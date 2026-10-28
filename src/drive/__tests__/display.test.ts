@@ -255,47 +255,118 @@ test('a start that already carries a speed and a limit spends both bypasses (the
 const mph = (n: number) => n * MPS_PER_MPH;
 const speeds = (set: jest.Mock) => set.mock.calls.map((a) => (a as unknown as [DriveDisplayState])[0].speed);
 
-describe('iOS: the Live Activity about once a second, with the halo’s number', () => {
-  test('a change goes out about 1 s after the last (a row or fix a few ms early included) and no timer ever runs; Android keeps its 3 s', () => {
-    expect(LIVE_MIN_INTERVAL_MS).toBe(900);
+/** A hand-run clock for iOS's held change: `later` records each timer, `run` fires the live ones. */
+function manual() {
+  const timers: { fn: () => void; ms: number; live: boolean }[] = [];
+  return {
+    later: (fn: () => void, ms: number) => {
+      const t = { fn, ms, live: true };
+      timers.push(t);
+      return () => {
+        t.live = false;
+      };
+    },
+    armed: () => timers.filter((t) => t.live).map((t) => t.ms),
+    run: () => {
+      for (const t of timers.splice(0)) if (t.live) t.fn();
+    },
+  };
+}
+
+describe('iOS: the Live Activity once a second, with the halo’s number', () => {
+  test('a change inside the second is held and goes out, the newest one, when the second is up; never two in a second; Android keeps its 3 s', () => {
+    expect(LIVE_MIN_INTERVAL_MS).toBe(1000);
     expect(DISPLAY_MIN_INTERVAL_MS).toBe(3000);
-    jest.useFakeTimers();
-    try {
-      let now = 0;
-      const { set, live } = sinks();
-      const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
-      d.start(state());
-      now = 200;
-      d.update(state({ speed: 31 }));
-      now = 600;
-      d.update(state({ speed: 32 }));
-      // inside the second: dropped, and nothing is scheduled to send them later
-      expect(set).toHaveBeenCalledTimes(1);
-      expect(jest.getTimerCount()).toBe(0);
-      now = 995;
-      d.update(state({ speed: 33 }));
-      // the next row or fix on the one-second beat sends the newest state, even a few ms early
-      expect(set).toHaveBeenCalledTimes(2);
-      expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 33 }));
-      now = 1850;
-      d.update(state({ speed: 34 }));
-      expect(set).toHaveBeenCalledTimes(2);
-      now = 2400;
-      d.update(state({ speed: 35 }), { mps: mph(35), accel: mph(3), at: 2400 });
-      expect(speeds(set)).toEqual([30, 33, 35]);
-      // a carried number is not re-read between updates either
-      jest.advanceTimersByTime(5000);
-      expect(set).toHaveBeenCalledTimes(3);
-      expect(jest.getTimerCount()).toBe(0);
-    } finally {
-      jest.useRealTimers();
-    }
+    let now = 0;
+    const clock = manual();
+    const { set, live } = sinks();
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    d.start(state());
+    now = 200;
+    d.update(state({ speed: 31 }));
+    now = 600;
+    d.update(state({ speed: 32 }));
+    // inside the second: held, with one send waiting for the second's end
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(clock.armed()).toEqual([800]);
+    now = 1000;
+    clock.run();
+    expect(speeds(set)).toEqual([30, 32]);
+    // a row or fix a few ms early on its one-second beat goes out on the beat, not with the next one
+    now = 1995;
+    d.update(state({ speed: 33 }));
+    expect(clock.armed()).toEqual([5]);
+    now = 2000;
+    clock.run();
+    expect(speeds(set)).toEqual([30, 32, 33]);
+    // nothing new inside the second: nothing waits
+    now = 2500;
+    d.update(state({ speed: 33 }));
+    expect(clock.armed()).toEqual([]);
+    // a change on time goes at once and takes the place of what waited
+    now = 2700;
+    d.update(state({ speed: 34 }));
+    expect(clock.armed()).toEqual([300]);
+    now = 3000;
+    d.update(state({ speed: 35 }));
+    expect(speeds(set)).toEqual([30, 32, 33, 35]);
+    expect(clock.armed()).toEqual([]);
+    // the end drops a held change
+    now = 3200;
+    d.update(state({ speed: 36 }));
+    d.end();
+    expect(clock.armed()).toEqual([]);
+    expect(speeds(set)).toEqual([30, 32, 33, 35]);
+
+    // Android never holds: its change goes out with the first update past its 3 s
+    const android = manual();
+    const sent: DriveDisplayState[] = [];
+    const a = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android', later: android.later });
+    a.start(state());
+    now += 500;
+    a.update(state({ speed: 31 }));
+    expect(android.armed()).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a held change goes out with the halo's number at that moment: a row with nothing new yet still waits while the number is carried", () => {
+    let now = 0;
+    const clock = manual();
+    const { set, live } = sinks();
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    d.start(state({ speed: 28 }));
+    // a fix at t = 900 ms: 30 mph and gaining 2 mph a second
+    const fix = { mps: mph(30), accel: mph(2), at: 900 };
+    now = 1000;
+    d.update(state({ speed: 30 }), fix);
+    // a row 100 ms on: the halo still reads 30, but its number is being carried, so it waits
+    now = 1100;
+    d.update(state({ speed: 30 }), fix);
+    expect(speeds(set)).toEqual([28, 30]);
+    expect(clock.armed()).toEqual([900]);
+    // the second's end: the halo's re-reads at 1250, 1500, 1750 and 2000 ms took it to 32 (32.2 mph)
+    now = 2000;
+    clock.run();
+    expect(speeds(set)).toEqual([28, 30, 32]);
+    // a row at 2.9 s: the halo reads 33 (33 mph, its carry capped at 1.5 s), held to the second's end
+    now = 2900;
+    d.update(state({ speed: 30 }), fix);
+    expect(clock.armed()).toEqual([100]);
+    now = 3000;
+    clock.run();
+    expect(speeds(set)).toEqual([28, 30, 32, 33]);
+    // the carry over, a row with nothing new waits for nothing
+    now = 3500;
+    d.update(state({ speed: 30 }), fix);
+    expect(clock.armed()).toEqual([]);
+    expect(speeds(set)).toEqual([28, 30, 32, 33]);
   });
 
   test("with the halo's speed, each update shows the halo's number at that moment: carried along its acceleration, with its hysteresis", () => {
     let now = 0;
+    const clock = manual();
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
     d.start(state({ speed: 28 }));
     // a fix at t = 900 ms: 30 mph and gaining 2 mph a second; the host rounds 30
     const fix = { mps: mph(30), accel: mph(2), at: 900 };
@@ -305,12 +376,13 @@ describe('iOS: the Live Activity about once a second, with the halo’s number',
     // 32.2 mph, 1.1 s on
     d.update(state({ speed: 30 }), fix);
     now = 2600;
-    // 33.4 mph: inside the second, dropped
+    // 33.4 mph: inside the second, held
     d.update(state({ speed: 30 }), fix);
     now = 3000;
-    // held at 1.5 s of carry: 33
+    // held at 1.5 s of carry: 33 (the update on the second's end sends it; nothing else waits)
     d.update(state({ speed: 30 }), fix);
     expect(speeds(set)).toEqual([28, 30, 32, 33]);
+    expect(clock.armed()).toEqual([]);
     now = 4000;
     // a new fix of 33.6 mph, not carried: the host rounds 34, the halo still reads 33 (0.6 past it)
     d.update(state({ speed: 34, limit: 40 }), { mps: mph(33.6), accel: 0, at: 4000 });

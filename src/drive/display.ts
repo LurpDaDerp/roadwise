@@ -2,13 +2,14 @@
 // Android foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end`
 // bound the activity's life to the drive. This adapter sends only changes (and an unchanged state
 // again every 60 s, so a long stop never leaves the Live Activity stale: its stale date is 2 min
-// on), at most one per 3 s on Android and about one a second on iOS (the drive's first known speed
-// and first known limit go out at once, outside either), and tolerates either module being absent (a
-// missing display must never affect a drive). A change held by the throttle needs no timer: rows
-// (once a second, at a stop too) and speed events call `update` again, and the newest state goes
-// out on the first call past the interval. `refresh` sends at once, outside the throttle (the
-// weather line, the "Not driving?" hint running out). Every state goes out wearing the app's
-// current sky (`displayLook.ts`).
+// on), at most one per 3 s on Android and one a second on iOS (the drive's first known speed and
+// first known limit go out at once, outside either), and tolerates either module being absent (a
+// missing display must never affect a drive). On iOS a change the throttle holds goes out when the
+// second is up (one timer, armed only while something new waits), with the newest state and the
+// halo's number at that moment, so no fix waits for the next row or fix to carry it; Android's held
+// change goes out with the first `update` past its 3 s. `refresh` sends at once, outside the
+// throttle (the weather line, the "Not driving?" hint running out). Every state goes out wearing the
+// app's current sky (`displayLook.ts`).
 //
 // iOS, the lock screen's number: given the halo's speed (`SpeedCarry`: the engine's estimate, its
 // acceleration and the time it stands for), each update shows the halo's number at that moment,
@@ -16,7 +17,7 @@
 // the halo's hysteresis (`wholeSpeed`). The hysteresis depends on the path, so each update first
 // walks the carry through the halo's own re-reads (every `SPEED_TICK_MS` from when the carry came,
 // until `CARRY_MAX_MS` after its time) without any timer, and the number lands where the halo's
-// does. The Live Activity holds its number until the next update (about once per GPS fix).
+// does. The Live Activity holds its number until the next update (at most a second later).
 // Android's notification never carries.
 //
 // iOS: `start` starts a local activity, or adopts one already running (a push-started one); it is
@@ -70,10 +71,10 @@ export interface DisplaySinks {
 /** Android: the notification takes a change this often at most. */
 export const DISPLAY_MIN_INTERVAL_MS = 3000;
 /**
- * iOS: the Live Activity takes a change about once a second (once per GPS fix). A little under the
- * second, so a row or a fix arriving a few ms early on its one-second beat is never dropped.
+ * iOS: the Live Activity takes a change at most once a second (about once per GPS fix, the most
+ * iOS keeps applying on a locked screen). A change that comes sooner is sent when the second is up.
  */
-export const LIVE_MIN_INTERVAL_MS = 900;
+export const LIVE_MIN_INTERVAL_MS = 1000;
 /** An unchanged display is re-sent this often (one update a minute at a stop). */
 export const DISPLAY_KEEPALIVE_MS = 60_000;
 
@@ -148,6 +149,8 @@ export function createDriveDisplay(
     onError?: (e: unknown) => void;
     /** The sky to wear (default: the app's, from `displayLook.ts`). */
     look?: () => DisplayLook | null;
+    /** Runs `fn` once after `ms` (iOS's held change); returns the cancel. Default: `setTimeout`. */
+    later?: (fn: () => void, ms: number) => () => void;
   }
 ): DriveDisplay {
   const ios = deps.platform === 'ios';
@@ -173,16 +176,69 @@ export function createDriveDisplay(
   let whole: number | null = null;
   let cameAt = 0;
   let walkedTo = 0;
+  /** iOS: the newest state the throttle holds (as the host gave it), and the timer that sends it. */
+  let held: DriveDisplayState | null = null;
+  let cancelHeld: (() => void) | null = null;
+  const later =
+    deps.later ??
+    ((fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms);
+      return () => clearTimeout(t);
+    });
 
-  function send(state: DriveDisplayState, force: boolean): void {
+  function dropHeld(): void {
+    cancelHeld?.();
+    cancelHeld = null;
+    held = null;
+  }
+
+  /** True when `state` went out. */
+  function send(state: DriveDisplayState, force: boolean): boolean {
     const now = deps.now();
     const first = (!speedShown && state.speed !== null) || (!limitShown && state.limit !== null);
-    if (!force && !first && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return;
+    if (!force && !first && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return false;
+    // Whatever waited is older than this.
+    dropHeld();
     last = state;
     lastAt = now;
     if (state.speed !== null) speedShown = true;
     if (state.limit !== null) limitShown = true;
     call(set === null ? null : () => set(state), deps.onError);
+    return true;
+  }
+
+  /**
+   * The carried number may still move by the time the second is up (the halo re-reads it every
+   * `SPEED_TICK_MS` until `CARRY_MAX_MS` after its fix).
+   */
+  const stillCarrying = (at: number): boolean => carry !== null && carry.mps > 0 && carry.accel !== 0 && at < carry.at + CARRY_MAX_MS + SPEED_TICK_MS;
+
+  /**
+   * iOS: `state` came inside the second. It is held (the newest wins) and sent when the second is
+   * up, with the halo's number then, if it shows something new by then: a change now, or a number
+   * still being carried.
+   */
+  function hold(state: DriveDisplayState, shown: DriveDisplayState, now: number): void {
+    const due = lastAt + minInterval;
+    if (same(last, shown) && !stillCarrying(due)) return;
+    held = state;
+    if (cancelHeld !== null) return;
+    cancelHeld = later(
+      () => {
+        cancelHeld = null;
+        const h = held;
+        held = null;
+        if (h !== null) sendNow(h);
+      },
+      Math.max(0, due - now)
+    );
+  }
+
+  /** `state` in the current sky with the halo's number at this moment, through the throttle. */
+  function sendNow(state: DriveDisplayState): void {
+    const now = deps.now();
+    const shown = carried(wearing(state, look()), now);
+    if (!send(shown, false) && ios && now - lastAt < minInterval) hold(state, shown, now);
   }
 
   /**
@@ -223,6 +279,7 @@ export function createDriveDisplay(
 
   return {
     start(state) {
+      dropHeld();
       last = null;
       speedShown = false;
       limitShown = false;
@@ -235,9 +292,8 @@ export function createDriveDisplay(
       send(worn, true);
     },
     update(state, c) {
-      const now = deps.now();
-      if (ios) take(c ?? null, state, now);
-      send(carried(wearing(state, look()), now), false);
+      if (ios) take(c ?? null, state, deps.now());
+      sendNow(state);
     },
     refresh(state, c) {
       const now = deps.now();
@@ -257,6 +313,7 @@ export function createDriveDisplay(
         const ended: DriveDisplayState = { ...wearing(final, look()), ended: true };
         call(set === null ? null : () => set(ended), deps.onError);
       }
+      dropHeld();
       last = null;
       lastAt = Number.NEGATIVE_INFINITY;
       speedShown = false;
