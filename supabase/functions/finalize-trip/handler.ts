@@ -22,8 +22,8 @@
 // an iPhone upload without a valid assertion is answered 429 `attest_required` (the phone attests and
 // sends it again; a build from before App Attest retries a 429 and keeps the drive queued), one from a
 // phone that says App Attest is not available is stored unscored as implausible, and an upload with
-// no App Attest header from an account that has an Android device and never had an iPhone (no iOS
-// device registered, no App Attest key) is scored as today. With it off,
+// no App Attest header from an account that has an Android device and no iPhone in the last 30 days
+// (no iOS registration, attestation or verified assertion, no key used) is scored as today. With it off,
 // nothing is refused and the verdict only goes to the log. A replay is answered before the check.
 //
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and

@@ -80,7 +80,7 @@ Deno.test('enforced: whatever an attesting phone can fix by attesting is a retry
     ['no header, no Android device', {}, () => Promise.resolve({})],
     ['no key yet', {}, () => Promise.resolve({ [ATTEST_HEADER]: 'unattested' })],
     ['a key the user does not have', { attest: { key: null, androidOnly: false } }, () => signed(5)],
-    ['no header, from an account with an iPhone (attested or registered) as well as an Android device', { attest: { key: null, androidOnly: false } }, () => Promise.resolve({})],
+    ['no header, from an account still using an iPhone (attested or registered in the last 30 days) as well as an Android device', { attest: { key: null, androidOnly: false } }, () => Promise.resolve({})],
     ['a replayed counter', { attest: keyRow({ counter: 5 }) }, () => signed(5)],
     ['another body', { attest: keyRow() }, () => signed(5, BODY.replace('"v":5', '"v":5 '))],
     ['another key', { attest: keyRow() }, async () => ({ ...(await signed(5, BODY, await makeAttestation({ apple, teamId: TEAM, challenge: 'c'.repeat(43), now: NOW }))), [ATTEST_KEY_HEADER]: attested.keyId })],
@@ -99,7 +99,7 @@ Deno.test('enforced: whatever an attesting phone can fix by attesting is a retry
   }
 });
 
-Deno.test('enforced: no App Attest header from an account with an Android device and never an iPhone is scored as today', async () => {
+Deno.test('enforced: no App Attest header from an account with an Android device and no iPhone in 30 days is scored as today', async () => {
   const h = harness({ attest: { key: null, androidOnly: true } });
   const res = await handleFinalizeTrip(post(), h.deps);
   assertEquals(res.status, 200);

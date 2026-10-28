@@ -12,10 +12,11 @@
 // again). With enforcement off, nothing is refused and the verdict only goes to the log.
 //
 // An upload with no App Attest header passes as Android only for an account that has an Android
-// device registered and has never had an iPhone (no iOS device registered, no App Attest key): an
-// account with an iPhone, attested or registered, attests every upload, and register_device (0031)
-// never turns its iPhone's row into an Android one. An account that never had an iPhone can still
-// post as Android until Play Integrity exists (accepted).
+// device registered and no iPhone in the last 30 days (no iOS registration, attestation or verified
+// assertion, kept apart from the device rows so their 10-row cap cannot clear it; no key used):
+// an account still using an iPhone, attested or registered, attests every upload, and
+// register_device (0031) never turns its iPhone's row into an Android one. An account with no
+// iPhone in 30 days can still post as Android until Play Integrity exists (accepted).
 import { fromHex, KEY_ID_PATTERN, MAX_ASSERTION_BYTES, verifyAssertion, type AssertionFailure, type AttestSettings } from '../_shared/appattest.ts';
 import type { EngineTx } from '../_shared/engine.ts';
 
@@ -52,7 +53,7 @@ export function readProof(headers: Headers): UploadProof {
 /**
  * - `verified`: a valid assertion from the user's own key; its counter is stored.
  * - `android`: no App Attest header, from an account that may post as Android (an Android device,
- *   never an iPhone; looked up only under enforcement).
+ *   no iPhone in the last 30 days; looked up only under enforcement).
  * - `none`: no App Attest header, not looked up (enforcement off).
  * - `unsupported`: the phone says App Attest is not available on it.
  * - `missing`: an iPhone upload with no assertion.

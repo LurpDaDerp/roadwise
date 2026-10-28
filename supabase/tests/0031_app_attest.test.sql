@@ -5,12 +5,13 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(50);
+select plan(60);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
   ('00000000-0000-0000-0000-000000000002', 'b@example.com'),
-  ('00000000-0000-0000-0000-000000000003', 'c@example.com');
+  ('00000000-0000-0000-0000-000000000003', 'c@example.com'),
+  ('00000000-0000-0000-0000-000000000004', 'd@example.com');
 
 -- a 32-byte challenge hash and a 44-character key id from a small number; a 65-byte EC point
 create function pg_temp.h(n int) returns bytea language sql immutable as $$ select extensions.digest('challenge-' || n, 'sha256') $$;
@@ -22,17 +23,18 @@ create function pg_temp.pk(n int) returns bytea language sql immutable as $$
 -- closed to the API roles
 -- ---------------------------------------------------------------------------
 select is((select array_agg(c.relrowsecurity order by c.relname) from pg_class c
-    where c.relnamespace = 'private'::regnamespace and c.relname in ('app_attest_challenges', 'app_attest_keys')),
-  array[true, true], 'both tables have RLS on');
+    where c.relnamespace = 'private'::regnamespace and c.relname in ('app_attest_challenges', 'app_attest_keys', 'ios_activity')),
+  array[true, true, true], 'all three tables have RLS on');
 select is((select count(*)::int from information_schema.role_table_grants g
-    where g.table_schema = 'private' and g.table_name in ('app_attest_challenges', 'app_attest_keys') and g.grantee in ('anon', 'authenticated', 'public')), 0,
-  'no API role holds a privilege on either table');
-select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and p.proname like 'app\_attest\_%'
+    where g.table_schema = 'private' and g.table_name in ('app_attest_challenges', 'app_attest_keys', 'ios_activity')
+      and g.grantee in ('anon', 'authenticated', 'public')), 0,
+  'no API role holds a privilege on any of them');
+select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and (p.proname like 'app\_attest\_%' or p.proname = 'stamp_ios')
     and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))), 0,
   'no app_attest function is executable by a client role');
-select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and p.proname like 'app\_attest\_%' and p.prosecdef), 0,
+select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and (p.proname like 'app\_attest\_%' or p.proname = 'stamp_ios') and p.prosecdef), 0,
   'every app_attest function runs as its caller');
-select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and p.proname like 'app\_attest\_%'
+select is((select count(*)::int from pg_proc p where p.pronamespace = 'private'::regnamespace and (p.proname like 'app\_attest\_%' or p.proname = 'stamp_ios')
     and not exists (select 1 from unnest(p.proconfig) c where c like 'search_path=%')), 0,
   'every app_attest function pins its search_path');
 set local role authenticated;
@@ -118,19 +120,29 @@ select is(private.app_attest_context('00000000-0000-0000-0000-000000000002', pg_
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000001', pg_temp.k(77)) -> 'key', 'null'::jsonb, 'an unknown key is null');
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000001', null) -> 'key', 'null'::jsonb, 'no key named is null');
 
--- posting as Android needs an Android device and never an iPhone: no iOS device registered, no App Attest key
+-- posting as Android needs an Android device and no iPhone in the last 30 days: the account's iPhone
+-- time (private.ios_activity) none or older, and no App Attest key used since
 create function pg_temp.android_only(p int) returns boolean language sql as $$
   select (private.app_attest_context(('00000000-0000-0000-0000-00000000000' || p)::uuid, null) ->> 'androidOnly')::boolean $$;
+create function pg_temp.ios_at(p int) returns timestamptz language sql as $$
+  select last_ios_at from private.ios_activity where user_id = ('00000000-0000-0000-0000-00000000000' || p)::uuid $$;
 create function pg_temp.as_user(p int) returns void language sql as $$
   select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000' || p || '","role":"authenticated"}', true) $$;
 grant execute on function pg_temp.as_user(int) to authenticated;
 insert into public.devices (user_id, device_id, platform) values ('00000000-0000-0000-0000-000000000002', 'device-android-2', 'android'),
   ('00000000-0000-0000-0000-000000000003', 'device-android-3', 'android');
 select is(pg_temp.android_only(2), true, 'an account with only an Android device may post as Android');
-select is(pg_temp.android_only(3), false, 'an account with an App Attest key attests every upload, whatever else it registers');
+select is(pg_temp.ios_at(3), now(), 'an attestation stamps the account''s iPhone time');
+select is(pg_temp.android_only(3), false, 'an account that attested in the last 30 days attests every upload, whatever else it registers');
+update private.app_attest_keys set last_used_at = now() - interval '31 days' where user_id = '00000000-0000-0000-0000-000000000003';
+select is(pg_temp.android_only(3), false, 'its iPhone time still holds it, keys unused or not');
+update private.ios_activity set last_ios_at = now() - interval '31 days' where user_id = '00000000-0000-0000-0000-000000000003';
+select is(pg_temp.android_only(3), true, 'an iPhone time and keys over 30 days old no longer hold an Android driver back');
+update private.app_attest_keys set last_used_at = now() - interval '29 days' where key_id = pg_temp.k(302);
+select is(pg_temp.android_only(3), false, 'one key used in the last 30 days still does');
 select is(pg_temp.android_only(1), false, 'an account with no Android device has nothing to post as');
 
--- register_device: an iPhone's row stays an iPhone's, so an account cannot re-label its phone
+-- register_device: an iPhone's row stays an iPhone's, and an iOS registration stamps the iPhone time
 set local role authenticated;
 select pg_temp.as_user(2);
 select lives_ok($$ select public.register_device('device-ios-0002', 'ios') $$, 'the Android account registers an iPhone');
@@ -140,7 +152,27 @@ select lives_ok($$ select public.register_device('device-android-2', 'android') 
 reset role;
 select is((select platform from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and device_id = 'device-ios-0002'), 'ios',
   'the row stays ios');
-select is(pg_temp.android_only(2), false, 'an account with an iPhone registered attests every upload');
+select is(array[pg_temp.ios_at(2) = now(), pg_temp.android_only(2)], array[true, false],
+  'an iOS registration stamps the iPhone time: the account attests every upload');
+update private.ios_activity set last_ios_at = now() - interval '31 days' where user_id = '00000000-0000-0000-0000-000000000002';
+select is(pg_temp.android_only(2), true, 'an iPhone unseen for 30 days no longer holds an Android driver back');
+update private.ios_activity set last_ios_at = now() - interval '29 days' where user_id = '00000000-0000-0000-0000-000000000002';
+select is(pg_temp.android_only(2), false, 'one seen 29 days ago still does');
+
+-- the 10-row cap can push an iPhone's row out; its time stays
+set local role authenticated;
+select pg_temp.as_user(4);
+select public.register_device('device-ios-0004', 'ios');
+reset role;
+update public.devices set last_seen_at = now() - interval '1 day' where user_id = '00000000-0000-0000-0000-000000000004';
+delete from public.rate_limits where user_id = '00000000-0000-0000-0000-000000000004';
+set local role authenticated;
+select pg_temp.as_user(4);
+select public.register_device('device-android-4-' || lpad(n::text, 2, '0'), 'android') from generate_series(1, 10) n;
+reset role;
+select is((select array[count(*)::int, (count(*) filter (where platform = 'ios'))::int] from public.devices where user_id = '00000000-0000-0000-0000-000000000004'),
+  array[10, 0], 'ten Android ids push the iPhone''s row out');
+select is(pg_temp.android_only(4), false, 'the account still attests every upload: its iPhone time stays');
 
 select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_temp.k(1), 3), true, 'a higher counter is stored');
 select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_temp.k(1), 3), false, 'the same counter again is refused');
@@ -148,14 +180,18 @@ select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_
 select is(private.app_attest_advance('00000000-0000-0000-0000-000000000002', pg_temp.k(1), 9), false, 'another user cannot move it');
 select is((select array[counter::int, (last_used_at = now())::int] from private.app_attest_keys where key_id = pg_temp.k(1)), array[3, 1],
   'the key holds the highest counter, used now');
+update private.ios_activity set last_ios_at = now() - interval '40 days' where user_id = '00000000-0000-0000-0000-000000000001';
+select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_temp.k(1), 4), true, 'a later counter is stored');
+select is(pg_temp.ios_at(1), now(), 'a verified assertion stamps the account''s iPhone time');
 
 -- ---------------------------------------------------------------------------
 -- gone with the account
 -- ---------------------------------------------------------------------------
 delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
 select is((select count(*)::int from private.app_attest_keys where user_id = '00000000-0000-0000-0000-000000000001')
-    + (select count(*)::int from private.app_attest_challenges where user_id = '00000000-0000-0000-0000-000000000001'), 0,
-  'deleting the account deletes its keys and challenges');
+    + (select count(*)::int from private.app_attest_challenges where user_id = '00000000-0000-0000-0000-000000000001')
+    + (select count(*)::int from private.ios_activity where user_id = '00000000-0000-0000-0000-000000000001'), 0,
+  'deleting the account deletes its keys, challenges and iPhone time');
 
 select * from finish();
 rollback;

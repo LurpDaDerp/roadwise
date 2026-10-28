@@ -12,15 +12,21 @@
 --     upload's assertion against it, and moves the counter up in the same transaction
 --     (app_attest_advance: strictly above the stored one, so a replayed assertion never passes).
 --     app_attest_context also says whether the account may post as Android: it has an Android
---     device registered and has never had an iPhone (no iOS device registered and no App Attest
---     key). Only then is an upload with no App Attest headers at all scored as an Android upload;
---     an account with an iPhone, attested or registered, attests every upload.
+--     device registered and no iPhone in the last 30 days. Only then is an upload with no App Attest
+--     headers at all scored as an Android upload; an account still using an iPhone, attested or
+--     registered, attests every upload. A driver who moved to Android has their Android uploads
+--     scored once the iPhone has gone 30 days unseen (until then they wait in the phone's queue,
+--     never lost).
+--   * private.ios_activity: when the account last showed an iPhone (an iOS register_device, an
+--     attestation, a verified assertion). It is kept apart from the device rows on purpose:
+--     register_device's 10-row cap can push an iPhone's row out, and this time stays. Filled here
+--     from the iOS device rows already registered.
 --   * register_device (as 0024) refuses to turn an install registered as an iPhone into an Android
 --     device, so an iPhone account cannot re-label its own phone to post as Android.
 --
--- Both tables live in `private` (the Data API never exposes it), with RLS on and no grant to any
--- API role; only these functions, run by the edge functions as postgres, read or write them. Both
--- go with the account (on delete cascade).
+-- The three tables live in `private` (the Data API never exposes it), with RLS on and no grant to
+-- any API role; only these functions, run by the edge functions as postgres (and register_device,
+-- a definer), read or write them. All three go with the account (on delete cascade).
 --
 -- Deploy order: this migration, then app-attest and finalize-trip. The finalize-trip before this
 -- one never calls these functions.
@@ -50,6 +56,28 @@ create index app_attest_keys_user_idx on private.app_attest_keys (user_id, last_
 alter table private.app_attest_challenges enable row level security;
 alter table private.app_attest_keys enable row level security;
 revoke all on private.app_attest_challenges, private.app_attest_keys from public, anon, authenticated;
+
+-- when the account last showed an iPhone: never cleared by the device rows' cap, gone with the account
+create table private.ios_activity (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  last_ios_at timestamptz not null
+);
+alter table private.ios_activity enable row level security;
+revoke all on private.ios_activity from public, anon, authenticated;
+insert into private.ios_activity (user_id, last_ios_at)
+  select d.user_id, max(d.last_seen_at) from public.devices d where d.platform = 'ios' group by d.user_id
+  on conflict (user_id) do nothing;
+
+-- the account showed an iPhone now
+create or replace function private.stamp_ios(p_user uuid) returns void
+language plpgsql volatile set search_path = public as $$
+begin
+  if p_user is null then
+    raise exception 'user is required' using errcode = 'invalid_parameter_value';
+  end if;
+  insert into private.ios_activity (user_id, last_ios_at) values (p_user, now())
+    on conflict (user_id) do update set last_ios_at = greatest(private.ios_activity.last_ios_at, excluded.last_ios_at);
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- challenges
@@ -104,8 +132,13 @@ begin
     on conflict (key_id) do nothing;
   if not found then
     select user_id into v_owner from private.app_attest_keys where key_id = p_key_id;
-    return case when v_owner = p_user then 'known' else 'taken' end;
+    if v_owner = p_user then
+      perform private.stamp_ios(p_user);
+      return 'known';
+    end if;
+    return 'taken';
   end if;
+  perform private.stamp_ios(p_user);
   -- at most 10 keys a user: the least recently used go
   delete from private.app_attest_keys k where k.user_id = p_user and k.key_id in (
     select x.key_id from private.app_attest_keys x where x.user_id = p_user order by x.last_used_at desc, x.created_at desc, x.key_id offset 10);
@@ -114,8 +147,8 @@ end $$;
 
 -- what an upload's App Attest check reads: the user's key by id (locked until the upload's
 -- transaction ends; null when the user has no such key, or none was named) and whether the account
--- may post as Android (`androidOnly`: an Android device registered, no iOS device registered and no
--- App Attest key)
+-- may post as Android (`androidOnly`: an Android device registered, the account's last iPhone
+-- (private.ios_activity) none or over 30 days ago, and no App Attest key used in the last 30 days)
 create or replace function private.app_attest_context(p_user uuid, p_key_id text) returns jsonb
 language plpgsql volatile set search_path = public as $$
 declare
@@ -133,8 +166,8 @@ begin
   end if;
   return jsonb_build_object('key', v_key,
     'androidOnly', exists (select 1 from public.devices d where d.user_id = p_user and d.platform = 'android')
-      and not exists (select 1 from public.devices d where d.user_id = p_user and d.platform = 'ios')
-      and not exists (select 1 from private.app_attest_keys x where x.user_id = p_user));
+      and not exists (select 1 from private.ios_activity a where a.user_id = p_user and a.last_ios_at > now() - interval '30 days')
+      and not exists (select 1 from private.app_attest_keys x where x.user_id = p_user and x.last_used_at > now() - interval '30 days'));
 end $$;
 
 -- an assertion's counter, stored: true only when it is above the key's (and the key is the user's)
@@ -146,7 +179,11 @@ begin
   end if;
   update private.app_attest_keys set counter = p_counter, last_used_at = now()
     where key_id = p_key_id and user_id = p_user and counter < p_counter;
-  return found;
+  if not found then
+    return false;
+  end if;
+  perform private.stamp_ios(p_user);
+  return true;
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -154,7 +191,9 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- register_device(p_device_id, p_platform, p_push_token, p_live_activity_token) -> { league_eligible }
 -- As 0024, and an install this account registered as 'ios' is refused as 'android' (the row and its
--- tokens are left as they were). A phone's platform never changes, so no real install meets it.
+-- tokens are left as they were; a phone's platform never changes, so no real install meets it), and
+-- an iOS registration stamps the account's iPhone time (private.ios_activity), which the 10-row cap
+-- never clears.
 create or replace function public.register_device(p_device_id text, p_platform text, p_push_token text default null,
   p_live_activity_token text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -202,6 +241,9 @@ begin
         push_token = coalesce(excluded.push_token, public.devices.push_token),
         live_activity_token = coalesce(excluded.live_activity_token, public.devices.live_activity_token),
         last_seen_at = now();
+  if p_platform = 'ios' then
+    perform private.stamp_ios(v_uid);
+  end if;
   -- a token moves with the device: no other account keeps it
   if p_push_token is not null then
     update public.devices set push_token = null where push_token = p_push_token and user_id <> v_uid;
@@ -239,6 +281,7 @@ revoke all on function private.app_attest_take_challenge(uuid, bytea) from publi
 revoke all on function private.app_attest_save_key(uuid, text, bytea, text) from public, anon, authenticated;
 revoke all on function private.app_attest_context(uuid, text) from public, anon, authenticated;
 revoke all on function private.app_attest_advance(uuid, text, bigint) from public, anon, authenticated;
+revoke all on function private.stamp_ios(uuid) from public, anon, authenticated;
 -- register_device stays the signed-in client's to call, as in 0024
 revoke all on function public.register_device(text, text, text, text) from public, anon, authenticated;
 grant execute on function public.register_device(text, text, text, text) to authenticated;

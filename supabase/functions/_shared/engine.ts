@@ -49,7 +49,8 @@ export interface DriveContextArgs {
 /**
  * `private.app_attest_context` (0031): the user's App Attest key by the id an upload names (null when
  * the user has no such key, or none was named), and whether the account may post as Android
- * (`androidOnly`: an Android device registered, and never an iPhone: no iOS device, no App Attest key).
+ * (`androidOnly`: an Android device registered, the account's last iPhone (an iOS registration, an
+ * attestation or a verified assertion) none or over 30 days ago, and no App Attest key used in 30 days).
  */
 export const AttestContextSchema = z.object({
   key: z
