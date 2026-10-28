@@ -8,6 +8,7 @@ import { CODE_LENGTH, RESEND_COOLDOWN_S, type ResendResult, type VerifyResult } 
 export const emailCodeCopy = {
   title: 'Check your email',
   sentTo: (email: string) => `We sent an 8-digit code to ${email}.`,
+  noCodeYet: (email: string) => `Confirm ${email} with an 8-digit code.`,
   codeLabel: '8-digit code',
   confirm: 'Confirm',
   tryAgain: 'Try again',
@@ -31,7 +32,7 @@ const VERIFY_ERRORS: Record<Exclude<VerifyResult, 'ok'>, string> = {
   error: emailCodeCopy.verifyFailed,
 };
 
-const RESEND_ERRORS: Record<Exclude<ResendResult, 'sent'>, string> = {
+const RESEND_ERRORS: Record<Exclude<ResendResult, 'sent' | 'too_soon'>, string> = {
   rate_limited: emailCodeCopy.rateLimited,
   offline: emailCodeCopy.offline,
   error: emailCodeCopy.resendFailed,
@@ -80,6 +81,8 @@ export function EmailCodeScreen({
   const [error, setError] = useState<string | null>(initialError);
   const [notice, setNotice] = useState<string | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(() => (codeSent ? Date.now() : null));
+  // Whether a code is known to be on its way: the line under the title says "We sent" only then.
+  const [codeOut, setCodeOut] = useState(codeSent);
   const [now, setNow] = useState(() => Date.now());
   // The code was right but the account isn't finished: only Try again and the way back are left.
   const [unfinished, setUnfinished] = useState(false);
@@ -132,11 +135,12 @@ export function EmailCodeScreen({
       // The code sent before no longer works.
       setCode('');
       setNotice(emailCodeCopy.resent);
-    } else {
+    } else if (result !== 'too_soon') {
       setError(RESEND_ERRORS[result]);
     }
+    if (result === 'sent' || result === 'too_soon') setCodeOut(true);
     // A refused send waits out the minute too: the server holds one mail per address a minute.
-    if (result === 'sent' || result === 'rate_limited') setSentAt(at);
+    if (result === 'sent' || result === 'too_soon' || result === 'rate_limited') setSentAt(at);
     setNow(at);
     setBusy(null);
   };
@@ -155,7 +159,7 @@ export function EmailCodeScreen({
           {emailCodeCopy.title}
         </Text>
         <Text variant="body" tone="muted">
-          {emailCodeCopy.sentTo(email)}
+          {codeOut ? emailCodeCopy.sentTo(email) : emailCodeCopy.noCodeYet(email)}
         </Text>
       </View>
 
@@ -182,7 +186,7 @@ export function EmailCodeScreen({
               inputMode="numeric"
               textContentType="oneTimeCode"
               autoComplete="one-time-code"
-              maxLength={CODE_LENGTH}
+              // No maxLength: a pasted "1234 5678" must reach onChange whole; it keeps the first 8 digits.
               style={{
                 minHeight: 48 * scale,
                 borderWidth: 1.5,

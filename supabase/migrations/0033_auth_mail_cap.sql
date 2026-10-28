@@ -1,7 +1,9 @@
 -- 0033_auth_mail_cap: the per-address cap on the codes the send-email hook mails.
 --
 --   * private.auth_mail_sends: one row per address the hook has mailed, keyed by SHA256 of the
---     lower-cased address (the address itself is never stored), with two fixed windows: at most 5
+--     address as send-email normalises it (lower case, no "+tag", a Gmail name without dots on
+--     gmail.com, so spellings of one inbox share a row; the address itself is never stored),
+--     with two fixed windows: at most 5
 --     mails in an hour and 10 in a day. A row whose day ended more than a day ago is dropped the
 --     next time any address is mailed.
 --   * private.take_auth_mail(hash): takes one mail for that address; false (nothing taken) when

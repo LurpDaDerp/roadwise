@@ -34,7 +34,7 @@ export const signInCopy = {
   attest: "I'm 13 or older and agree to the Terms and Privacy Policy",
   needsTick: 'Check the box above first.',
   saveFailed: "Couldn't save that. Try again.",
-  rateLimited: 'Too many tries. Try again in a minute.',
+  rateLimited: 'Too many tries. Try again in a few minutes.',
 } as const;
 
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -157,16 +157,23 @@ export function SignInScreen() {
     if (!creating) {
       const result = await signInWithPassword(email, password);
       if (result === 'unconfirmed') {
-        // The right password on an address never confirmed: a fresh code, and the code screen. A
-        // send refused for coming too soon means one went out within the minute, still good.
+        // The right password on an address never confirmed: a fresh code, and the code screen. Auth
+        // refusing a second mail within the minute (`too_soon`) means one went out then, still good;
+        // any other refusal sent nothing, and the screen says why.
         const sent = await resendEmailCode(email);
-        const went = sent === 'sent' || sent === 'rate_limited';
+        const went = sent === 'sent' || sent === 'too_soon';
         setPending({
           email: email.trim(),
           confirmation: startEmailConfirmation(email, null),
           username: null,
           codeSent: went,
-          error: went ? null : sent === 'offline' ? emailCodeCopy.offline : emailCodeCopy.resendFailed,
+          error: went
+            ? null
+            : sent === 'offline'
+              ? emailCodeCopy.offline
+              : sent === 'rate_limited'
+                ? emailCodeCopy.rateLimited
+                : emailCodeCopy.resendFailed,
         });
         return;
       }

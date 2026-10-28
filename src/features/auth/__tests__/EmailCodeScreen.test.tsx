@@ -58,7 +58,8 @@ test('a title, the line naming the address, and a one-time-code field iOS can fi
   expect(field.props.textContentType).toBe('oneTimeCode');
   expect(field.props.autoComplete).toBe('one-time-code');
   expect(field.props.keyboardType).toBe('number-pad');
-  expect(field.props.maxLength).toBe(8);
+  // No maxLength: a pasted code with a space must reach the field whole.
+  expect(field.props.maxLength).toBeUndefined();
 });
 
 test('takes digits only, and checks the code once all 8 are in', async () => {
@@ -69,6 +70,13 @@ test('takes digits only, and checks the code once all 8 are in', async () => {
   expect(onVerify).not.toHaveBeenCalled();
   await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
   expect(onVerify).toHaveBeenCalledTimes(1);
+  expect(onVerify).toHaveBeenCalledWith('12345678');
+});
+
+test('a code pasted with a space or text around it keeps its 8 digits', async () => {
+  await mount();
+  await fireEvent.changeText(screen.getByLabelText(CODE.name), '1234 5678');
+  expect(screen.getByLabelText(CODE.name).props.value).toBe('12345678');
   expect(onVerify).toHaveBeenCalledWith('12345678');
 });
 
@@ -129,8 +137,10 @@ test.each([
   expect(screen.getByRole('button', { name: button })).toBeTruthy();
 });
 
-test('with no code known to have gone out, Resend code is ready at once and the reason shows', async () => {
+test('with no code known to have gone out, Resend code is ready at once, the reason shows, and nothing says "We sent"', async () => {
   await mount({ codeSent: false, initialError: emailCodeCopy.offline });
+  expect(screen.getByText('Confirm ava@example.com with an 8-digit code.')).toBeOnTheScreen();
+  expect(screen.queryByText(/We sent/)).toBeNull();
   expect(screen.getByRole('button', { name: 'Resend code' })).toBeEnabled();
   expect(screen.getByRole('alert')).toHaveTextContent("You're offline. Check your connection and try again.");
 });
@@ -190,4 +200,20 @@ describe('a right code whose account could not be finished', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: 'Use a different email' })).toBeDisabled();
   });
+});
+
+test('a resend Auth refuses as too soon (one went out within the minute) waits the minute with no error, and says "We sent"', async () => {
+  onResend.mockResolvedValueOnce('too_soon');
+  await mount({ codeSent: false });
+  await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
+  expect(await screen.findByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+});
+
+test('a sent resend turns the line into "We sent"', async () => {
+  await mount({ codeSent: false });
+  expect(screen.queryByText(/We sent an/)).toBeNull();
+  await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
+  expect(await screen.findByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
 });

@@ -343,7 +343,7 @@ describe('startEmailConfirmation', () => {
     expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
   });
 
-  test('leaving while the code is being checked signs out the session it brings, and hands nothing over', async () => {
+  test('a sign-up left while the code is being checked: the now-confirmed account gets the chosen password and no other session, then its session goes', async () => {
     const c = startEmailConfirmation('ava@example.com', 'correct horse');
     mockVerifyOtp.mockImplementationOnce(async () => {
       await c.abandon();
@@ -351,6 +351,24 @@ describe('startEmailConfirmation', () => {
       return { data: { session: mockAside.held, user: USER }, error: null };
     });
     expect(await c.verify('12345678')).toBe('error');
+    expect(mockUpdateUser).toHaveBeenCalledWith({ password: 'correct horse' });
+    expect(mockAdminSignOut).toHaveBeenCalledWith('access-1', 'others');
+    expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(order(mockUpdateUser)).toBeLessThan(order(mockAsideSignOut));
+    expect(order(mockAdminSignOut)).toBeLessThan(order(mockAsideSignOut));
+    expect(mockSetSession).not.toHaveBeenCalled();
+  });
+
+  test('a sign-in left while the code is being checked only signs its session out', async () => {
+    const c = startEmailConfirmation('ava@example.com', null);
+    mockVerifyOtp.mockImplementationOnce(async () => {
+      await c.abandon();
+      mockAside.held = sessionFor(1);
+      return { data: { session: mockAside.held, user: USER }, error: null };
+    });
+    expect(await c.verify('12345678')).toBe('error');
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+    expect(mockAdminSignOut).not.toHaveBeenCalled();
     expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(mockSetSession).not.toHaveBeenCalled();
   });
@@ -385,7 +403,14 @@ describe('resendEmailCode', () => {
   });
 
   test.each([
+    // Auth's one-mail-a-minute refusal: a code went out within the minute.
+    [{ status: 429, code: 'over_email_send_rate_limit', message: 'For security purposes, you can only request this after 42 seconds.' }, 'too_soon'],
+    [{ status: 429, code: 'over_email_send_rate_limit', message: 'For security purposes, you can only request this after 1 second.' }, 'too_soon'],
+    // The project's hourly cap shares the code but sent nothing.
+    [{ status: 429, code: 'over_email_send_rate_limit', message: 'Email rate limit exceeded' }, 'rate_limited'],
     [{ status: 429, code: 'over_email_send_rate_limit' }, 'rate_limited'],
+    // The send-email hook's per-address cap.
+    [{ status: 429, message: 'Too many codes for this address. Try again later.' }, 'rate_limited'],
     [{ status: 429, code: 'over_request_rate_limit' }, 'rate_limited'],
     [OFFLINE, 'offline'],
     [{ status: 500, code: 'unexpected_failure' }, 'error'],

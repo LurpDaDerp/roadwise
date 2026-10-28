@@ -19,7 +19,12 @@ export type RegisterResult = 'ok' | 'confirm_email' | 'exists' | 'weak_password'
 export type SignInResult = 'ok' | 'invalid' | 'unconfirmed' | 'rate_limited' | 'error';
 /** `unfinished`: the code was right, but the account could not be made the driver's yet (Try again). */
 export type VerifyResult = 'ok' | 'wrong_code' | 'rate_limited' | 'offline' | 'unfinished' | 'error';
-export type ResendResult = 'sent' | 'rate_limited' | 'offline' | 'error';
+/**
+ * `too_soon`: Auth's one-mail-a-minute refusal for this address, so a code went out within the
+ * minute and still works. `rate_limited`: any other refusal for too many (the per-address cap of
+ * the send-email hook, the project's hourly mails, too many requests): no code went out.
+ */
+export type ResendResult = 'sent' | 'too_soon' | 'rate_limited' | 'offline' | 'error';
 
 const codeOf = (error: unknown): { status?: unknown; code?: unknown; name?: unknown } =>
   typeof error === 'object' && error !== null ? (error as { status?: unknown; code?: unknown; name?: unknown }) : {};
@@ -28,6 +33,17 @@ const codeOf = (error: unknown): { status?: unknown; code?: unknown; name?: unkn
 const isRateLimited = (error: unknown): boolean => {
   const { status, code } = codeOf(error);
   return status === 429 || code === 'over_request_rate_limit' || code === 'over_email_send_rate_limit';
+};
+
+/**
+ * Auth's refusal of a second mail to one address within `max_frequency` ("you can only request
+ * this after N seconds"). The project's hourly cap shares its code (`over_email_send_rate_limit`)
+ * but not its words, and no code went out then, so both must match; anything else reads as no code.
+ */
+const isTooSoon = (error: unknown): boolean => {
+  const { code } = codeOf(error);
+  const message = (error as { message?: unknown } | null)?.message;
+  return code === 'over_email_send_rate_limit' && typeof message === 'string' && /after \d+ seconds?/i.test(message);
 };
 
 /** A request that never reached Auth: supabase-js answers it with a retryable fetch error, status 0. */
@@ -176,6 +192,26 @@ export function startEmailConfirmation(email: string, chosenPassword: string | n
     return 'ok';
   };
 
+  // The address is confirmed from the right code on, so a sign-up left before it finished makes one
+  // more try at steps 1 and 2 before the session goes: a confirmed account must not keep a password
+  // someone else set. Best effort; offline it leaves things as they were.
+  const secureBeforeLeaving = async (client: AsideAuth, password: string) => {
+    try {
+      const session = await liveSession(client);
+      if (session === null) return;
+      await client.updateUser({ password });
+      await client.admin.signOut(session.access_token, 'others');
+    } catch {
+      // Left as it was.
+    }
+  };
+
+  /** The confirmed session goes with the screen: on a sign-up, after one more try at steps 1 and 2. */
+  const leave = async (client: AsideAuth) => {
+    if (chosenPassword !== null) await secureBeforeLeaving(client, chosenPassword);
+    await revoke(client);
+  };
+
   const verify = async (code: string): Promise<VerifyResult> => {
     if (abandoned) return 'error';
     if (holding) return finish();
@@ -193,35 +229,20 @@ export function startEmailConfirmation(email: string, chosenPassword: string | n
       return 'error';
     }
     if (abandoned) {
-      // Left while the code was being checked: the session it signed in goes with the screen.
-      await revoke(client);
+      // Left while the code was being checked: the address is confirmed by now, so the session it
+      // signed in goes the way an abandoned one does.
+      await leave(client);
       return 'error';
     }
     holding = true;
     return finish();
   };
 
-  // The address is confirmed from the right code on, so a sign-up left before it finished makes one
-  // more try at steps 1 and 2 before the session goes: a confirmed account must not keep a password
-  // someone else set. Best effort; offline it leaves things as they were.
-  const secureBeforeLeaving = async (client: AsideAuth, password: string) => {
-    try {
-      const session = await liveSession(client);
-      if (session === null) return;
-      await client.updateUser({ password });
-      await client.admin.signOut(session.access_token, 'others');
-    } catch {
-      // Left as it was.
-    }
-  };
-
   const abandon = async () => {
     abandoned = true;
     const client = holding ? aside : null;
     holding = false;
-    if (client === null) return;
-    if (chosenPassword !== null) await secureBeforeLeaving(client, chosenPassword);
-    await revoke(client);
+    if (client !== null) await leave(client);
   };
 
   return { verify, finish, abandon };
@@ -235,6 +256,7 @@ export async function resendEmailCode(email: string): Promise<ResendResult> {
   try {
     const { error } = await supabase.auth.resend({ type: 'signup', email: normalise(email) });
     if (!error) return 'sent';
+    if (isTooSoon(error)) return 'too_soon';
     if (isRateLimited(error)) return 'rate_limited';
     return isOffline(error) ? 'offline' : 'error';
   } catch {

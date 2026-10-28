@@ -24,7 +24,7 @@ const mockStartConfirmation = jest.fn((_email: string, _password: string | null)
 const mockVerify = jest.fn(async (_code: string) => 'ok' as Verified);
 const mockFinish = jest.fn(async () => 'ok' as Verified);
 const mockAbandon = jest.fn(async () => {});
-const mockResend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'rate_limited' | 'offline' | 'error');
+const mockResend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'too_soon' | 'rate_limited' | 'offline' | 'error');
 const mockClaim = jest.fn(async (_username: string) => true);
 const mockRefreshProfile = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
@@ -298,7 +298,7 @@ describe('creating an account with an email and password', () => {
   test.each([
     ['exists', 'That email already has an account. Sign in instead.'],
     ['weak_password', 'That password is too weak. Use at least 8 characters.'],
-    ['rate_limited', 'Too many tries. Try again in a minute.'],
+    ['rate_limited', 'Too many tries. Try again in a few minutes.'],
     ['error', "Couldn't sign in. Try again."],
   ] as const)('a refused registration (%s) says so in place and claims nothing', async (result, words) => {
     mockRegister.mockResolvedValueOnce(result);
@@ -341,7 +341,7 @@ describe('signing in with an email and password', () => {
 
   test.each([
     ['invalid', "That email and password don't match. Check them and try again."],
-    ['rate_limited', 'Too many tries. Try again in a minute.'],
+    ['rate_limited', 'Too many tries. Try again in a few minutes.'],
     ['error', "Couldn't sign in. Try again."],
   ] as const)('a refused sign-in (%s) says so in place', async (result, words) => {
     mockSignInPassword.mockResolvedValueOnce(result);
@@ -492,11 +492,21 @@ describe('confirming the address with the mailed code', () => {
   });
 
   test('a code sent within the minute still counts: the code screen waits out the rest', async () => {
-    mockResend.mockResolvedValueOnce('rate_limited');
+    mockResend.mockResolvedValueOnce('too_soon');
     await signInUnconfirmed();
     expect(await screen.findByText('Check your email')).toBeOnTheScreen();
+    expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
     expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('any other refusal for too many (the per-address cap) sent nothing: the screen says so and never "We sent"', async () => {
+    mockResend.mockResolvedValueOnce('rate_limited');
+    await signInUnconfirmed();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many tries. Try again in a few minutes.');
+    expect(screen.queryByText(/We sent/)).toBeNull();
+    expect(screen.getByText('Confirm ava@example.com with an 8-digit code.')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Resend code' })).toBeEnabled();
   });
 
   test('a fresh code that could not be sent shows why, with Resend code ready', async () => {

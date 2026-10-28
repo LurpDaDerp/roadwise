@@ -4,7 +4,7 @@
 // request that wants the mail; an error answer fails that request, and the code it was about to
 // store goes with it. So a code exists only for the one mail RoadWise sends:
 //   * `signup` (a sign-up's confirmation code, also its Resend code): mailed through Resend, at most
-//     5 an hour and 10 a day per address (`private.take_auth_mail`, else 429).
+//     5 an hour and 10 a day per inbox (`private.take_auth_mail` on `capKey`, else 429).
 //   * A security notification (`*_notification`): carries no code; skipped without a mail, so a
 //     notification switched on in the dashboard can't break the change it reports.
 //   * Every other type (`recovery`, `magiclink`, `email`, `invite`, `email_change`,
@@ -58,6 +58,28 @@ export interface SendEmailDeps {
 const done = (): Response => json(200, {});
 /** A refusal Auth turns into an error of `httpCode` for the request that wanted the mail. */
 const refuse = (httpCode: number, message: string): Response => json(200, { error: { http_code: httpCode, message } });
+
+/** Gmail ignores dots in the name and treats googlemail.com as gmail.com. */
+const GMAIL_DOMAINS: ReadonlySet<string> = new Set(['gmail.com', 'googlemail.com']);
+
+/**
+ * The address the per-address cap counts against: lower-cased, a "+tag" dropped (for every
+ * domain), and a Gmail name without its dots on gmail.com. Many spellings that reach one inbox
+ * share one cap; the mail itself still goes to the address as given.
+ */
+export function capKey(address: string): string {
+  const lower = address.trim().toLowerCase();
+  const at = lower.lastIndexOf('@');
+  let name = lower.slice(0, at);
+  let domain = lower.slice(at + 1);
+  const plus = name.indexOf('+');
+  if (plus > 0) name = name.slice(0, plus);
+  if (GMAIL_DOMAINS.has(domain)) {
+    name = name.replaceAll('.', '');
+    domain = 'gmail.com';
+  }
+  return `${name}@${domain}`;
+}
 
 async function sha256(text: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
@@ -147,7 +169,7 @@ export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<
 
     let allowed: boolean;
     try {
-      allowed = await deps.takeMail(await sha256(to.toLowerCase()));
+      allowed = await deps.takeMail(await sha256(capKey(to)));
     } catch (err) {
       log.error('[send-email] cap check failed: no mail is sent', { id, type, user, err: err instanceof Error ? err.name : 'unknown' });
       return refuse(500, 'The code could not be sent.');

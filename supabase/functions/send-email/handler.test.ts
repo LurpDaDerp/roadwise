@@ -1,5 +1,5 @@
 import { assert, assertEquals } from '@std/assert';
-import { createSendEmail, MAX_BODY_BYTES, type SendEmailDeps } from './handler.ts';
+import { capKey, createSendEmail, MAX_BODY_BYTES, type SendEmailDeps } from './handler.ts';
 import type { Delivery, Mail } from './mail.ts';
 
 const KEY = new Uint8Array(32).map((_, i) => i * 7);
@@ -245,4 +245,29 @@ Deno.test('a chunked body under the cap is read whole and checked as usual', asy
   const w = world();
   assertEquals(await call(w, new Request(signedReq.url, { method: 'POST', headers, body: stream })), { status: 200, body: {} });
   assertEquals(w.sent.length, 1);
+});
+
+Deno.test('the cap key: one inbox, one cap (lower case, no +tag anywhere, Gmail without dots on gmail.com)', () => {
+  assertEquals(capKey('victim+1@gmail.com'), 'victim@gmail.com');
+  assertEquals(capKey('v.ictim@gmail.com'), 'victim@gmail.com');
+  assertEquals(capKey(' Victim@GoogleMail.com '), 'victim@gmail.com');
+  assertEquals(capKey('V.i.c.t.i.m+roadwise@googlemail.com'), 'victim@gmail.com');
+  assertEquals(capKey('Ava+x@Example.com'), 'ava@example.com');
+  // Elsewhere a dot is part of the name.
+  assertEquals(capKey('a.b@example.com'), 'a.b@example.com');
+  // A name that is only a tag keeps it rather than becoming empty.
+  assertEquals(capKey('+x@example.com'), '+x@example.com');
+});
+
+Deno.test('spellings of one Gmail inbox are counted as one address, and each mail still goes where it was asked', async () => {
+  const w = world();
+  for (const email of ['victim+1@gmail.com', 'v.ictim@gmail.com', 'Victim@GoogleMail.com']) {
+    assertEquals((await call(w, await signed(payload('signup', { email })))).status, 200);
+  }
+  const key = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('victim@gmail.com')));
+  assertEquals(w.taken, [key, key, key]);
+  assertEquals(
+    w.sent.map((s) => s.mail.to),
+    ['victim+1@gmail.com', 'v.ictim@gmail.com', 'Victim@GoogleMail.com']
+  );
 });
