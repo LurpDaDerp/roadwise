@@ -7,8 +7,8 @@ import { CODE_LENGTH, RESEND_COOLDOWN_S, type ResendResult, type VerifyResult } 
 
 export const emailCodeCopy = {
   title: 'Check your email',
-  sentTo: (email: string) => `We sent a 6-digit code to ${email}.`,
-  codeLabel: '6-digit code',
+  sentTo: (email: string) => `We sent an 8-digit code to ${email}.`,
+  codeLabel: '8-digit code',
   confirm: 'Confirm',
   tryAgain: 'Try again',
   resend: 'Resend code',
@@ -44,8 +44,8 @@ export function resendWait(sentAt: number | null, now: number): number {
 }
 
 /**
- * The code screen an email account confirms its address on: the 6-digit code from the confirmation
- * mail, typed in (or offered by iOS from the mail), checked as soon as all 6 digits are in. Resend
+ * The code screen an email account confirms its address on: the 8-digit code from the confirmation
+ * mail, typed in (or offered by iOS from the mail), checked as soon as all 8 digits are in. Resend
  * code waits out the server's minute between mails, and "Use a different email" goes back to the
  * form with everything typed there kept. The right code signs the driver in, and the usual
  * after-sign-in flow takes it from there (`onVerify` does what the form owes first). A right code

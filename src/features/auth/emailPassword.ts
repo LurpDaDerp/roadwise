@@ -7,7 +7,7 @@ import { createAsideAuth, type AsideAuth } from './asideAuth';
 export const PASSWORD_MIN = 8;
 
 /** Digits in the code the confirmation mail carries: the server's `otp_length` (supabase/config.toml). */
-export const CODE_LENGTH = 6;
+export const CODE_LENGTH = 8;
 
 /**
  * Seconds before Resend code can send another mail: the server's `max_frequency` in production
@@ -40,7 +40,7 @@ const normalise = (email: string): string => email.trim().toLowerCase();
 
 /**
  * Creates the account. With email confirmations on (supabase/config.toml) the answer carries no
- * session and Auth mails a 6-digit code to the address: `confirm_email`, and the code screen takes
+ * session and Auth mails an 8-digit code to the address: `confirm_email`, and the code screen takes
  * it from there. An address that already has a confirmed account gets the same quiet answer from
  * Auth, but with a stand-in user that has no identities and no mail sent, so it reads as `exists`.
  * An answer with a session (a project with confirmations off) is `ok`: the driver is in at once.
@@ -201,11 +201,27 @@ export function startEmailConfirmation(email: string, chosenPassword: string | n
     return finish();
   };
 
+  // The address is confirmed from the right code on, so a sign-up left before it finished makes one
+  // more try at steps 1 and 2 before the session goes: a confirmed account must not keep a password
+  // someone else set. Best effort; offline it leaves things as they were.
+  const secureBeforeLeaving = async (client: AsideAuth, password: string) => {
+    try {
+      const session = await liveSession(client);
+      if (session === null) return;
+      await client.updateUser({ password });
+      await client.admin.signOut(session.access_token, 'others');
+    } catch {
+      // Left as it was.
+    }
+  };
+
   const abandon = async () => {
     abandoned = true;
     const client = holding ? aside : null;
     holding = false;
-    if (client !== null) await revoke(client);
+    if (client === null) return;
+    if (chosenPassword !== null) await secureBeforeLeaving(client, chosenPassword);
+    await revoke(client);
   };
 
   return { verify, finish, abandon };

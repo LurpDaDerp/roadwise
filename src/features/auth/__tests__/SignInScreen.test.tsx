@@ -377,12 +377,12 @@ describe('confirming the address with the mailed code', () => {
     await fireEvent.press(screen.getByRole('button', REGISTER));
     await screen.findByText('Check your email');
   };
-  const typeCode = (code: string) => fireEvent.changeText(screen.getByLabelText('6-digit code'), code);
+  const typeCode = (code: string) => fireEvent.changeText(screen.getByLabelText('8-digit code'), code);
 
   test('a sign-up goes to the code screen, naming the address, with nothing claimed yet', async () => {
     await register();
-    expect(screen.getByText('We sent a 6-digit code to Ava@Example.com.')).toBeOnTheScreen();
-    expect(screen.getByLabelText('6-digit code').props.textContentType).toBe('oneTimeCode');
+    expect(screen.getByText('We sent an 8-digit code to Ava@Example.com.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('8-digit code').props.textContentType).toBe('oneTimeCode');
     expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
     expect(screen.queryByLabelText('Password')).toBeNull();
     expect(mockClaim).not.toHaveBeenCalled();
@@ -394,9 +394,9 @@ describe('confirming the address with the mailed code', () => {
     await register();
     // The confirmation carries the password chosen on the form, to make the account the driver's.
     expect(mockStartConfirmation).toHaveBeenCalledWith(' Ava@Example.com ', 'correct horse');
-    await typeCode('123456');
+    await typeCode('12345678');
     await waitFor(() => expect(mockRefreshProfile).toHaveBeenCalledTimes(1));
-    expect(mockVerify).toHaveBeenCalledWith('123456');
+    expect(mockVerify).toHaveBeenCalledWith('12345678');
     expect(mockClaim).toHaveBeenCalledWith('ava_01');
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -404,7 +404,7 @@ describe('confirming the address with the mailed code', () => {
   test('a wrong code claims nothing and says so in place', async () => {
     mockVerify.mockResolvedValueOnce('wrong_code');
     await register();
-    await typeCode('000000');
+    await typeCode('00000000');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'That code is wrong or has expired. Check it, or send a new one.'
     );
@@ -414,7 +414,7 @@ describe('confirming the address with the mailed code', () => {
   test('a right code whose account could not be finished claims nothing; Try again finishes, then claims', async () => {
     mockVerify.mockResolvedValueOnce('unfinished');
     await register();
-    await typeCode('123456');
+    await typeCode('12345678');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Couldn't finish signing you in. Check your connection and try again."
     );
@@ -434,7 +434,7 @@ describe('confirming the address with the mailed code', () => {
   test('the screen going any other way (a route change, Android back) gives the confirmation up too', async () => {
     mockVerify.mockResolvedValueOnce('unfinished');
     await register();
-    await typeCode('123456');
+    await typeCode('12345678');
     await screen.findByRole('button', { name: 'Try again' });
     expect(mockAbandon).not.toHaveBeenCalled();
     await screen.unmount();
@@ -486,8 +486,8 @@ describe('confirming the address with the mailed code', () => {
 
     // Nothing was chosen on a form: no password to set, and no username to claim.
     expect(mockStartConfirmation).toHaveBeenCalledWith('ava@example.com', null);
-    await typeCode('123456');
-    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('123456'));
+    await typeCode('12345678');
+    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('12345678'));
     expect(mockClaim).not.toHaveBeenCalled();
   });
 

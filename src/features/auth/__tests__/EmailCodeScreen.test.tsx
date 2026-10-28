@@ -13,7 +13,7 @@ const onFinish = jest.fn(async (): Promise<VerifyResult> => 'ok');
 const onResend = jest.fn(async (): Promise<ResendResult> => 'sent');
 const onBack = jest.fn();
 
-const CODE = { name: '6-digit code' };
+const CODE = { name: '8-digit code' };
 const CONFIRM = { name: 'Confirm' };
 
 beforeEach(() => {
@@ -53,29 +53,29 @@ const seconds = async (n: number) => {
 test('a title, the line naming the address, and a one-time-code field iOS can fill from the mail', async () => {
   await mount();
   expect(screen.getByRole('header')).toHaveTextContent('Check your email');
-  expect(screen.getByText('We sent a 6-digit code to ava@example.com.')).toBeOnTheScreen();
+  expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
   const field = screen.getByLabelText(CODE.name);
   expect(field.props.textContentType).toBe('oneTimeCode');
   expect(field.props.autoComplete).toBe('one-time-code');
   expect(field.props.keyboardType).toBe('number-pad');
-  expect(field.props.maxLength).toBe(6);
+  expect(field.props.maxLength).toBe(8);
 });
 
-test('takes digits only, and checks the code once all 6 are in', async () => {
+test('takes digits only, and checks the code once all 8 are in', async () => {
   await mount();
   await fireEvent.changeText(screen.getByLabelText(CODE.name), '12 3-4');
   expect(screen.getByLabelText(CODE.name).props.value).toBe('1234');
   expect(screen.getByRole('button', CONFIRM)).toBeDisabled();
   expect(onVerify).not.toHaveBeenCalled();
-  await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+  await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
   expect(onVerify).toHaveBeenCalledTimes(1);
-  expect(onVerify).toHaveBeenCalledWith('123456');
+  expect(onVerify).toHaveBeenCalledWith('12345678');
 });
 
 test('a code pasted or filled in whole is checked at once', async () => {
   await mount();
-  await fireEvent.changeText(screen.getByLabelText(CODE.name), 'Your code: 654321');
-  expect(onVerify).toHaveBeenCalledWith('654321');
+  await fireEvent.changeText(screen.getByLabelText(CODE.name), 'Your code: 87654321');
+  expect(onVerify).toHaveBeenCalledWith('87654321');
 });
 
 test.each([
@@ -86,7 +86,7 @@ test.each([
 ] as const)('a refused code (%s) says so in plain words, and Confirm tries again', async (result, words) => {
   onVerify.mockResolvedValueOnce(result);
   await mount();
-  await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+  await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent(words);
   expect(alert.props.accessibilityLiveRegion).toBe('polite');
@@ -145,7 +145,7 @@ test('while the right code signs in, nothing more can be pressed', async () => {
   let finish: (r: VerifyResult) => void = () => {};
   onVerify.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
   await mount({ codeSent: false });
-  await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+  await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
   expect(screen.getByRole('button', { name: 'Use a different email' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Resend code' })).toBeDisabled();
   await act(async () => finish('ok'));
@@ -166,7 +166,7 @@ describe('a right code whose account could not be finished', () => {
   test('stays signed out with the reason, and Try again in place of the code and Resend code', async () => {
     onVerify.mockResolvedValueOnce('unfinished');
     await mount({ codeSent: false });
-    await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+    await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Couldn't finish signing you in. Check your connection and try again."
     );
@@ -180,7 +180,7 @@ describe('a right code whose account could not be finished', () => {
     onVerify.mockResolvedValueOnce('unfinished');
     onFinish.mockResolvedValueOnce('unfinished');
     await mount();
-    await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+    await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
     await fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
     expect(onFinish).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't finish signing you in.", { exact: false });

@@ -83,8 +83,8 @@ test('passwords need at least 8 characters, as the server is set to require', ()
   expect(PASSWORD_MIN).toBe(8);
 });
 
-test("the code is 6 digits and Resend waits a minute, as the server's otp_length and max_frequency say", () => {
-  expect(CODE_LENGTH).toBe(6);
+test("the code is 8 digits and Resend waits a minute, as the server's otp_length and max_frequency say", () => {
+  expect(CODE_LENGTH).toBe(8);
   expect(RESEND_COOLDOWN_S).toBe(60);
 });
 
@@ -155,8 +155,8 @@ describe('startEmailConfirmation', () => {
 
   test('a sign-up: the right code, then the chosen password, then no other session, then the app signs in', async () => {
     const c = startEmailConfirmation(' Ava@Example.com ', 'correct horse');
-    expect(await c.verify('123456')).toBe('ok');
-    expect(mockVerifyOtp).toHaveBeenCalledWith({ email: 'ava@example.com', token: '123456', type: 'signup' });
+    expect(await c.verify('12345678')).toBe('ok');
+    expect(mockVerifyOtp).toHaveBeenCalledWith({ email: 'ava@example.com', token: '12345678', type: 'signup' });
     expect(mockUpdateUser).toHaveBeenCalledWith({ password: 'correct horse' });
     // Through Auth's own answer to the logout, so a refusal can't pass as done.
     expect(mockAdminSignOut).toHaveBeenCalledWith('access-1', 'others');
@@ -171,7 +171,7 @@ describe('startEmailConfirmation', () => {
 
   test('the same password refused is the usual answer: the account was already the driver’s', async () => {
     mockUpdateUser.mockResolvedValue({ data: { user: null }, error: { status: 422, code: 'same_password' } });
-    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('123456')).toBe('ok');
+    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('12345678')).toBe('ok');
     expect(mockSetSession).toHaveBeenCalledWith(handedOver(1));
   });
 
@@ -183,7 +183,7 @@ describe('startEmailConfirmation', () => {
   ])('a password that could not be set (%s) fails closed: never signed in, and Try again finishes', async (_label, fail) => {
     fail();
     const c = startEmailConfirmation('ava@example.com', 'correct horse');
-    expect(await c.verify('123456')).toBe('unfinished');
+    expect(await c.verify('12345678')).toBe('unfinished');
     expect(mockSetSession).not.toHaveBeenCalled();
     expect(mockAdminSignOut).not.toHaveBeenCalled();
 
@@ -205,7 +205,7 @@ describe('startEmailConfirmation', () => {
     mockAdminSignOut.mockResolvedValue({ data: null, error });
     for (const password of ['correct horse', null]) {
       mockSetSession.mockClear();
-      expect(await startEmailConfirmation('ava@example.com', password).verify('123456')).toBe('unfinished');
+      expect(await startEmailConfirmation('ava@example.com', password).verify('12345678')).toBe('unfinished');
       expect(mockSetSession).not.toHaveBeenCalled();
     }
   });
@@ -215,7 +215,7 @@ describe('startEmailConfirmation', () => {
       mockAside.held = sessionFor(1, 120);
       return { data: { session: mockAside.held, user: USER }, error: null };
     });
-    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('123456')).toBe('ok');
+    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('12345678')).toBe('ok');
     expect(mockRefreshSession).toHaveBeenCalledTimes(1);
     expect(order(mockRefreshSession)).toBeLessThan(order(mockUpdateUser));
     expect(mockAdminSignOut).toHaveBeenCalledWith('access-2', 'others');
@@ -232,7 +232,7 @@ describe('startEmailConfirmation', () => {
       return { data: { session: mockAside.held, user: USER }, error: null };
     });
     fail();
-    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('123456')).toBe('unfinished');
+    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('12345678')).toBe('unfinished');
     expect(mockUpdateUser).not.toHaveBeenCalled();
     expect(mockAdminSignOut).not.toHaveBeenCalled();
     expect(mockSetSession).not.toHaveBeenCalled();
@@ -245,7 +245,7 @@ describe('startEmailConfirmation', () => {
       if (password === null) mockAdminSignOut.mockResolvedValueOnce({ data: null, error: OFFLINE });
       else failPassword();
       const c = startEmailConfirmation('ava@example.com', password);
-      expect(await c.verify('123456')).toBe('unfinished');
+      expect(await c.verify('12345678')).toBe('unfinished');
 
       jest.setSystemTime(new Date('2026-10-27T13:30:00Z'));
       mockUpdateUser.mockReset().mockResolvedValue({ data: { user: USER }, error: null });
@@ -259,14 +259,14 @@ describe('startEmailConfirmation', () => {
   test('a handover the app could not take is unfinished, and a second code check only finishes', async () => {
     mockSetSession.mockResolvedValueOnce({ data: { session: null }, error: OFFLINE });
     const c = startEmailConfirmation('ava@example.com', 'correct horse');
-    expect(await c.verify('123456')).toBe('unfinished');
-    expect(await c.verify('123456')).toBe('ok');
+    expect(await c.verify('12345678')).toBe('unfinished');
+    expect(await c.verify('12345678')).toBe('ok');
     expect(mockVerifyOtp).toHaveBeenCalledTimes(1);
     expect(mockSetSession).toHaveBeenCalledTimes(2);
   });
 
   test('a sign-in to an unconfirmed account sets no password, but still signs out every other session', async () => {
-    expect(await startEmailConfirmation('ava@example.com', null).verify('123456')).toBe('ok');
+    expect(await startEmailConfirmation('ava@example.com', null).verify('12345678')).toBe('ok');
     expect(mockUpdateUser).not.toHaveBeenCalled();
     expect(mockAdminSignOut).toHaveBeenCalledWith('access-1', 'others');
     expect(mockSetSession).toHaveBeenCalledWith(handedOver(1));
@@ -280,16 +280,16 @@ describe('startEmailConfirmation', () => {
     [{ status: 500, code: 'unexpected_failure' }, 'error'],
   ])('a refused code %j is %s, and nothing else happens', async (error, expected) => {
     mockVerifyOtp.mockResolvedValue({ data: { session: null, user: null }, error });
-    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('123456')).toBe(expected);
+    expect(await startEmailConfirmation('ava@example.com', 'correct horse').verify('12345678')).toBe(expected);
     expect(mockUpdateUser).not.toHaveBeenCalled();
     expect(mockSetSession).not.toHaveBeenCalled();
   });
 
   test('an answer with no session, or a throw, is an error rather than a sign-in', async () => {
     mockVerifyOtp.mockResolvedValue({ data: { session: null, user: null }, error: null });
-    expect(await startEmailConfirmation('ava@example.com', 'x').verify('123456')).toBe('error');
+    expect(await startEmailConfirmation('ava@example.com', 'x').verify('12345678')).toBe('error');
     mockVerifyOtp.mockRejectedValue(new Error('boom'));
-    expect(await startEmailConfirmation('ava@example.com', 'x').verify('123456')).toBe('error');
+    expect(await startEmailConfirmation('ava@example.com', 'x').verify('12345678')).toBe('error');
     expect(mockSetSession).not.toHaveBeenCalled();
   });
 
@@ -297,16 +297,50 @@ describe('startEmailConfirmation', () => {
     const early = startEmailConfirmation('ava@example.com', 'correct horse');
     await early.abandon();
     expect(mockAsideSignOut).not.toHaveBeenCalled();
-    expect(await early.verify('123456')).toBe('error');
+    expect(await early.verify('12345678')).toBe('error');
     expect(mockVerifyOtp).not.toHaveBeenCalled();
 
-    failPassword();
+    mockAdminSignOut.mockResolvedValueOnce({ data: null, error: OFFLINE });
     const c = startEmailConfirmation('ava@example.com', 'correct horse');
-    expect(await c.verify('123456')).toBe('unfinished');
+    expect(await c.verify('12345678')).toBe('unfinished');
     await c.abandon();
     expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(await c.finish()).toBe('error');
     expect(mockSetSession).not.toHaveBeenCalled();
+  });
+
+  test('a sign-up left unfinished tries once more to set the chosen password and sign out the rest, then signs out', async () => {
+    failPassword();
+    const c = startEmailConfirmation('ava@example.com', 'correct horse');
+    expect(await c.verify('12345678')).toBe('unfinished');
+    mockUpdateUser.mockReset().mockResolvedValue({ data: { user: USER }, error: null });
+    await c.abandon();
+    expect(mockUpdateUser).toHaveBeenCalledWith({ password: 'correct horse' });
+    expect(mockAdminSignOut).toHaveBeenCalledWith('access-1', 'others');
+    expect(order(mockUpdateUser)).toBeLessThan(order(mockAdminSignOut));
+    expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(order(mockAdminSignOut)).toBeLessThan(order(mockAsideSignOut));
+    expect(mockSetSession).not.toHaveBeenCalled();
+  });
+
+  test('that last try failing (offline) still signs the session out', async () => {
+    failPassword();
+    const c = startEmailConfirmation('ava@example.com', 'correct horse');
+    expect(await c.verify('12345678')).toBe('unfinished');
+    mockUpdateUser.mockReset().mockRejectedValue(new Error('offline'));
+    await c.abandon();
+    expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  test('a sign-in left unfinished has no password to set: it only signs out', async () => {
+    mockAdminSignOut.mockResolvedValueOnce({ data: null, error: OFFLINE });
+    const c = startEmailConfirmation('ava@example.com', null);
+    expect(await c.verify('12345678')).toBe('unfinished');
+    mockAdminSignOut.mockClear();
+    await c.abandon();
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+    expect(mockAdminSignOut).not.toHaveBeenCalled();
+    expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
   });
 
   test('leaving while the code is being checked signs out the session it brings, and hands nothing over', async () => {
@@ -316,7 +350,7 @@ describe('startEmailConfirmation', () => {
       mockAside.held = sessionFor(1);
       return { data: { session: mockAside.held, user: USER }, error: null };
     });
-    expect(await c.verify('123456')).toBe('error');
+    expect(await c.verify('12345678')).toBe('error');
     expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(mockSetSession).not.toHaveBeenCalled();
   });
@@ -327,7 +361,7 @@ describe('startEmailConfirmation', () => {
       await c.abandon();
       return { data: { session: {} }, error: null };
     });
-    expect(await c.verify('123456')).toBe('ok');
+    expect(await c.verify('12345678')).toBe('ok');
     expect(mockAsideSignOut).not.toHaveBeenCalled();
   });
 
@@ -337,7 +371,7 @@ describe('startEmailConfirmation', () => {
       await c.abandon();
       return { data: { session: null }, error: OFFLINE };
     });
-    expect(await c.verify('123456')).toBe('unfinished');
+    expect(await c.verify('12345678')).toBe('unfinished');
     expect(mockAsideSignOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(await c.finish()).toBe('error');
   });
