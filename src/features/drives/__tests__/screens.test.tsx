@@ -33,6 +33,8 @@ jest.mock('../useDriveScores', () => ({ useDriveScores: () => mockScores }));
 let mockAuto: { state: string } = { state: 'unsupported' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
 let mockHistory: unknown[] = [];
+let mockArchived: unknown = undefined;
+jest.mock('@/data/queries/archived', () => ({ useArchivedKinds: () => ({ data: mockArchived }) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -41,6 +43,7 @@ beforeEach(() => {
   mockScores = new Map();
   mockAuto = { state: 'unsupported' };
   mockHistory = [];
+  mockArchived = undefined;
 });
 
 test('the summary reads the drive and the uses left, and reports through the drive actions', async () => {
@@ -89,4 +92,8 @@ test('the history shows each drive with its score, and the empty list words foll
   mockAuto = { state: 'on' };
   await draw(<DriveHistoryScreen />);
   expect(screen.getByText("Your drives show up here after you've driven. RoadWise notices them on its own.")).toBeOnTheScreen();
+  // Drives past 183 days (archived) exist: the empty list says so instead of "yet".
+  mockArchived = { all: true, clean: false, passenger: false };
+  await draw(<DriveHistoryScreen />);
+  expect(screen.getByText('No drives in the last 6 months')).toBeOnTheScreen();
 });

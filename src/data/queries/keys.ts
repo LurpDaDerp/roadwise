@@ -14,6 +14,8 @@ export const queryKeys = {
   statSums: (sinceMs: number | null) => ['stats', sinceMs] as const,
   driveCount: () => ['driveCount'] as const,
   routes: (sinceMs: number | null) => ['routes', sinceMs] as const,
+  /** Which kinds of drive are archived (Drive history's empty titles). Under `drives`: every change refreshes it. */
+  archivedKinds: () => ['drives', 'archived'] as const,
   /** The route pool's lines (archived drives' routes, with no drive and no date). */
   routePool: () => ['routes', 'pool'] as const,
   windowEvents: (sinceMs: number | null) => ['stats', 'events', sinceMs] as const,

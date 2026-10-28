@@ -3,6 +3,7 @@ import { uuid } from '@/core/engine/__fixtures__/drives';
 import { archiveDue, type Db } from '@/data/db';
 import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { readScoredDrives, readWindowEvents } from '@/data/queries/analytics';
+import { readArchivedKinds } from '@/data/queries/archived';
 import {
   readDriveCount,
   readDriveDetail,
@@ -95,6 +96,13 @@ test('the lists and a drive’s own read leave an archived drive out', async () 
   expect((await readScoredDrives(db, null)).find((d) => d.clientTripId === uuid(3))).toMatchObject({ archived: true, polyline: null, fromLabel: null });
   // Its events keep no place.
   expect((await readDriveEvents(db, [uuid(3)])).get(uuid(3))).toEqual([expect.objectContaining({ type: 'speeding', lat: null, lng: null })]);
+});
+
+test('Drive history learns which kinds of drive are archived (its empty titles): any, clean, “Wasn’t driving”', async () => {
+  expect(await readArchivedKinds(db)).toEqual({ all: false, clean: false, passenger: false });
+  await archiveDue(db, NOW);
+  // Drive 4 (clean) and 5 ("Wasn't driving") are among the archived.
+  expect(await readArchivedKinds(db)).toEqual({ all: true, clean: true, passenger: true });
 });
 
 test('all time, the routes are the drives’ own and then the pool’s: a scored archived drive’s line is still drawn', async () => {

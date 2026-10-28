@@ -41,6 +41,27 @@ test('drives are grouped by week, newest first, each week with its drives and di
   expect(screen.queryByText(NO_POINTS)).toBeNull();
 });
 
+test('a drive still uploading reads "score" until its upload has failed, then "not synced", as its recap says', async () => {
+  await draw(
+    <HistoryView
+      {...props({
+        drives: [
+          drive({ clientTripId: 'e', startedAt: NOW - 1000, status: 'pending', result: null }),
+          drive({ clientTripId: 'f', startedAt: NOW - 2000, status: 'pending', result: null, uploadFailed: true }),
+        ],
+        scores: new Map([
+          ['e', 90],
+          ['f', 88],
+        ]),
+      })}
+    />
+  );
+  expect(within(screen.getByTestId('drive-e')).getByText('score')).toBeOnTheScreen();
+  expect(within(screen.getByTestId('drive-e')).queryByText('not synced')).toBeNull();
+  expect(within(screen.getByTestId('drive-f')).getByText('not synced')).toBeOnTheScreen();
+  expect(screen.getByTestId('drive-f').props.accessibilityLabel).toContain('drive score 88, not synced');
+});
+
 test('a row shows its score in its merit colour (no icon), "not synced" for a drive still to upload, else the word', async () => {
   await draw(<HistoryView {...props()} />);
   const surfaces = [tokens.color.light.surface, tokens.color.light.surfaceRaised];
@@ -101,6 +122,23 @@ test('no drives at all points back to Home, in the words of how drives start her
   expect(p.onHome).toHaveBeenCalled();
   await draw(<HistoryView {...props({ drives: [], autoDrives: true })} />);
   expect(screen.getByText("Your drives show up here after you've driven. RoadWise notices them on its own.")).toBeOnTheScreen();
+});
+
+test('with the drives of a kind all past 183 days (archived), its empty list says “in the last 6 months”, not “yet”; the body and button stay', async () => {
+  const archived = { all: true, clean: true, passenger: false };
+  await draw(<HistoryView {...props({ drives: [], archived })} />);
+  expect(within(screen.getByTestId('history-empty-all')).getByText('No drives in the last 6 months')).toBeOnTheScreen();
+  expect(screen.queryByText('No drives yet')).toBeNull();
+  expect(screen.getByText('Swipe Start drive on Home before you pull out. Every drive shows up here.')).toBeOnTheScreen();
+  expect(screen.getByText('Go to Home')).toBeOnTheScreen();
+  await draw(<HistoryView {...props({ drives: [], archived, filter: 'clean' })} />);
+  expect(within(screen.getByTestId('history-empty-clean')).getByText('No clean drives in the last 6 months')).toBeOnTheScreen();
+  expect(screen.getByText('A drive with zero events counts as clean. Your next one could be it.')).toBeOnTheScreen();
+  // No archived "Wasn't driving" drive: that filter's title is unchanged.
+  await draw(<HistoryView {...props({ drives: [], archived, filter: 'passenger' })} />);
+  expect(within(screen.getByTestId('history-empty-passenger')).getByText('No passenger drives')).toBeOnTheScreen();
+  await draw(<HistoryView {...props({ drives: [], archived: { all: true, clean: false, passenger: true }, filter: 'passenger' })} />);
+  expect(screen.getByText('No passenger drives in the last 6 months')).toBeOnTheScreen();
 });
 
 test('while loading it shows placeholders, not an empty state', async () => {

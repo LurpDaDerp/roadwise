@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useDataSource, useDb, useDriveDetail, useDriveHistory } from '@/data/queries';
+import { useArchivedKinds } from '@/data/queries/archived';
 import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
@@ -32,6 +33,7 @@ export function DriveHistoryScreen() {
   const [filter, setFilter] = useState<HistoryFilter>('all');
   const q = useDriveHistory(filter);
   const scores = useDriveScores(q.data);
+  const archived = useArchivedKinds();
   const auto = useAutoDrives();
   return (
     <Screen padded={false}>
@@ -49,6 +51,7 @@ export function DriveHistoryScreen() {
         now={Math.floor(now() / 3_600_000) * 3_600_000}
         scores={scores}
         autoDrives={autoDrivesOn(auto)}
+        {...(archived.data ? { archived: archived.data } : {})}
       />
     </Screen>
   );
