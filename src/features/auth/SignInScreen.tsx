@@ -14,12 +14,12 @@ import { Button, Screen, Text, useTheme } from '@/ui';
 import { EmailCodeScreen, emailCodeCopy } from './EmailCodeScreen';
 import {
   claimChosenUsername,
-  keepChosenPassword,
   PASSWORD_MIN,
   registerWithPassword,
   resendEmailCode,
   signInWithPassword,
-  verifyEmailCode,
+  startEmailConfirmation,
+  type EmailConfirmation,
   type VerifyResult,
 } from './emailPassword';
 import { legalState } from './legal';
@@ -40,12 +40,14 @@ export const signInCopy = {
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * An address waiting for the code from its confirmation mail. A sign-up holds the username and
- * password chosen on the form (in memory only) until the code confirms the address.
+ * An address waiting for the code from its confirmation mail. A sign-up holds the username chosen
+ * on the form, and its confirmation the password (in memory only), until the code confirms the
+ * address.
  */
 type PendingCode = {
   email: string;
-  signUp: { username: string; password: string } | null;
+  confirmation: EmailConfirmation;
+  username: string | null;
   codeSent: boolean;
   error: string | null;
 };
@@ -150,7 +152,8 @@ export function SignInScreen() {
         const went = sent === 'sent' || sent === 'rate_limited';
         setPending({
           email: email.trim(),
-          signUp: null,
+          confirmation: startEmailConfirmation(email, null),
+          username: null,
           codeSent: went,
           error: went ? null : sent === 'offline' ? emailCodeCopy.offline : emailCodeCopy.resendFailed,
         });
@@ -173,7 +176,13 @@ export function SignInScreen() {
       return;
     }
     if (result === 'confirm_email') {
-      setPending({ email: email.trim(), signUp: { username, password }, codeSent: true, error: null });
+      setPending({
+        email: email.trim(),
+        confirmation: startEmailConfirmation(email, password),
+        username,
+        codeSent: true,
+        error: null,
+      });
       return;
     }
     setError(
@@ -187,27 +196,26 @@ export function SignInScreen() {
     );
   });
 
-  // The right code signs the driver in. After a sign-up, the password chosen on the form replaces
-  // any left by an earlier sign-up to this address that was never confirmed (`keepChosenPassword`),
-  // and the username chosen there is claimed.
-  const verifyCode = async (code: string): Promise<VerifyResult> => {
-    if (pending === null) return 'error';
-    const result = await verifyEmailCode(pending.email, code);
-    if (result !== 'ok' || pending.signUp === null) return result;
-    await claimUsername(pending.signUp.username);
-    await keepChosenPassword(pending.signUp.password);
-    return 'ok';
-  };
-
   if (pending !== null) {
+    // The right code signs the driver in only once the account is theirs (`startEmailConfirmation`:
+    // after a sign-up the password chosen on the form, and no other session); then the username
+    // chosen on the form is claimed.
+    const signedIn = async (result: VerifyResult): Promise<VerifyResult> => {
+      if (result === 'ok' && pending.username !== null) await claimUsername(pending.username);
+      return result;
+    };
     return (
       <EmailCodeScreen
         email={pending.email}
         codeSent={pending.codeSent}
         initialError={pending.error}
-        onVerify={verifyCode}
+        onVerify={async (code) => signedIn(await pending.confirmation.verify(code))}
+        onFinish={async () => signedIn(await pending.confirmation.finish())}
         onResend={() => resendEmailCode(pending.email)}
-        onBack={() => setPending(null)}
+        onBack={() => {
+          void pending.confirmation.abandon();
+          setPending(null);
+        }}
       />
     );
   }

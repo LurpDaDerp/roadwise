@@ -4,7 +4,7 @@
     RoadWise's sign-up confirmation mail ([auth.email.template.confirmation] in supabase/config.toml).
     It carries only the 6-digit code (the Token variable), which the driver types into the app's
     code screen. No link, so a mail scanner that opens links can't use it up, and the code works
-    whichever device the mail is read on. The hour matches otp_expiry.
+    whichever device the mail is read on. The 10 minutes match otp_expiry (600 s).
   -->
   <head>
     <meta charset="utf-8" />
@@ -54,7 +54,7 @@
                 >
                   {{ .Token }}
                 </p>
-                <p style="margin: 0 0 8px; font-size: 14px; line-height: 20px; color: #4a4a4f">It works for one hour.</p>
+                <p style="margin: 0 0 8px; font-size: 14px; line-height: 20px; color: #4a4a4f">It works for 10 minutes.</p>
                 <p style="margin: 0; font-size: 14px; line-height: 20px; color: #4a4a4f">
                   Didn't sign up for RoadWise? You can ignore this email. Nothing happens unless the code is typed in.
                 </p>

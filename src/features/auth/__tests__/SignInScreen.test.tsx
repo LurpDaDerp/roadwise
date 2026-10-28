@@ -18,11 +18,13 @@ const mockRegister = jest.fn(
 const mockSignInPassword = jest.fn(
   async (_email: string, _password: string) => 'ok' as 'ok' | 'invalid' | 'unconfirmed' | 'rate_limited' | 'error'
 );
-const mockVerify = jest.fn(
-  async (_email: string, _code: string) => 'ok' as 'ok' | 'wrong_code' | 'rate_limited' | 'offline' | 'error'
-);
+type Verified = 'ok' | 'wrong_code' | 'rate_limited' | 'offline' | 'unfinished' | 'error';
+// One address's confirmation (startEmailConfirmation): what it was started with, and its three calls.
+const mockStartConfirmation = jest.fn((_email: string, _password: string | null) => {});
+const mockVerify = jest.fn(async (_code: string) => 'ok' as Verified);
+const mockFinish = jest.fn(async () => 'ok' as Verified);
+const mockAbandon = jest.fn(async () => {});
 const mockResend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'rate_limited' | 'offline' | 'error');
-const mockKeepPassword = jest.fn(async (_password: string) => {});
 const mockClaim = jest.fn(async (_username: string) => true);
 const mockRefreshProfile = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
@@ -46,15 +48,18 @@ jest.mock('@/features/auth/emailPassword', () => ({
   registerWithPassword: (email: string, password: string) => mockRegister(email, password),
   signInWithPassword: (email: string, password: string) => mockSignInPassword(email, password),
   claimChosenUsername: (username: string) => mockClaim(username),
-  verifyEmailCode: (email: string, code: string) => mockVerify(email, code),
   resendEmailCode: (email: string) => mockResend(email),
-  keepChosenPassword: (password: string) => mockKeepPassword(password),
+  startEmailConfirmation: (email: string, password: string | null) => {
+    mockStartConfirmation(email, password);
+    return { verify: mockVerify, finish: mockFinish, abandon: mockAbandon };
+  },
 }));
 jest.mock('@/data/supabase/session', () => ({
   useSession: () => ({ refreshProfile: mockRefreshProfile }),
 }));
 // The consent helpers import the app client; nothing here reaches the network.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/features/auth/asideAuth', () => ({ createAsideAuth: jest.fn() }));
 jest.mock('@/data/config/appConfig', () => ({
   ...jest.requireActual('@/data/config/appConfig'),
   useAppConfig: () => mockConfig,
@@ -90,9 +95,11 @@ beforeEach(() => {
   mockRegister.mockReset().mockResolvedValue('ok');
   mockSignInPassword.mockReset().mockResolvedValue('ok');
   mockClaim.mockReset().mockResolvedValue(true);
+  mockStartConfirmation.mockReset();
   mockVerify.mockReset().mockResolvedValue('ok');
+  mockFinish.mockReset().mockResolvedValue('ok');
+  mockAbandon.mockReset().mockResolvedValue(undefined);
   mockResend.mockReset().mockResolvedValue('sent');
-  mockKeepPassword.mockReset().mockResolvedValue(undefined);
   mockRefreshProfile.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
   executed.length = 0;
@@ -385,13 +392,12 @@ describe('confirming the address with the mailed code', () => {
 
   test('the right code signs in, then the username from the form is claimed and the profile read again', async () => {
     await register();
+    // The confirmation carries the password chosen on the form, to make the account the driver's.
+    expect(mockStartConfirmation).toHaveBeenCalledWith(' Ava@Example.com ', 'correct horse');
     await typeCode('123456');
-    await waitFor(() => expect(mockKeepPassword).toHaveBeenCalledTimes(1));
-    expect(mockVerify).toHaveBeenCalledWith('Ava@Example.com', '123456');
+    await waitFor(() => expect(mockRefreshProfile).toHaveBeenCalledTimes(1));
+    expect(mockVerify).toHaveBeenCalledWith('123456');
     expect(mockClaim).toHaveBeenCalledWith('ava_01');
-    expect(mockRefreshProfile).toHaveBeenCalledTimes(1);
-    // The password chosen on the form replaces any left by an earlier, never-confirmed sign-up.
-    expect(mockKeepPassword).toHaveBeenCalledWith('correct horse');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -403,7 +409,25 @@ describe('confirming the address with the mailed code', () => {
       'That code is wrong or has expired. Check it, or send a new one.'
     );
     expect(mockClaim).not.toHaveBeenCalled();
-    expect(mockKeepPassword).not.toHaveBeenCalled();
+  });
+
+  test('a right code whose account could not be finished claims nothing; Try again finishes, then claims', async () => {
+    mockVerify.mockResolvedValueOnce('unfinished');
+    await register();
+    await typeCode('123456');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Couldn't finish signing you in. Check your connection and try again."
+    );
+    expect(mockClaim).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(mockClaim).toHaveBeenCalledWith('ava_01'));
+    expect(mockFinish).toHaveBeenCalledTimes(1);
+  });
+
+  test('leaving the code screen gives the confirmation up', async () => {
+    await register();
+    await fireEvent.press(screen.getByRole('button', { name: 'Use a different email' }));
+    expect(mockAbandon).toHaveBeenCalledTimes(1);
   });
 
   test('Resend code sends a fresh code to the same address', async () => {
@@ -449,11 +473,11 @@ describe('confirming the address with the mailed code', () => {
     expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
     expect(screen.queryByRole('alert')).toBeNull();
 
+    // Nothing was chosen on a form: no password to set, and no username to claim.
+    expect(mockStartConfirmation).toHaveBeenCalledWith('ava@example.com', null);
     await typeCode('123456');
-    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('ava@example.com', '123456'));
-    // Nothing was chosen on a form: no username to claim, no password to set.
+    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('123456'));
     expect(mockClaim).not.toHaveBeenCalled();
-    expect(mockKeepPassword).not.toHaveBeenCalled();
   });
 
   test('a code sent within the minute still counts: the code screen waits out the rest', async () => {

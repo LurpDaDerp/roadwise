@@ -208,7 +208,9 @@ token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
 sign_in_sign_ups = 30
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
-token_verifications = 30
+# Held low because the sign-up code is 6 digits: a driver needs one or two tries, and a guesser gets
+# 10 every 5 minutes. Production sets the same ([remotes.production.auth.rate_limit]).
+token_verifications = 10
 # Number of Web3 logins that can be made in a 5 minute interval per IP address.
 web3 = 30
 
@@ -236,8 +238,9 @@ secure_password_change = false
 max_frequency = "1s"
 # Number of characters used in the email OTP. The app's code field takes 6 (CODE_LENGTH).
 otp_length = 6
-# Number of seconds before the email OTP expires (defaults to 1 hour). The confirmation mail says an hour.
-otp_expiry = 3600
+# Number of seconds before the email OTP expires (defaults to 1 hour). 10 minutes, as in production:
+# the confirmation mail says so.
+otp_expiry = 600
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -450,9 +453,10 @@ minimum_password_length = 8
 enable_confirmations = true
 # One mail per address a minute: the app's "Resend code" waits the same 60 s (RESEND_COOLDOWN_S).
 max_frequency = "60s"
-# The app's code field takes 6 digits (CODE_LENGTH), and the mail says the code lasts an hour.
+# The app's code field takes 6 digits (CODE_LENGTH). The code lasts 10 minutes (the mail says so),
+# a short window for guessing, with token_verifications below holding guesses down.
 otp_length = 6
-otp_expiry = 3600
+otp_expiry = 600
 
 # The mail goes out through Resend's SMTP from the sending domain verified in Resend. Both values
 # come from the environment of the shell that runs `supabase config push` (or the root .env /
@@ -475,6 +479,9 @@ sender_name = "RoadWise"
 # once (a driver needs one mail, two with a resend); on Resend's free plan its 100 a day binds first.
 [remotes.production.auth.rate_limit]
 email_sent = 60
+# Code checks per IP address in 5 minutes (the hosted project ran 30): a driver needs one or two,
+# a guesser of a 6-digit code gets 10. Drivers sharing one address (a school's Wi-Fi) share it too.
+token_verifications = 10
 
 # What the hosted project already runs, so `supabase config push` changes sign-in only: these local
 # values (MFA off, a smaller pooler, no analytics buckets) must not reach it.

@@ -10,6 +10,7 @@ export const emailCodeCopy = {
   sentTo: (email: string) => `We sent a 6-digit code to ${email}.`,
   codeLabel: '6-digit code',
   confirm: 'Confirm',
+  tryAgain: 'Try again',
   resend: 'Resend code',
   resendIn: (seconds: number) => `Resend code in ${seconds} s`,
   resent: 'We sent a new code.',
@@ -18,6 +19,7 @@ export const emailCodeCopy = {
   rateLimited: 'Too many tries. Try again in a minute.',
   offline: "You're offline. Check your connection and try again.",
   verifyFailed: "Couldn't confirm your email. Try again.",
+  unfinished: "Couldn't finish signing you in. Check your connection and try again.",
   resendFailed: "Couldn't send a new code. Try again.",
 } as const;
 
@@ -25,6 +27,7 @@ const VERIFY_ERRORS: Record<Exclude<VerifyResult, 'ok'>, string> = {
   wrong_code: emailCodeCopy.wrongCode,
   rate_limited: emailCodeCopy.rateLimited,
   offline: emailCodeCopy.offline,
+  unfinished: emailCodeCopy.unfinished,
   error: emailCodeCopy.verifyFailed,
 };
 
@@ -45,13 +48,16 @@ export function resendWait(sentAt: number | null, now: number): number {
  * mail, typed in (or offered by iOS from the mail), checked as soon as all 6 digits are in. Resend
  * code waits out the server's minute between mails, and "Use a different email" goes back to the
  * form with everything typed there kept. The right code signs the driver in, and the usual
- * after-sign-in flow takes it from there (`onVerify` does what the form owes first).
+ * after-sign-in flow takes it from there (`onVerify` does what the form owes first). A right code
+ * whose account could not be finished (`unfinished`) leaves the driver signed out with Try again
+ * (`onFinish`) in place of Confirm; the code is spent by then, so the field and Resend code go.
  */
 export function EmailCodeScreen({
   email,
   codeSent,
   initialError = null,
   onVerify,
+  onFinish,
   onResend,
   onBack,
 }: {
@@ -61,6 +67,8 @@ export function EmailCodeScreen({
   /** A line to show on arrival, such as a fresh code that couldn't be sent. */
   initialError?: string | null;
   onVerify: (code: string) => Promise<VerifyResult>;
+  /** Finishes the account again after `unfinished`. */
+  onFinish: () => Promise<VerifyResult>;
   onResend: () => Promise<ResendResult>;
   onBack: () => void;
 }) {
@@ -73,6 +81,8 @@ export function EmailCodeScreen({
   const [notice, setNotice] = useState<string | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(() => (codeSent ? Date.now() : null));
   const [now, setNow] = useState(() => Date.now());
+  // The code was right but the account isn't finished: only Try again and the way back are left.
+  const [unfinished, setUnfinished] = useState(false);
   const wait = resendWait(sentAt, now);
 
   // A once-a-second tick, only while Resend code is waiting.
@@ -86,19 +96,29 @@ export function EmailCodeScreen({
     return () => clearInterval(timer);
   }, [sentAt]);
 
-  const verify = async (value: string) => {
-    if (busy !== null || value.length !== CODE_LENGTH) return;
+  const settle = async (attempt: () => Promise<VerifyResult>) => {
     setError(null);
     setNotice(null);
     setBusy('verify');
-    const result = await onVerify(value);
+    const result = await attempt();
     if (result === 'ok') {
       // Signed in: the screen stays still until the route changes.
       setBusy('done');
       return;
     }
+    if (result === 'unfinished') setUnfinished(true);
     setError(VERIFY_ERRORS[result]);
     setBusy(null);
+  };
+
+  const verify = (value: string) => {
+    if (busy !== null || unfinished || value.length !== CODE_LENGTH) return;
+    void settle(() => onVerify(value));
+  };
+
+  const retry = () => {
+    if (busy !== null) return;
+    void settle(onFinish);
   };
 
   const resend = async () => {
@@ -125,7 +145,7 @@ export function EmailCodeScreen({
     const digits = text.replace(/\D/g, '').slice(0, CODE_LENGTH);
     const completes = digits.length === CODE_LENGTH && digits !== code;
     setCode(digits);
-    if (completes) void verify(digits);
+    if (completes) verify(digits);
   };
 
   return (
@@ -140,43 +160,55 @@ export function EmailCodeScreen({
       </View>
 
       <View style={{ gap: th.space.sm }}>
-        <TextInput
-          accessibilityLabel={emailCodeCopy.codeLabel}
-          placeholder={emailCodeCopy.codeLabel}
-          placeholderTextColor={th.colors.textMuted}
-          value={code}
-          onChangeText={onChange}
-          editable={busy === null}
-          autoFocus
-          keyboardType="number-pad"
-          inputMode="numeric"
-          textContentType="oneTimeCode"
-          autoComplete="one-time-code"
-          maxLength={CODE_LENGTH}
-          style={{
-            minHeight: 48 * scale,
-            borderWidth: 1.5,
-            borderColor: th.colors.borderStrong,
-            borderRadius: th.radius.md,
-            paddingHorizontal: th.space.md,
-            color: th.colors.text,
-            fontSize: 17 * scale,
-          }}
-        />
-        <Button
-          label={emailCodeCopy.confirm}
-          variant="secondary"
-          onPress={() => void verify(code)}
-          loading={busy === 'verify' || busy === 'done'}
-          disabled={code.length !== CODE_LENGTH || busy !== null}
-        />
-        <Button
-          label={wait > 0 ? emailCodeCopy.resendIn(wait) : emailCodeCopy.resend}
-          variant="ghost"
-          onPress={() => void resend()}
-          loading={busy === 'resend'}
-          disabled={wait > 0 || busy !== null}
-        />
+        {unfinished ? (
+          <Button
+            label={emailCodeCopy.tryAgain}
+            variant="secondary"
+            onPress={retry}
+            loading={busy === 'verify' || busy === 'done'}
+            disabled={busy !== null}
+          />
+        ) : (
+          <>
+            <TextInput
+              accessibilityLabel={emailCodeCopy.codeLabel}
+              placeholder={emailCodeCopy.codeLabel}
+              placeholderTextColor={th.colors.textMuted}
+              value={code}
+              onChangeText={onChange}
+              editable={busy === null}
+              autoFocus
+              keyboardType="number-pad"
+              inputMode="numeric"
+              textContentType="oneTimeCode"
+              autoComplete="one-time-code"
+              maxLength={CODE_LENGTH}
+              style={{
+                minHeight: 48 * scale,
+                borderWidth: 1.5,
+                borderColor: th.colors.borderStrong,
+                borderRadius: th.radius.md,
+                paddingHorizontal: th.space.md,
+                color: th.colors.text,
+                fontSize: 17 * scale,
+              }}
+            />
+            <Button
+              label={emailCodeCopy.confirm}
+              variant="secondary"
+              onPress={() => verify(code)}
+              loading={busy === 'verify' || busy === 'done'}
+              disabled={code.length !== CODE_LENGTH || busy !== null}
+            />
+            <Button
+              label={wait > 0 ? emailCodeCopy.resendIn(wait) : emailCodeCopy.resend}
+              variant="ghost"
+              onPress={() => void resend()}
+              loading={busy === 'resend'}
+              disabled={wait > 0 || busy !== null}
+            />
+          </>
+        )}
         <Button label={emailCodeCopy.changeEmail} variant="ghost" onPress={onBack} disabled={busy !== null} />
       </View>
 

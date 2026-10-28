@@ -6,8 +6,10 @@ import { ThemeProvider } from '@/ui/theme';
 
 // The screen's constants live beside the calls, which import the app client; nothing here reaches it.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/features/auth/asideAuth', () => ({ createAsideAuth: jest.fn() }));
 
 const onVerify = jest.fn(async (_code: string): Promise<VerifyResult> => 'ok');
+const onFinish = jest.fn(async (): Promise<VerifyResult> => 'ok');
 const onResend = jest.fn(async (): Promise<ResendResult> => 'sent');
 const onBack = jest.fn();
 
@@ -18,6 +20,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   jest.setSystemTime(new Date('2026-10-27T12:00:00Z'));
   onVerify.mockReset().mockResolvedValue('ok');
+  onFinish.mockReset().mockResolvedValue('ok');
   onResend.mockReset().mockResolvedValue('sent');
   onBack.mockReset();
 });
@@ -34,6 +37,7 @@ const mount = (props: { codeSent?: boolean; initialError?: string | null } = {})
         codeSent={props.codeSent ?? true}
         initialError={props.initialError ?? null}
         onVerify={onVerify}
+        onFinish={onFinish}
         onResend={onResend}
         onBack={onBack}
       />
@@ -156,4 +160,34 @@ test('resendWait counts whole seconds down from the send, never below 0', () => 
   expect(resendWait(0, 59_001)).toBe(1);
   expect(resendWait(0, 60_000)).toBe(0);
   expect(resendWait(0, 90_000)).toBe(0);
+});
+
+describe('a right code whose account could not be finished', () => {
+  test('stays signed out with the reason, and Try again in place of the code and Resend code', async () => {
+    onVerify.mockResolvedValueOnce('unfinished');
+    await mount({ codeSent: false });
+    await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Couldn't finish signing you in. Check your connection and try again."
+    );
+    expect(screen.queryByLabelText(CODE.name)).toBeNull();
+    expect(screen.queryByRole('button', CONFIRM)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resend code' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Use a different email' })).toBeEnabled();
+  });
+
+  test('Try again finishes without the code again, as many times as it takes', async () => {
+    onVerify.mockResolvedValueOnce('unfinished');
+    onFinish.mockResolvedValueOnce('unfinished');
+    await mount();
+    await fireEvent.changeText(screen.getByLabelText(CODE.name), '123456');
+    await fireEvent.press(await screen.findByRole('button', { name: 'Try again' }));
+    expect(onFinish).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't finish signing you in.", { exact: false });
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    expect(onFinish).toHaveBeenCalledTimes(2);
+    expect(onVerify).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Use a different email' })).toBeDisabled();
+  });
 });
