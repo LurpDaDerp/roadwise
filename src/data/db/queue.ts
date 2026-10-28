@@ -46,6 +46,14 @@ export const SERVER_REOPEN_AFTER_MS = 24 * 60 * 60 * 1000;
 export const MAX_AHEAD_MS = 2 * MAX_DELAY_S * 1000;
 
 /**
+ * A read helper: an SQL expression, over a trip aliased `t`, that is 1 while that drive's upload is
+ * still owed and has failed at least once (tried and waiting to retry, or out of retries without
+ * being refused), else 0. The upload's key is `trip:<clientTripId>` (`finalizeIdempotencyKey`).
+ */
+export const UPLOAD_FAILED_SQL = `EXISTS (SELECT 1 FROM sync_queue q WHERE q.idempotency_key = 'trip:' || t.client_trip_id
+  AND ((q.status IN ('pending', 'inflight') AND q.attempts > 0) OR (q.status = 'failed' AND q.next_attempt_at <> ${REFUSED_NEVER})))`;
+
+/**
  * An item still owed to the server: waiting, being sent, or out of retries without ever being
  * refused (a later foreground reopens it). Bound with `REFUSED_NEVER`.
  */

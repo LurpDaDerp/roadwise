@@ -19,6 +19,8 @@ export const recapCopy = {
   },
   share: 'Share',
   notSynced: "Not synced yet. We'll keep trying.",
+  /** A drive whose upload the server turned down for good. */
+  syncRefused: "Couldn't sync this drive. It stays on this phone.",
   states: {
     recording: { title: 'Drive in progress', body: 'Your score shows up when the drive ends.' },
     tooShort: { title: 'Too short to score', body: (dist: string, min: number) => `Drives under ${dist} that take under ${min} min don't get a score.` },
@@ -54,6 +56,10 @@ export const recapCopy = {
     no_uses_left: 'You’ve used both “Wasn’t driving” marks this month.',
     already_marked: 'This drive was already marked as not driving.',
     not_driving_expired: `The “${hudCopy.notDriving}” option on that drive ran out, so it can’t be marked.`,
+  } as Readonly<Record<string, string>>,
+  /** The refusals a later tap can get past: the line shows under "Wasn't driving", which stays. */
+  refusalsRetry: {
+    not_found: 'This drive hasn’t reached the server yet. Try again in a moment.',
   } as Readonly<Record<string, string>>,
   report: {
     sent: "Thanks. We'll check it and update this drive.",

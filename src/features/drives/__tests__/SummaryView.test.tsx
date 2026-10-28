@@ -106,9 +106,15 @@ describe('the hero mirrors the share card', () => {
     await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null }) })} />);
     expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
     expect(screen.queryByTestId('state-not-synced')).toBeNull();
-    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', result: null }) })} />);
+    // Its upload failed once: it keeps trying, and says so.
+    await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null, uploadFailed: true }) })} />);
     expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
     expect(screen.getByTestId('state-not-synced')).toHaveTextContent("Not synced yet. We'll keep trying.");
+    // Turned down for good: nothing will try again, and the line says what is true.
+    await draw(<SummaryView {...props({ drive: drive({ status: 'failed', result: null }) })} />);
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
+    expect(screen.queryByTestId('state-not-synced')).toBeNull();
+    expect(screen.getByTestId('state-sync-refused')).toHaveTextContent("Couldn't sync this drive. It stays on this phone.");
   });
 
   test.each([
@@ -360,7 +366,17 @@ describe("Wasn't driving", () => {
   test('an upload error is not mistaken for a refusal', async () => {
     await draw(<SummaryView {...props({ drive: drive({ syncError: 'invalid_payload' }) })} />);
     expect(screen.queryByTestId('not-driving-refused')).toBeNull();
+    expect(screen.queryByTestId('not-driving-retry')).toBeNull();
     expect(screen.getByTestId('not-driving')).toBeOnTheScreen();
+  });
+
+  test('a mark the server could not place yet (not_found) says why under the button, which stays', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ syncError: 'not_found' }) })} />);
+    expect(screen.getByTestId('not-driving-retry')).toHaveTextContent('This drive hasn’t reached the server yet. Try again in a moment.');
+    expect(screen.getByTestId('not-driving')).toBeOnTheScreen();
+    expect(screen.queryByTestId('not-driving-refused')).toBeNull();
+    await press(screen.getByTestId('not-driving'));
+    expect(screen.getByText("Yes, I wasn't driving")).toBeOnTheScreen();
   });
 });
 

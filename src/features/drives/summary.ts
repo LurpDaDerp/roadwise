@@ -21,16 +21,23 @@ import type { LocalDrive, LocalDriveEvent } from './model';
 
 // ── Score ───────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A drive the server does not hold yet, in words under its score: `retrying` once its upload has
+ * failed at least once ("Not synced yet. We'll keep trying."), `refused` when the server turned the
+ * upload down for good; null for one synced or still on its first try.
+ */
+export type SyncNote = 'retrying' | 'refused' | null;
+
 /** What a drive's score card shows: its score, or the state that stands in for one. */
 export type ScoreState =
-  | { kind: 'score'; value: number; notSynced: boolean }
+  | { kind: 'score'; value: number; sync: SyncNote }
   | { kind: 'recording' }
   | { kind: 'too_short' }
   | { kind: 'not_scored' }
   | { kind: 'not_driving' };
 
 /** Whether a drive has a score to show, before its events are read: scored, uploading or not synced yet, and long enough. */
-export type DriveKind = { kind: 'scorable'; notSynced: boolean } | Exclude<ScoreState, { kind: 'score' }>;
+export type DriveKind = { kind: 'scorable'; sync: SyncNote } | Exclude<ScoreState, { kind: 'score' }>;
 
 export function driveKind(d: LocalDrive): DriveKind {
   const tooShort = d.reason === 'too_short' || d.result?.reason === 'too_short';
@@ -42,11 +49,11 @@ export function driveKind(d: LocalDrive): DriveKind {
     case 'unscored':
       return tooShort ? { kind: 'too_short' } : { kind: 'not_scored' };
     case 'failed':
-      return tooShort ? { kind: 'too_short' } : { kind: 'scorable', notSynced: true };
+      return tooShort ? { kind: 'too_short' } : { kind: 'scorable', sync: 'refused' };
     case 'pending':
-      return tooShort ? { kind: 'too_short' } : { kind: 'scorable', notSynced: false };
+      return tooShort ? { kind: 'too_short' } : { kind: 'scorable', sync: d.uploadFailed === true ? 'retrying' : null };
     case 'scored':
-      return { kind: 'scorable', notSynced: false };
+      return { kind: 'scorable', sync: null };
   }
 }
 
@@ -78,7 +85,7 @@ export function scoreState(d: LocalDrive, events: readonly LocalDriveEvent[]): S
   const k = driveKind(d);
   if (k.kind !== 'scorable') return k;
   const value = driveScoreOf(d, events);
-  return value === null ? { kind: 'not_scored' } : { kind: 'score', value, notSynced: k.notSynced };
+  return value === null ? { kind: 'not_scored' } : { kind: 'score', value, sync: k.sync };
 }
 
 /** The word a history row shows where a score would be (null for a score). */
@@ -222,6 +229,17 @@ export const NOT_DRIVING_REFUSALS: Readonly<Record<string, string>> = recapCopy.
 export function notDrivingRefusal(d: Pick<LocalDrive, 'status' | 'syncError'>): string | null {
   if (d.status === 'not_driving' || d.syncError === null) return null;
   return NOT_DRIVING_REFUSALS[d.syncError] ?? null;
+}
+
+/**
+ * A refusal of a "Wasn't driving" that leaves it on offer, in words: the server did not hold the
+ * drive yet (`not_found`), so the same tap can go through later. Null for anything else. (While the
+ * drive's own upload is still owed the server's `not_found` never comes back as a refusal: the
+ * mark waits for the upload.)
+ */
+export function notDrivingRetryNote(d: Pick<LocalDrive, 'status' | 'syncError'>): string | null {
+  if (d.status === 'not_driving' || d.syncError === null) return null;
+  return recapCopy.refusalsRetry[d.syncError] ?? null;
 }
 
 /** "Wasn't driving (2 left this month)". */

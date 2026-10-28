@@ -23,6 +23,7 @@ import {
   meritOf,
   notDrivingLabel,
   notDrivingRefusal,
+  notDrivingRetryNote,
   scoreState,
   type ReportReason,
   type ScoreState,
@@ -93,6 +94,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
   const notDrivingOk = canMarkNotDriving(drive, now) && notDrivingLeft !== 0;
   const refusal = notDrivingRefusal(drive);
+  const retryNote = notDrivingRetryNote(drive);
   // The events list for a drive that is kept; a drive in progress or marked has none to work on.
   const listed = state.kind === 'score' || state.kind === 'too_short' || state.kind === 'not_scored';
   const wash = tier !== null && score !== null ? meritWash(tier, t.scheme) : null;
@@ -159,9 +161,9 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
                 </View>
                 {share}
               </View>
-              {state.notSynced ? (
-                <Text variant="footnote" tone="muted" testID="state-not-synced" style={{ paddingTop: t.space.sm }}>
-                  {recapCopy.notSynced}
+              {state.sync !== null ? (
+                <Text variant="footnote" tone="muted" testID={state.sync === 'refused' ? 'state-sync-refused' : 'state-not-synced'} style={{ paddingTop: t.space.sm }}>
+                  {state.sync === 'refused' ? recapCopy.syncRefused : recapCopy.notSynced}
                 </Text>
               ) : null}
             </View>
@@ -203,14 +205,21 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
           }}
         >
           {notDrivingOk ? (
-            <Button
-              label={notDrivingLabel(notDrivingLeft)}
-              variant="ghost"
-              size="sm"
-              onPress={() => setConfirmNotDriving(true)}
-              testID="not-driving"
-              style={{ alignSelf: 'flex-start' }}
-            />
+            <View style={{ flex: 1, gap: t.space.xs }}>
+              <Button
+                label={notDrivingLabel(notDrivingLeft)}
+                variant="ghost"
+                size="sm"
+                onPress={() => setConfirmNotDriving(true)}
+                testID="not-driving"
+                style={{ alignSelf: 'flex-start' }}
+              />
+              {retryNote ? (
+                <Text variant="footnote" tone="muted" testID="not-driving-retry">
+                  {retryNote}
+                </Text>
+              ) : null}
+            </View>
           ) : (
             <Text variant="footnote" tone="muted" testID="not-driving-refused" style={{ flex: 1 }}>
               {refusal}

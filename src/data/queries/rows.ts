@@ -4,6 +4,9 @@
  */
 import { clampExposure, estimateExposure, type EventType, type Exposure, type StatSums, type Tier } from '@scoring';
 
+import { UPLOAD_FAILED_SQL } from '@/data/db/queue';
+import { asNumberOrNull } from '@/data/db/row';
+import { toTripRow } from '@/data/db/trips';
 import type { DriveOrigin, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
 
@@ -77,7 +80,21 @@ export interface LocalDrive {
    * kept). Counted in every stat, shown in no list, and its recap reads as not found. Absent: false.
    */
   archived?: boolean;
+  /**
+   * Its upload is still owed and has failed at least once (`UPLOAD_FAILED_SQL`): "Not synced yet".
+   * Read with the drive by the lists and the recap. Absent: false.
+   */
+  uploadFailed?: boolean;
 }
+
+/** A trip row as the drive reads select it: the row, and whether its upload has failed (`UPLOAD_FAILED_SQL`, 0 or 1). */
+export type TripView = TripRow & { upload_failed?: number | null };
+
+/** A trip's columns and whether its upload has failed, for a select over `trips t`. */
+export const TRIP_VIEW = `t.*, ${UPLOAD_FAILED_SQL} AS upload_failed`;
+
+/** A row selected with `TRIP_VIEW`. */
+export const toTripView = (row: Record<string, unknown>): TripView => ({ ...toTripRow(row), upload_failed: asNumberOrNull(row, 'upload_failed') });
 
 export interface LocalDriveEvent {
   id: string;
@@ -173,7 +190,7 @@ export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns'
   return { exposure: estimateExposure(row.miles, row.duration_s), estimated: true };
 }
 
-export function toLocalDrive(row: TripRow): LocalDrive {
+export function toLocalDrive(row: TripView): LocalDrive {
   return toDrive(row, parseResult(row.result_json));
 }
 
@@ -181,11 +198,11 @@ export function toLocalDrive(row: TripRow): LocalDrive {
  * A row as a list reads it: the stored server answer left unread (`result` null), so a list of a
  * whole history spends no schema check per drive on a field it never shows.
  */
-export function toListedDrive(row: TripRow): LocalDrive {
+export function toListedDrive(row: TripView): LocalDrive {
   return toDrive(row, null);
 }
 
-function toDrive(row: TripRow, result: FinalizeTripResponse | null): LocalDrive {
+function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive {
   const { exposure, estimated } = exposureOf(row);
   return {
     clientTripId: row.client_trip_id,
@@ -210,8 +227,9 @@ function toDrive(row: TripRow, result: FinalizeTripResponse | null): LocalDrive 
     startSource: row.start_source,
     exposure,
     exposureEstimated: estimated,
-    // Present only on an archived drive.
+    // Present only on an archived drive, and on one whose upload has failed.
     ...(row.archived_at !== null ? { archived: true } : {}),
+    ...(row.upload_failed === 1 ? { uploadFailed: true } : {}),
   };
 }
 

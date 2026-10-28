@@ -17,7 +17,7 @@ import { createRoutePoolRepo } from '@/data/db/archive';
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo, toEventRow } from '@/data/db/events';
 import { asEnum, asNumber, asNumberOrNull, asTextOrNull } from '@/data/db/row';
-import { createTripsRepo, toTripRow } from '@/data/db/trips';
+import { createTripsRepo } from '@/data/db/trips';
 import { TRIP_STATUSES } from '@/data/db/types';
 import { SCORED_TRIP } from '@/data/queries/analytics';
 import { useDataSource } from '@/data/queries/context';
@@ -32,6 +32,8 @@ import {
   type LocalDrive,
   type LocalDriveEvent,
   type SummedDrive,
+  TRIP_VIEW,
+  toTripView,
 } from '@/data/queries/rows';
 
 export type { DriveCounts, DriveStatus, LocalDrive, LocalDriveEvent } from '@/data/queries/rows';
@@ -48,13 +50,13 @@ const NEWEST_FIRST = 'ORDER BY t.started_at DESC, t.client_trip_id ASC';
 const LISTED = "t.status != 'recording' AND t.archived_at IS NULL";
 
 export async function readRecentDrives(db: Db, limit: number): Promise<LocalDrive[]> {
-  const { rows } = await db.execute(`SELECT * FROM trips t WHERE ${LISTED} ${NEWEST_FIRST} LIMIT ?`, [Math.max(0, limit)]);
-  return rows.map((row) => toLocalDrive(toTripRow(row)));
+  const { rows } = await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE ${LISTED} ${NEWEST_FIRST} LIMIT ?`, [Math.max(0, limit)]);
+  return rows.map((row) => toLocalDrive(toTripView(row)));
 }
 
 export async function readDriveHistory(db: Db, filter: DriveHistoryFilter): Promise<LocalDrive[]> {
-  const { rows } = await db.execute(`SELECT * FROM trips t WHERE ${LISTED} ${NEWEST_FIRST}`);
-  return rows.map((row) => toListedDrive(toTripRow(row))).filter((d) => matchesHistoryFilter(d, filter));
+  const { rows } = await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE ${LISTED} ${NEWEST_FIRST}`);
+  return rows.map((row) => toListedDrive(toTripView(row))).filter((d) => matchesHistoryFilter(d, filter));
 }
 
 /**
@@ -80,7 +82,8 @@ export async function readDriveDetail(
   db: Db,
   clientTripId: string
 ): Promise<{ drive: LocalDrive; events: LocalDriveEvent[] } | null> {
-  const row = await createTripsRepo(db).get(clientTripId);
+  const { rows } = await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE t.client_trip_id = ?`, [clientTripId]);
+  const row = rows[0] === undefined ? null : toTripView(rows[0]);
   if (row === null || row.archived_at !== null) return null;
   const events = await createEventsRepo(db).listByTrip(clientTripId);
   return { drive: toLocalDrive(row), events: events.map(toLocalDriveEvent) };

@@ -33,8 +33,9 @@ export function eventTally(counts: DriveCounts): { type: EventType; n: number }[
 
 /**
  * One drive in a list: when, where, a route sketch, distance, time and its events, with its score
- * at the right in its merit tier's colour (no icon; "not synced" under a drive still to upload), or
- * the word for why it has none. `score` is the drive's (`useDriveScores`); absent while it loads.
+ * at the right in its merit tier's colour (no icon; "not synced" under it when the recap has a sync
+ * line: an upload that has failed, or one the server turned down), or the word for why it has none.
+ * `score` is the drive's (`useDriveScores`); absent while it loads.
  */
 export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive; score?: number | null; onPress: () => void; testID?: string }) {
   const t = useTheme();
@@ -53,7 +54,7 @@ export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive;
     formatWhen(drive.startedAt),
     spokenRoute(drive),
     formatDistance(drive.miles, units, { spoken: true }),
-    value !== null ? `drive score ${value}${kind.kind === 'scorable' && kind.notSynced ? ', not synced' : ''}` : word,
+    value !== null ? `drive score ${value}${kind.kind === 'scorable' && kind.sync !== null ? ', not synced' : ''}` : word,
     clean ? 'clean drive' : tally.map((x) => `${x.n} ${EVENT_LABEL[x.type].toLowerCase()}`).join(', ') || null,
   ]
     .filter(Boolean)
@@ -116,7 +117,7 @@ export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive;
               {value}
             </Text>
             <Text variant="label" tone="subtle" style={{ textTransform: 'none' }}>
-              {kind.kind === 'scorable' && kind.notSynced ? recapCopy.history.notSynced : recapCopy.history.score}
+              {kind.kind === 'scorable' && kind.sync !== null ? recapCopy.history.notSynced : recapCopy.history.score}
             </Text>
           </>
         ) : word ? (

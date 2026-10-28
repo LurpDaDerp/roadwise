@@ -681,6 +681,37 @@ test('an upload queued inside a caller’s transaction is not announced (the cal
   off();
 });
 
+test('a drive’s first failed upload is announced as a local-only change; a later failure is not; a sent one is a sync', async () => {
+  await finalized(uuid(10));
+  const heard: string[] = [];
+  const off = onDataChanged((c) => heard.push(c.source));
+  let up = false;
+  let clock = T0 + 2_000_000;
+  const r = createSyncRunner({
+    db,
+    supabase: createFakeSupabase({ invoke: ({ body }) => (up ? invokeOk(response((body as { clientTripId: string }).clientTripId)) : functionsFetchError()) }),
+    mayDrain: () => true,
+    isRecording: () => false,
+    now: () => clock,
+  });
+  await r.start();
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  await r.drainOnce();
+  await flush();
+  expect(heard).toEqual(['retry']);
+  clock += 3_600_000;
+  await r.drainOnce();
+  await flush();
+  expect(heard).toEqual(['retry']);
+  up = true;
+  clock += 3_600_000;
+  await r.drainOnce();
+  await flush();
+  expect(heard).toEqual(['retry', 'sync']);
+  await r.stop();
+  off();
+});
+
 test('the runner wakes on the enqueue change event and on foreground', async () => {
   jest.useFakeTimers();
   try {

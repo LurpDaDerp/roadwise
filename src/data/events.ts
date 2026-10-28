@@ -6,8 +6,8 @@
  * and the drive host finalizing a trip — so the pair collapses into one event that says **what**
  * moved the rows. Every listener hears every source and decides for itself:
  *
- * - the sync runner wakes on `enqueue` and `finalize` (there is new work), and ignores `sync` (its
- *   own pass) and `hydrate` (nothing was queued);
+ * - the sync runner wakes on `enqueue` and `finalize` (there is new work), and ignores `sync` and
+ *   `retry` (its own pass) and `hydrate` (nothing was queued);
  * - the query cache invalidates on all of them (on `spots`, only the spots view).
  *
  * **Delivery is on a macrotask, never inline.** The callers that matter emit at the very end of a
@@ -26,9 +26,11 @@
 
 /**
  * What moved the rows. `wipe`: a sign-out, a handover or a deleted account emptied the phone.
- * `spots`: the problem spots were recomputed (only the spots moved).
+ * `spots`: the problem spots were recomputed (only the spots moved). `retry`: a drain pass settled
+ * nothing, but a drive's upload failed for the first time ("Not synced yet" now shows on it); the
+ * server's numbers did not move.
  */
-export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize' | 'wipe' | 'spots';
+export type ChangeSource = 'enqueue' | 'sync' | 'hydrate' | 'finalize' | 'wipe' | 'spots' | 'retry';
 
 /** What a drain pass settled — the counts a `sync` change carries. */
 export type SyncApplied = Readonly<{ done: number; failed: number; deferred: number }>;

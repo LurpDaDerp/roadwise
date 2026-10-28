@@ -28,6 +28,7 @@ import {
   isShownEvent,
   meritOf,
   notDrivingLabel,
+  notDrivingRetryNote,
   REPORT_LABEL,
   reportReasons,
   scoreState,
@@ -269,9 +270,12 @@ describe('stats', () => {
 
 describe('summary', () => {
   test('a drive has a score to show when it is scored, uploading or not synced yet, and long enough', () => {
-    expect(driveKind(drive())).toEqual({ kind: 'scorable', notSynced: false });
-    expect(driveKind(drive({ status: 'pending', result: null }))).toEqual({ kind: 'scorable', notSynced: false });
-    expect(driveKind(drive({ status: 'failed', result: null }))).toEqual({ kind: 'scorable', notSynced: true });
+    expect(driveKind(drive())).toEqual({ kind: 'scorable', sync: null });
+    // On its first try: no line yet. Once its upload has failed: "Not synced yet". Turned down for good: its own line.
+    expect(driveKind(drive({ status: 'pending', result: null }))).toEqual({ kind: 'scorable', sync: null });
+    expect(driveKind(drive({ status: 'pending', result: null, uploadFailed: true }))).toEqual({ kind: 'scorable', sync: 'retrying' });
+    expect(driveKind(drive({ status: 'failed', result: null }))).toEqual({ kind: 'scorable', sync: 'refused' });
+    expect(driveKind(drive({ status: 'scored', uploadFailed: true }))).toEqual({ kind: 'scorable', sync: null });
     expect(driveKind(drive({ status: 'pending', reason: 'too_short', result: null }))).toEqual({ kind: 'too_short' });
     expect(driveKind(drive({ status: 'failed', reason: 'too_short', result: null }))).toEqual({ kind: 'too_short' });
     expect(driveKind(drive({ status: 'unscored', reason: 'too_short' }))).toEqual({ kind: 'too_short' });
@@ -281,8 +285,9 @@ describe('summary', () => {
   });
 
   test('the score state and the word a row shows instead', () => {
-    expect(scoreState(drive(), [event()])).toEqual({ kind: 'score', value: 93, notSynced: false });
-    expect(scoreState(drive({ status: 'failed', result: null }), [event()])).toEqual({ kind: 'score', value: 93, notSynced: true });
+    expect(scoreState(drive(), [event()])).toEqual({ kind: 'score', value: 93, sync: null });
+    expect(scoreState(drive({ status: 'pending', result: null, uploadFailed: true }), [event()])).toEqual({ kind: 'score', value: 93, sync: 'retrying' });
+    expect(scoreState(drive({ status: 'failed', result: null }), [event()])).toEqual({ kind: 'score', value: 93, sync: 'refused' });
     expect(scoreState(drive({ miles: 0 }), [])).toEqual({ kind: 'not_scored' });
     expect(stateWord({ kind: 'score' })).toBeNull();
     expect(stateWord({ kind: 'recording' })).toBe('Recording');
@@ -345,6 +350,11 @@ describe('summary', () => {
     for (const status of ['recording', 'not_driving', 'failed'] as const) expect(canMarkNotDriving(drive({ status }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'too_old' }), ended)).toBe(false);
     expect(canMarkNotDriving(drive({ syncError: 'invalid_payload' }), ended)).toBe(true);
+    // The server did not hold the drive yet: the mark stays on offer, with its line.
+    expect(canMarkNotDriving(drive({ syncError: 'not_found' }), ended)).toBe(true);
+    expect(notDrivingRetryNote(drive({ syncError: 'not_found' }))).toBe('This drive hasn’t reached the server yet. Try again in a moment.');
+    expect(notDrivingRetryNote(drive({ status: 'not_driving', syncError: 'not_found' }))).toBeNull();
+    expect(notDrivingRetryNote(drive({ syncError: 'too_old' }))).toBeNull();
     expect(canMarkNotDriving(drive({ status: 'failed', syncError: 'invalid_payload' }), ended)).toBe(false);
   });
 });

@@ -413,6 +413,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     return { kind: 'retry', error: failure.status === null ? TRANSPORT_FAILURE : failure.code, ...(untilMs !== undefined ? { untilMs } : {}) };
   }
 
+  /** A drive's upload failed for the first time in this pass: its recap and its row now say "Not synced yet". */
+  let uploadFirstFailed = false;
+
   async function settle(item: QueueItem, outcome: Outcome, uid: string): Promise<'done' | 'failed' | 'deferred'> {
     switch (outcome.kind) {
       case 'done':
@@ -420,6 +423,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         return 'done';
       case 'retry': {
         const after = await queue.markAttempt(item.id, false, outcome.error, now());
+        if (item.kind === 'finalize-trip' && after?.attempts === 1) uploadFirstFailed = true;
         if (after !== null && outcome.untilMs !== undefined) await queue.deferUntil(item.id, outcome.untilMs);
         return after?.status === 'failed' ? 'failed' : 'deferred';
       }
@@ -448,6 +452,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   async function pass(): Promise<DrainResult> {
     const result: DrainResult = { ran: true, done: 0, failed: 0, deferred: 0 };
     let refreshed = false;
+    uploadFirstFailed = false;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       if (!started || !deps.mayDrain() || deps.isRecording()) break;
       let items: QueueItem[];
@@ -499,6 +504,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       }
     }
     if (result.done + result.failed > 0) emitDataChanged({ source: 'sync', result: { done: result.done, failed: result.failed, deferred: result.deferred } });
+    // Only what the phone shows moved (a drive's first failed upload): the local lists refresh, not the server's numbers.
+    else if (uploadFirstFailed) emitDataChanged({ source: 'retry' });
     return result;
   }
 

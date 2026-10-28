@@ -1,9 +1,10 @@
 /** @jest-environment node */
 import { uuid } from '@/core/engine/__fixtures__/drives';
-import type { Db } from '@/data/db';
+import { REFUSED_NEVER, type Db } from '@/data/db';
 import type { TripRow } from '@/data/db/types';
 import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { readDriveCount, readDriveDetail, readDriveHistory, readDrives, readRecentDrives, readRoutePolylines, readStatSums, useDriveCount, useRecentDrives } from '@/data/queries/drives';
+import { readScoredDrives } from '@/data/queries/analytics';
 import { DRIVE_HISTORY_FILTERS } from '@/data/queries/keys';
 import { countEvents, isListed, isScoredDrive, matchesHistoryFilter, sumStats, toLocalDrive } from '@/data/queries/rows';
 
@@ -85,6 +86,34 @@ test('the narrow reads answer exactly what filtering the whole table does; only 
   for (const filter of DRIVE_HISTORY_FILTERS) {
     expect(await readDriveHistory(db, filter)).toEqual(whole.filter((d) => matchesHistoryFilter(d, filter)).map((d) => ({ ...d, result: null })));
   }
+});
+
+test('a drive whose upload has failed at least once and is still owed says so in every read; a first try, a refusal or a done upload does not', async () => {
+  const queue = (key: string, status: string, attempts: number, at: number) =>
+    db.execute(
+      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at) VALUES ('finalize-trip', '{}', ?, ?, ?, ?, 0)",
+      [key, status, attempts, at]
+    );
+  // uuid(2) (pending, scored length): tried once, waiting to retry.
+  await queue(`trip:${uuid(2)}`, 'pending', 1, T0);
+  // uuid(1): its upload went. uuid(8): queued, never tried. uuid(7): turned down for good.
+  await queue(`trip:${uuid(1)}`, 'done', 0, T0);
+  await queue(`trip:${uuid(8)}`, 'pending', 0, T0);
+  await queue(`trip:${uuid(7)}`, 'failed', 1, REFUSED_NEVER);
+  const failed = (list: readonly { clientTripId: string; uploadFailed?: boolean }[]) => list.filter((d) => d.uploadFailed === true).map((d) => d.clientTripId);
+  expect(failed(await readDriveHistory(db, 'all'))).toEqual([uuid(2)]);
+  expect(failed(await readRecentDrives(db, 10))).toEqual([uuid(2)]);
+  expect(failed(await readScoredDrives(db, null))).toEqual([uuid(2)]);
+  expect((await readDriveDetail(db, uuid(2)))?.drive.uploadFailed).toBe(true);
+  expect((await readDriveDetail(db, uuid(8)))?.drive).not.toHaveProperty('uploadFailed');
+  // Out of retries without a refusal: still owed, still failed. In flight on a retry: the same.
+  await db.execute("UPDATE sync_queue SET status = 'failed', attempts = 20, next_attempt_at = ? WHERE idempotency_key = ?", [T0, `trip:${uuid(2)}`]);
+  expect((await readDriveDetail(db, uuid(2)))?.drive.uploadFailed).toBe(true);
+  await db.execute("UPDATE sync_queue SET status = 'inflight', attempts = 3 WHERE idempotency_key = ?", [`trip:${uuid(2)}`]);
+  expect((await readDriveDetail(db, uuid(2)))?.drive.uploadFailed).toBe(true);
+  // Re-armed with a clean ladder (a sign-out's flush, a reopen): back to a first try.
+  await db.execute("UPDATE sync_queue SET status = 'pending', attempts = 0 WHERE idempotency_key = ?", [`trip:${uuid(2)}`]);
+  expect((await readDriveDetail(db, uuid(2)))?.drive).not.toHaveProperty('uploadFailed');
 });
 
 test('row bridges: counts from events, filters on a drive view', () => {
