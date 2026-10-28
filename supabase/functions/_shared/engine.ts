@@ -48,7 +48,8 @@ export interface DriveContextArgs {
 
 /**
  * `private.app_attest_context` (0031): the user's App Attest key by the id an upload names (null when
- * the user has no such key, or none was named), and whether the user has an Android device registered.
+ * the user has no such key, or none was named), and whether the account may post as Android
+ * (`androidOnly`: an Android device registered, and never an iPhone: no iOS device, no App Attest key).
  */
 export const AttestContextSchema = z.object({
   key: z
@@ -59,7 +60,7 @@ export const AttestContextSchema = z.object({
       environment: z.enum(['production', 'development']),
     })
     .nullable(),
-  android: z.boolean(),
+  androidOnly: z.boolean(),
 });
 export type AttestContext = z.infer<typeof AttestContextSchema>;
 
@@ -123,7 +124,7 @@ export interface EngineTx {
    * clientTripId is not one), on the times apply_drive will store.
    */
   driveOverlaps(userId: string, clientTripId: string, startedAt: number, endedAt: number): Promise<boolean>;
-  /** `private.app_attest_context` (0031): the named key, locked until the transaction ends, and the Android flag. */
+  /** `private.app_attest_context` (0031): the named key, locked until the transaction ends, and whether the account may post as Android. */
   attestContext(userId: string, keyId: string | null): Promise<AttestContext>;
   /** `private.app_attest_advance` (0031): stores an assertion's counter; false unless it is above the key's. */
   advanceAttestCounter(userId: string, keyId: string, counter: number): Promise<boolean>;

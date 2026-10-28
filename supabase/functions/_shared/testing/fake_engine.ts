@@ -26,8 +26,8 @@ export interface FakeEngineScript {
   /** What drive_overlaps answers (false when left out), or the error it throws. */
   overlaps?: boolean | Error;
   /**
-   * What app_attest_context answers (checked against `AttestContextSchema`): no key and no Android
-   * device when left out. A function gets the key id the upload named.
+   * What app_attest_context answers (checked against `AttestContextSchema`): no key, and not an
+   * Android-only account, when left out. A function gets the key id the upload named.
    */
   attest?: AttestContext | Error | ((keyId: string | null) => AttestContext);
   /** What app_attest_advance answers (true when left out), or a function of the counter. */
@@ -70,7 +70,7 @@ export function fakeEngine(script: FakeEngineScript = {}): FakeEngine {
     },
     attestContext(userId, keyId) {
       calls.push({ fn: 'attestContext', args: { userId, keyId } });
-      const a = script.attest ?? { key: null, android: false };
+      const a = script.attest ?? { key: null, androidOnly: false };
       const raw = typeof a === 'function' ? a(keyId) : answer(a);
       const parsed = AttestContextSchema.safeParse(raw);
       if (!parsed.success) return Promise.reject(new EngineContractError('private.app_attest_context'));

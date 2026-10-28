@@ -17,7 +17,7 @@ const freshContext = { version: 23, phoneUse: true, existing: null, merge: null 
 const attested: MadeAttestation = await makeAttestation({ apple, teamId: TEAM, challenge: 'c'.repeat(43), now: NOW });
 const keyRow = (over: Partial<NonNullable<AttestContext['key']>> = {}): AttestContext => ({
   key: { publicKey: toHex(attested.point), counter: 4, environment: 'production', ...over },
-  android: false,
+  androidOnly: false,
 });
 
 function harness(script: FakeEngineScript = {}, attest: { settings?: AttestSettings | null; enforce: boolean } = { enforce: true }) {
@@ -79,7 +79,8 @@ Deno.test('enforced: whatever an attesting phone can fix by attesting is a retry
   const cases: [string, FakeEngineScript, () => Promise<Record<string, string>>][] = [
     ['no header, no Android device', {}, () => Promise.resolve({})],
     ['no key yet', {}, () => Promise.resolve({ [ATTEST_HEADER]: 'unattested' })],
-    ['a key the user does not have', { attest: { key: null, android: false } }, () => signed(5)],
+    ['a key the user does not have', { attest: { key: null, androidOnly: false } }, () => signed(5)],
+    ['no header, from an account with an iPhone (attested or registered) as well as an Android device', { attest: { key: null, androidOnly: false } }, () => Promise.resolve({})],
     ['a replayed counter', { attest: keyRow({ counter: 5 }) }, () => signed(5)],
     ['another body', { attest: keyRow() }, () => signed(5, BODY.replace('"v":5', '"v":5 '))],
     ['another key', { attest: keyRow() }, async () => ({ ...(await signed(5, BODY, await makeAttestation({ apple, teamId: TEAM, challenge: 'c'.repeat(43), now: NOW }))), [ATTEST_KEY_HEADER]: attested.keyId })],
@@ -98,8 +99,8 @@ Deno.test('enforced: whatever an attesting phone can fix by attesting is a retry
   }
 });
 
-Deno.test('enforced: no App Attest header from a user with an Android device is scored as today', async () => {
-  const h = harness({ attest: { key: null, android: true } });
+Deno.test('enforced: no App Attest header from an account with an Android device and never an iPhone is scored as today', async () => {
+  const h = harness({ attest: { key: null, androidOnly: true } });
   const res = await handleFinalizeTrip(post(), h.deps);
   assertEquals(res.status, 200);
   assertEquals(fns(h), ['driveContext', 'attestContext', 'takeRateLimit', 'driveOverlaps', 'applyDrive']);

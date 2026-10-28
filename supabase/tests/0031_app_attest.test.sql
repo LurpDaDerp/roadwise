@@ -5,7 +5,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(43);
+select plan(50);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -109,19 +109,38 @@ select is((select array[count(*)::int, count(*) filter (where key_id = pg_temp.k
   'the eleventh pushes out the least recently used, never the new one');
 
 -- ---------------------------------------------------------------------------
--- an upload's check: the key, the Android flag, the counter
+-- an upload's check: the key, whether the account may post as Android, the counter
 -- ---------------------------------------------------------------------------
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000001', pg_temp.k(1)),
-  jsonb_build_object('key', jsonb_build_object('publicKey', encode(pg_temp.pk(1), 'hex'), 'counter', 0, 'environment', 'production'), 'android', false),
+  jsonb_build_object('key', jsonb_build_object('publicKey', encode(pg_temp.pk(1), 'hex'), 'counter', 0, 'environment', 'production'), 'androidOnly', false),
   'the user''s key, by id');
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000002', pg_temp.k(1)) -> 'key', 'null'::jsonb, 'never another user''s key');
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000001', pg_temp.k(77)) -> 'key', 'null'::jsonb, 'an unknown key is null');
 select is(private.app_attest_context('00000000-0000-0000-0000-000000000001', null) -> 'key', 'null'::jsonb, 'no key named is null');
-insert into public.devices (user_id, device_id, platform) values ('00000000-0000-0000-0000-000000000002', 'device-android-1', 'android'),
-  ('00000000-0000-0000-0000-000000000001', 'device-ios-0001', 'ios');
-select is(array[(private.app_attest_context('00000000-0000-0000-0000-000000000002', null) ->> 'android')::boolean,
-    (private.app_attest_context('00000000-0000-0000-0000-000000000001', null) ->> 'android')::boolean],
-  array[true, false], 'the Android flag is whether the user has an Android device registered');
+
+-- posting as Android needs an Android device and never an iPhone: no iOS device registered, no App Attest key
+create function pg_temp.android_only(p int) returns boolean language sql as $$
+  select (private.app_attest_context(('00000000-0000-0000-0000-00000000000' || p)::uuid, null) ->> 'androidOnly')::boolean $$;
+create function pg_temp.as_user(p int) returns void language sql as $$
+  select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000000' || p || '","role":"authenticated"}', true) $$;
+grant execute on function pg_temp.as_user(int) to authenticated;
+insert into public.devices (user_id, device_id, platform) values ('00000000-0000-0000-0000-000000000002', 'device-android-2', 'android'),
+  ('00000000-0000-0000-0000-000000000003', 'device-android-3', 'android');
+select is(pg_temp.android_only(2), true, 'an account with only an Android device may post as Android');
+select is(pg_temp.android_only(3), false, 'an account with an App Attest key attests every upload, whatever else it registers');
+select is(pg_temp.android_only(1), false, 'an account with no Android device has nothing to post as');
+
+-- register_device: an iPhone's row stays an iPhone's, so an account cannot re-label its phone
+set local role authenticated;
+select pg_temp.as_user(2);
+select lives_ok($$ select public.register_device('device-ios-0002', 'ios') $$, 'the Android account registers an iPhone');
+select throws_ok($$ select public.register_device('device-ios-0002', 'android') $$, '22023', 'an iOS device cannot become an Android device',
+  'that iPhone cannot be registered again as Android');
+select lives_ok($$ select public.register_device('device-android-2', 'android') $$, 'its Android device registers as before');
+reset role;
+select is((select platform from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and device_id = 'device-ios-0002'), 'ios',
+  'the row stays ios');
+select is(pg_temp.android_only(2), false, 'an account with an iPhone registered attests every upload');
 
 select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_temp.k(1), 3), true, 'a higher counter is stored');
 select is(private.app_attest_advance('00000000-0000-0000-0000-000000000001', pg_temp.k(1), 3), false, 'the same counter again is refused');

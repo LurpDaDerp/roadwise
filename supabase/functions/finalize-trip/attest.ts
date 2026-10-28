@@ -10,6 +10,12 @@
 // same transaction. With enforcement on, the handler lets `verified` and `android` uploads through,
 // stores `unsupported` unscored, and answers the rest `attest_required` (the phone attests and sends
 // again). With enforcement off, nothing is refused and the verdict only goes to the log.
+//
+// An upload with no App Attest header passes as Android only for an account that has an Android
+// device registered and has never had an iPhone (no iOS device registered, no App Attest key): an
+// account with an iPhone, attested or registered, attests every upload, and register_device (0031)
+// never turns its iPhone's row into an Android one. An account that never had an iPhone can still
+// post as Android until Play Integrity exists (accepted).
 import { fromHex, KEY_ID_PATTERN, MAX_ASSERTION_BYTES, verifyAssertion, type AssertionFailure, type AttestSettings } from '../_shared/appattest.ts';
 import type { EngineTx } from '../_shared/engine.ts';
 
@@ -45,8 +51,8 @@ export function readProof(headers: Headers): UploadProof {
 
 /**
  * - `verified`: a valid assertion from the user's own key; its counter is stored.
- * - `android`: no App Attest header, from a user with an Android device registered (looked up only
- *   under enforcement).
+ * - `android`: no App Attest header, from an account that may post as Android (an Android device,
+ *   never an iPhone; looked up only under enforcement).
  * - `none`: no App Attest header, not looked up (enforcement off).
  * - `unsupported`: the phone says App Attest is not available on it.
  * - `missing`: an iPhone upload with no assertion.
@@ -80,7 +86,7 @@ export async function checkUpload(
       return { verdict: 'missing' };
     case 'none':
       if (!enforce) return { verdict: 'none' };
-      return { verdict: (await tx.attestContext(userId, null)).android ? 'android' : 'missing' };
+      return { verdict: (await tx.attestContext(userId, null)).androidOnly ? 'android' : 'missing' };
     case 'assertion': {
       if (!settings) return { verdict: 'unchecked' };
       const { key } = await tx.attestContext(userId, proof.keyId);
