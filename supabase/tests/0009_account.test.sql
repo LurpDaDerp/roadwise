@@ -59,9 +59,9 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
 select is((select e ->> 'format' from ex), 'roadwise-export', 'the export document');
 select is((select array_agg(k order by k) from ex, jsonb_object_keys(e) k),
-  array['about', 'account', 'achievements', 'clan', 'consents', 'devices', 'event_disputes', 'exported_at', 'format', 'format_version', 'friends', 'inbox', 'notification_prefs', 'profile', 'progress', 'reports_made', 'trip_events', 'trips', 'weekly_challenges'],
+  array['about', 'account', 'achievements', 'clan', 'consents', 'devices', 'event_disputes', 'exported_at', 'format', 'format_version', 'friends', 'inbox', 'notification_prefs', 'profile', 'progress', 'reports_made', 'route_pool', 'trip_events', 'trips', 'weekly_challenges'],
   'with every section of the account''s own rows (no points ledger, no league results)');
-select is((select e -> 'format_version' from ex), '4'::jsonb, 'format version 4');
+select is((select e -> 'format_version' from ex), '5'::jsonb, 'format version 5');
 select is((select position('00000000-0000-0000-0000-000000000002' in e::text) from ex), 0, 'nothing in it names the other user, not even the friend, the clanmate or the reported one');
 select is((select position(repeat('ab', 32) in e::text) from ex), 0, 'nor the Live Activity push-to-start token');
 select is((select e -> 'progress' ? 'last_end_lat' from ex), false, 'nor the merge-check end point');

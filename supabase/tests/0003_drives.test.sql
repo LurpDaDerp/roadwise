@@ -213,9 +213,9 @@ set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 select is((select jsonb_array_length(public.list_my_drives(null, 20))), 7, 'A lists the seven drives (the merged-away upload is not a drive)');
 select is((select array(select jsonb_object_keys(d) order by 1) from jsonb_array_elements(public.list_my_drives(null, 1)) d),
-  array['clean', 'clientTripId', 'dashcamCoveredS', 'dashcamMovingS', 'dashcamOn', 'durationS', 'endedAt', 'events', 'exposure', 'localDay', 'miles', 'nDashcam',
+  array['archived', 'clean', 'clientTripId', 'dashcamCoveredS', 'dashcamMovingS', 'dashcamOn', 'durationS', 'endedAt', 'events', 'exposure', 'localDay', 'miles', 'nDashcam',
         'nightMiles', 'notDriving', 'notDrivingExpired', 'origin', 'pointsNet', 'polyline', 'reason', 'result', 'safeMiles', 'scored', 'startedAt', 'tripId', 'tz'],
-  'each drive carries its facts, origin, ran-out flag and counters (pointsNet and safeMiles are LEGACY literals)');
+  'each drive carries its facts, origin, ran-out flag, counters and whether it is archived (pointsNet and safeMiles are LEGACY literals)');
 select is((select array[d -> 'exposure', d -> 'pointsNet', d -> 'safeMiles', d -> 'origin'] from jsonb_array_elements(public.list_my_drives(null, 20)) d where d ->> 'clientTripId' = '11111111-1111-4111-8111-111111111111'),
   array['{"turns": 14, "limitS": 1500, "phoneS": 0, "movingS": 2150, "speedups": 21, "slowdowns": 23}'::jsonb, 'null'::jsonb, '0'::jsonb, '"auto"'::jsonb], 'the union''s counters (no phone seconds: neither leg sent any); the LEGACY keys at their literals');
 select is((select d -> 'events' #>> '{0,status}' from jsonb_array_elements(public.list_my_drives(null, 20)) d where d ->> 'clientTripId' = '11111111-1111-4111-8111-111111111111'), 'removed', 'events carry their status');
