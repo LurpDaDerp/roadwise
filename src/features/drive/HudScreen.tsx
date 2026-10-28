@@ -130,9 +130,11 @@ export type HudScreenProps = {
  *
  * - Middle: the halo, a glowing ring with the speed inside it (white when calm, the halo's colour
  *   otherwise). Calm: light blue-white, light moving slowly round it. Past the limit on the sign it
- *   tints toward yellow, orange and red with the speed shown over it (all but calm just over, red at
- *   1.7 × the limit), from the first moment the speed passes the sign; it pulses only while the car is over the speeding line (limit plus
- *   tolerance), faster the further over, and stops on the first row back under it. A DashPal alert
+ *   tints toward yellow, orange and red with the speed shown over it, ever faster: 0 at the limit,
+ *   half way at the speeding line (1.16 × the limit − 0.8 mph), full red about 1.47 times the line's
+ *   margin over the limit (`speedingTint`), from the first moment the speed passes the sign; it
+ *   pulses only while the car is over the speeding line, faster the further over, and stops on the
+ *   first row back under it. A DashPal alert
  *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
  *   hard start or sharp turn, and each DashPal alert start or step (not a reconnect's re-send),
  *   pulse it quickly a few times. Each event (a speeding episode as it alerts too) shakes the
