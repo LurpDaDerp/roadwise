@@ -10,12 +10,14 @@
  * - `archived_at` is stamped: the drive leaves every list and its recap reads as not found.
  *
  * Only a settled drive is archived (`ARCHIVABLE_STATUSES`): the server has answered it, or refused
- * it for good, or it could never be sent. A drive still recording or still owed to the server is
- * left alone, however old, until it settles. Archiving is idempotent: an archived drive is never
- * touched again.
+ * it for good, or it could never be sent. And only while nothing is owed to the server for it
+ * (`OWED_FOR_TRIP`): a "Wasn't driving" drive whose upload is still queued, or a drive whose upload
+ * the queue will send again, waits. A drive still recording or still owed to the server is left
+ * alone, however old, until it settles. Archiving is idempotent: an archived drive is never touched
+ * again.
  */
 import type { Db } from '@/data/db/driver';
-import { REFUSED_NEVER } from '@/data/db/queue';
+import { FUNCTION_MISSING, REFUSED_NEVER } from '@/data/db/queue';
 import { asNumber } from '@/data/db/row';
 import type { TripStatus } from '@/data/db/types';
 
@@ -31,8 +33,20 @@ export const ARCHIVABLE_STATUSES: readonly TripStatus[] = ['scored', 'unscored',
 
 const SETTLED = ARCHIVABLE_STATUSES.map((s) => `'${s}'`).join(', ');
 
-/** The drives due at a cutoff (one bound parameter). */
-const DUE = `archived_at IS NULL AND ended_at IS NOT NULL AND ended_at < ? AND status IN (${SETTLED})`;
+/**
+ * A queue item still owed for the trip row in scope: the queue's own rule (`OWED` in queue.ts:
+ * waiting, in flight, or failed without being refused for good), plus a refusal on a missing
+ * function (`FUNCTION_MISSING`), which the queue's `reopenRetryable` sends again. Any kind counts
+ * (the upload, a report, "Wasn't driving"): each one's payload names the drive's `clientTripId`.
+ * The constants are the queue's own, written into the SQL (they are numbers and a fixed code).
+ */
+const OWED_FOR_TRIP = `EXISTS (SELECT 1 FROM sync_queue q WHERE json_valid(q.payload_json)
+    AND json_extract(q.payload_json, '$.clientTripId') = trips.client_trip_id
+    AND (q.status IN ('pending', 'inflight')
+      OR (q.status = 'failed' AND (q.next_attempt_at <> ${REFUSED_NEVER} OR q.last_error = '${FUNCTION_MISSING}'))))`;
+
+/** The drives due at a cutoff (one bound parameter): settled, ended before it, and owing nothing. */
+const DUE = `archived_at IS NULL AND ended_at IS NOT NULL AND ended_at < ? AND status IN (${SETTLED}) AND NOT ${OWED_FOR_TRIP}`;
 
 /** How many drives are due at `now`. */
 export async function countDue(on: Db, now: number): Promise<number> {
@@ -55,10 +69,13 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
   );
   await on.execute(`UPDATE trip_events SET lat = NULL, lng = NULL WHERE client_trip_id IN (${due}) AND (lat IS NOT NULL OR lng IS NOT NULL)`, [cutoff]);
   await on.execute(`DELETE FROM samples WHERE client_trip_id IN (${due})`, [cutoff]);
+  // A refusal on a missing function is sent again (`reopenRetryable`), so it is never deleted here
+  // (and its drive is not due while it is there).
   await on.execute(
     `DELETE FROM sync_queue WHERE kind = 'finalize-trip' AND status = 'failed' AND next_attempt_at = ?
+       AND (last_error IS NULL OR last_error <> ?)
        AND json_valid(payload_json) AND json_extract(payload_json, '$.clientTripId') IN (${due})`,
-    [REFUSED_NEVER, cutoff]
+    [REFUSED_NEVER, FUNCTION_MISSING, cutoff]
   );
   const { changes } = await on.execute(
     `UPDATE trips SET polyline = NULL, start_lat = NULL, start_lng = NULL, end_lat = NULL, end_lng = NULL,

@@ -4,7 +4,7 @@ import { archiveCutoff, archiveDue, countDue, createRoutePoolRepo, isRecording, 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo } from '@/data/db/events';
 import { migrate } from '@/data/db/migrate';
-import { REFUSED_NEVER } from '@/data/db/queue';
+import { createQueueRepo, FUNCTION_MISSING, REFUSED_NEVER } from '@/data/db/queue';
 import { createTripsRepo } from '@/data/db/trips';
 import type { NewTrip } from '@/data/db/types';
 
@@ -33,10 +33,10 @@ const drive = (id: string, daysAgo: number, over: Partial<NewTrip> = {}): NewTri
   ...over,
 });
 
-const queueRow = (key: string, clientTripId: string, status: string, nextAttemptAt: number) =>
+const queueRow = (key: string, clientTripId: string, status: string, nextAttemptAt: number, lastError: string | null = null, kind = 'finalize-trip') =>
   db.execute(
-    "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at) VALUES ('finalize-trip', ?, ?, ?, 1, ?, 1)",
-    [JSON.stringify({ clientTripId, polyline: 'x' }), key, status, nextAttemptAt]
+    'INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, last_error, created_at) VALUES (?, ?, ?, ?, 1, ?, ?, 1)',
+    [kind, JSON.stringify({ clientTripId, polyline: 'x' }), key, status, nextAttemptAt, lastError]
   );
 
 beforeEach(async () => {
@@ -64,7 +64,7 @@ beforeEach(async () => {
   ]);
   await db.execute("INSERT INTO samples (client_trip_id, ts, row_json) VALUES ('old-failed', 1, '{}'), ('old-pending', 1, '{}')");
   // The refused upload of the failed drive holds its route; the pending drive's upload is still owed.
-  await queueRow('finalize:old-failed', 'old-failed', 'failed', REFUSED_NEVER);
+  await queueRow('finalize:old-failed', 'old-failed', 'failed', REFUSED_NEVER, 'http_422');
   await queueRow('finalize:old-pending', 'old-pending', 'failed', NOW + 1);
 });
 
@@ -126,3 +126,56 @@ test('a recording drive is seen', async () => {
   await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: NOW, tz: 'UTC', status: 'recording' }, NOW);
   expect(await isRecording(db)).toBe(true);
 });
+
+test('a "Wasn’t driving" drive whose upload is still owed waits, however old, until the upload is done', async () => {
+  const trips = createTripsRepo(db);
+  await trips.insert(drive('passenger-owed', 300, { status: 'not_driving' }), NOW);
+  await queueRow('trip:passenger-owed', 'passenger-owed', 'pending', NOW);
+  // and a queued "Wasn't driving" action for another old drive holds that one too
+  await trips.insert(drive('action-owed', 300, { status: 'not_driving' }), NOW);
+  await queueRow('not_driving:action-owed', 'action-owed', 'pending', NOW, null, 'trip-actions');
+  await archiveDue(db, NOW);
+  expect(await trips.get('passenger-owed')).toMatchObject({ archived_at: null, polyline: 'route-passenger-owed' });
+  expect(await trips.get('action-owed')).toMatchObject({ archived_at: null });
+  await db.execute("UPDATE sync_queue SET status = 'done' WHERE idempotency_key IN ('trip:passenger-owed', 'not_driving:action-owed')");
+  expect(await archiveDue(db, NOW)).toBe(2);
+  expect(await trips.get('passenger-owed')).toMatchObject({ archived_at: NOW, polyline: null });
+});
+
+test('a failed drive whose upload was refused on a missing function waits: the queue sends it again, so its item is kept', async () => {
+  const trips = createTripsRepo(db);
+  await trips.insert(drive('reopens', 300, { status: 'failed', sync_error: FUNCTION_MISSING }), NOW);
+  await queueRow('trip:reopens', 'reopens', 'failed', REFUSED_NEVER, FUNCTION_MISSING);
+  await archiveDue(db, NOW);
+  expect(await trips.get('reopens')).toMatchObject({ archived_at: null, polyline: 'route-reopens' });
+  expect(await createQueueRepo(db).byKey('trip:reopens')).not.toBeNull();
+  // The queue reopens it at the next launch, as before.
+  expect(await createQueueRepo(db).reopenRetryable(NOW)).toBeGreaterThanOrEqual(1);
+  expect((await createQueueRepo(db).byKey('trip:reopens'))?.status).toBe('pending');
+});
+
+test('what holds a drive back is the queue’s own "owed" (and a missing-function refusal): item by item, archiving agrees with queue.owes', async () => {
+  const trips = createTripsRepo(db);
+  const queue = createQueueRepo(db);
+  const cases: [string, string, number, string | null][] = [
+    ['pending', 'pending', NOW, null],
+    ['inflight', 'inflight', NOW, null],
+    ['backoff', 'failed', NOW + 60_000, 'http_500'],
+    ['ranout', 'failed', NOW - 1, 'network'],
+    ['refused', 'failed', REFUSED_NEVER, 'http_422'],
+    ['missing', 'failed', REFUSED_NEVER, FUNCTION_MISSING],
+    ['done', 'done', NOW, null],
+  ];
+  for (const [id, status, next, error] of cases) {
+    await trips.insert(drive(`case-${id}`, 300), NOW);
+    await queueRow(`trip:case-${id}`, `case-${id}`, status, next, error);
+  }
+  const owed = new Map<string, boolean>();
+  for (const [id] of cases) owed.set(id, await queue.owes(`trip:case-${id}`));
+  await archiveDue(db, NOW);
+  for (const [id, , , error] of cases) {
+    const held = (await trips.get(`case-${id}`))?.archived_at === null;
+    expect([id, held]).toEqual([id, owed.get(id) === true || error === FUNCTION_MISSING]);
+  }
+});
+

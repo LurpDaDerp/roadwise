@@ -245,6 +245,8 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   await createSettingsRepo(db).set('privacy.zones', [{ id: 'h', name: 'Home', lat: 1, lng: 1, radiusM: 300 }]);
   await createSettingsRepo(db).set(INSTALL_ID_KEY, 'install-keeps-1234');
   await createSettingsRepo(db).set(DROP_NOTICE_KEY, { clientTripId: uuid(2), cause: 'stopped', reason: 'no_movement', at: T0 });
+  // The routes of drives past 183 days are the driver's too.
+  await createRoutePoolRepo(db).insertMany(['route-old']);
   for (const [status, key, at] of [['done', 'a', 0], ['failed', 'b', REFUSED_NEVER], ['pending', 'c', 0], ['failed', 'd', 0]] as const) {
     await db.execute(
       "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, next_attempt_at, created_at) VALUES ('trip.finalize', '{}', ?, ?, ?, 0)",
@@ -253,6 +255,7 @@ test('a plain sign-out with nothing owed wipes the drives and zones but keeps th
   }
   await wipeForSignOut(db);
   expect(await createTripsRepo(db).count()).toBe(0);
+  expect(await createRoutePoolRepo(db).count()).toBe(0);
   // Finished and refused queue rows (they hold the payloads) go; the ones still owed stay (one out
   // of retries but never refused included).
   expect(await createQueueRepo(db).countByStatus('done')).toBe(0);
