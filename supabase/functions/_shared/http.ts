@@ -50,7 +50,8 @@ export const bearerToken = (req: Request): string | null => {
 export const requirePost = (req: Request): Response | null =>
   req.method === 'POST' ? null : json(405, { code: 'method_not_allowed' }, { allow: 'POST' });
 
-export type BodyResult = { ok: true; body: unknown } | { ok: false; response: Response };
+/** The parsed body, and the exact bytes it was parsed from (what an App Attest assertion signs). */
+export type BodyResult = { ok: true; body: unknown; raw: Uint8Array } | { ok: false; response: Response };
 
 /**
  * The body, bounded: refused on a declared length over the cap without reading, and cut off at the
@@ -86,7 +87,7 @@ export async function readJsonBody(req: Request, maxBytes: number): Promise<Body
   const raw = await readBounded(req, maxBytes);
   if (raw === null) return { ok: false, response: json(413, { code: 'payload_too_large' }) };
   try {
-    return { ok: true, body: JSON.parse(new TextDecoder().decode(raw)) };
+    return { ok: true, body: JSON.parse(new TextDecoder().decode(raw)), raw };
   } catch {
     return { ok: false, response: json(400, { code: 'invalid_json' }) };
   }

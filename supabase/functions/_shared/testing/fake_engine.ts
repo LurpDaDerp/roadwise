@@ -4,9 +4,11 @@
 // `DriveContextSchema` as the real port holds the database's answer, so a context from an older
 // database (no `version: 23`) is the same contract error.
 import {
+  AttestContextSchema,
   DriveContextSchema,
   EngineContractError,
   type ApplyDriveEnvelope,
+  type AttestContext,
   type DriveContextArgs,
   type Engine,
   type EngineTx,
@@ -23,6 +25,13 @@ export interface FakeEngineScript {
   context?: unknown;
   /** What drive_overlaps answers (false when left out), or the error it throws. */
   overlaps?: boolean | Error;
+  /**
+   * What app_attest_context answers (checked against `AttestContextSchema`): no key and no Android
+   * device when left out. A function gets the key id the upload named.
+   */
+  attest?: AttestContext | Error | ((keyId: string | null) => AttestContext);
+  /** What app_attest_advance answers (true when left out), or a function of the counter. */
+  advance?: boolean | Error | ((counter: number) => boolean);
   apply?: unknown | Error | ((envelope: ApplyDriveEnvelope) => unknown);
   notDriving?: unknown | Error;
   dispute?: unknown | Error | ((args: { userId: string; clientTripId: string; eventId: string; reason: string }) => unknown);
@@ -58,6 +67,19 @@ export function fakeEngine(script: FakeEngineScript = {}): FakeEngine {
     driveOverlaps(userId, clientTripId, startedAt, endedAt) {
       calls.push({ fn: 'driveOverlaps', args: { userId, clientTripId, startedAt, endedAt } });
       return Promise.resolve(answer(script.overlaps ?? false));
+    },
+    attestContext(userId, keyId) {
+      calls.push({ fn: 'attestContext', args: { userId, keyId } });
+      const a = script.attest ?? { key: null, android: false };
+      const raw = typeof a === 'function' ? a(keyId) : answer(a);
+      const parsed = AttestContextSchema.safeParse(raw);
+      if (!parsed.success) return Promise.reject(new EngineContractError('private.app_attest_context'));
+      return Promise.resolve(parsed.data);
+    },
+    advanceAttestCounter(userId, keyId, counter) {
+      calls.push({ fn: 'advanceAttestCounter', args: { userId, keyId, counter } });
+      const a = script.advance ?? true;
+      return Promise.resolve(typeof a === 'function' ? a(counter) : answer(a));
     },
     applyDrive(envelope) {
       calls.push({ fn: 'applyDrive', args: envelope });

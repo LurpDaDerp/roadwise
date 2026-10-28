@@ -1,10 +1,11 @@
-// The drive engine port: the `private.*` SQL functions of migrations 0023, 0026 and 0029, reached over a DIRECT
+// The drive engine port: the `private.*` SQL functions of migrations 0023, 0026, 0029 and 0031, reached over a DIRECT
 // Postgres connection — the `private` schema is not exposed by the Data API, so nothing but these
 // functions (and the service role) can call them. Every request runs inside ONE transaction:
-// `drive_context` locks the user's progress row and finds a replay, `drive_overlaps` finds a drive
-// the upload overlaps, the TypeScript decides what is stored, `apply_drive` writes; a replay returns
-// the stored response. A "Wasn't driving" and a report are one SQL call each (`mark_not_driving`,
-// `dispute_event`).
+// `drive_context` locks the user's progress row and finds a replay, `app_attest_context` reads the
+// upload's App Attest key (locked) and `app_attest_advance` moves its counter, `drive_overlaps` finds
+// a drive the upload overlaps, the TypeScript decides what is stored, `apply_drive` writes; a replay
+// returns the stored response. A "Wasn't driving" and a report are one SQL call each
+// (`mark_not_driving`, `dispute_event`).
 //
 // Answers are zod-checked against the SQL contract (server-side drift is a 500, never a half-stored
 // drive); a writer's refusal is a `PgError` carrying the SQLSTATE and fixed message `pgFailure`
@@ -44,6 +45,23 @@ export interface DriveContextArgs {
   /** YYYY-MM-DD, the server's own derivation */
   localDay: string;
 }
+
+/**
+ * `private.app_attest_context` (0031): the user's App Attest key by the id an upload names (null when
+ * the user has no such key, or none was named), and whether the user has an Android device registered.
+ */
+export const AttestContextSchema = z.object({
+  key: z
+    .object({
+      /** The uncompressed P-256 point, hex. */
+      publicKey: z.string().regex(/^04[0-9a-f]{128}$/),
+      counter: z.number().int().min(0).max(4_294_967_295),
+      environment: z.enum(['production', 'development']),
+    })
+    .nullable(),
+  android: z.boolean(),
+});
+export type AttestContext = z.infer<typeof AttestContextSchema>;
 
 /** The DashPal seconds of what is stored, with the derived DashPal-drive flag. */
 export interface EnvelopeDashcam {
@@ -105,6 +123,10 @@ export interface EngineTx {
    * clientTripId is not one), on the times apply_drive will store.
    */
   driveOverlaps(userId: string, clientTripId: string, startedAt: number, endedAt: number): Promise<boolean>;
+  /** `private.app_attest_context` (0031): the named key, locked until the transaction ends, and the Android flag. */
+  attestContext(userId: string, keyId: string | null): Promise<AttestContext>;
+  /** `private.app_attest_advance` (0031): stores an assertion's counter; false unless it is above the key's. */
+  advanceAttestCounter(userId: string, keyId: string, counter: number): Promise<boolean>;
   applyDrive(envelope: ApplyDriveEnvelope): Promise<unknown>;
   /** `private.mark_not_driving`: "Wasn't driving" on one drive. */
   markNotDriving(userId: string, clientTripId: string): Promise<unknown>;
@@ -166,6 +188,18 @@ function txPort(tx: Tx): EngineTx {
       call<boolean>('private.drive_overlaps', () =>
         tx<{ r: boolean }[]>`select private.drive_overlaps(${userId}::uuid, ${clientTripId}::uuid, to_timestamp(${startedAt}::double precision / 1000.0),
           to_timestamp(${endedAt}::double precision / 1000.0)) as r`
+      ),
+    async attestContext(userId, keyId) {
+      const r = await call<unknown>('private.app_attest_context', () =>
+        tx<{ r: unknown }[]>`select private.app_attest_context(${userId}::uuid, ${keyId}::text) as r`
+      );
+      const parsed = AttestContextSchema.safeParse(r);
+      if (!parsed.success) throw new EngineContractError('private.app_attest_context');
+      return parsed.data;
+    },
+    advanceAttestCounter: (userId, keyId, counter) =>
+      call<boolean>('private.app_attest_advance', () =>
+        tx<{ r: boolean }[]>`select private.app_attest_advance(${userId}::uuid, ${keyId}::text, ${counter}::bigint) as r`
       ),
     async driveContext(a) {
       // no start point: where a drive started is never passed on (only the old merge check read it)

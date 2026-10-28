@@ -6,8 +6,9 @@
 // parsing), JSON, the upload contract (v5; a v4 or v3 body from an older build is upgraded, so no drive
 // is ever lost), the time zone and local day (derived here from tz + startedAt; an unknown IANA
 // zone or a mislabelled day is refused), then ONE database transaction: `drive_context` (lock,
-// idempotency) → the daily upload budget → `drive_overlaps` → integrity → the DashPal speed gate
-// re-applied → `classifyDrive`'s length rule → `apply_drive` → the response, stored for replays.
+// idempotency) → the App Attest check → the daily upload budget → `drive_overlaps` → integrity → the
+// DashPal speed gate re-applied → `classifyDrive`'s length rule → `apply_drive` → the response,
+// stored for replays.
 // Every upload is stored as its own drive: the envelope's `mergeInto` is always null, so the
 // response's `mergedInto` is too. A drive that overlaps another stored drive of the user (by more
 // than a minute) is stored unscored as implausible: one person drives one car at a time.
@@ -16,8 +17,17 @@
 // goes no further than this function: neither is passed to the database, so no point outside the
 // trimmed route is ever kept.
 //
+// App Attest (iPhone, attest.ts): an upload's assertion is checked against the user's attested key and
+// the exact body bytes, and its counter stored, in the same transaction. With APP_ATTEST_ENFORCE on,
+// an iPhone upload without a valid assertion is answered 429 `attest_required` (the phone attests and
+// sends it again; a build from before App Attest retries a 429 and keeps the drive queued), one from a
+// phone that says App Attest is not available is stored unscored as implausible, and an upload with
+// no App Attest header from a user with an Android device registered is scored as today. With it off,
+// nothing is refused and the verdict only goes to the log. A replay is answered before the check.
+//
 // A user id comes from the JWT and nowhere else. Logs carry the request id, the client trip id and
 // codes — never a position, a name or a database message.
+import type { AttestSettings } from '../_shared/appattest.ts';
 import type { ApplyDriveEnvelope, Engine, EnvelopeDashcam, EnvelopeEvent } from '../_shared/engine.ts';
 import { EngineContractError } from '../_shared/engine.ts';
 import { integrityReason } from '../_shared/finalize_rules.ts';
@@ -51,10 +61,13 @@ import {
   SPEEDING_MAX_OVER_MPH,
   speedingChargedS,
 } from '../_shared/scoring/index';
+import { checkUpload, NEEDS_ATTESTATION, readProof } from './attest.ts';
 
 /** Uploads a user may make per rolling day; above it the queue is told to wait. */
 export const MAX_UPLOADS_PER_DAY = 300;
 export const UPLOAD_LIMIT_KEY = 'finalize_trip';
+/** How long a build from before App Attest waits before it sends an upload refused `attest_required` again. */
+export const ATTEST_RETRY_AFTER_S = 300;
 /** apply_drive's fixed refusal of a zone pg_timezone_names lacks (0023). */
 export const TZ_REFUSAL = 'payload needs clientTripId, a known tz, localDay and a valid reason';
 
@@ -62,6 +75,11 @@ export interface FinalizeDeps {
   /** The user id the token proves, or null when it proves nothing; throws when Auth is unreachable. */
   verifyJwt(token: string): Promise<string | null>;
   engine: Engine;
+  /**
+   * App Attest: the verifier's settings (null when APP_ATTEST_TEAM_ID is unset: nothing is verified)
+   * and whether iPhone uploads must carry a valid assertion (APP_ATTEST_ENFORCE). Absent: off.
+   */
+  attest?: { settings: AttestSettings | null; enforce: boolean };
   log?: Logger;
 }
 
@@ -143,6 +161,8 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
   if (!parsed.success) return reply(invalidPayload(parsed.error));
   const p = parsed.data;
   const ctxLog = { requestId: id, clientTripId: p.clientTripId };
+  const proof = readProof(req.headers);
+  const enforce = deps.attest?.enforce === true;
 
   if (!isKnownTz(p.tz)) {
     return reply(json(400, { code: 'invalid_payload', issues: [{ path: 'tz', message: 'unknown time zone' }] }));
@@ -156,13 +176,23 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
     const result = await deps.engine.transaction(async (tx) => {
       const context = await tx.driveContext({ userId, clientTripId: p.clientTripId, startedAt: p.startedAt, endedAt: p.endedAt, localDay });
       if (context.existing) return { kind: 'replay' as const, response: context.existing };
+      const attest = await checkUpload(tx, userId, proof, body.raw, deps.attest?.settings ?? null, enforce);
+      if (enforce && NEEDS_ATTESTATION.has(attest.verdict)) {
+        log.warn('finalize-trip attest required', { ...ctxLog, verdict: attest.verdict, reason: attest.reason ?? null });
+        return { kind: 'attest_required' as const };
+      }
+      if (attest.verdict === 'invalid' || attest.verdict === 'unknown_key' || attest.verdict === 'unchecked') {
+        log.warn('finalize-trip attest not verified', { ...ctxLog, verdict: attest.verdict, reason: attest.reason ?? null, enforce });
+      }
       if (!(await tx.takeRateLimit(userId, UPLOAD_LIMIT_KEY, '1 day', MAX_UPLOADS_PER_DAY))) {
         return { kind: 'limited' as const };
       }
       const overlaps = await tx.driveOverlaps(userId, p.clientTripId, p.startedAt, p.endedAt);
+      // Under enforcement, a phone without App Attest (a simulator) is stored but not scored.
+      const unattested = enforce && attest.verdict === 'unsupported';
 
-      // An integrity-refused drive, or one overlapping another, is stored unscored.
-      const refused = integrityReason(p) ?? (overlaps ? 'implausible' : null);
+      // An integrity-refused drive, one overlapping another, or an unattested one is stored unscored.
+      const refused = integrityReason(p) ?? (overlaps || unattested ? 'implausible' : null);
       const s = buildStoredDrive(p);
       const scored = !refused && !s.short;
       const reason: ApplyDriveEnvelope['reason'] = refused ?? (s.short ? 'too_short' : null);
@@ -193,11 +223,14 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
         events: s.events,
         scoringVersion: SCORING_VERSION,
       };
-      if (refused) log.warn('finalize-trip stored unscored', { ...ctxLog, reason: refused, overlaps });
+      if (refused) log.warn('finalize-trip stored unscored', { ...ctxLog, reason: refused, overlaps, unattested });
       return { kind: 'applied' as const, response: await tx.applyDrive(envelope) };
     });
 
     if (result.kind === 'limited') return reply(json(429, { code: 'too_many_trips' }, { 'retry-after': '3600' }));
+    if (result.kind === 'attest_required') {
+      return reply(json(429, { code: 'attest_required' }, { 'retry-after': String(ATTEST_RETRY_AFTER_S) }));
+    }
     // The stored document is our own contract; a document outside it says the database drifted.
     const response = FinalizeTripResponseSchema.safeParse(result.response);
     if (!response.success) {

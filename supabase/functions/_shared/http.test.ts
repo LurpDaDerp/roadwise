@@ -45,7 +45,8 @@ Deno.test('readJsonBody caps the size by header and by bytes, and refuses non-JS
   assertEquals(bad.ok, false);
   if (!bad.ok) assertEquals(await bad.response.json(), { code: 'invalid_json' });
   const good = await readJsonBody(req({ body: '{"a":1}' }), 100);
-  assertEquals(good, { ok: true, body: { a: 1 } });
+  // with the exact bytes it was parsed from (what an App Attest assertion signs)
+  assertEquals(good, { ok: true, body: { a: 1 }, raw: new TextEncoder().encode('{"a":1}') });
 });
 
 Deno.test('readJsonBody stops reading a chunked body at the cap instead of buffering it whole', async () => {
