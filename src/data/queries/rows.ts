@@ -72,6 +72,11 @@ export interface LocalDrive {
   exposure: Exposure;
   /** True when the drive was recorded before the counters and `exposure` is estimated from its miles and duration. */
   exposureEstimated: boolean;
+  /**
+   * Past the detailed history: ended more than 183 days ago and archived (no route, places or labels
+   * kept). Counted in every stat, shown in no list, and its recap reads as not found. Absent: false.
+   */
+  archived?: boolean;
 }
 
 export interface LocalDriveEvent {
@@ -205,6 +210,8 @@ function toDrive(row: TripRow, result: FinalizeTripResponse | null): LocalDrive 
     startSource: row.start_source,
     exposure,
     exposureEstimated: estimated,
+    // Present only on an archived drive.
+    ...(row.archived_at !== null ? { archived: true } : {}),
   };
 }
 
@@ -256,10 +263,10 @@ export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
 }
 
 /**
- * A drive the lists show: not still recording. One that failed to upload is still a drive the user
- * made, and is listed under "Not synced" rather than lost.
+ * A drive the lists show: not still recording, and not archived (past the detailed history). One
+ * that failed to upload is still a drive the user made, and is listed under "Not synced" rather than lost.
  */
-export const isListed = (d: Pick<LocalDrive, 'status'>): boolean => d.status !== 'recording';
+export const isListed = (d: Pick<LocalDrive, 'status' | 'archived'>): boolean => d.status !== 'recording' && d.archived !== true;
 
 /**
  * A drive that counts toward stats and the first-run count: scored by the server, or pending and

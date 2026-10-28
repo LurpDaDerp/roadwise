@@ -12,6 +12,7 @@ import {
   SCHEMA_V10,
   SCHEMA_V11,
   SCHEMA_V12,
+  SCHEMA_V13,
   SCHEMA_VERSION_TABLE,
 } from '@/data/db/schema';
 
@@ -37,6 +38,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 10, statements: SCHEMA_V10 },
   { version: 11, statements: SCHEMA_V11 },
   { version: 12, statements: SCHEMA_V12 },
+  { version: 13, statements: SCHEMA_V13 },
 ];
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;

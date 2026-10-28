@@ -1,12 +1,14 @@
 /** @jest-environment node */
 import { uuid } from '@/data/sync/__fixtures__/drives';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createEventsRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { createEventsRepo, createRoutePoolRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { onDataChanged } from '@/data/events';
-import { applyServerDrive, MAX_PAGES, RESTORE_CURSOR_KEY, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
-import { readDriveCount, readRecentDrives } from '@/data/queries/drives';
+import { applyServerDrive, MAX_PAGES, POOL_PAGE, RESTORE_CURSOR_KEY, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
+import { readDriveCount, readDriveDetail, readRecentDrives, readRoutePolylines, readStatSums } from '@/data/queries/drives';
 
 const T0 = 1_700_000_000_000;
+/** The restore's clock: the fixtures' drives are hours old, far inside the 183 days. */
+const NOW = () => T0;
 
 let db: Db;
 const UID = 'user-1';
@@ -62,6 +64,7 @@ test('an empty device is restored page by page, newest first; events come along'
   const result = await restoreDrives({
     db,
     uid: UID,
+    now: NOW,
     pageSize: 2,
     rpc: async (fn, args) => {
       calls.push([fn, args]);
@@ -92,19 +95,19 @@ test('an empty device is restored page by page, newest first; events come along'
 test('a drive the device already holds is kept as it is and the rest are filled in; a malformed row is skipped', async () => {
   // A drive recorded before the restore ran never stops it.
   await createTripsRepo(db).insert({ client_trip_id: uuid(1), started_at: T0, tz: 'UTC', status: 'pending' }, T0);
-  expect(await restoreDrives({ db, uid: UID, rpc: async () => [{ bogus: true }, serverDrive(1), serverDrive(2)] })).toMatchObject({ skipped: false, restored: 1 });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc: async () => [{ bogus: true }, serverDrive(1), serverDrive(2)] })).toMatchObject({ skipped: false, restored: 1 });
   expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', started_at: T0 });
   expect(await createTripsRepo(db).get(uuid(2))).toMatchObject({ status: 'scored' });
 });
 
 test('a restore that ran to the end is not run again for that driver; another driver’s record does not count', async () => {
-  const rpc = jest.fn(async () => [serverDrive(1)]);
-  await restoreDrives({ db, uid: UID, rpc });
+  const rpc = jest.fn(async (fn: string) => (fn === 'list_my_drives' ? [serverDrive(1)] : []));
+  await restoreDrives({ db, uid: UID, now: NOW, rpc });
   expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toMatchObject({ uid: UID });
-  expect(await restoreDrives({ db, uid: UID, rpc })).toMatchObject({ skipped: true, restored: 0 });
-  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc })).toMatchObject({ skipped: true, restored: 0 });
+  expect(rpc.mock.calls.map((c) => c[0])).toEqual(['list_my_drives', 'list_my_route_pool']);
   await createSettingsRepo(db).set(RESTORED_AT_KEY, { uid: 'someone-else', at: T0 });
-  expect(await restoreDrives({ db, uid: UID, rpc })).toMatchObject({ skipped: false });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc })).toMatchObject({ skipped: false });
 });
 
 test('a restore cut short keeps what it wrote, shows it, and the next run picks up the older pages', async () => {
@@ -116,13 +119,13 @@ test('a restore cut short keeps what it wrote, shows it, and the next run picks 
     if (fail) throw new Error('offline');
     return [serverDrive(3)];
   };
-  await expect(restoreDrives({ db, uid: UID, pageSize: 2, rpc })).rejects.toThrow('offline');
+  await expect(restoreDrives({ db, uid: UID, now: NOW, pageSize: 2, rpc })).rejects.toThrow('offline');
   expect(await createTripsRepo(db).count()).toBe(2);
   expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
   await new Promise((r) => setTimeout(r, 0));
   expect(changes).toContain('hydrate');
   fail = false;
-  expect(await restoreDrives({ db, uid: UID, pageSize: 2, rpc })).toMatchObject({ restored: 1, complete: true });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, pageSize: 2, rpc })).toMatchObject({ restored: 1, complete: true });
   expect(await createTripsRepo(db).get(uuid(3))).not.toBeNull();
   off();
 });
@@ -135,11 +138,11 @@ test('a history longer than one run’s pages is not stamped complete: the next 
     calls.push(args?.p_before as string | undefined);
     return server.filter((d) => d.startedAt < before).slice(0, Number(args?.p_limit));
   };
-  expect(await restoreDrives({ db, uid: UID, pageSize: 1, rpc })).toEqual({ skipped: false, restored: MAX_PAGES, complete: false });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, pageSize: 1, rpc })).toEqual({ skipped: false, restored: MAX_PAGES, complete: false });
   expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
   expect(await createSettingsRepo(db).get(RESTORE_CURSOR_KEY)).toEqual({ uid: UID, before: T0 - MAX_PAGES * 3_600_000 });
   calls.length = 0;
-  expect(await restoreDrives({ db, uid: UID, pageSize: 1, rpc })).toEqual({ skipped: false, restored: 5, complete: true });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, pageSize: 1, rpc })).toEqual({ skipped: false, restored: 5, complete: true });
   // It started where the last run stopped, not at the newest page.
   expect(calls[0]).toBe(new Date(T0 - MAX_PAGES * 3_600_000).toISOString());
   expect(await createTripsRepo(db).count()).toBe(MAX_PAGES + 5);
@@ -149,7 +152,7 @@ test('a history longer than one run’s pages is not stamped complete: the next 
   await createSettingsRepo(db).remove(RESTORED_AT_KEY);
   await createSettingsRepo(db).set(RESTORE_CURSOR_KEY, { uid: 'someone-else', before: T0 - 3_600_000 });
   calls.length = 0;
-  await restoreDrives({ db, uid: UID, pageSize: 1, rpc });
+  await restoreDrives({ db, uid: UID, now: NOW, pageSize: 1, rpc });
   expect(calls[0]).toBeUndefined();
 });
 
@@ -161,7 +164,7 @@ test('a restore that outlives its driver writes nothing more: another owner on t
     if (page === 1) await createSettingsRepo(db).set('device.lastUserId', 'user-2');
     return [serverDrive(page)];
   };
-  await expect(restoreDrives({ db, uid: UID, rpc })).rejects.toBeInstanceOf(RestoreAbandonedError);
+  await expect(restoreDrives({ db, uid: UID, now: NOW, rpc })).rejects.toBeInstanceOf(RestoreAbandonedError);
   expect(await createTripsRepo(db).count()).toBe(0);
   expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
 
@@ -171,7 +174,7 @@ test('a restore that outlives its driver writes nothing more: another owner on t
     wanted = false; // the session changed while the page was read
     return [serverDrive(5)];
   };
-  await expect(restoreDrives({ db, uid: UID, rpc: later, isCurrent: () => wanted })).rejects.toBeInstanceOf(RestoreAbandonedError);
+  await expect(restoreDrives({ db, uid: UID, now: NOW, rpc: later, isCurrent: () => wanted })).rejects.toBeInstanceOf(RestoreAbandonedError);
   expect(await createTripsRepo(db).count()).toBe(0);
 });
 
@@ -209,7 +212,7 @@ test('a drive restored from a server that tracks phone use reads its phone secon
   expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: 420 } })))).toMatchObject({ moving_s: 500, phone_s: 420 });
   expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: 9000 } }))).phone_s).toBe(500);
   expect(toTripRow(ServerDriveSchema.parse(serverDrive(1, { exposure: { ...exposure, phoneS: null } }))).phone_s).toBe(0);
-  expect(await restoreDrives({ db, uid: UID, rpc: async () => [serverDrive(1, { exposure: { ...exposure, phoneS: 420 } })] })).toMatchObject({ restored: 1 });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc: async () => [serverDrive(1, { exposure: { ...exposure, phoneS: 420 } })] })).toMatchObject({ restored: 1 });
   expect((await readRecentDrives(db, 1))[0]).toMatchObject({ exposure: { ...exposure, phoneS: 420 }, exposureEstimated: false });
 });
 
@@ -221,7 +224,7 @@ test('a phone pickup comes back with its seconds in hand and speeds; an event of
       { id: uuid(603), type: 'phone_handling', tier: 'moderate', startedAt: T0 - 3_050_000, durationS: 20, status: 'active' },
     ],
   });
-  expect(await restoreDrives({ db, uid: UID, rpc: async () => [drive] })).toMatchObject({ restored: 1 });
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc: async () => [drive] })).toMatchObject({ restored: 1 });
   const events = await createEventsRepo(db).listByTrip(uuid(1));
   expect(events.map((e) => e.id).sort()).toEqual([uuid(601), uuid(602)]);
   expect(events.find((e) => e.id === uuid(601))).toMatchObject({ type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":41.5}' });
@@ -239,3 +242,89 @@ test('bringing a held drive in line with the server keeps the counters this phon
   expect(await trips.get(uuid(1))).toMatchObject({ status: 'scored', origin: 'manual', not_driving_expired: 1, slowdowns: 9, moving_s: 9, server_id: uuid(101) });
   expect(await trips.get(uuid(2))).toMatchObject({ status: 'scored', not_driving_expired: 0, slowdowns: 3, speedups: 2, turns: 4, limit_s: 300, moving_s: 500 });
 });
+
+// ---------------------------------------------------------------------------------------------
+// 183 days: archived drives and the route pool
+
+const DAY = 86_400_000;
+
+/** An rpc that answers the drive pages from `drives` and the pool pages from `pool` (`[id, line]`, in id order). */
+function serverWith(drives: Record<string, unknown>[], pool: [string, string][] = []) {
+  const calls: [string, Record<string, unknown> | undefined][] = [];
+  const rpc = async (fn: string, args?: Record<string, unknown>) => {
+    calls.push([fn, args]);
+    if (fn === 'list_my_route_pool') {
+      const after = typeof args?.p_after === 'string' ? args.p_after : '';
+      return pool.filter(([id]) => id > after).slice(0, Number(args?.p_limit)).map(([id, polyline]) => ({ id, polyline }));
+    }
+    const before = typeof args?.p_before === 'string' ? Date.parse(args.p_before) : Infinity;
+    return drives.filter((d) => Number(d.startedAt) < before).slice(0, Number(args?.p_limit));
+  };
+  return { rpc, calls };
+}
+
+test('a drive the server archived comes down archived: in no list and no recap, no route or places, still in every stat', async () => {
+  const archived = serverDrive(2, {
+    archived: true,
+    polyline: '',
+    events: [{ id: uuid(502), type: 'speeding', tier: 'minor', startedAt: T0 - 2 * 3_600_000 + 60_000, durationS: 8, lat: null, lng: null, measured: { overMphS: 9 }, status: 'active' }],
+  });
+  const { rpc } = serverWith([serverDrive(1), archived]);
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc })).toMatchObject({ restored: 2, complete: true });
+  expect(await createTripsRepo(db).get(uuid(2))).toMatchObject({ archived_at: T0, polyline: null, status: 'scored', miles: 5 });
+  expect((await createEventsRepo(db).listByTrip(uuid(2))).map((e) => [e.type, e.lat, e.lng])).toEqual([['speeding', null, null]]);
+  expect((await readRecentDrives(db, 10)).map((d) => d.clientTripId)).toEqual([uuid(1)]);
+  expect(await readDriveDetail(db, uuid(2))).toBeNull();
+  expect(await readStatSums(db, null)).toMatchObject({ drives: 2, miles: 10, speeding: 2 });
+  expect(await readDriveCount(db)).toBe(2);
+});
+
+test('a drive the phone’s clock finds past the 183 days, not archived on the server yet, is archived as it lands and its route pooled', async () => {
+  const { rpc } = serverWith([serverDrive(1)]);
+  const later = () => T0 + 200 * DAY;
+  expect(await restoreDrives({ db, uid: UID, now: later, rpc })).toMatchObject({ restored: 1, complete: true });
+  expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ archived_at: later(), polyline: null });
+  expect(await createRoutePoolRepo(db).list()).toEqual(['_p~iF~ps|U']);
+  expect(await readRoutePolylines(db, null)).toEqual(['_p~iF~ps|U']);
+});
+
+test('after the last drive page the server’s route pool joins the phone’s, page by page; a line the phone holds is not doubled', async () => {
+  const pool: [string, string][] = Array.from({ length: POOL_PAGE + 3 }, (_, i) => [`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, `line-${i}`]);
+  await createRoutePoolRepo(db).insertMany(['line-0']);
+  const changes: string[] = [];
+  const off = onDataChanged((c) => changes.push(c.source));
+  const { rpc, calls } = serverWith([], pool);
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc })).toEqual({ skipped: false, restored: 0, complete: true });
+  expect(calls.map(([fn]) => fn)).toEqual(['list_my_drives', 'list_my_route_pool', 'list_my_route_pool']);
+  expect(calls[2]?.[1]).toEqual({ p_limit: POOL_PAGE, p_after: pool[POOL_PAGE - 1]![0] });
+  expect(await createRoutePoolRepo(db).count()).toBe(POOL_PAGE + 3);
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toMatchObject({ uid: UID });
+  await new Promise((r) => setTimeout(r, 0));
+  expect(changes).toContain('hydrate');
+  off();
+});
+
+test('a server without the pool (before 0030) has none to give: the restore still completes', async () => {
+  const rpc = async (fn: string) => {
+    if (fn === 'list_my_route_pool') throw Object.assign(new Error('Could not find the function'), { code: 'PGRST202' });
+    return [serverDrive(1)];
+  };
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc })).toMatchObject({ restored: 1, complete: true });
+  expect(await createRoutePoolRepo(db).count()).toBe(0);
+});
+
+test('a pool read that fails leaves the restore unfinished, to run again; a pool page for a driver who left is not written', async () => {
+  let fail = true;
+  const rpc = async (fn: string) => {
+    if (fn !== 'list_my_route_pool') return [serverDrive(1)];
+    if (fail) throw new Error('offline');
+    await createSettingsRepo(db).set('device.lastUserId', 'user-2');
+    return [{ id: uuid(800), polyline: 'line' }];
+  };
+  await expect(restoreDrives({ db, uid: UID, now: NOW, rpc })).rejects.toThrow('offline');
+  expect(await createSettingsRepo(db).get(RESTORED_AT_KEY)).toBeNull();
+  fail = false;
+  await expect(restoreDrives({ db, uid: UID, now: NOW, rpc })).rejects.toBeInstanceOf(RestoreAbandonedError);
+  expect(await createRoutePoolRepo(db).count()).toBe(0);
+});
+

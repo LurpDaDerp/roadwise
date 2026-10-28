@@ -99,6 +99,8 @@ export interface TripRow {
   moving_s: number | null;
   /** Seconds at driving speed watched for phone use (phone use's opportunities); 0 on a drive recorded before phone tracking. */
   phone_s: number;
+  /** When the drive was archived (183 days after it ended: no route or places, in no list); null until then. */
+  archived_at: number | null;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

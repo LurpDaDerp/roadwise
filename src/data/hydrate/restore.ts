@@ -15,11 +15,16 @@
  * Every page is written only while the device still belongs to the driver it was started for, and
  * only while `isCurrent` says the run is still wanted: a restore that outlives a sign-out or a
  * handover writes nothing more.
+ *
+ * Routes and places are kept 183 days (`@/data/db/archive`). A drive the server archived comes down
+ * archived (its numbers, no route, no event places), each page archives what the phone's own clock
+ * finds due, and after the last page the server's route pool (`list_my_route_pool`, a page at a
+ * time) joins the phone's, so the All trips map draws every route again.
  */
 import { clampExposure, watchedMiles, type EventType } from '@scoring';
 import { z } from 'zod';
 
-import { createEventsRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip, type TripPatch } from '@/data/db';
+import { archiveDue, createEventsRepo, createRoutePoolRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip, type TripPatch } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
 import { countEvents } from '@/data/queries/rows';
 import { EVENT_TYPES, TIERS } from '@/data/sync/payload';
@@ -27,6 +32,9 @@ import { deviceOwnerIs } from '@/data/sync/queue';
 
 export const RESTORE_PAGE = 50;
 export const MAX_PAGES = 40;
+/** The route pool is read this many lines a page, and at most this many pages in one run. */
+export const POOL_PAGE = 100;
+export const MAX_POOL_PAGES = 200;
 /** Settings key: `{ uid, at }`, the driver whose restore last ran to the end and when. */
 export const RESTORED_AT_KEY = 'restore.completedAt';
 /** Settings key: `{ uid, before }`, where that driver's unfinished restore carries on (epoch ms). */
@@ -93,8 +101,13 @@ export const ServerDriveSchema = z.object({
   dashcamCoveredS: z.number().nullable().optional(),
   result: z.unknown().optional(),
   events: z.array(ServerEvent).default([]),
+  /** Archived on the server (no route, no event places); a server before 0030 does not say (none were). */
+  archived: z.boolean().default(false),
 });
 export type ServerDrive = z.infer<typeof ServerDriveSchema>;
+
+/** One `list_my_route_pool` row: a pooled line and its random id (the page cursor). */
+const ServerPoolLine = z.object({ id: z.uuid(), polyline: z.string() });
 
 export interface RestoreDeps {
   db: Db;
@@ -151,7 +164,8 @@ function exposureCols(d: ServerDrive): Pick<NewTrip, 'slowdowns' | 'speedups' | 
   return { slowdowns: e.slowdowns, speedups: e.speedups, turns: e.turns, limit_s: e.limitS, moving_s: e.movingS, phone_s: e.phoneS };
 }
 
-export function toTripRow(d: ServerDrive): NewTrip {
+/** The local row of a server drive; one the server archived is stored archived at `now`, with no route. */
+export function toTripRow(d: ServerDrive, now: number = Date.now()): NewTrip {
   const events = knownEvents(d).map((e) => ({ type: e.type, status: e.status ?? 'active' }));
   return {
     client_trip_id: d.clientTripId,
@@ -173,6 +187,7 @@ export function toTripRow(d: ServerDrive): NewTrip {
     origin: d.origin,
     not_driving_expired: d.notDrivingExpired ? 1 : 0,
     ...exposureCols(d),
+    ...(d.archived ? { polyline: null, archived_at: now } : {}),
   };
 }
 
@@ -184,8 +199,8 @@ export function toEventRows(d: ServerDrive): NewEvent[] {
     tier: e.tier,
     started_at: e.startedAt,
     duration_s: e.durationS,
-    lat: e.lat ?? null,
-    lng: e.lng ?? null,
+    lat: d.archived ? null : (e.lat ?? null),
+    lng: d.archived ? null : (e.lng ?? null),
     measured_json: e.measured === undefined ? null : JSON.stringify(e.measured),
     status: e.status ?? 'active',
     // A removed event was taken off by an accepted report: never offer Report on it again.
@@ -225,7 +240,7 @@ export async function applyServerDrive(tx: Db, d: ServerDrive, now: number): Pro
   const events = createEventsRepo(tx);
   const local = await trips.get(d.clientTripId, tx);
   if (local === null) return;
-  const row = toTripRow(d);
+  const row = toTripRow(d, now);
   const counted = local.slowdowns !== null && local.speedups !== null && local.turns !== null && local.limit_s !== null && local.moving_s !== null;
   const patch: TripPatch = {
     status: row.status,
@@ -264,6 +279,7 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
   const pageSize = deps.pageSize ?? RESTORE_PAGE;
   let before = await readCursor(db, uid);
   let restored = 0;
+  let pooled = 0;
   let complete = false;
   try {
     for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -284,10 +300,12 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
         let n = 0;
         for (const d of drives) {
           if ((await trips.get(d.clientTripId, tx)) !== null) continue;
-          await trips.insert(toTripRow(d), now(), tx);
+          await trips.insert(toTripRow(d, now()), now(), tx);
           await events.insertMany(toEventRows(d), tx);
           n += 1;
         }
+        // A drive due by this phone's clock that the server has not archived yet is archived here.
+        if (n > 0) await archiveDue(tx, now());
         // The page and where the next one starts are written together.
         if (!last && oldest !== null) await createSettingsRepo(tx).set(RESTORE_CURSOR_KEY, { uid, before: oldest } satisfies RestoreCursor);
         return n;
@@ -301,6 +319,9 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
       before = oldest;
     }
     if (complete) {
+      await restorePool(deps, isCurrent, (n) => {
+        pooled += n;
+      });
       await db.transaction(async (tx) => {
         if (!(await deviceOwnerIs(tx, uid))) throw new RestoreAbandonedError();
         await createSettingsRepo(tx).set(RESTORED_AT_KEY, { uid, at: now() } satisfies RestoredAt);
@@ -309,7 +330,46 @@ export async function restoreDrives(deps: RestoreDeps): Promise<RestoreResult> {
     }
   } finally {
     // Whatever was written is shown, also when the run stopped part-way.
-    if (restored > 0) emitDataChanged({ source: 'hydrate' });
+    if (restored > 0 || pooled > 0) emitDataChanged({ source: 'hydrate' });
   }
   return { skipped: false, restored, complete };
+}
+
+/** PostgREST's answer for a function the server does not have: a server before 0030, which pooled nothing. */
+const isMissingFunction = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'PGRST202';
+
+/**
+ * The server's route pool into the phone's, a page at a time in the server's id order (random: it
+ * says nothing about when). A line the phone already holds adds nothing. Fenced like the drives'
+ * pages; each page's count of added lines goes to `onAdded` as it is written, so a run that stops
+ * part-way still shows what it added.
+ */
+async function restorePool(deps: RestoreDeps, isCurrent: () => boolean | Promise<boolean>, onAdded: (n: number) => void): Promise<void> {
+  const { db, uid } = deps;
+  const pool = createRoutePoolRepo(db);
+  let after: string | null = null;
+  for (let page = 0; page < MAX_POOL_PAGES; page += 1) {
+    if (!(await isCurrent())) throw new RestoreAbandonedError();
+    let raw: unknown;
+    try {
+      raw = await deps.rpc('list_my_route_pool', after === null ? { p_limit: POOL_PAGE } : { p_limit: POOL_PAGE, p_after: after });
+    } catch (error) {
+      if (isMissingFunction(error)) return;
+      throw error;
+    }
+    const rows = z.array(z.unknown()).safeParse(raw);
+    if (!rows.success) throw new Error('list_my_route_pool did not answer with a list');
+    const lines = rows.data.map((r) => ServerPoolLine.safeParse(r)).flatMap((p) => (p.success ? [p.data] : []));
+    if (!(await isCurrent())) throw new RestoreAbandonedError();
+    const written = await db.transaction(async (tx) => {
+      if (!(await deviceOwnerIs(tx, uid))) return null;
+      return pool.insertMany(lines.map((l) => l.polyline), tx);
+    });
+    if (written === null) throw new RestoreAbandonedError();
+    onAdded(written);
+    const last = lines[lines.length - 1];
+    if (rows.data.length < POOL_PAGE || last === undefined) break;
+    after = last.id;
+  }
 }

@@ -435,6 +435,17 @@ describe('AllTimeCard', () => {
     expect(screen.getByTestId('all-time-longest-clean-value')).toHaveTextContent('50.3 km');
   });
 
+  test('the longest clean drive archived (past 183 days): its distance still shows, with nothing to press', async () => {
+    const onOpen = jest.fn();
+    const archived = [...list.slice(0, 1), { ...list[1]!, archived: true }, list[2]!];
+    await draw(<AllTimeCard allTime={allTimeTotals(archived)} onOpen={onOpen} />);
+    expect(screen.getByTestId('all-time-longest-clean-value')).toHaveTextContent('31.2 mi');
+    expect(screen.getByTestId('all-time-clean-drives-value')).toHaveTextContent('2');
+    expect(screen.getByTestId('all-time-longest-clean').props.accessibilityRole).toBeUndefined();
+    await press(screen.getByTestId('all-time-longest-clean'));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   test('no drives yet: a dash for the longest, nothing to press, and no clean drives', async () => {
     await draw(<AllTimeCard allTime={allTimeTotals([])} onOpen={jest.fn()} />);
     expect(screen.getAllByText('—')).toHaveLength(1);

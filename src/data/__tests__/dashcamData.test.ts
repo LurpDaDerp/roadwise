@@ -59,7 +59,8 @@ test('a restored drive keeps its DashPal event and stays clean', async () => {
     result: null,
     events: [{ id: DROWSY, type: 'drowsy', tier: 'severe', startedAt: T0 + 60_000, durationS: 4, lat: null, lng: null, measured: { source: 'dashcam', speedMph: 40 }, status: 'active' }],
   };
-  expect(await restoreDrives({ db, uid: 'user-1', rpc: async (_fn, args) => (args?.p_before ? [] : [drive]) })).toMatchObject({ restored: 1 });
+  // The restore's clock is the drive's day: a drive past 183 days would come down archived (in no list).
+  expect(await restoreDrives({ db, uid: 'user-1', now: () => T0 + 600_000, rpc: async (_fn, args) => (args?.p_before ? [] : [drive]) })).toMatchObject({ restored: 1 });
   const [d] = await readRecentDrives(db, 1);
   expect(d).toMatchObject({ clean: true, watchedMiles: 5, counts: expect.objectContaining({ drowsy: 1, speeding: 0 }) });
   expect(await createEventsRepo(db).listByTrip(uuid(1))).toEqual([expect.objectContaining({ id: DROWSY, type: 'drowsy', measured_json: '{"source":"dashcam","speedMph":40}' })]);

@@ -7,7 +7,7 @@ import { rows, TZ } from '@/core/engine/__fixtures__/drives';
 import type { LimitSample } from '@/core/engine/types';
 import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
-import { createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, REFUSED_NEVER, type Db } from '@/data/db';
+import { createQueueRepo, createRoutePoolRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, REFUSED_NEVER, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { bootstrapApp, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
@@ -83,7 +83,7 @@ function deps(over: Partial<Parameters<typeof bootstrapApp>[0]> = {}) {
 test('a cold launch: migrates, records the owner, boots the host idle, starts the runner; nothing is armed or started', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
-  expect(rt.schemaVersion).toBe(12);
+  expect(rt.schemaVersion).toBe(13);
   expect(rt.owner).toBe('first');
   expect(await readDeviceOwner(db)).toBe('user-1');
   expect(rt.drive.snapshot().status).toBe('idle');
@@ -97,6 +97,20 @@ test('a cold launch: migrates, records the owner, boots the host idle, starts th
   const rt2 = await bootstrapApp(again.deps);
   expect(again.source.calls).toEqual([]);
   await rt2.stop();
+});
+
+test('a launch archives the drives past 183 days before anything reads them; a drive still owed to the server is left', async () => {
+  const DAY = 86_400_000;
+  await migrate(db);
+  await rememberDeviceOwner(db, 'user-1');
+  const old = { started_at: clock - 200 * DAY, ended_at: clock - 200 * DAY + 600_000, tz: TZ, status: 'scored' as const, miles: 5, polyline: 'route-old' };
+  await createTripsRepo(db).insert({ client_trip_id: uuid(1), ...old }, clock);
+  await createTripsRepo(db).insert({ client_trip_id: uuid(2), ...old, polyline: 'route-held', status: 'pending' as const }, clock);
+  const rt = await bootstrapApp(deps().deps);
+  expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ archived_at: clock, polyline: null });
+  expect(await createTripsRepo(db).get(uuid(2))).toMatchObject({ archived_at: null, polyline: 'route-held' });
+  expect(await createRoutePoolRepo(db).list()).toEqual(['route-old']);
+  await rt.stop();
 });
 
 test('the launch makes the network adapter and keeps the database out of backups, waiting for neither; a failure is reported and the launch goes on', async () => {
@@ -193,6 +207,7 @@ test('device ownership: a different user wipes every table but the schema’s; a
     'dashcam_boots',
     'dashcam_coverage',
     'problem_spots',
+    'route_pool',
     'trips',
   ]);
   expect(await ensureDeviceOwner(db, null)).toBe('signed-out');

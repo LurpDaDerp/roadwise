@@ -62,6 +62,7 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   limit_s: null,
   moving_s: null,
   phone_s: 0,
+  archived_at: null,
   ...over,
 });
 

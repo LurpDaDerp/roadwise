@@ -1,9 +1,20 @@
 export { createExpoDb, type Db, type DbResult } from '@/data/db/driver';
 export { CURRENT_SCHEMA_VERSION, migrate } from '@/data/db/migrate';
-export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V10, SCHEMA_V11, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
+export { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V10, SCHEMA_V11, SCHEMA_V13, SCHEMA_VERSION_TABLE } from '@/data/db/schema';
 export { DISPUTE_REASONS, DRIVE_ORIGINS, START_SOURCES } from '@/data/db/types';
 
 export { MissingTripError } from '@/data/db/errors';
+export {
+  ARCHIVABLE_STATUSES,
+  archiveCutoff,
+  archiveDue,
+  countDue,
+  createRoutePoolRepo,
+  isRecording,
+  RETENTION_DAYS,
+  RETENTION_MS,
+  type RoutePoolRepo,
+} from '@/data/db/archive';
 export { createEventsRepo, type EventsRepo } from '@/data/db/events';
 export { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S, REFUSED_NEVER, type QueueRepo } from '@/data/db/queue';
 export { createSamplesRepo, type SamplesRepo } from '@/data/db/samples';

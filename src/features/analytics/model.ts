@@ -668,7 +668,8 @@ export function trendDirection(points: readonly Pick<TrendPoint, 'x' | 'value'>[
 
 export interface Best {
   value: number;
-  clientTripId: string;
+  /** The drive it came from; null when that drive is archived (past the detailed history: no recap to open). */
+  clientTripId: string | null;
 }
 
 export interface PersonalBests {
@@ -676,13 +677,13 @@ export interface PersonalBests {
   longestClean: Best | null;
 }
 
-/** All-time bests over scored drives. The first (newest, as given) wins a tie. */
+/** All-time bests over scored drives, archived ones included. The first (newest, as given) wins a tie. */
 export function personalBests(drives: readonly LocalDrive[]): PersonalBests {
   let longestClean: Best | null = null;
   for (const d of drives) {
     if (!isScoredDrive(d)) continue;
     if (d.miles > 0 && d.clean === true && (longestClean === null || d.miles > longestClean.value)) {
-      longestClean = { value: d.miles, clientTripId: d.clientTripId };
+      longestClean = { value: d.miles, clientTripId: d.archived === true ? null : d.clientTripId };
     }
   }
   return { longestClean };

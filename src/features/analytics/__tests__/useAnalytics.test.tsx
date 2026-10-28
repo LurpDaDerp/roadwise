@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { QueryClient } from '@tanstack/react-query';
 
 import { uuid } from '@/core/engine/__fixtures__/drives';
-import type { Db } from '@/data/db';
+import { archiveDue, type Db } from '@/data/db';
 import { createTestDb, seedEvents, seedTrips, wrapperFor } from '@/data/queries/__fixtures__/harness';
 import { readScoredDrives, readWindowEvents } from '@/data/queries/analytics';
 import { createQueryClient } from '@/data/queries/client';
@@ -209,3 +209,39 @@ test('a sync refreshes the analytics data', async () => {
   await invalidateAfterSync(client);
   await waitFor(() => expect(result.current.sums.drives).toBe(3));
 });
+
+test('past the 183 days a drive leaves the drive list but every all-time number still counts it, and the map draws its route from the pool', async () => {
+  // A long clean drive 250 days ago, with its speeding event, inside the Year range.
+  await seedTrips(db, [
+    { client_trip_id: uuid(6), started_at: NOW - 250 * DAY, ended_at: NOW - 250 * DAY + 600_000, tz: 'UTC', status: 'scored', miles: 40, duration_s: 2400, clean: 0,
+      counts_json: JSON.stringify({ speeding: 1 }), polyline: route, slowdowns: 30, speedups: 30, turns: 20, limit_s: 1200, moving_s: 2000 },
+    { client_trip_id: uuid(7), started_at: NOW - 260 * DAY, ended_at: NOW - 260 * DAY + 600_000, tz: 'UTC', status: 'scored', miles: 45, duration_s: 2400, clean: 1,
+      polyline: encodeRuns([[{ lat: 47.61, lng: -122.31 }, { lat: 47.63, lng: -122.33 }]]), slowdowns: 30, speedups: 30, turns: 20, limit_s: 1200, moving_s: 2000 },
+  ]);
+  await seedEvents(db, [
+    { id: uuid(31), client_trip_id: uuid(6), type: 'speeding', tier: 'moderate', started_at: NOW - 250 * DAY + 60_000, duration_s: 20, lat: 47.6, lng: -122.3, measured_json: '{"speedMph":52,"limitMph":40,"overMphS":120}' },
+  ]);
+  const { result } = await renderHook(() => useAnalytics('year'), { wrapper: wrapperFor(db, client, now) });
+  await waitFor(() => expect(result.current.drives).toHaveLength(6));
+  const before = result.current;
+  expect(before.allTime.longestClean).toEqual({ value: 45, clientTripId: uuid(7) });
+
+  await archiveDue(db, NOW);
+  await invalidateAfterSync(client);
+  await waitFor(() => expect(result.current.drives).toHaveLength(4));
+  const after = result.current;
+  // The list (and its "Drives · n") holds only the drives with a recap.
+  expect(after.drives.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(3), uuid(4)]);
+  // Every all-time and Year number is the same.
+  expect(after.allTime).toEqual({ ...before.allTime, longestClean: { value: 45, clientTripId: null } });
+  expect(after.grid).toEqual(before.grid);
+  expect(after.sums).toEqual(before.sums);
+  expect(after.trend).toEqual(before.trend);
+  expect(after.coaching).toEqual(before.coaching);
+  // The map draws the same lines: the archived drives' routes now come from the pool.
+  expect(after.routes).toHaveLength(before.routes.length);
+  expect(after.routes).toEqual(expect.arrayContaining(before.routes));
+  expect(before.routes).toEqual(expect.arrayContaining(after.routes));
+  expect(after.region).toEqual(before.region);
+});
+

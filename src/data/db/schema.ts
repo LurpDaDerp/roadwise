@@ -14,7 +14,8 @@
  * what the in-app driver monitoring (DMS) left behind. Version 5 adds the DashPal dashcam's tables.
  * Version 6 marks the DashPal events that arrived while no drive was open. Versions 7 to 9 add a
  * column each. Version 10 is the round where points and phone use leave, drives start on their own,
- * scores are judged per opportunity and problem spots are kept.
+ * scores are judged per opportunity and problem spots are kept. Version 13 keeps a drive's route
+ * and places for 183 days only (`archive.ts`).
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -403,4 +404,21 @@ export const SCHEMA_V12: readonly string[] = [
   "DELETE FROM dashcam_coverage WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
   "UPDATE dashcam_events SET client_trip_id = NULL WHERE client_trip_id IN (SELECT client_trip_id FROM trips WHERE status = 'merged')",
   "DELETE FROM trips WHERE status = 'merged'",
+];
+
+/**
+ * V13: a drive's route and places are kept 183 days after it ended (`archive.ts`).
+ * - `trips.archived_at`: when the drive was archived (epoch ms). An archived drive keeps every
+ *   number the stats read, but no route, no start or end point, no from/to label and no event
+ *   place, and it is in no list and has no recap. Null until then.
+ * - `route_pool`: the archived scored drives' routes, one line each, with nothing that says which
+ *   drive or when: the All trips map draws them beside the routes the drives still hold. A line is
+ *   stored once (a restore that brings the server's copy of a line this phone already pooled adds
+ *   nothing).
+ */
+export const SCHEMA_V13: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN archived_at INTEGER',
+  `CREATE TABLE route_pool (
+    polyline TEXT NOT NULL UNIQUE
+  )`,
 ];

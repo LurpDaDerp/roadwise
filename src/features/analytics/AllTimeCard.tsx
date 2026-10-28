@@ -13,12 +13,14 @@ const NONE: Metric = { value: '—', unit: '', spoken: 'none yet' };
 
 /**
  * The all-time totals above the range toggle, titled "All time": the longest clean drive (opening
- * the drive it came from) and how many drives were clean, side by side. The range never moves them.
+ * the drive it came from, unless that drive is archived and has no recap) and how many drives were
+ * clean, side by side. The range never moves them.
  */
 export function AllTimeCard({ allTime, onOpen }: { allTime: AllTimeTotals; onOpen: (clientTripId: string) => void }) {
   const t = useTheme();
   const units = useUnits();
   const best = allTime.longestClean;
+  const opens = best?.clientTripId ?? null;
   return (
     <Card testID="analytics-all-time">
       <Text variant="title3" accessibilityRole="header">
@@ -28,8 +30,8 @@ export function AllTimeCard({ allTime, onOpen }: { allTime: AllTimeTotals; onOpe
         <MetricCell
           caption={c.longestClean}
           metric={best ? distanceMetric(best.value, units) : NONE}
-          onPress={best ? () => onOpen(best.clientTripId) : undefined}
-          hint={best ? c.hint : undefined}
+          onPress={opens !== null ? () => onOpen(opens) : undefined}
+          hint={opens !== null ? c.hint : undefined}
           style={{ flex: 1 }}
           testID="all-time-longest-clean"
         />

@@ -67,6 +67,7 @@ const COLUMNS = [
   'limit_s',
   'moving_s',
   'phone_s',
+  'archived_at',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -126,6 +127,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     limit_s: asNumberOrNull(row, 'limit_s'),
     moving_s: asNumberOrNull(row, 'moving_s'),
     phone_s: asNumberOrNull(row, 'phone_s') ?? 0,
+    archived_at: asNumberOrNull(row, 'archived_at'),
   };
 }
 

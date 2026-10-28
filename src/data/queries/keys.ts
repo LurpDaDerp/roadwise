@@ -14,6 +14,8 @@ export const queryKeys = {
   statSums: (sinceMs: number | null) => ['stats', sinceMs] as const,
   driveCount: () => ['driveCount'] as const,
   routes: (sinceMs: number | null) => ['routes', sinceMs] as const,
+  /** The route pool's lines (archived drives' routes, with no drive and no date). */
+  routePool: () => ['routes', 'pool'] as const,
   windowEvents: (sinceMs: number | null) => ['stats', 'events', sinceMs] as const,
   scoredDrives: (sinceMs: number | null) => ['stats', 'drives', sinceMs] as const,
   /** The problem spots view (Analytics' card and sheet). */

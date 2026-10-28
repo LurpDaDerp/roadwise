@@ -4,11 +4,16 @@
  *
  * Every reader asks SQLite for only what it shows: a count is a COUNT, the recent drives a LIMIT,
  * a sum reads the summed columns, and a list leaves each drive's stored server answer unread. The
- * rows, their order and every number are those of filtering the whole table, as before.
+ * rows, their order and every number are those of filtering the whole table.
+ *
+ * A drive archived 183 days after it ended (`@/data/db/archive`) is a stat, never a list item: the
+ * lists (recent drives, history) and a drive's own read (its recap) leave it out, while the sums
+ * and the count still count it, and the all-time routes take its line from the route pool.
  */
 import type { StatSums } from '@scoring';
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
+import { createRoutePoolRepo } from '@/data/db/archive';
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo, toEventRow } from '@/data/db/events';
 import { asEnum, asNumber, asNumberOrNull, asTextOrNull } from '@/data/db/row';
@@ -39,13 +44,16 @@ export async function readDrives(db: Db): Promise<LocalDrive[]> {
 /** The order every list reads in (`trips.list`). */
 const NEWEST_FIRST = 'ORDER BY t.started_at DESC, t.client_trip_id ASC';
 
+/** The drives a list shows: not recording, not archived (`isListed`). */
+const LISTED = "t.status != 'recording' AND t.archived_at IS NULL";
+
 export async function readRecentDrives(db: Db, limit: number): Promise<LocalDrive[]> {
-  const { rows } = await db.execute(`SELECT * FROM trips t WHERE t.status != 'recording' ${NEWEST_FIRST} LIMIT ?`, [Math.max(0, limit)]);
+  const { rows } = await db.execute(`SELECT * FROM trips t WHERE ${LISTED} ${NEWEST_FIRST} LIMIT ?`, [Math.max(0, limit)]);
   return rows.map((row) => toLocalDrive(toTripRow(row)));
 }
 
 export async function readDriveHistory(db: Db, filter: DriveHistoryFilter): Promise<LocalDrive[]> {
-  const { rows } = await db.execute(`SELECT * FROM trips t WHERE t.status != 'recording' ${NEWEST_FIRST}`);
+  const { rows } = await db.execute(`SELECT * FROM trips t WHERE ${LISTED} ${NEWEST_FIRST}`);
   return rows.map((row) => toListedDrive(toTripRow(row))).filter((d) => matchesHistoryFilter(d, filter));
 }
 
@@ -67,12 +75,13 @@ export async function readDriveEvents(db: Db, clientTripIds: readonly string[]):
   return out;
 }
 
+/** One drive with its events; null when the device does not hold it, or holds it archived (no recap). */
 export async function readDriveDetail(
   db: Db,
   clientTripId: string
 ): Promise<{ drive: LocalDrive; events: LocalDriveEvent[] } | null> {
   const row = await createTripsRepo(db).get(clientTripId);
-  if (row === null) return null;
+  if (row === null || row.archived_at !== null) return null;
   const events = await createEventsRepo(db).listByTrip(clientTripId);
   return { drive: toLocalDrive(row), events: events.map(toLocalDriveEvent) };
 }
@@ -106,13 +115,23 @@ export async function readDriveCount(db: Db): Promise<number> {
   return asNumber(rows[0] ?? {}, 'n');
 }
 
+/**
+ * The trimmed routes of the drives started at or after `sinceMs`, newest first; all time (null)
+ * adds the route pool's lines after them (they carry no date, so a window never holds them).
+ */
 export async function readRoutePolylines(db: Db, sinceMs: number | null): Promise<string[]> {
   const since = sinceMs === null ? '' : 'AND t.started_at >= ?';
   const { rows } = await db.execute(
     `SELECT t.polyline FROM trips t WHERE t.status != 'recording' AND t.polyline IS NOT NULL AND t.polyline != '' ${since} ${NEWEST_FIRST}`,
     sinceMs === null ? [] : [sinceMs]
   );
-  return rows.map((row) => asTextOrNull(row, 'polyline') ?? '');
+  const lines = rows.map((row) => asTextOrNull(row, 'polyline') ?? '');
+  return sinceMs === null ? [...lines, ...(await readRoutePool(db))] : lines;
+}
+
+/** The route pool: the archived scored drives' routes, lines with no drive and no date. */
+export function readRoutePool(db: Db): Promise<string[]> {
+  return createRoutePoolRepo(db).list();
 }
 
 /** The last `limit` drives, newest first (Home's "Recent drives"). */
@@ -127,7 +146,7 @@ export function useDriveHistory(filter: DriveHistoryFilter): UseQueryResult<Loca
   return useQuery({ queryKey: queryKeys.driveHistory(filter), queryFn: () => readDriveHistory(db, filter) });
 }
 
-/** One drive with its events; null when the device does not hold it. */
+/** One drive with its events; null when the device does not hold it, or holds it archived. */
 export function useDriveDetail(clientTripId: string): UseQueryResult<{ drive: LocalDrive; events: LocalDriveEvent[] } | null> {
   const { db } = useDataSource();
   return useQuery({
@@ -149,8 +168,14 @@ export function useDriveCount(): UseQueryResult<number> {
   return useQuery({ queryKey: queryKeys.driveCount(), queryFn: () => readDriveCount(db) });
 }
 
-/** The trimmed polylines of the user's own drives (the heat map). */
+/** The trimmed polylines of the user's own drives (the heat map); all time adds the route pool. */
 export function useRoutePolylines(sinceMs: number | null): UseQueryResult<string[]> {
   const { db } = useDataSource();
   return useQuery({ queryKey: queryKeys.routes(sinceMs), queryFn: () => readRoutePolylines(db, sinceMs) });
+}
+
+/** The route pool's lines (the All trips map draws them beside the drives' own routes). */
+export function useRoutePool(): UseQueryResult<string[]> {
+  const { db } = useDataSource();
+  return useQuery({ queryKey: queryKeys.routePool(), queryFn: () => readRoutePool(db), placeholderData: keepPreviousData });
 }

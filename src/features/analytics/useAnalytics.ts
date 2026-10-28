@@ -9,6 +9,7 @@ import { simplifyTrack } from '@/core/engine/privacy';
 import type { LocalDrive } from '@/data/queries/rows';
 import { useDataSource } from '@/data/queries/context';
 import { useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
+import { useRoutePool } from '@/data/queries/drives';
 import type { Region } from '@/features/settings/maps';
 
 import {
@@ -82,9 +83,12 @@ export interface AnalyticsData {
   grid: DriveGrid;
   /** The range's Score and Events over time (the Trends card). */
   trend: Trend;
-  /** Every scored drive, all time, newest first (the Drives list, which pages them ten at a time). */
+  /** Every scored drive not yet archived, newest first (the Drives list, which pages them ten at a time). */
   drives: LocalDrive[];
-  /** Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips). */
+  /**
+   * Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips): the
+   * routes the drives hold, then the route pool's (the archived drives').
+   */
   routes: MapPoint[][];
   /** Where the trip map opens (`fitRegion`); null with no routes. */
   region: Region | null;
@@ -95,8 +99,9 @@ export interface AnalyticsData {
 
 /**
  * Everything the Analytics tab draws. The range drives only the sums (the Driving card, Trends'
- * clean share, the category sheets) and the trend; the grid, the drive list, the map and the
- * all-time card read every scored drive.
+ * clean share, the category sheets) and the trend; the grid, the map and the all-time card read
+ * every scored drive, archived ones included (the map draws theirs from the route pool), and the
+ * drive list every scored drive not archived.
  */
 export function useAnalytics(range: Range): AnalyticsData {
   const { now } = useDataSource();
@@ -106,6 +111,7 @@ export function useAnalytics(range: Range): AnalyticsData {
   // The trend's axis ends with the current hour (the same window), so it recomputes once an hour, not every render.
   const hourEnd = windowStart(at, 0) + 3_599_999;
   const all = useScoredDrives(null);
+  const pool = useRoutePool();
   const events = useWindowEvents(coachSince);
   // The trend's Score looks back 90 days from each point, so it reads a year and 90 days of events
   // for every range: switching the range never waits on a new read.
@@ -120,32 +126,38 @@ export function useAnalytics(range: Range): AnalyticsData {
     () => coachWindow(events.data ? (drives ?? []) : [], events.data ?? [], coachSince, hourEnd),
     [drives, events.data, coachSince, hourEnd]
   );
-  // All time: the drive list (already newest first, paged by its card), the grid and the totals.
+  // All time: the drive list (already newest first, paged by its card; an archived drive is in no
+  // list), the grid and the totals (every drive, archived ones included).
   const lifetime = useMemo(() => {
     const list = drives ?? [];
-    return { allTime: allTimeTotals(list), grid: driveGrid(list, null), drives: scoredSince(list, null) };
+    return { allTime: allTimeTotals(list), grid: driveGrid(list, null), drives: scoredSince(list, null).filter((d) => d.archived !== true) };
   }, [drives]);
   // The range's time over the limit reads its speeding events (the year and 90 days' read holds every range's).
   const rangeEventList = rangeEvents.data;
   const sums = useMemo(() => windowSums(drives ?? [], sinceMs, rangeEventList ?? []), [drives, sinceMs, rangeEventList]);
   const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
-  // The map draws the same drives as every other card: scored ones, not "Wasn't driving". Simplified
-  // (the overview can't show what it drops), and the region fitted on what is drawn.
+  // The map draws the same drives as every other card: scored ones, not "Wasn't driving", an
+  // archived one's route from the pool (only scored drives' routes are pooled). Simplified (the
+  // overview can't show what it drops), and the region fitted on what is drawn.
+  const poolLines = pool.data;
   const map = useMemo(() => {
-    const routes = routeLines((drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : []))).map(overviewRun);
+    const lines = [...(drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])), ...(poolLines ?? [])];
+    const routes = routeLines(lines).map(overviewRun);
     return { routes, region: fitLines(routes) };
-  }, [drives]);
+  }, [drives, poolLines]);
 
   const { refetch: refetchAll } = all;
+  const { refetch: refetchPool } = pool;
   const { refetch: refetchEvents } = events;
   const { refetch: refetchRangeEvents } = rangeEvents;
   const refetch = useMemo(
     () => () => {
       void refetchAll();
+      void refetchPool();
       void refetchEvents();
       void refetchRangeEvents();
     },
-    [refetchAll, refetchEvents, refetchRangeEvents]
+    [refetchAll, refetchPool, refetchEvents, refetchRangeEvents]
   );
 
   return {
@@ -156,8 +168,8 @@ export function useAnalytics(range: Range): AnalyticsData {
     sums,
     trend: trendData,
     ...map,
-    loading: all.isLoading || events.isLoading || rangeEvents.isLoading,
-    error: all.isError || events.isError || rangeEvents.isError,
+    loading: all.isLoading || pool.isLoading || events.isLoading || rangeEvents.isLoading,
+    error: all.isError || pool.isError || events.isError || rangeEvents.isError,
     refetch,
   };
 }

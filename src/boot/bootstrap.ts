@@ -24,6 +24,7 @@ import { getInstallId } from '@/data/devices/installId';
 import { createPushToStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
+import { archiveOldDrives } from '@/data/hydrate/archive';
 import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
 import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
@@ -56,6 +57,8 @@ export const BOOTSTRAP_TIMEOUT_MS = 20_000;
 export const SESSION_TIMEOUT_MS = 1_500;
 export const ZONE_REREAD_MS = 60_000;
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
+/** How often, while the app is in front, drives past the 183 days are archived (`archiveOldDrives`). */
+export const ARCHIVE_INTERVAL_MS = 24 * 60 * 60_000;
 /** A capture whose last row is older than this is not continued: the drive is finalized as it stood. */
 export const ADOPT_MAX_GAP_MS = 5 * 60_000;
 /** Set once the forgot-to-start reminder (retired) has been switched off on this install. */
@@ -278,6 +281,9 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   const db = await stage('open', () => (deps.openDb ?? (() => createExpoDb(DB_NAME)))());
   enter('migrate');
   const schemaVersion = await stage('migrate', () => migrate(db));
+  // Drives past the 183 days leave the lists before anything reads them: local SQL only, and it
+  // does nothing while a drive is recording. A failure holds nothing up (the daily job retries).
+  await archiveOldDrives(db, now()).catch((error: unknown) => onError(error, 'archive old drives'));
   // Neither holds the launch, and a failure costs only what it would have given.
   const createNet = deps.createNet === undefined ? createExpoNet : deps.createNet;
   if (createNet) void createNet().catch((error: unknown) => onError(error, 'network state'));
@@ -821,8 +827,9 @@ export interface ForegroundJobs {
 /**
  * The work that runs only while the driver has the app open, each on a transition to `active`:
  * the restore (once per launch until the owner's has run to the end), the public config (daily), the
- * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily), automatic
- * drives armed or disarmed (every time: iPhone), and the problem spots' recompute.
+ * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily), the archive
+ * of drives past 183 days (daily), automatic drives armed or disarmed (every time: iPhone), and the
+ * problem spots' recompute.
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
   const onError = deps.onError ?? warn;
@@ -857,6 +864,15 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     },
     foreground
   );
+  // Drives past the 183 days are archived once a day as well, for an app that stays alive for days.
+  const stopArchive = runWhenForeground(
+    'archive',
+    ARCHIVE_INTERVAL_MS,
+    async () => {
+      if ((await archiveOldDrives(runtime.db, runtime.now())) === null) throw new Error('a drive is recording');
+    },
+    foreground
+  );
   // Automatic drives (iPhone): armed for the signed-in, onboarded driver on every return to the
   // front while the Automatic drives switch is on (else disarmed), then the app wake.
   const stopAutoDetect = runWhenForeground(
@@ -873,6 +889,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
       stopRestore();
       stopConfig();
       stopPrune();
+      stopArchive();
       stopAutoDetect();
       spots?.stop();
     },
