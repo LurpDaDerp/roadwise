@@ -52,6 +52,7 @@ extension DriveDetector {
     vehicleStanding = a.confident && a.automotive
     if vehicleStanding && phase == "candidate" { lastVehicleTs = a.at }
     latest = a
+    vetoState = DetectPolicy.noteVeto(vetoState, at: a.at, onFoot: a.walking || a.cycling, automotive: a.automotive, confident: a.confident)
     if a.walking {
       if a.confident && walkSince == nil { walkSince = a.at }
     } else {
@@ -59,10 +60,11 @@ extension DriveDetector {
     }
   }
 
-  /// A confident cycling, walking or running report from the last 30 s holds an auto confirmation.
+  /// A confident cycling, walking or running report from the last 30 s holds an auto confirmation,
+  /// unless a confident automotive report arrived after it (`DetectPolicy.onFootVeto`). A
+  /// low-confidence, stationary or unknown report after it never lifts it.
   func vetoNow() -> Bool {
-    guard let a = latest else { return false }
-    return a.confident && (a.walking || a.cycling) && DriveDetector.now() - a.at <= DetectPolicy.VETO_FRESH_MS
+    DetectPolicy.onFootVeto(vetoState, DriveDetector.now())
   }
 
   /// The standing report is moving car motion (a tunnel, a garage): a fix-less row holds the still clock.

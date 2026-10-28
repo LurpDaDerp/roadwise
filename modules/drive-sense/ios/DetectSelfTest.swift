@@ -34,6 +34,15 @@ enum DetectSelfTest {
     case "motionGate":
       guard let m = motionOf(v["summary"]), let now = jsonNumber(v["now"]) else { return nil }
       return ["reason": DetectPolicy.motionGate(m, now)]
+    case "veto":
+      guard let list = v["reports"] as? [Any], let now = jsonNumber(v["now"]) else { return nil }
+      var s = VetoState()
+      for raw in list {
+        guard let o = raw as? [String: Any], let at = jsonNumber(o["at"]), let onFoot = jsonBool(o["onFoot"]),
+              let automotive = jsonBool(o["automotive"]), let confident = jsonBool(o["confident"]) else { return nil }
+        s = DetectPolicy.noteVeto(s, at: at, onFoot: onFoot, automotive: automotive, confident: confident)
+      }
+      return ["vetoed": DetectPolicy.onFootVeto(s, now)]
     case "wake":
       guard let c = wakeOf(v["ctx"]) else { return nil }
       return ["reason": DetectPolicy.wakeGate(c)]

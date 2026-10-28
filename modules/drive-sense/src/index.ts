@@ -72,6 +72,8 @@ export {
   motionGate,
   moving,
   MPS_PER_MPH,
+  noteVeto,
+  onFootVeto,
   recentStarts,
   resumeDecision,
   rolling,
@@ -83,6 +85,7 @@ export {
   suppressionDue,
   traceStart,
   trusted,
+  VETO_START,
   wakeGate,
 } from './detect/policy';
 export type {
@@ -99,6 +102,8 @@ export type {
   StatusInputs,
   TracedStart,
   TriggerKind,
+  VetoReport,
+  VetoState,
   WakeCtx,
   WakeGate,
   WakeReason,

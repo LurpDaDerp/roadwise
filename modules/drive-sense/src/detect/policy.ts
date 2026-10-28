@@ -35,7 +35,7 @@ export const DETECT = {
   CONFIRM_HOLD_MS_MANUAL: 15_000,
   /** A dip under the Start card's trigger (or an untrusted row) spanning this long or less keeps the hold. */
   CONFIRM_DIP_MAX_MS: 5_000,
-  /** A confident cycling, walking or running report this recent earns an auto candidate nothing. */
+  /** A confident cycling, walking or running report this recent earns an auto candidate nothing, unless a confident automotive report came after it (`onFootVeto`). */
   VETO_FRESH_MS: 30_000,
   /** A row counts only with a fix this accurate… */
   TRUSTED_HACC_M: 30,
@@ -277,6 +277,43 @@ export function confirmStep(s: ConfirmState, r: DetectRow, kind: TriggerKind, ve
   const dip = s.dipStartTs ?? r.ts;
   if (r.ts - dip > DETECT.CONFIRM_DIP_MAX_MS) return { state: CONFIRM_START, confirmed: false };
   return { state: { ...CONFIRM_START, runStartTs: s.runStartTs, dipStartTs: dip }, confirmed: false };
+}
+
+/**
+ * A live motion report as the on-foot veto reads it: when it arrived, whether it says on foot
+ * (walking, running or cycling) or in a vehicle (automotive, a car standing at a light too), and
+ * whether it is confident (medium or high).
+ */
+export interface VetoReport {
+  at: number;
+  onFoot: boolean;
+  automotive: boolean;
+  confident: boolean;
+}
+
+/** The on-foot veto's memory: when the last confident on-foot report arrived, and the last confident automotive one (null: none). */
+export interface VetoState {
+  onFootAt: number | null;
+  automotiveAt: number | null;
+}
+
+export const VETO_START: VetoState = Object.freeze({ onFootAt: null, automotiveAt: null });
+
+/** One live report into the veto's memory. A low-confidence report changes nothing, and neither does a stationary or unknown one. */
+export function noteVeto(s: VetoState, r: VetoReport): VetoState {
+  if (!r.confident) return s;
+  return { onFootAt: r.onFoot ? r.at : s.onFootAt, automotiveAt: r.automotive ? r.at : s.automotiveAt };
+}
+
+/**
+ * The on-foot veto at `now` (the auto trigger's `veto`): a confident walking, running or cycling
+ * report that arrived in the last `VETO_FRESH_MS` holds an auto confirmation, unless a confident
+ * automotive report arrived after it. Only the car lifts it early: a low-confidence, stationary or
+ * unknown report after it never does.
+ */
+export function onFootVeto(s: VetoState, now: number): boolean {
+  if (s.onFootAt === null || now - s.onFootAt > DETECT.VETO_FRESH_MS) return false;
+  return s.automotiveAt === null || s.automotiveAt <= s.onFootAt;
 }
 
 // ——— The start ———

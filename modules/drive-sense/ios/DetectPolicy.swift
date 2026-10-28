@@ -30,6 +30,13 @@ struct ConfirmState: Equatable {
   var lastMoveTs: Double?
 }
 
+/// The on-foot veto's memory (policy.ts `VetoState`): when the last confident walking, running or
+/// cycling report arrived, and the last confident automotive one; nil: none.
+struct VetoState: Equatable {
+  var onFootAt: Double?
+  var automotiveAt: Double?
+}
+
 /// Where a confirmed drive begins, and the first kept row (an index into the rows given).
 struct TracedStart: Equatable {
   var index: Int

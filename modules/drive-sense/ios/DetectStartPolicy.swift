@@ -57,6 +57,21 @@ extension DetectPolicy {
     return (ConfirmState(runStartTs: run, dipStartTs: dip), false)
   }
 
+  /// policy.ts `noteVeto`: one live report into the veto's memory. A low-confidence report changes
+  /// nothing, and neither does a stationary or unknown one.
+  static func noteVeto(_ s: VetoState, at: Double, onFoot: Bool, automotive: Bool, confident: Bool) -> VetoState {
+    guard confident else { return s }
+    return VetoState(onFootAt: onFoot ? at : s.onFootAt, automotiveAt: automotive ? at : s.automotiveAt)
+  }
+
+  /// policy.ts `onFootVeto`: a confident walking, running or cycling report that arrived in the last
+  /// `VETO_FRESH_MS` holds an auto confirmation, unless a confident automotive report arrived after it.
+  static func onFootVeto(_ s: VetoState, _ now: Double) -> Bool {
+    guard let f = s.onFootAt, now - f <= VETO_FRESH_MS else { return false }
+    guard let c = s.automotiveAt else { return true }
+    return c <= f
+  }
+
   // MARK: - The start
 
   /// policy.ts `traceStart`: the last trusted row at or under 3 mph before the run, going on back

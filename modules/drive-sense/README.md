@@ -898,8 +898,9 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   0.9 s (`autoHoldMs`). 15 mph and under earns nothing. Under 20 mph a row earns only with fresh car
   motion (a standing confident moving automotive report, or one in the last 2 min, the wake's motion
   history included),
-  so a bike or an e-scooter in that band never confirms; a row with a confident cycling, walking or
-  running report 30 s old or less earns nothing. The interval between two earning rows at most 2 s
+  so a bike or an e-scooter in that band never confirms; a row earns nothing while a confident
+  cycling, walking or running report arrived 30 s ago or less with no confident automotive report
+  after it (`onFootVeto`; a low-confidence, stationary or unknown report never lifts it). The interval between two earning rows at most 2 s
   apart adds its length at the slower one's rate, so a lone GPS spike earns nothing, and the 0.9 s
   floor is the spike guard: from about 29.46 mph (30 mph and over included) a drive confirms on the
   second good reading in a row, never on one; the floor sits under the 1 s row interval, so the 1 Hz

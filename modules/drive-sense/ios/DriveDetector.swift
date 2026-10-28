@@ -30,6 +30,8 @@ final class DriveDetector {
   var lastOverStopTs: Double?
   var walkSince: Double?
   var latest: MotionReport?
+  /// The on-foot veto's memory: the last confident on-foot and automotive reports' arrivals.
+  var vetoState = VetoState()
   /// This candidate's standing motion report (reset as it opens): confident moving car motion, and
   /// any confident automotive report (a car at a light too).
   var carStanding = false

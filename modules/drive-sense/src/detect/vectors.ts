@@ -17,6 +17,7 @@ import {
   type StartSource,
   type StatusInputs,
   type TriggerKind,
+  type VetoReport,
   type WakeCtx,
   type WakeGate,
 } from './policy';
@@ -97,6 +98,8 @@ export type DetectVector =
     }
   | { name: string; kind: 'summary'; activities: ActivitySample[]; now: number; expected: MotionSummary }
   | { name: string; kind: 'motionGate'; summary: MotionSummary; now: number; expected: MotionGate }
+  /** The live reports in arrival order, then the on-foot veto at `now`. */
+  | { name: string; kind: 'veto'; reports: VetoReport[]; now: number; expected: boolean }
   | { name: string; kind: 'wake'; ctx: WakeCtx; expected: WakeGate }
   | {
       name: string;
@@ -170,6 +173,11 @@ function stopAndGo(cycles: number): DetectRow[] {
 const kerbRedLight = [...vrows(0, 30, 0), ...vrows(31, 50, 8), ...vrows(51, 95, 0), ...vrows(96, 140, 24)];
 
 const act = (start: number, o: Partial<ActivitySample>): ActivitySample => ({ start, automotive: false, stationary: false, onFoot: false, confident: true, ...o });
+
+/** A live report arriving `sec` s after T0: confident and neither on foot nor automotive (a stationary phone) unless told. */
+const report = (sec: number, o: Partial<VetoReport> = {}): VetoReport => ({ at: at(sec), onFoot: false, automotive: false, confident: true, ...o });
+const onFoot = (sec: number, confident = true) => report(sec, { onFoot: true, confident });
+const car = (sec: number, confident = true) => report(sec, { automotive: true, confident });
 
 const wakeCtx = (o: Partial<WakeCtx> = {}): WakeCtx => ({
   now: at(0),
@@ -463,6 +471,17 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   { name: 'motion gate: car motion 3 min ago is not fresh', kind: 'motionGate', summary: { lastAutomotiveAt: at(-180), automotiveSince: at(-600), onFootNow: false }, now: at(0), expected: 'notFresh' },
   { name: 'motion gate: no car motion is not fresh', kind: 'motionGate', summary: { lastAutomotiveAt: 0, automotiveSince: 0, onFootNow: false }, now: at(0), expected: 'notFresh' },
   { name: 'motion gate: a driver on foot now starts nothing', kind: 'motionGate', summary: { lastAutomotiveAt: at(-30), automotiveSince: at(-600), onFootNow: true }, now: at(0), expected: 'onFoot' },
+  { name: 'veto: a confident walk 10 s ago holds', kind: 'veto', reports: [onFoot(-10)], now: at(0), expected: true },
+  { name: 'veto: a confident ride exactly 30 s ago still holds', kind: 'veto', reports: [onFoot(-30)], now: at(0), expected: true },
+  { name: 'veto: a confident ride 31 s ago no longer holds', kind: 'veto', reports: [onFoot(-31)], now: at(0), expected: false },
+  { name: 'veto: a low-confidence walk vetoes nothing', kind: 'veto', reports: [onFoot(-5, false)], now: at(0), expected: false },
+  { name: 'veto: a confident ride then a low-confidence report keeps it', kind: 'veto', reports: [onFoot(-10), report(-5, { confident: false })], now: at(0), expected: true },
+  { name: 'veto: a confident ride then a stationary report keeps it', kind: 'veto', reports: [onFoot(-10), report(-5)], now: at(0), expected: true },
+  { name: 'veto: a confident ride then a low-confidence automotive report keeps it', kind: 'veto', reports: [onFoot(-10), car(-5, false)], now: at(0), expected: true },
+  { name: 'veto: a confident automotive report after the walk lifts it (the car pulling away, or standing at a light)', kind: 'veto', reports: [onFoot(-10), car(-5)], now: at(0), expected: false },
+  { name: 'veto: a car report before the walk lifts nothing', kind: 'veto', reports: [car(-20), onFoot(-10)], now: at(0), expected: true },
+  { name: 'veto: a later confident walk vetoes again after a car report', kind: 'veto', reports: [onFoot(-25), car(-20), onFoot(-5)], now: at(0), expected: true },
+  { name: 'veto: no report vetoes nothing', kind: 'veto', reports: [], now: at(0), expected: false },
   { name: 'wake: armed, owned, allowed and idle passes', kind: 'wake', ctx: wakeCtx(), expected: 'ok' },
   { name: 'wake: not armed', kind: 'wake', ctx: wakeCtx({ armed: false }), expected: 'off' },
   { name: 'wake: no owner', kind: 'wake', ctx: wakeCtx({ hasOwner: false }), expected: 'noOwner' },

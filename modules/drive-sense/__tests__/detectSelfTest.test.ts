@@ -46,6 +46,7 @@ describe('the detect self-test', () => {
       start: (a) => ({ ...a, start: { ...(a.start as object), startSource: 'wake' } }),
       summary: (a) => ({ summary: { ...(a.summary as object), onFootNow: !(a.summary as { onFootNow: boolean }).onFootNow } }),
       motionGate: () => ({ reason: 'ok-ish' }),
+      veto: (a) => ({ vetoed: !(a.vetoed as boolean) }),
       wake: () => ({ reason: 'resting' }),
       candidate: () => ({ cause: 'walking' }),
       startsAfter: (a) => ({ starts: [...(a.starts as number[]), 1] }),

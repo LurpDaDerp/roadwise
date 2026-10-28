@@ -18,6 +18,8 @@ import {
   lingerAfterJsEnd,
   MANUAL_TRIGGER,
   MPS_PER_MPH,
+  noteVeto,
+  onFootVeto,
   rolling,
   slow,
   startOf,
@@ -26,9 +28,12 @@ import {
   suppressionResume,
   traceStart,
   trusted,
+  VETO_START,
   walkStanding,
   type ConfirmState,
   type DetectRow,
+  type VetoReport,
+  type VetoState,
 } from '../src/detect/policy';
 import { matchDetectRow, runDetectRow } from '../src/detect/selfTest';
 import { DETECT_VECTORS, T0, vrow, vrows } from '../src/detect/vectors';
@@ -48,7 +53,7 @@ describe('the decision table', () => {
 
   test('every rule has rows', () => {
     const kinds = new Set(DETECT_VECTORS.map((v) => v.kind));
-    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'resumeSeq', 'start', 'startsAfter', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'wake'].sort());
+    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'resumeSeq', 'start', 'startsAfter', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'veto', 'wake'].sort());
   });
 });
 
@@ -221,6 +226,57 @@ function randomRows(seed: number, n = 240): DetectRow[] {
   }
   return out;
 }
+
+describe('the on-foot veto', () => {
+  const report = (sec: number, o: Partial<VetoReport> = {}): VetoReport => ({ at: T0 + sec * 1000, onFoot: false, automotive: false, confident: true, ...o });
+  const memory = (reports: readonly VetoReport[]): VetoState => reports.reduce(noteVeto, VETO_START);
+  /** The auto confirmation over `rows`, the veto read at each row from the reports that had arrived by then. */
+  function confirmedAt(rows: readonly DetectRow[], reports: readonly VetoReport[]): number | null {
+    let s: ConfirmState = CONFIRM_START;
+    for (const r of rows) {
+      const step = confirmStep(s, r, 'auto', onFootVeto(memory(reports.filter((x) => x.at <= r.ts)), r.ts), false);
+      s = step.state;
+      if (step.confirmed) return r.ts;
+    }
+    return null;
+  }
+  // an e-bike at 21 mph (a 15 s hold, no car motion needed from 20 mph)
+  const ebike = vrows(0, 60, 21);
+
+  test('a confident ride then a low-confidence report keeps the veto: nothing earns until 30 s after the ride report', () => {
+    expect(onFootVeto(memory([report(0, { onFoot: true }), report(5, { confident: false })]), T0 + 10_000)).toBe(true);
+    // the same with a stationary or unknown report, confident or not
+    expect(onFootVeto(memory([report(0, { onFoot: true }), report(5)]), T0 + 10_000)).toBe(true);
+    // the ride report at 0 s holds through 30 s; the hold builds from there and confirms 15 s on
+    expect(confirmedAt(ebike, [report(0, { onFoot: true }), report(5, { confident: false })])).toBe(T0 + 46_000);
+  });
+
+  test('a confident automotive report after it lifts the veto at once, a car standing at a light too', () => {
+    expect(onFootVeto(memory([report(0, { onFoot: true }), report(5, { automotive: true })]), T0 + 6_000)).toBe(false);
+    // car motion from 5 s: the rows from there earn, and the 15 s hold confirms at 20 s
+    expect(confirmedAt(ebike, [report(0, { onFoot: true }), report(5, { automotive: true })])).toBe(T0 + 20_000);
+    // a low-confidence automotive report lifts nothing
+    expect(confirmedAt(ebike, [report(0, { onFoot: true }), report(5, { automotive: true, confident: false })])).toBe(T0 + 46_000);
+  });
+
+  test('the walk to the car: the veto lasts at most 30 s past the last confident walk report, and the car report ends it sooner', () => {
+    // walking until 0 s, seated (stationary) at 10 s, pulling away to 30 mph at 15 s: the veto holds
+    // through 30 s, and the second reading after it (32 s) confirms
+    const pullAway = [...vrows(0, 14, 0), ...vrows(15, 60, 30)];
+    expect(confirmedAt(pullAway, [report(0, { onFoot: true }), report(10)])).toBe(T0 + 32_000);
+    // CoreMotion reporting the car at 20 s ends it there
+    expect(confirmedAt(pullAway, [report(0, { onFoot: true }), report(10), report(20, { automotive: true })])).toBe(T0 + 21_000);
+    // with no walk report the same pull-away confirms on its second reading
+    expect(confirmedAt(pullAway, [])).toBe(T0 + 16_000);
+  });
+
+  test('a low-confidence walk vetoes nothing, and one older than 30 s neither', () => {
+    expect(onFootVeto(memory([report(0, { onFoot: true, confident: false })]), T0 + 1_000)).toBe(false);
+    expect(onFootVeto(memory([report(0, { onFoot: true })]), T0 + DETECT.VETO_FRESH_MS)).toBe(true);
+    expect(onFootVeto(memory([report(0, { onFoot: true })]), T0 + DETECT.VETO_FRESH_MS + 1)).toBe(false);
+    expect(onFootVeto(VETO_START, T0)).toBe(false);
+  });
+});
 
 describe('properties', () => {
   test('the Start card: a hold never confirms across a dip spanning more than 5 s, and always spans the hold', () => {

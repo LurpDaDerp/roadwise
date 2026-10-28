@@ -18,6 +18,8 @@ import {
   endOnRow,
   lingerAfterJsEnd,
   motionGate,
+  noteVeto,
+  onFootVeto,
   resumeDecision,
   resumeSeq,
   startOf,
@@ -27,6 +29,7 @@ import {
   suppressionDue,
   suppressionResume,
   traceStart,
+  VETO_START,
   wakeGate,
   type DetectRow,
 } from './policy';
@@ -93,6 +96,8 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
       return { summary: summarize(v.activities, v.now) };
     case 'motionGate':
       return { reason: motionGate(v.summary, v.now) };
+    case 'veto':
+      return { vetoed: onFootVeto(v.reports.reduce(noteVeto, VETO_START), v.now) };
     case 'wake':
       return { reason: wakeGate(v.ctx) };
     case 'candidate':
@@ -151,6 +156,8 @@ export function expectedActual(v: DetectVector): DetectActual {
       return { cause: v.expected };
     case 'startsAfter':
       return { starts: v.expected };
+    case 'veto':
+      return { vetoed: v.expected };
     case 'end':
       return { results: v.expected };
     case 'resume':

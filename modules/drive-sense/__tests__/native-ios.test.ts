@@ -536,6 +536,16 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(act).toMatch(/vehicleStanding = a\.confident && a\.automotive\s*if vehicleStanding && phase == "candidate" \{ lastVehicleTs = a\.at \}/);
     expect(act).toMatch(/if a\.walking \{\s*if a\.confident && walkSince == nil \{ walkSince = a\.at \}\s*\} else \{\s*walkSince = nil\s*\}/);
     expect(fn(d, 'func carFresh()')).toMatch(/carStanding \|\| DriveDetector\.now\(\) - lastCarMotionAt <= DetectPolicy\.AUTOMOTIVE_FRESH_MS/);
+    // the on-foot veto: every live report goes into its memory through the policy; a confident walk,
+    // run or ride from the last 30 s holds, and only a confident automotive report after it lifts it
+    // (a low-confidence, stationary or unknown one never does), never the latest report alone
+    expect(act).toMatch(/latest = a\s*vetoState = DetectPolicy\.noteVeto\(vetoState, at: a\.at, onFoot: a\.walking \|\| a\.cycling, automotive: a\.automotive, confident: a\.confident\)/);
+    const veto = fn(d, 'func vetoNow()');
+    expect(veto).toMatch(/DetectPolicy\.onFootVeto\(vetoState, DriveDetector\.now\(\)\)/);
+    expect(veto).not.toMatch(/latest/);
+    const start = code('DetectStartPolicy.swift');
+    expect(fn(start, 'static func noteVeto(')).toMatch(/guard confident else \{ return s \}\s*return VetoState\(onFootAt: onFoot \? at : s\.onFootAt, automotiveAt: automotive \? at : s\.automotiveAt\)/);
+    expect(fn(start, 'static func onFootVeto(')).toMatch(/guard let f = s\.onFootAt, now - f <= VETO_FRESH_MS else \{ return false \}\s*guard let c = s\.automotiveAt else \{ return true \}\s*return c <= f/);
     // a candidate keeps its last trusted place (for a parked spot); only the rest keeps its last movement
     const fix = fn(d, 'func onFix(');
     expect(fix).toMatch(/guard p == "suppressed" \|\| p == "candidate" else \{ return \}/);
@@ -813,12 +823,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectStartPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
-    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['confirmStep(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
+    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'veto', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status']) expect(st).toContain(`case "${kind}":`);
+    for (const call of ['confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded and goes back over a stop the car rolled (5 mph) into; the
