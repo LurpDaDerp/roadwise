@@ -26,6 +26,7 @@
     "@expo-google-fonts/b612": "^0.4.1",
     "@expo-google-fonts/b612-mono": "^0.4.1",
     "@expo-google-fonts/barlow-semi-condensed": "^0.4.1",
+    "@expo/app-integrity": "~57.0.2",
     "@expo/ui": "~57.0.25",
     "@expo/vector-icons": "^15.0.2",
     "@noble/ciphers": "1.3.0",

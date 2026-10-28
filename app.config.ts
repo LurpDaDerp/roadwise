@@ -91,6 +91,12 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         // src/features/navigation/catalog.ts, in order (src/features/navigation/__tests__/apps.test.ts holds them equal).
         LSApplicationQueriesSchemes: ['maps', 'comgooglemaps', 'waze', 'here-route', 'com.sygic.aura', 'tomtomgo', 'magicearth', 'osmandmaps', 'om', 'mapquest', 'yandexnavi'],
       },
+      // App Attest (@expo/app-integrity, src/data/devices/appAttest.ts): every drive upload is signed by a
+      // key Apple attested, and the server checks it. Production in every build: App Store and
+      // TestFlight builds use production whatever this says, and one value keeps the native
+      // fingerprint (and so the OTA updates' runtime) the same for every EAS profile and for
+      // `eas update`. EAS turns the App Attest capability on for the App ID from this entitlement.
+      entitlements: { 'com.apple.developer.devicecheck.appattest-environment': 'production' },
       // Signing for the widget extension target (@bacons/apple-targets reads it). Set
       // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
       ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),

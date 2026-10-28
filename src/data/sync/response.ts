@@ -94,6 +94,12 @@ async function readBody(context: Record<string, unknown>): Promise<unknown> {
   return undefined;
 }
 
+/**
+ * finalize-trip's 429 for an iPhone upload without an assertion it can check (App Attest enforced):
+ * retryable like any 429; the runner attests a key and sends the drive again at once.
+ */
+export const ATTEST_REQUIRED_CODE = 'attest_required';
+
 /** The code a function itself answers a 404 with (trip-actions: no such trip or event on the server). */
 export const FUNCTION_NOT_FOUND_CODE = 'not_found';
 

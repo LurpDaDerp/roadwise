@@ -1,10 +1,12 @@
 // The sync runner: the device half of the upload (plan §3, §4, §5).
 //
 // It drains the `sync_queue` the finalizer and the drive actions fill. A `finalize-trip` item
-// posts its payload as v4 (one an older build queued as v3 is upgraded first) and writes the
+// posts its payload as v5 (one an older build queued as v3 or v4 is upgraded first) and writes the
 // server's answer back: the trip becomes `scored` or `unscored` with its result. Once the answer is
-// written the drive's samples go. A `trip-actions` item posts a dispute or "wasn't driving" and
-// resolves the optimistic `pending` rows.
+// written the drive's samples go. On an iPhone the upload carries App Attest headers over its exact
+// body bytes (`src/data/devices/appAttest.ts`); a server answer of `attest_required` has the phone
+// attest a key, silently, and send the drive once more at once. A `trip-actions` item posts a
+// dispute or "wasn't driving" and resolves the optimistic `pending` rows.
 //
 // Rules:
 // - **Never while the engine is recording or finalizing**: a drain competes for SQLite's write lock.
@@ -23,13 +25,14 @@ import { createSamplesRepo } from '@/data/db/samples';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
 import type { EventRow, QueueItem, TripRow, TripStatus } from '@/data/db/types';
+import type { AppAttest, UploadProof } from '@/data/devices/appAttest';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
 import { deviceOwnerIs, finalizeIdempotencyKey, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
-import { classifyInvokeError, DisputeResultSchema, FUNCTION_NOT_FOUND_CODE, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
+import { ATTEST_REQUIRED_CODE, classifyInvokeError, DisputeResultSchema, FUNCTION_NOT_FOUND_CODE, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
 
 export const FINALIZE_FUNCTION = 'finalize-trip';
 export const ACTIONS_FUNCTION = 'trip-actions';
@@ -74,7 +77,7 @@ export interface SyncSupabase {
     refreshSession(): Promise<{ data: { session: { user: { id: string } } | null }; error: unknown }>;
   };
   functions: {
-    invoke(name: string, options: { body: unknown }): Promise<{ data: unknown; error: unknown }>;
+    invoke(name: string, options: { body: unknown; headers?: Record<string, string> }): Promise<{ data: unknown; error: unknown }>;
   };
   /** Reads the server's copy of a drive after an action it already holds (`list_my_drives`). */
   rpc?(fn: string, args?: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }>;
@@ -88,6 +91,8 @@ export interface SyncRunnerDeps {
   /** The engine is recording or finalizing: no drain. */
   isRecording: () => boolean;
   appState?: AppStateLike;
+  /** App Attest for the drive uploads (iPhone); absent, an upload carries no App Attest header. */
+  attest?: AppAttest;
   now?: () => number;
   batch?: number;
   onError?: (error: unknown, context: string) => void;
@@ -263,9 +268,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     }
   }
 
-  async function invoke(name: string, body: unknown): Promise<{ ok: true; data: unknown } | { ok: false; failure: Failure }> {
+  async function invoke(name: string, body: unknown, headers?: Record<string, string>): Promise<{ ok: true; data: unknown } | { ok: false; failure: Failure }> {
     try {
-      const { data, error } = await supabase.functions.invoke(name, { body });
+      const { data, error } = await supabase.functions.invoke(name, headers ? { body, headers } : { body });
       if (error) return { ok: false, failure: await classifyInvokeError(error, now()) };
       return { ok: true, data };
     } catch (error) {
@@ -286,7 +291,17 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const parsed = parseFinalizeUpload(parseJson(item.payload_json));
     if (!parsed.success) return { kind: 'refused', error: 'invalid_payload' };
     const payload = parsed.data;
-    const res = await invoke(FINALIZE_FUNCTION, payload);
+    // Sent as these exact bytes (the same JSON supabase-js would write): App Attest signs them.
+    const body = JSON.stringify(payload);
+    const send = (proof: UploadProof | null) => invoke(FINALIZE_FUNCTION, body, { 'Content-Type': 'application/json', ...proof?.headers });
+    const attest = deps.attest;
+    let proof = attest ? await attest.prove(uid, body) : null;
+    let res = await send(proof);
+    // The server wants a key it can check: one is attested now, silently, and the drive goes again.
+    if (!res.ok && attest && proof && res.failure.code === ATTEST_REQUIRED_CODE && (await attest.recover(uid, proof))) {
+      proof = await attest.prove(uid, body);
+      res = await send(proof);
+    }
     if (!res.ok) return failureOutcome(res.failure);
     const response = FinalizeTripResponseSchema.safeParse(res.data);
     if (!response.success) return { kind: 'retry', error: 'bad_response' };
