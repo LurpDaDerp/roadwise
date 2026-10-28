@@ -16,7 +16,8 @@
  *
  * What is kept (SecureStore, this device only): the account the key was made for, its id (Apple's
  * hash of the public key, not a secret), whether the server accepted it, and when this install last
- * attested. Nothing here throws.
+ * attested. A handover or an account deletion (`clearAppAttest`, from the wipe) leaves only the last
+ * of these. Nothing here throws.
  */
 export const APP_ATTEST_FUNCTION = 'app-attest';
 export const APP_ATTEST_STORE_KEY = 'roadwise.appAttest';
@@ -112,6 +113,15 @@ function parseKept(raw: string | null): Kept {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/** The keychain class: readable after the first unlock since boot, never in a backup or on another phone. */
+const keychain = (store: AttestKeyStore): { keychainAccessible: unknown } | undefined =>
+  store.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY === undefined ? undefined : { keychainAccessible: store.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
+
+function defaultStore(): AttestKeyStore {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- native module, loaded on first use
+  return require('expo-secure-store') as AttestKeyStore;
+}
 const isInvalidKey = (error: unknown): boolean => isRecord(error) && error.code === INVALID_KEY_CODE;
 
 export function createAppAttest(deps: AppAttestDeps): AppAttest {
@@ -123,7 +133,7 @@ export function createAppAttest(deps: AppAttestDeps): AppAttest {
       // nobody left to tell
     }
   };
-  const options = deps.store.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY === undefined ? undefined : { keychainAccessible: deps.store.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
+  const options = keychain(deps.store);
   const load = async (): Promise<Kept> => parseKept(await deps.store.getItemAsync(APP_ATTEST_STORE_KEY, options));
   const save = (kept: Kept): Promise<void> => deps.store.setItemAsync(APP_ATTEST_STORE_KEY, JSON.stringify(kept), options);
 
@@ -232,9 +242,28 @@ export function createDefaultAppAttest(invoke: Invoke, onError?: (error: unknown
   return createAppAttest({
     platform: (require('react-native') as typeof import('react-native')).Platform.OS,
     native: () => require('@expo/app-integrity') as AppIntegrityNative,
-    store: require('expo-secure-store') as AttestKeyStore,
+    store: defaultStore(),
     invoke,
     onError,
   });
   /* eslint-enable @typescript-eslint/no-require-imports */
+}
+
+/**
+ * The handover and account-deletion wipe (`wipeDevice`): nothing of the leaving account stays, neither
+ * its id nor its key's, so the next account attests a key of its own. Only this install's attestations
+ * of the last day stay, so a wipe never resets the day's cap. A phone that never attested keeps
+ * nothing at all. Never throws.
+ */
+export async function clearAppAttest(given?: AttestKeyStore): Promise<void> {
+  try {
+    const store = given ?? defaultStore();
+    const options = keychain(store);
+    const raw = await store.getItemAsync(APP_ATTEST_STORE_KEY, options);
+    if (raw === null) return;
+    const kept: Kept = { ...EMPTY, tries: parseKept(raw).tries };
+    await store.setItemAsync(APP_ATTEST_STORE_KEY, JSON.stringify(kept), options);
+  } catch {
+    // No store (Jest), or none readable: nothing of the account to clear.
+  }
 }

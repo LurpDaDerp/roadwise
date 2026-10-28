@@ -13,6 +13,7 @@ import type { DriveDetectApi } from '@drive-sense';
 
 import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, REFUSED_NEVER, SPOTS_META_KEY, type Db } from '@/data/db';
+import { clearAppAttest } from '@/data/devices/appAttest';
 import { clearDeviceSecret } from '@/data/devices/deviceSecret';
 import { emitDataChanged } from '@/data/events';
 import { RESTORE_CURSOR_KEY, RESTORED_AT_KEY } from '@/data/hydrate/restore';
@@ -131,8 +132,10 @@ export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<vo
   // Automatic drives stop with the account (iPhone): the next driver arms them again. Native's
   // journals, last end and parked spot go too, so none of them reaches the next driver.
   await autoDetectOff({ ...(deps.detect !== undefined ? { detect: deps.detect } : {}), wipe: true });
-  // The privacy trim secret goes with the account (a new one is minted on the next drive).
+  // The privacy trim secret goes with the account (a new one is minted on the next drive), and so do
+  // its App Attest key's id and owner (the next account attests its own; the day's cap stays).
   await clearDeviceSecret();
+  await clearAppAttest();
   await db.transaction(async (tx) => {
     for (const table of DEVICE_TABLES) {
       if (table === 'settings') {

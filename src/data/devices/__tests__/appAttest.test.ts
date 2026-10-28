@@ -5,6 +5,7 @@ import {
   ATTEST_ASSERTION_HEADER,
   ATTEST_HEADER,
   ATTEST_KEY_HEADER,
+  clearAppAttest,
   createAppAttest,
   INVALID_KEY_CODE,
   MAX_ATTESTATIONS_PER_DAY,
@@ -221,4 +222,19 @@ test('a kept record that does not parse is no key', async () => {
   expect((await s.attest.prove('user-1', BODY)).keyId).toBe(keyIdOf(1));
   s.store.items.set(APP_ATTEST_STORE_KEY, JSON.stringify({ owner: 'user-1', keyId: 'bad', attested: true, tries: ['x'] }));
   expect((await s.attest.prove('user-1', BODY)).keyId).toBe(keyIdOf(2));
+});
+
+test('the wipe (handover, account deletion) leaves nothing of the account, only the day’s attestations: the next account attests its own key', async () => {
+  const s = setup();
+  await s.attest.prove('user-1', BODY);
+  await clearAppAttest(s.store);
+  expect(JSON.parse(s.store.items.get(APP_ATTEST_STORE_KEY)!)).toEqual({ owner: null, keyId: null, attested: false, tries: [T0] });
+  // the same account after a wipe is attested afresh too, within the same day's budget
+  expect((await s.attest.prove('user-1', BODY)).keyId).toBe(keyIdOf(2));
+  expect(JSON.parse(s.store.items.get(APP_ATTEST_STORE_KEY)!).tries).toEqual([T0, T0]);
+  // a phone that never attested keeps nothing; a store that fails is no throw
+  const empty = fakeStore();
+  await clearAppAttest(empty);
+  expect(empty.items.size).toBe(0);
+  await expect(clearAppAttest({ getItemAsync: () => Promise.reject(new Error('locked')), setItemAsync: () => Promise.resolve() })).resolves.toBeUndefined();
 });
