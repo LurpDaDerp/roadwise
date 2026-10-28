@@ -208,9 +208,7 @@ token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
 sign_in_sign_ups = 30
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
-# Held low because the sign-up code is 6 digits: a driver needs one or two tries, and a guesser gets
-# 10 every 5 minutes. Production sets the same ([remotes.production.auth.rate_limit]).
-token_verifications = 10
+token_verifications = 30
 # Number of Web3 logins that can be made in a 5 minute interval per IP address.
 web3 = 30
 
@@ -222,25 +220,22 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
+# On locally only: with Apple and Google off here, a password is the local stack's one way in (the
+# seed scripts sign in as their accounts with one). Production has it off.
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-# On, as in production: an email sign-up types the 8-digit code from its confirmation mail into the
-# app. The local stack sends no real mail; Mailpit catches it at http://127.0.0.1:54624 ([local_smtp]).
-# Accounts made through the admin API with email_confirm (scripts/dev-jwt.js, scripts/seed-demo.js,
-# scripts/seed-julian) and the tests' own auth.users rows need no code.
-enable_confirmations = true
+enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
-# Number of characters used in the email OTP. The app's code field takes 8 (CODE_LENGTH).
-otp_length = 8
-# Number of seconds before the email OTP expires (defaults to 1 hour). 10 minutes, as in production:
-# the confirmation mail says so.
-otp_expiry = 600
+# Number of characters used in the email OTP.
+otp_length = 6
+# Number of seconds before the email OTP expires (defaults to 1 hour).
+otp_expiry = 3600
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -252,16 +247,10 @@ otp_expiry = 600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# The confirmation mail as Auth itself renders it: the local stack's (into Mailpit), and production's
-# only if its send-email hook were ever switched off (with the hook on, send-email writes the mail:
-# supabase/functions/send-email/mail.ts, kept the same). The 8-digit code (in the subject too, so the
-# phone can offer it), no link, so a mail scanner that opens links can't use it up and the code
-# works whichever device reads the mail. Its "It works for 10 minutes." matches otp_expiry.
-# content_path is read from the repo root. It is the only mail the app sends: it has no password
-# reset, magic link or email change.
-[auth.email.template.confirmation]
-subject = "{{ .Token }} is your RoadWise code"
-content_path = "./supabase/templates/confirmation.html"
+# Uncomment to customize email template
+# [auth.email.template.invite]
+# subject = "You have been invited"
+# content_path = "./supabase/templates/invite.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
@@ -299,17 +288,6 @@ max_frequency = "5s"
 # [auth.hook.custom_access_token]
 # enabled = true
 # uri = "pg-functions://<database>/<schema>/<hook_name>"
-
-# Every mail Auth sends goes through the send-email function (supabase/functions/send-email), which
-# mails only the sign-up code and refuses every other kind, so no other code is ever minted. It is
-# on in production ([remotes.production.auth.hook.send_email]). Locally it is off and Mailpit takes
-# the mail (the template above): switching it on needs SEND_EMAIL_HOOK_SECRET ("v1,whsec_<base64>")
-# in the CLI's environment and in the function's (supabase/functions/.env, with RESEND_API_KEY and
-# RESEND_FROM), and `supabase start` refuses to run while it is on without one.
-[auth.hook.send_email]
-enabled = false
-uri = "http://host.docker.internal:54621/functions/v1/send-email"
-secrets = "env(SEND_EMAIL_HOOK_SECRET)"
 
 # Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
 [auth.sms.twilio]
@@ -416,11 +394,6 @@ deno_version = 2
 [functions.push-sender]
 verify_jwt = false
 
-# send-email is Auth's Send Email hook: Auth calls it with the hook's Standard Webhooks signature, not
-# a user's JWT, and it checks that signature itself, so the gateway JWT check is off for it too.
-[functions.send-email]
-verify_jwt = false
-
 [analytics]
 enabled = true
 port = 54627
@@ -451,54 +424,28 @@ enabled = true
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
 
-# Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, mail caught
-# by Mailpit, Apple and Google disabled). `supabase db push` never reads this file, but
-# `supabase config push` after `supabase link` would carry those values to the hosted project; this
-# stanza is what it sends instead. `supabase config diff` previews the push without changing anything.
+# Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, email
+# confirmations off, Apple and Google disabled). `supabase db push` loads this file (and stops if it
+# is invalid) but changes no settings, while `supabase config push` after `supabase link` would carry
+# those values to the hosted project; this stanza is what it sends instead. `supabase config diff` previews the push without changing anything.
 [remotes.production]
 project_id = "cjcpotetcslpscsbkdnj"
 
 [remotes.production.auth]
 site_url = "https://roadwise.app"
-# Email sign-up is an address, a username and a password typed into the app, confirmed with a code
-# typed into the app too, so no link ever has to land anywhere.
+# Sign-in is Apple and Google only, both native (an id token handed to Auth), so no link ever has to
+# land anywhere.
 additional_redirect_urls = []
 minimum_password_length = 8
 
-# A new email account confirms its address before it is signed in: Auth mints an 8-digit code, the
-# send-email hook below mails it, and the app's code screen takes it. Accounts made while
-# confirmations were off were confirmed as they were made, so switching this on locks no one out.
-# Apple and Google sign-in are not affected.
+# No email accounts: the email provider is off, so Auth refuses an email sign-up or a password
+# sign-in and sends no mail. Apple and Google sign-in are not affected.
 [remotes.production.auth.email]
-enable_confirmations = true
-# One mail per address a minute: the app's "Resend code" waits the same 60 s (RESEND_COOLDOWN_S).
+enable_signup = false
+enable_confirmations = false
+# Held at what the project already runs, so the push changes nothing else about email.
 max_frequency = "60s"
-# The app's code field takes 8 digits (CODE_LENGTH). The code lasts 10 minutes (the mail says so),
-# with token_verifications below holding guesses down.
 otp_length = 8
-otp_expiry = 600
-
-# No SMTP: Auth sends every mail through the send-email hook, which mails the sign-up code through
-# Resend's HTTP API (its own secrets: RESEND_API_KEY, RESEND_FROM, SEND_EMAIL_HOOK_SECRET) and
-# refuses every other kind (password recovery, magic link, invite, email change, reauthentication),
-# so Auth's public endpoints can't mint those codes for any address. It also caps each address at 5
-# codes an hour and 10 a day (0033). `secrets` is the same "v1,whsec_<base64>" value as the
-# function's SEND_EMAIL_HOOK_SECRET, read from the environment of the shell that runs
-# `supabase config push` (or supabase/.env, never committed). Set it before every push: unset, the
-# push sends no secret, and on the first push that leaves every sign-up mail failing.
-[remotes.production.auth.hook.send_email]
-enabled = true
-uri = "https://cjcpotetcslpscsbkdnj.supabase.co/functions/v1/send-email"
-secrets = "env(SEND_EMAIL_HOOK_SECRET)"
-
-[remotes.production.auth.rate_limit]
-# Mails the project may send an hour, all addresses together. Room for a class signing up at once (a
-# driver needs one mail, two with a resend); on Resend's free plan its 100 a day binds first. Auth
-# applies it to the hook's mails too.
-email_sent = 60
-# Code checks per IP address in 5 minutes (the hosted project ran 30): a driver needs one or two.
-# Drivers sharing one address (a school's Wi-Fi) share it too.
-token_verifications = 10
 
 # What the hosted project already runs, so `supabase config push` changes sign-in only: these local
 # values (MFA off, a smaller pooler, no analytics buckets) must not reach it.
