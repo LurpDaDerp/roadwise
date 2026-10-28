@@ -16,7 +16,7 @@ export const emailCodeCopy = {
   resent: 'We sent a new code.',
   changeEmail: 'Use a different email',
   wrongCode: 'That code is wrong or has expired. Check it, or send a new one.',
-  rateLimited: 'Too many tries. Try again in a minute.',
+  rateLimited: 'Too many tries. Try again in a few minutes.',
   offline: "You're offline. Check your connection and try again.",
   verifyFailed: "Couldn't confirm your email. Try again.",
   unfinished: "Couldn't finish signing you in. Check your connection and try again.",

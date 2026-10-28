@@ -16,7 +16,6 @@ export const en = {
   'signIn.credentialsInvalid': "That email and password don't match. Check them and try again.",
   'signIn.emailTaken': 'That email already has an account. Sign in instead.',
   'signIn.passwordWeak': 'That password is too weak. Use at least 8 characters.',
-  'signIn.confirmEmail': 'Check your email to confirm your account, then sign in.',
   'signIn.errorGeneric': "Couldn't sign in. Try again.",
   'signIn.offline': "You're offline. Connect to sign in.",
   'tabs.home': 'Home',

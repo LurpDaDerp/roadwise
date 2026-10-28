@@ -80,7 +80,7 @@ test('a code pasted or filled in whole is checked at once', async () => {
 
 test.each([
   ['wrong_code', 'That code is wrong or has expired. Check it, or send a new one.'],
-  ['rate_limited', 'Too many tries. Try again in a minute.'],
+  ['rate_limited', 'Too many tries. Try again in a few minutes.'],
   ['offline', "You're offline. Check your connection and try again."],
   ['error', "Couldn't confirm your email. Try again."],
 ] as const)('a refused code (%s) says so in plain words, and Confirm tries again', async (result, words) => {
@@ -118,7 +118,7 @@ test('a resend clears the old code, says a new one went out, and waits another m
 });
 
 test.each([
-  ['rate_limited', 'Too many tries. Try again in a minute.', 'Resend code in 60 s'],
+  ['rate_limited', 'Too many tries. Try again in a few minutes.', 'Resend code in 60 s'],
   ['offline', "You're offline. Check your connection and try again.", 'Resend code'],
   ['error', "Couldn't send a new code. Try again.", 'Resend code'],
 ] as const)('a resend that fails (%s) says so; only a refusal waits again', async (result, words, button) => {

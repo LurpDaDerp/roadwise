@@ -87,6 +87,17 @@ export function SignInScreen() {
     void startSignInVisit(settings);
   }, [settings]);
 
+  // A confirmation is given up when the code screen goes, however it goes ("Use a different email",
+  // or this screen leaving): a right code's session not yet handed to the app is signed out. Once
+  // handed over (the driver signed in, so this screen leaves), there is nothing left to give up.
+  useEffect(() => {
+    if (pending === null) return;
+    const { confirmation } = pending;
+    return () => {
+      void confirmation.abandon();
+    };
+  }, [pending]);
+
   const toggle = async () => {
     if (saving) return;
     setError(null);
@@ -212,10 +223,7 @@ export function SignInScreen() {
         onVerify={async (code) => signedIn(await pending.confirmation.verify(code))}
         onFinish={async () => signedIn(await pending.confirmation.finish())}
         onResend={() => resendEmailCode(pending.email)}
-        onBack={() => {
-          void pending.confirmation.abandon();
-          setPending(null);
-        }}
+        onBack={() => setPending(null)}
       />
     );
   }

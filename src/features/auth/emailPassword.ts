@@ -84,16 +84,27 @@ export type EmailConfirmation = {
 };
 
 /**
+ * The least life a held session's access token must have left before the steps that finish an
+ * account: any less and it is refreshed first.
+ */
+const FRESH_FOR_MS = 5 * 60_000;
+
+type HeldSession = { access_token: string; refresh_token: string; expires_at?: number };
+
+/**
  * Confirms an address with the code from its mail, failing closed. Auth keeps the password of the
  * first sign-up to an address until the address is confirmed (a second sign-up neither replaces it
  * nor is refused: Auth just mails a new code), so an account someone else registered to the
  * driver's address, and could never confirm, would otherwise come out of the driver's code
  * carrying that person's password. So the session the right code signs in stays on an aside client
  * (`createAsideAuth`), out of the app's sight, until:
+ * 0. its access token has at least 5 minutes left (it is refreshed first when not: the aside client
+ *    never refreshes on its own, and Try again can come much later);
  * 1. after a sign-up, the password chosen on the form is the account's (`updateUser`; Auth's
  *    `same_password` refusal, the usual answer, means it already is; a change also signs out
  *    every other session);
- * 2. every other session of the account is signed out;
+ * 2. every other session of the account is signed out, checked through Auth's answer to the
+ *    logout itself (the client's own `signOut` lets a 401, 403 or 404 pass as done);
  * 3. the app's client takes the session over (`setSession`), which signs the driver in.
  * Any of those failing is `unfinished`: the driver is not signed in, and `finish` tries again with
  * the same session. A sign-in to an unconfirmed account (`chosenPassword` null) skips step 1: its
@@ -103,56 +114,98 @@ export type EmailConfirmation = {
 export function startEmailConfirmation(email: string, chosenPassword: string | null): EmailConfirmation {
   const address = normalise(email);
   let aside: AsideAuth | null = null;
-  let held: { access_token: string; refresh_token: string } | null = null;
+  // The aside client holds the session the right code signed in, not yet handed to the app.
+  let holding = false;
+  let abandoned = false;
+
+  const revoke = async (client: AsideAuth) => {
+    try {
+      await client.signOut({ scope: 'local' });
+    } catch {
+      // Gone with the screen either way: nothing on the phone holds it.
+    }
+  };
+
+  /** The held session with at least `FRESH_FOR_MS` left, refreshed first when it has less; null when it can't be. */
+  const liveSession = async (client: AsideAuth): Promise<HeldSession | null> => {
+    const { data, error } = await client.getSession();
+    if (error || !data.session) return null;
+    const { expires_at: expiresAt } = data.session;
+    if (expiresAt !== undefined && expiresAt * 1000 - Date.now() > FRESH_FOR_MS) return data.session;
+    const { data: refreshed, error: refreshError } = await client.refreshSession();
+    return refreshError || !refreshed.session ? null : refreshed.session;
+  };
 
   const finish = async (): Promise<VerifyResult> => {
-    if (aside === null || held === null) return 'error';
+    const client = aside;
+    if (client === null || !holding || abandoned) return 'error';
+    let session: HeldSession | null;
     try {
+      session = await liveSession(client);
+      if (session === null) return 'unfinished';
       if (chosenPassword !== null) {
-        const { error } = await aside.updateUser({ password: chosenPassword });
+        const { error } = await client.updateUser({ password: chosenPassword });
         if (error && codeOf(error).code !== 'same_password') return 'unfinished';
       }
-      const { error: othersError } = await aside.signOut({ scope: 'others' });
+      const { error: othersError } = await client.admin.signOut(session.access_token, 'others');
       if (othersError) return 'unfinished';
-      const { error: handoverError } = await supabase.auth.setSession(held);
-      if (handoverError) return 'unfinished';
     } catch {
+      return 'unfinished';
+    }
+    if (abandoned) return 'unfinished';
+    // The app's client takes the session over from here: leaving the screen meanwhile (its route
+    // changes as the driver signs in) must not sign that session out.
+    holding = false;
+    let handedOver = false;
+    try {
+      const { error } = await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+      handedOver = !error;
+    } catch {
+      handedOver = false;
+    }
+    if (!handedOver) {
+      if (abandoned) await revoke(client);
+      else holding = true;
       return 'unfinished';
     }
     // The app's client owns the session now; the aside one must never use it again.
     aside = null;
-    held = null;
     return 'ok';
   };
 
   const verify = async (code: string): Promise<VerifyResult> => {
-    if (held !== null) return finish();
+    if (abandoned) return 'error';
+    if (holding) return finish();
+    let client: AsideAuth;
     try {
-      aside ??= createAsideAuth();
-      const { data, error } = await aside.verifyOtp({ email: address, token: code, type: 'signup' });
+      client = aside ??= createAsideAuth();
+      const { data, error } = await client.verifyOtp({ email: address, token: code, type: 'signup' });
       if (error) {
         if (isRateLimited(error)) return 'rate_limited';
         if (isOffline(error)) return 'offline';
         return codeOf(error).code === 'otp_expired' ? 'wrong_code' : 'error';
       }
       if (!data.session) return 'error';
-      held = { access_token: data.session.access_token, refresh_token: data.session.refresh_token };
     } catch {
       return 'error';
     }
+    if (abandoned) {
+      // Left while the code was being checked: the session it signed in goes with the screen.
+      await revoke(client);
+      return 'error';
+    }
+    holding = true;
     return finish();
   };
 
   const abandon = async () => {
-    const left = held === null ? null : aside;
-    aside = null;
-    held = null;
-    if (left === null) return;
-    try {
-      await left.signOut({ scope: 'local' });
-    } catch {
-      // Gone with the screen either way: nothing on the phone holds it.
-    }
+    abandoned = true;
+    const client = holding ? aside : null;
+    holding = false;
+    if (client !== null) await revoke(client);
   };
 
   return { verify, finish, abandon };

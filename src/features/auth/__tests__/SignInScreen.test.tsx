@@ -426,7 +426,18 @@ describe('confirming the address with the mailed code', () => {
 
   test('leaving the code screen gives the confirmation up', async () => {
     await register();
+    expect(mockAbandon).not.toHaveBeenCalled();
     await fireEvent.press(screen.getByRole('button', { name: 'Use a different email' }));
+    expect(mockAbandon).toHaveBeenCalledTimes(1);
+  });
+
+  test('the screen going any other way (a route change, Android back) gives the confirmation up too', async () => {
+    mockVerify.mockResolvedValueOnce('unfinished');
+    await register();
+    await typeCode('123456');
+    await screen.findByRole('button', { name: 'Try again' });
+    expect(mockAbandon).not.toHaveBeenCalled();
+    await screen.unmount();
     expect(mockAbandon).toHaveBeenCalledTimes(1);
   });
 

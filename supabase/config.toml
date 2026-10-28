@@ -252,9 +252,11 @@ otp_expiry = 600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# The confirmation mail: the 6-digit code (in the subject too, so the phone can offer it), no link.
-# Production uses it as well ([remotes.production] adds only what differs). content_path is read from
-# the repo root. It is the only mail the app sends: it has no password reset, magic link or email change.
+# The confirmation mail: the 6-digit code (in the subject too, so the phone can offer it), no link, so
+# a mail scanner that opens links can't use it up and the code works whichever device reads the mail.
+# Its "It works for 10 minutes." matches otp_expiry. Production uses it as well ([remotes.production]
+# adds only what differs). content_path is read from the repo root. It is the only mail the app sends:
+# it has no password reset, magic link or email change.
 [auth.email.template.confirmation]
 subject = "{{ .Token }} is your RoadWise code"
 content_path = "./supabase/templates/confirmation.html"
