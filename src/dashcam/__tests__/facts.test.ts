@@ -209,7 +209,7 @@ test('window selection: the derived start must be inside the drive; other dashca
   expect((await loadDashcamTripFacts(db, trip)).events.map((e) => e.id)).toEqual(f.events.map((e) => e.id));
 });
 
-test('an event that arrived with no drive open (ignored) is never a candidate nor stamped, even inside the window; coverage and synced are unchanged', async () => {
+test('an event that arrived with no drive open after the drive had opened (ignored: a late replay) is never a candidate nor stamped, even inside the window; coverage and synced are unchanged', async () => {
   const store = createDashcamStore(db);
   await store.addCoverage(TRIP, 600, 590, trip.endedAt - 1000);
   await sample(T0 + 5 * 60_000, 30 * MPH);
@@ -233,6 +233,45 @@ test('an event that arrived with no drive open (ignored) is never a candidate no
     { id: dropped, client_trip_id: null, ignored: 1 },
     { id: expect.any(String), client_trip_id: null, ignored: 1 },
   ]);
+});
+
+test("an automatic drive's traced-back start: events that reached the phone before the drive opened (ignored) are claimed when they started inside it, under the same speed gate", async () => {
+  // The car pulled away at T0; the drive was confirmed, and opened on the phone, 4 min later.
+  const AUTO = '33333333-3333-4333-8333-333333333333';
+  const opened = T0 + 4 * 60_000;
+  await createTripsRepo(db).insert({ client_trip_id: AUTO, started_at: T0, tz: 'UTC', status: 'recording' }, opened);
+  const at = async (ts: number, mph: number) =>
+    db.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [AUTO, ts, JSON.stringify({ ts, speed: mph * MPH, gnssValid: true })]);
+  await at(T0 + 60_000, 15);
+  await at(T0 + 3 * 60_000, 5);
+  // The board raised one before the car pulled away, one at 15 mph and one at 5 mph in the
+  // traced-back start: all reached the phone while no drive was open.
+  const before = await event({ seq: 0, ev: 0, firedAt: T0 - 60_000, durS: 1, ignored: true });
+  const at15 = await event({ seq: 1, ev: 0, firedAt: T0 + 60_000, durS: 1, ignored: true });
+  const at5 = await event({ seq: 2, ev: 1, firedAt: T0 + 3 * 60_000, durS: 2, ignored: true });
+  // One more after it opened, in the drive as usual.
+  const live = await event({ seq: 3, ev: 2, detail: 1, firedAt: T0 + 10 * 60_000, durS: 5, receivedAt: T0 + 10 * 60_000 + 50 });
+  const auto = { clientTripId: AUTO, startedAt: T0, endedAt: T0 + 30 * 60_000 };
+
+  const f = await loadDashcamTripFacts(db, auto);
+  expect(f.events.map((e) => [e.id, e.kind, e.speedMph === null ? null : Math.round(e.speedMph)])).toEqual([
+    [at15, 'drowsy', 15],
+    [at5, 'drowsy', 5],
+    [live, 'eyes_off', null],
+  ]);
+  // The 10 mph gate (and the server's, `keepDashcamEvents`, the same) keeps the one at 15 mph.
+  expect(dashcamEvents(f.events, auto, []).map((e) => e.id)).toEqual([at15]);
+  const { rows } = await db.execute('SELECT id, client_trip_id, ignored FROM dashcam_events ORDER BY seq');
+  expect(rows).toEqual([
+    { id: before, client_trip_id: null, ignored: 1 },
+    { id: at15, client_trip_id: AUTO, ignored: 1 },
+    { id: at5, client_trip_id: AUTO, ignored: 1 },
+    { id: live, client_trip_id: AUTO, ignored: 0 },
+  ]);
+  // A drive the phone opened by hand at T0 (Start drive) has no traced-back start: the same
+  // ignored events stay out of it (they arrived after it opened, or started before it).
+  await db.execute('UPDATE dashcam_events SET client_trip_id = NULL');
+  expect((await loadDashcamTripFacts(db, trip)).events.map((e) => e.id)).toEqual([live]);
 });
 
 test('a pre-drive event replayed during the drive (a reconnect mid-drive) is received in the drive but started before it: not claimed', async () => {

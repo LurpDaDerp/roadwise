@@ -1309,15 +1309,17 @@ describe('coverage (§7.5)', () => {
     expect(await r.store.coverage(TRIP)).toBeNull();
   });
 
-  test('a replayed row (the journal taken in again) counts no coverage, stamps no sync time and is never the speed STATE sends', async () => {
+  test('a replayed row from before the dashcam was watching (a relaunch backlog) counts no coverage, stamps no sync time and is never the speed STATE sends', async () => {
     const r = rig();
     await connect(r);
     r.ctx.recording = true;
     const live = { clientTripId: TRIP, recording: true, dryRun: false };
     const replay = { ...live, replay: true };
     status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
-    // Twenty minutes of the drive replayed at 60 km/h while the car now stands still.
-    for (let i = 0; i < 30; i++) expect(r.link.row(row(r.clock.t, { speed: 16.7 }), replay)).toBeNull();
+    // Twenty minutes of the drive, from before this link was up, replayed at 60 km/h while the car
+    // now stands still.
+    const from = r.clock.t - 20 * 60_000;
+    for (let i = 0; i < 30; i++) expect(r.link.row(row(from + i * 1000, { speed: 16.7 }), replay)).toBeNull();
     r.advance(1000);
     const state = () => r.sent('STATE').at(-1)!;
     expect(state().flags & STATE_FLAG.SPEED_VALID).toBe(0);
@@ -1326,12 +1328,78 @@ describe('coverage (§7.5)', () => {
     expect(await r.store.coverage(TRIP)).toBeNull();
     // A live row is the car now: its speed, its coverage.
     r.link.row(row(r.clock.t, { speed: 0 }), live);
-    r.link.row(row(r.clock.t, { speed: 16.7 }), replay);
+    r.link.row(row(from, { speed: 16.7 }), replay);
     r.advance(1000);
     expect(state().flags & STATE_FLAG.SPEED_VALID).toBe(STATE_FLAG.SPEED_VALID);
     expect(state().speedCms).toBe(0);
     await r.settle();
     expect(await r.store.coverage(TRIP)).toEqual({ movingS: 0, coveredS: 0, lastSyncedAtMs: expect.any(Number) });
+  });
+
+  test("an automatic drive's traced-back start, taken in at its confirmation: a replayed second counts as covered when the dashcam has been watching for this phone, unbroken, since at or before it; never STATE's speed or the sync stamp", async () => {
+    const r = rig();
+    await connect(r);
+    // The dashcam watches a live face for this phone from here, STATUS every 2 s.
+    const watchFrom = r.clock.t;
+    status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    for (let i = 0; i < 90; i++) {
+      r.advance(2000);
+      status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    }
+    // Confirmed 3 min later: the drive opens, and its start, traced back to 2 min after the watch
+    // began, is taken in. Before that second the phone cannot vouch for the watch.
+    r.ctx.recording = true;
+    const replay = { clientTripId: TRIP, recording: true, dryRun: false, replay: true };
+    expect(r.link.row(row(watchFrom - 1000, { speed: 16.7 }), replay)).toBeNull();
+    for (let i = 0; i < 60; i++) expect(r.link.row(row(watchFrom + 120_000 + i * 1000, { speed: 16.7 }), replay)).toEqual({ moving: true, covered: true });
+    expect(r.link.row(row(watchFrom + 180_000, { speed: 1 }), replay)).toEqual({ moving: false, covered: false });
+    r.advance(1000);
+    const state = r.sent('STATE').at(-1)!;
+    expect(state.flags & STATE_FLAG.SPEED_VALID).toBe(0);
+    await r.settle();
+    expect(await r.store.coverage(TRIP)).toEqual({ movingS: 60, coveredS: 60, lastSyncedAtMs: null });
+  });
+
+  test('the unbroken watch ends at a drop, a STATUS without a live face, or a STATUS more than 5 s after the last; replayed seconds before its new start count nothing', async () => {
+    const r = rig();
+    await connect(r);
+    r.ctx.recording = true;
+    const replay = { clientTripId: TRIP, recording: true, dryRun: false, replay: true };
+    const watch = () => status(r, STATUS_FLAG.LIVE | STATUS_FLAG.PRIMARY);
+    const counts = (ts: number) => r.link.row(row(ts), replay) !== null;
+    watch();
+    const a = r.clock.t;
+    r.advance(2000);
+    watch();
+    expect(counts(a)).toBe(true);
+    // No live face for one STATUS: the watch starts over at the next good one.
+    r.advance(2000);
+    status(r, STATUS_FLAG.PRIMARY);
+    expect(counts(a)).toBe(false);
+    r.advance(2000);
+    watch();
+    const b = r.clock.t;
+    expect(counts(b - 1)).toBe(false);
+    expect(counts(b)).toBe(true);
+    // A STATUS 6 s after the last: a gap, the watch starts over there.
+    r.advance(6000);
+    watch();
+    const c = r.clock.t;
+    expect(counts(b)).toBe(false);
+    expect(counts(c)).toBe(true);
+    // Nothing for over 5 s: no watch now.
+    r.advance(5001);
+    expect(counts(c)).toBe(false);
+    watch();
+    const d = r.clock.t;
+    expect(counts(d)).toBe(true);
+    // The link drops and comes back: only seconds after the new watch began count.
+    r.link.linkDown();
+    await connect(r);
+    expect(counts(d)).toBe(false);
+    watch();
+    expect(counts(d)).toBe(false);
+    expect(counts(r.clock.t)).toBe(true);
   });
 
   test('a replayed row sends no STATE of its own (timers paused: only live rows do)', async () => {

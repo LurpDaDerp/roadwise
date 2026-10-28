@@ -85,10 +85,18 @@ export async function loadDashcamTripFacts(
 
   if (paired === null) return { dashcamId: null, movingS, coveredS, synced, events: [] };
 
+  // When the drive opened on the phone (its row was made): an automatic drive opens at its
+  // confirmation, after the start it was traced back to.
+  const opened = await db.execute('SELECT created_at FROM trips WHERE client_trip_id = ?', [trip.clientTripId]);
+  const openedAt = opened.rows[0] ? asNumberOrNull(opened.rows[0], 'created_at') : null;
+
   // Every event of the paired dashcam whose condition started inside the drive, by the boot's best
-  // offset now; not claimed by another drive and not ignored (it arrived with no drive open). Events
-  // of a boot with no offset cannot be placed. An event that arrived during the drive but started
-  // before it (a replay after a reconnect) is outside the window and stays unclaimed.
+  // offset now, and not claimed by another drive. One that arrived with no drive open (ignored)
+  // counts only when it arrived before this drive opened: it happened in the drive's traced-back
+  // start, before the drive was confirmed (one that came after, a late replay, stays out, as the
+  // sync at the drive's end decides). Events of a boot with no offset cannot be placed. An event
+  // that arrived during the drive but started before it (a replay after a reconnect) is outside the
+  // window and stays unclaimed.
   const startExpr = '(b.offset_ms + e.t_ms - e.dur_ds * 100)';
   const { rows } = await db.execute(
     `SELECT e.dashcam_id, e.boot_id, e.seq, e.id, e.ev, e.detail, e.audible, e.t_ms, e.dur_ds, b.offset_ms
@@ -96,10 +104,10 @@ export async function loadDashcamTripFacts(
        JOIN dashcam_boots b ON b.dashcam_id = e.dashcam_id AND b.boot_id = e.boot_id
       WHERE e.dashcam_id = ?
         AND b.offset_ms IS NOT NULL
-        AND e.ignored = 0
+        AND (e.ignored = 0 OR e.received_at_ms <= ?)
         AND (e.client_trip_id IS NULL OR e.client_trip_id = ?)
         AND ${startExpr} >= ? AND ${startExpr} <= ?`,
-    [paired, trip.clientTripId, trip.startedAt, trip.endedAt]
+    [paired, openedAt ?? -1, trip.clientTripId, trip.startedAt, trip.endedAt]
   );
 
   const inDrive: (EpisodeEvent & { audible: boolean; dashcamId: string; bootKey: number; seq: number })[] = rows.map((r) => {

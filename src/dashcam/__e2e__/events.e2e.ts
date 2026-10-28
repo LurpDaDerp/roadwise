@@ -543,3 +543,99 @@ describeSim('DashPal events only inside a drive started by hand (firmware ring �
       })
   );
 });
+
+// ——— events in an automatic drive's traced-back start ———
+
+/** A drive row at `ts` (epoch ms) at `speed` m/s on a good fix, as the journal holds it. */
+const rowAt = (ts: number, speed: number) => ({
+  ts,
+  lat: 40,
+  lng: -75,
+  hAcc: 5,
+  speed,
+  speedAcc: 0.5,
+  course: 0,
+  alt: 0,
+  gnssValid: true,
+  aLonMax: 0,
+  aLonMin: 0,
+  aLatMax: 0,
+  aLatMin: 0,
+  yawRateMax: 0,
+  jerkMax: 0,
+  gravityStability: 1,
+  orientationDelta: 0,
+  handlingScore: 0,
+  locked: false,
+  screenOn: true,
+  appForeground: true,
+});
+
+describeSim("DashPal events in an automatic drive's traced-back start (firmware ring ↔ app store and facts)", () => {
+  test(
+    'the drive opens at its confirmation with its start traced back: the events DashPal raised in that start (stored while no drive was open) join it under the 10 mph gate, one from before the start stays out, the ACK is unchanged, and the start counts as watched because the link watched throughout',
+    () =>
+      scenario({ bootId: BOOT, bonded: ['A'] }, async (w) => {
+        await w.dashcam('STATE 3 72'); // monitoring, calibrated, live face
+        const a = await linkedA(w);
+        await w.advance(5000);
+        await microsleep(w); // seq 0: before the car pulled away
+        await w.advance(5000);
+        const startedAt = w.now(); // where the car pulled away (the trace-back finds it later)
+        await w.advance(30_000);
+        await microsleep(w); // seq 1: at 15 mph
+        const at15 = w.now();
+        await w.advance(70_000);
+        await microsleep(w); // seq 2: at 5 mph
+        const at5 = w.now();
+        await w.advance(30_000);
+        // No drive was open: all three stored as ignored, and acknowledged as usual.
+        expect((await flagRows(a)).map((r) => [r.seq, r.ignored, r.client_trip_id])).toEqual([
+          [0, 1, null],
+          [1, 1, null],
+          [2, 1, null],
+        ]);
+        expect(lastAck(w, 1)).toBe(3);
+
+        // Confirmed: the drive opens now, its start traced back, and its rows from there are taken in.
+        const opened = w.now();
+        await a.rawDb.execute('UPDATE trips SET started_at = ?, created_at = ? WHERE client_trip_id = ?', [startedAt, opened, a.tripId]);
+        startDrive(w, a);
+        const speedAt = (ts: number) => (Math.abs(ts - at5) <= 3000 ? 5 * 0.44704 : Math.abs(ts - at15) <= 3000 ? 15 * 0.44704 : 15);
+        for (let ts = startedAt; ts < opened; ts += 1000) {
+          a.rt.row(rowAt(ts, speedAt(ts)), { clientTripId: a.tripId, recording: true, dryRun: false, replay: true });
+          await a.rawDb.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [a.tripId, ts, JSON.stringify({ ts, speed: speedAt(ts), gnssValid: true })]);
+        }
+        await w.drive(a, 60_000, 15);
+
+        const endedAt = w.now();
+        a.host.recording = false;
+        a.host.driveOpen = true;
+        await a.rt.beforeFinalize(a.tripId);
+        for (let ts = opened; ts <= endedAt; ts += 1000) {
+          await a.rawDb.execute('INSERT INTO samples (client_trip_id, ts, row_json) VALUES (?, ?, ?)', [a.tripId, ts, JSON.stringify({ ts, speed: 15, gnssValid: true })]);
+        }
+        const facts = await a.rt.facts({ clientTripId: a.tripId, startedAt, endedAt });
+        a.host.driveOpen = false;
+
+        const rows = await stored(a);
+        // The two in the traced-back start are the drive's (their flag, the arrival record, stays); the one before is not.
+        expect((await flagRows(a)).map((r) => [r.seq, r.ignored, r.client_trip_id])).toEqual([
+          [0, 1, null],
+          [1, 1, a.tripId],
+          [2, 1, a.tripId],
+        ]);
+        expect(facts.events.map((e) => [e.id, e.kind, Math.round(e.speedMph ?? -1)])).toEqual([
+          [rows[1]!.id, 'drowsy', 15],
+          [rows[2]!.id, 'drowsy', 5],
+        ]);
+        // The 10 mph gate keeps the one at 15 mph only.
+        expect(dashcamEvents(facts.events, { startedAt, endedAt }, []).map((e) => e.id)).toEqual([rows[1]!.id]);
+        // The traced-back seconds were watched (the link was up with a live face throughout): covered.
+        expect(facts.coveredS).toBeGreaterThanOrEqual(Math.round((opened - startedAt) / 1000) + 55);
+        expect(facts.synced).toBe(true);
+        expect(dashcamDrive(dashcamBlock(facts))).toBe(true);
+        expect(lastAck(w, 1)).toBe(3);
+      })
+  );
+});

@@ -39,7 +39,8 @@
 // Events (§3.6): persisted (INSERT OR IGNORE, a fresh v4 id) before they are acknowledged; the ACK
 // and RESUME cursor is the lowest seq at or above the boot's floor not yet stored. An event that
 // arrives while no drive is open is still stored (the cursor needs every seq) but marked ignored,
-// as the frame arrives: no drive ever claims it. A HELLO whose
+// as the frame arrives: only a drive that opens later with its start traced back before the event
+// (an automatic drive at its confirmation) claims it (`facts.ts`). A HELLO whose
 // boot id the phone knows but whose next_seq is below what it stored is a different boot (a new
 // local generation). Inbound HELLO and EVENT frames are processed on one serial chain, so an event is
 // never stored before its boot is known; alert frames are handled at once.
@@ -350,9 +351,12 @@ export interface DashcamLink {
   /**
    * One drive row (host row hook): the context for STATE, a tick, and this row's coverage (written
    * to the drive; returned so the caller can keep the drive's totals). Null: nothing counted (no
-   * dashcam paired, not recording, a dry run, a replay). `replay`: a journal row taken in again, the
-   * past: it reaches neither STATE (its speed is not the car's now) nor the coverage or the sync
-   * stamp (the link knows nothing of the dashcam then).
+   * dashcam paired, not recording, a dry run, a replay it cannot vouch for). `replay`: a journal row
+   * taken in again, the past: it never reaches STATE (its speed is not the car's now) nor the sync
+   * stamp, and it counts toward the coverage only when the link has been up with the dashcam watching
+   * from at or before the row's second until now, unbroken (`watchingSince`): the traced-back start
+   * of an automatic drive taken in at its confirmation, a gap filled a moment later. A backlog from
+   * before a relaunch, or a drive taken in after it ended, counts nothing.
    */
   row(row: FeatureRow, drive: { clientTripId: string | null; recording: boolean; dryRun: boolean; replay?: boolean }): { moving: boolean; covered: boolean } | null;
   /**
@@ -404,6 +408,12 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let lastRow: { row: FeatureRow; at: number } | null = null;
   /** the drive the latest live recording row belonged to, and when it arrived */
   let lastLive: { clientTripId: string; at: number } | null = null;
+  /**
+   * Since when the link has been up with the dashcam watching on this phone's primary link (each
+   * STATUS fresh, calibrating or monitoring, a live face, primary), unbroken; null when it is not.
+   * Any drop, a STATUS that says otherwise or one more than `STATUS_FRESH_MS` after the last ends it.
+   */
+  let watchingSince: number | null = null;
   /** serial chain for HELLO/EVENT persistence */
   let chain: Promise<void> = Promise.resolve();
   /** serial chain for coverage writes (one per row) */
@@ -978,10 +988,29 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     }, 'event');
   }
 
+  /** A STATUS saying the dashcam watches a live face for this phone (what a covered second needs). */
+  const watching = (st: Pick<LinkStatus, 'state' | 'flags'>): boolean =>
+    (st.state === DASHCAM_STATE.CALIBRATING || st.state === DASHCAM_STATE.MONITORING) && (st.flags & STATUS_FLAG.LIVE) !== 0 && (st.flags & STATUS_FLAG.PRIMARY) !== 0;
+
   function onStatus(st: Status, now: number): void {
     const s = session;
     if (!s) return;
+    const prev = s.status;
     s.status = { state: st.state, flags: st.flags, fpsX10: st.fpsX10, tempC: st.tempC, bondCount: st.bondCount, at: now };
+    // A gap in the STATUSes is a gap in the watch, whatever came before and after it.
+    if (prev === null || now - prev.at > STATUS_FRESH_MS || now < prev.at) watchingSince = null;
+    if (!watching(s.status)) watchingSince = null;
+    else watchingSince ??= now;
+  }
+
+  /** `watchingSince`, while it still holds now (the last STATUS fresh); else null. */
+  function watchedSince(now: number): number | null {
+    const st = session?.status ?? null;
+    if (watchingSince === null || st === null || now - st.at > STATUS_FRESH_MS || now < st.at) {
+      watchingSince = null;
+      return null;
+    }
+    return watchingSince;
   }
 
   // ——— the link ———
@@ -1018,6 +1047,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       repairCause = null;
       unverifiedNow = false;
       session = freshSession(info, now);
+      watchingSince = null;
       // CCCDs of bonded peers are restored silently: subscribing alone does not produce a HELLO.
       requestHello(session, now);
       changed();
@@ -1025,6 +1055,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     },
 
     linkDown() {
+      watchingSince = null;
       const s = session;
       const entries = alerts.continuing();
       dropped = s !== null && s.wireBoot !== null && entries.length > 0 ? { boot: s.wireBoot, at: deps.now(), entries } : null;
@@ -1059,6 +1090,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     needsRepair(cause) {
       repairCause = cause;
       session = null;
+      watchingSince = null;
       connectingNow = false;
       dropped = null;
       heldStale = false;
@@ -1176,6 +1208,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
         repairCause = null;
         unverifiedNow = false;
         session = null;
+        watchingSince = null;
         dropped = null;
         heldStale = false;
         alerts.clear();
@@ -1186,8 +1219,18 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     tick,
 
     row(row, drive) {
-      // The past (a journal row taken in again): nothing of it reaches STATE, the coverage or the sync stamp.
-      if (drive.replay === true) return null;
+      if (drive.replay === true) {
+        // The past (a journal row taken in again): never STATE's speed, never the sync stamp. Covered
+        // only when the dashcam has been watching for this phone, unbroken, since at or before its second.
+        if (!paired || !drive.recording || drive.dryRun || drive.clientTripId === null) return null;
+        const since = watchedSince(deps.now());
+        if (since === null || !(row.ts >= since)) return null;
+        const speed = knownSpeed(row);
+        const moving = speed !== null && speed >= MOVING_MPS;
+        const tripId = drive.clientTripId;
+        coverageChain = coverageChain.then(() => store.addCoverage(tripId, moving ? 1 : 0, moving ? 1 : 0, null)).catch((e: unknown) => report(e, 'coverage'));
+        return { moving, covered: moving };
+      }
       const now = deps.now();
       lastRow = { row, at: now };
       if (drive.recording && drive.clientTripId !== null) lastLive = { clientTripId: drive.clientTripId, at: now };
@@ -1197,14 +1240,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       const speed = knownSpeed(row);
       const moving = speed !== null && speed >= MOVING_MPS;
       const st = s?.status ?? null;
-      const covered =
-        moving &&
-        s !== null &&
-        st !== null &&
-        now - st.at <= STATUS_FRESH_MS &&
-        (st.state === DASHCAM_STATE.CALIBRATING || st.state === DASHCAM_STATE.MONITORING) &&
-        (st.flags & STATUS_FLAG.LIVE) !== 0 &&
-        (st.flags & STATUS_FLAG.PRIMARY) !== 0;
+      const covered = moving && s !== null && st !== null && now - st.at <= STATUS_FRESH_MS && watching(st);
       const syncedAt = synced() ? now : null;
       const tripId = drive.clientTripId;
       coverageChain = coverageChain
@@ -1297,6 +1333,7 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     dispose() {
       disposed = true;
       session = null;
+      watchingSince = null;
       dropped = null;
       wakeNappers();
       listeners.clear();

@@ -39,8 +39,9 @@ export interface NewDashcamEvent {
   startedAtMs: number | null;
   receivedAtMs: number;
   /**
-   * It arrived while no drive was open: stored only as a delivery record (the cursor needs every
-   * seq), never claimed by a drive. Set by the first copy only; a replay never changes it.
+   * It arrived while no drive was open: stored as a delivery record (the cursor needs every seq),
+   * claimed only by a drive that opened after it with its start traced back before it (`facts.ts`).
+   * Set by the first copy only; a replay never changes it.
    */
   ignored?: boolean;
 }
