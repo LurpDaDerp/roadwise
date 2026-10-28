@@ -65,11 +65,13 @@ import {
   STATE_FLAG,
   STATE_TTL_DS,
   STATUS_FLAG,
+  type AimFrame,
   type DashcamEventFrame,
   type DashcamInfo,
   type Hello,
   type RxFrame,
   type Status,
+  type ViewStateFrame,
 } from './protocol';
 import { BOOT_GENERATION, type DashcamStore } from './store';
 
@@ -359,7 +361,10 @@ export interface DashcamLink {
    * one whose rows stopped long ago, is not caught up at its end by a sync now).
    */
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
-  command(op: number, arg?: number): Promise<boolean>;
+  /** `withResponse` false: a write without response (the aiming picture's acknowledgements, COMMAND 11). */
+  command(op: number, arg?: number, opts?: { withResponse?: boolean }): Promise<boolean>;
+  /** The aiming stream's AIM and VIEW_STATE frames on this link (a paired phone's re-aim): until the returned function. */
+  onViewFrames(fn: (f: AimFrame | ViewStateFrame) => void): () => void;
   /** The phone can play a DashPal alert now; `fresh`: with the audio output read now. */
   canPlay(fresh?: boolean): boolean;
   sendAlertAck(alertId: number, outcome: 0 | 1): void;
@@ -393,6 +398,8 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
   let pingSeq = 0;
   const counters = { badFrames: 0, lateAlerts: 0, stored: 0, ignored: 0, duplicates: 0, orphanEvents: 0, storeErrors: 0 };
   const listeners = new Set<(s: LinkSnapshot) => void>();
+  /** the aiming stream's frames on this link (a re-aim: `onViewFrames`) */
+  const viewListeners = new Set<(f: AimFrame | ViewStateFrame) => void>();
   /** the latest live drive row and when it arrived (a replayed row never) */
   let lastRow: { row: FeatureRow; at: number } | null = null;
   /** the drive the latest live recording row belonged to, and when it arrived */
@@ -1141,6 +1148,16 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
             report(e, 'onPaired');
           }
           break;
+        case 'AIM':
+        case 'VIEW_STATE':
+          for (const fn of [...viewListeners]) {
+            try {
+              fn(f);
+            } catch (e) {
+              report(e, 'view frames');
+            }
+          }
+          break;
       }
       tick(now);
       changed();
@@ -1229,9 +1246,16 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
       }
     },
 
-    async command(op, arg = 0) {
+    async command(op, arg = 0, opts = {}) {
       if (!session) return false;
-      return send({ type: 'COMMAND', op, arg }, { withResponse: true });
+      return send({ type: 'COMMAND', op, arg }, { withResponse: opts.withResponse !== false });
+    },
+
+    onViewFrames(fn) {
+      viewListeners.add(fn);
+      return () => {
+        viewListeners.delete(fn);
+      };
     },
 
     canPlay,

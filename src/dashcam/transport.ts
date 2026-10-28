@@ -178,6 +178,15 @@ export interface DashcamTransport {
   subscribeView(peripheralId: string, onRecord: (record: number[]) => void): Promise<void>;
   /** The listener goes and `stopNotification` on VIEW. */
   unsubscribeView(peripheralId: string): Promise<void>;
+  /**
+   * The paired dashcam's aiming picture (a re-aim, outside setup): `startNotification` on VIEW of the
+   * linked dashcam, each record opened under its session (direction 3, its own replay window) and
+   * handed to `onRecord`; records that do not open are dropped. One listener, gone when the link goes
+   * down. Rejects when not linked.
+   */
+  subscribePairedView(onRecord: (record: number[]) => void): Promise<void>;
+  /** The paired picture's listener goes and, while linked, `stopNotification` on VIEW. */
+  unsubscribePairedView(): Promise<void>;
   /** One sealed frame to the setup connection's RX (with response unless `withResponse` is false: the aiming picture's acknowledgements). */
   writeSealed(peripheralId: string, bytes: number[], opts?: { withResponse?: boolean }): Promise<void>;
   disconnect(peripheralId: string): Promise<void>;
@@ -299,6 +308,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   const setupFrames = new Map<string, (bytes: number[]) => void>();
   /** the aiming picture's listener per setup connection, and the records that failed to open there */
   const setupViews = new Map<string, (record: number[]) => void>();
+  /** the paired dashcam's aiming picture listener (a re-aim), only while its link is up */
+  let pairedView: ((record: number[]) => void) | null = null;
   const setupFails = new Map<string, number>();
   let scanHit: ((e: BlePeripheralEvent) => void) | null = null;
   /** Connected peripherals this phone disconnected whose disconnect event has not come (lowercase id). */
@@ -519,6 +530,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     const was = conn;
     conn = 'down';
     linkInfo = null;
+    pairedView = null;
     endSession();
     buffer.length = 0;
     failQueued('the dashcam disconnected');
@@ -777,7 +789,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     api.onDidUpdateValueForCharacteristic((e) => {
       pump();
       if (same(e.characteristic, VIEW_CHAR)) {
-        onSetupView(e.peripheral, e.value);
+        if ([...setupViews.keys()].some((id) => same(id, e.peripheral))) onSetupView(e.peripheral, e.value);
+        else onPairedView(e.peripheral, e.value);
         return;
       }
       if (!same(e.characteristic, TX_CHAR)) return;
@@ -818,6 +831,16 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     const r = s.openView(value);
     if (r.ok) listener(r.frame);
     else if (r.why === 'bad') setupFailed(peripheral);
+  }
+
+  /** A VIEW notification from the linked dashcam: opened under its session and handed to the re-aim listener; nothing without one. */
+  function onPairedView(peripheral: string, value: number[]): void {
+    const listener = pairedView;
+    const t = tgt;
+    const s = sealer;
+    if (!listener || !t || !s || conn !== 'up' || !same(peripheral, t.peripheralId)) return;
+    const r = s.openView(value);
+    if (r.ok) listener(r.frame);
   }
 
   /** iOS restored these: keep the paired one (a session again on the kept connection), cancel the rest. */
@@ -1070,6 +1093,25 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       setupViews.delete(peripheralId);
       if (!setupLinks.has(peripheralId.toLowerCase())) return;
       await gatt('stopNotification', () => api.stopNotification(peripheralId, DASHPAL_SERVICE, VIEW_CHAR)).catch((e: unknown) => report(e, 'stopNotification'));
+    },
+
+    async subscribePairedView(onRecord) {
+      const t = tgt;
+      if (!t || conn !== 'up' || !sealer) throw new Error('not linked');
+      pairedView = onRecord;
+      try {
+        await gatt('startNotification', () => api.startNotification(t.peripheralId, DASHPAL_SERVICE, VIEW_CHAR));
+      } catch (e) {
+        if (pairedView === onRecord) pairedView = null;
+        throw e;
+      }
+    },
+
+    async unsubscribePairedView() {
+      pairedView = null;
+      const t = tgt;
+      if (!t || conn !== 'up') return;
+      await gatt('stopNotification', () => api.stopNotification(t.peripheralId, DASHPAL_SERVICE, VIEW_CHAR)).catch((e: unknown) => report(e, 'stopNotification'));
     },
 
     async writeSealed(peripheralId, bytes, opts = {}) {

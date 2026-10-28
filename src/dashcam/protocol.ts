@@ -149,9 +149,10 @@ export const EVENT_NAMES: readonly string[] = [
   'MONITORING_RESTORED',
   'PHONE_HANDHELD',
   'CRITICAL_STAND_DOWN',
+  'CAMERA_AIM',
 ];
 
-export const EV = { MICROSLEEP: 0, SLEEP: 1, UNRESPONSIVE: 2, CRITICAL_STAND_DOWN: 31 } as const;
+export const EV = { MICROSLEEP: 0, SLEEP: 1, UNRESPONSIVE: 2, CRITICAL_STAND_DOWN: 31, CAMERA_AIM: 32 } as const;
 
 /** `UNKNOWN_<n>` for an id this app does not know: stored, never scored. */
 export const eventName = (ev: number): string => EVENT_NAMES[ev] ?? `UNKNOWN_${ev}`;
@@ -183,6 +184,8 @@ export const STATUS_FLAG = {
   PRIMARY: 1 << 4,
   BUZZER_ACTIVE: 1 << 5,
   LIVE: 1 << 6,
+  /** the camera needs re-aiming (its aim watch; kept by the dashcam across power cycles; firmware 3.6) */
+  REAIM: 1 << 7,
 } as const;
 
 /**

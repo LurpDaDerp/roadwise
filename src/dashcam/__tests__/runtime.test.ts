@@ -8,8 +8,8 @@ import { createPumpedTimers, processTimers } from '@/lib/timers';
 
 import { createFakeDashcam, type FakeDashcam } from '../__fixtures__/fakeDashcam';
 import { createFakeBle, type FakeBle } from '../fakeTransport';
-import { BT_OPT_IN_KEY, BUZZER_TOO_KEY, ENABLED_SECURE_KEY, LAST_PHONES_KEY, PAIRED_KEY, type PairedDashcam } from '../keys';
-import { decodeRx, encodeTx, fromHex, RX_CHAR } from '../protocol';
+import { BT_OPT_IN_KEY, BUZZER_TOO_KEY, ENABLED_SECURE_KEY, LAST_PHONES_KEY, PAIRED_KEY, REAIM_KEY, type PairedDashcam } from '../keys';
+import { decodeRx, encodeTx, fromHex, RX_CHAR, STATUS_FLAG } from '../protocol';
 import { AUDIO_PROBE_MEMO_MS, createDashcamRuntime, linkServiceStateFor, MIN_MOVING_S, type DashcamRuntime, type LinkServicePort, type LinkServiceResult, type LinkServiceState } from '../runtime';
 import { AUTH_SECURE_KEY, createDashpalSecrets, PERIPHERAL_SECURE_KEY, type DashpalSecrets } from '../secure';
 import { createDashcamStore } from '../store';
@@ -413,6 +413,54 @@ describe('Add another phone and the new-phone notice', () => {
     r.cam.notify(status(4));
     await flush();
     expect(r.rt.state().newPhone).toBe(true);
+    r.rt.dispose();
+  });
+});
+
+describe('the camera needs re-aiming (STATUS bit 7)', () => {
+  async function connected(): Promise<Rig> {
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const r = rig();
+    await r.rt.ready;
+    await flush();
+    expect(r.rt.state().link.lifecycle).toBe('connected');
+    return r;
+  }
+  const status = (flags: number) => encodeTx({ type: 'STATUS', uptimeMs: 1, state: 3, flags, fpsX10: 150, tempC: 30, bondCount: 1 });
+
+  test('a sealed STATUS with bit 7 raises reaim; it is kept across a relaunch with the DashPal off; a STATUS without it clears it; forget clears it', async () => {
+    const r = await connected();
+    expect(r.rt.state().reaim).toBe(false);
+    r.clock.t += 1000;
+    r.cam.notify(status(STATUS_FLAG.REAIM | STATUS_FLAG.CALIBRATED));
+    await flush();
+    expect(r.rt.state().reaim).toBe(true);
+    expect(await createSettingsRepo(db).get(REAIM_KEY)).toEqual({ dashcamId: CAM });
+    r.rt.dispose();
+    const again = rig();
+    await again.rt.ready;
+    expect(again.rt.state().reaim).toBe(true);                       // Home can remind with the DashPal off
+    await flush();
+    again.clock.t += 1000;
+    again.cam.notify(status(STATUS_FLAG.CALIBRATED));
+    await flush();
+    expect(again.rt.state().reaim).toBe(false);
+    expect(await createSettingsRepo(db).get(REAIM_KEY)).toBeNull();
+    again.clock.t += 1000;
+    again.cam.notify(status(STATUS_FLAG.REAIM));
+    await flush();
+    expect(again.rt.state().reaim).toBe(true);
+    await again.rt.forget();
+    expect(again.rt.state().reaim).toBe(false);
+    expect(await createSettingsRepo(db).get(REAIM_KEY)).toBeNull();
+  });
+
+  test('a flag kept for another DashPal never shows', async () => {
+    await createSettingsRepo(db).set(REAIM_KEY, { dashcamId: 'ffffffffffff' });
+    await createSettingsRepo(db).set(PAIRED_KEY, PAIRED);
+    const r = rig();
+    await r.rt.ready;
+    expect(r.rt.state().reaim).toBe(false);
     r.rt.dispose();
   });
 });

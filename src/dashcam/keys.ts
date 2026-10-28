@@ -16,6 +16,19 @@ export const SNOOZES_KEY = 'dashcam.snoozes';
  * pairing.
  */
 export const LAST_PHONES_KEY = 'dashcam.lastPhones';
+/**
+ * The paired DashPal says its camera needs re-aiming (STATUS bit 7: its aim watch, kept by the
+ * dashcam across power cycles): `{ dashcamId }`, kept here so Home can remind with the DashPal off;
+ * removed when a STATUS without the bit arrives, on forget, and when another DashPal is paired.
+ */
+export const REAIM_KEY = 'dashcam.reaim';
+
+/** A stored re-aim record's DashPal, or null. */
+export function asReaim(value: unknown): string | null {
+  if (value === null || typeof value !== 'object') return null;
+  const id = (value as Record<string, unknown>).dashcamId;
+  return isDashcamId(id) ? id : null;
+}
 
 /** SecureStore: start the BLE manager at launch (written at opt-in and pairing; survives wipes). */
 export const ENABLED_SECURE_KEY = 'dashpal.enabled';

@@ -858,3 +858,45 @@ describe('the aiming picture on a setup connection (VIEW)', () => {
     expect(VIEW_CHAR.slice(4, 8)).toBe('0007');
   });
 });
+
+describe('the aiming picture on the paired link (a re-aim)', () => {
+  /** The paired dashcam linked; its VIEW key from the fake dashcam's side of the session. */
+  async function pairedRig() {
+    const r = rig('android');
+    await up(r);
+    expect(r.t.linked()).toBe(true);
+    return { r, kdp: r.cam.conn()!.kdp! };
+  }
+  const REC = [1, 1, 1, 0, 3, 0, 0, 0, 0xff, 0xd8, 0xd9];
+
+  test('subscribePairedView starts VIEW on the linked dashcam and hands each record opened under its session; replays dropped; none after unsubscribe', async () => {
+    const { r, kdp } = await pairedRig();
+    const got: number[][] = [];
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 0, REC)));                 // before a listener: never kept
+    await r.t.subscribePairedView((rec) => got.push(rec));
+    expect(r.ble.calls).toContain(`startNotification:${PID}:0007`);
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 1, REC)));
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 1, REC)));                 // a replay
+    r.ble.notifyView(PID, Array.from(sealView(new Uint8Array(16).fill(9), 2, REC)));   // another key: dropped
+    expect(got).toEqual([REC]);
+    await r.t.unsubscribePairedView();
+    expect(r.ble.calls).toContain(`stopNotification:${PID}:0007`);
+    r.ble.notifyView(PID, Array.from(sealView(kdp, 3, REC)));
+    expect(got).toEqual([REC]);
+    expect(r.k.frames).toEqual(expect.not.arrayContaining([REC]));          // never a TX frame
+  });
+
+  test('not linked, it is refused; the link going down drops the listener', async () => {
+    const r = rig('android');
+    await expect(r.t.subscribePairedView(() => {})).rejects.toThrow(/not linked/);
+    const p = await pairedRig();
+    const got: number[][] = [];
+    await p.r.t.subscribePairedView((rec) => got.push(rec));
+    p.r.ble.drop(PID);
+    await flush();
+    await p.r.clock.advance(60_000);
+    expect(p.r.t.linked()).toBe(true);                                        // reconnected, a new session
+    p.r.ble.notifyView(PID, Array.from(sealView(p.r.cam.conn()!.kdp!, 0, REC)));
+    expect(got).toEqual([]);
+  });
+});

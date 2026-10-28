@@ -21,6 +21,7 @@ import {
   PAIRING_NEW,
   PAIRING_OPEN,
   PAIRING_SETUP,
+  STATUS_FLAG,
   toHex,
   VIEW_CHAR,
   viewReason,
@@ -338,6 +339,13 @@ test('event names follow the frozen engine order; unknown ids read UNKNOWN_<n>',
   expect(eventName(2)).toBe('UNRESPONSIVE');
   expect(eventName(30)).toBe('PHONE_HANDHELD');
   expect(eventName(31)).toBe('CRITICAL_STAND_DOWN');
-  expect(eventName(32)).toBe('UNKNOWN_32');
+  expect(eventName(32)).toBe('CAMERA_AIM');
+  expect(eventName(33)).toBe('UNKNOWN_33');
   expect(eventName(255)).toBe('UNKNOWN_255');
+});
+
+test('STATUS bit 7: the camera needs re-aiming (the aim watch, firmware 3.6)', () => {
+  expect(STATUS_FLAG.REAIM).toBe(0x80);
+  const bytes = encodeTx({ type: 'STATUS', uptimeMs: 5, state: 3, flags: STATUS_FLAG.REAIM | STATUS_FLAG.CALIBRATED, fpsX10: 200, tempC: 40, bondCount: 1 });
+  expect(decodeTx(bytes)).toEqual({ ok: true, frame: expect.objectContaining({ type: 'STATUS', flags: 0x88 }) });
 });

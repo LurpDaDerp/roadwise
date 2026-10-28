@@ -32,7 +32,7 @@ export interface FakeDashcamRuntime extends DashcamRuntime {
 
 export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'link'>> & { link?: Partial<LinkSnapshot> } = {}): FakeDashcamRuntime {
   const listeners = new Set<(s: DashcamState) => void>();
-  let state: DashcamState = { buzzerToo: false, btOptIn: false, loaded: true, newPhone: false, ...initial, link: linkSnapshot(initial.link) };
+  let state: DashcamState = { buzzerToo: false, btOptIn: false, loaded: true, newPhone: false, reaim: false, ...initial, link: linkSnapshot(initial.link) };
   const log: string[] = [];
   const rt: FakeDashcamRuntime = {
     log,

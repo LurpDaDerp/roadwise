@@ -1928,3 +1928,36 @@ describe('phone-first sound routing (BLE_PROTOCOL §1, §5)', () => {
     expect(r.errors.some((e) => e.startsWith('holdAwake:'))).toBe(true);
   });
 });
+
+// ——— the aiming picture's frames on the paired link (a re-aim) ———
+
+describe('the aiming frames on the paired link', () => {
+  test('AIM and VIEW_STATE reach the view listeners, only while subscribed; a listener that throws is reported', async () => {
+    const r = rig();
+    await connect(r);
+    const got: string[] = [];
+    const off = r.link.onViewFrames((f) => got.push(f.type === 'AIM' ? `aim:${f.score}` : `view:${f.on}:${f.reason}:${f.leftS}`));
+    r.rx({ type: 'VIEW_STATE', on: 1, reason: 0, leftS: 600 });
+    r.rx({ type: 'AIM', seq: 3, score: 92, hint: 0, flags: 7, iod: 50, yaw: -4, pitch: 2 });
+    off();
+    r.rx({ type: 'AIM', seq: 4, score: 40, hint: 2, flags: 3, iod: 50, yaw: 0, pitch: 0 });
+    expect(got).toEqual(['view:1:0:600', 'aim:92']);
+    r.link.onViewFrames(() => {
+      throw new Error('boom');
+    });
+    r.rx({ type: 'VIEW_STATE', on: 0, reason: 3, leftS: 590 });
+    expect(r.errors.some((e) => e.includes('boom'))).toBe(true);
+  });
+
+  test('a command may go without response (the picture acknowledgements)', async () => {
+    const r = rig();
+    await connect(r);
+    r.clear();
+    await r.link.command(11, 7, { withResponse: false });
+    await r.link.command(10, 1);
+    expect(r.writes.filter((w) => w.frame.type === 'COMMAND').map((w) => [w.frame, w.withResponse])).toEqual([
+      [{ type: 'COMMAND', op: 11, arg: 7 }, false],
+      [{ type: 'COMMAND', op: 10, arg: 1 }, true],
+    ]);
+  });
+});

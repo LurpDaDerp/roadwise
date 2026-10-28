@@ -93,9 +93,11 @@ export interface FakeDashcam {
   notifyView(record: number[]): void;
   /**
    * The aiming stream: `on` while started; `refuse` answers a start with VIEW_STATE(0, that reason);
-   * `acks` the COMMAND 11 frames; `starts` / `stops` the COMMAND 10 starts and stops received.
+   * `acks` the COMMAND 11 frames; `starts` / `stops` the COMMAND 10 starts and stops received; `reaim`
+   * the stream on was a paired phone's (no setup hold); `recalibrations` the stops of a stream that was on
+   * (each recalibrates, firmware 3.6).
    */
-  view: { on: boolean; refuse: number | null; acks: number[]; starts: number; stops: number };
+  view: { on: boolean; refuse: number | null; acks: number[]; starts: number; stops: number; reaim: boolean; recalibrations: number };
   /** An image as the dashcam's VIEW records (`frame` 1-255), cut for `mtu`; sent only while the stream is on. */
   sendImage(frame: number, jpeg: number[], mtu?: number): void;
   /** A VIEW_STATE stop of a running stream for a gate (moving 2, drive 3, …). */
@@ -182,7 +184,7 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
         setupBusy: self.busy,
         nonce: c?.nc ?? new Uint8Array(16),
       }),
-    view: { on: false, refuse: null, acks: [], starts: 0, stops: 0 },
+    view: { on: false, refuse: null, acks: [], starts: 0, stops: 0, reaim: false, recalibrations: 0 },
     sendImage(frame, jpeg, mtu = 247) {
       if (!self.view.on) return;
       const n = mtu - 3 - 20 - 8;
@@ -417,17 +419,22 @@ export function createFakeDashcam(o: FakeDashcamOptions): FakeDashcam {
         }
         break;
       case 10: {
-        const refusal = !holds ? 9 : self.commandWindow ? 1 : d.frame.arg === 1 ? self.view.refuse : null;
-        if (d.frame.arg === 2) self.notify({ type: 'VIEW_STATE', on: holds && !self.commandWindow ? 1 : 0, reason: !holds ? 9 : self.commandWindow ? 1 : 0, leftS: 600 });
+        // firmware 3.6: the setup hold's connection (a setup stream), or a paired phone while no hold lasts (a re-aim)
+        const reaim = !holds && self.prov === null && conn.phone !== null;
+        const gate = holds ? (self.commandWindow ? 1 : null) : reaim ? null : 1;
+        const refusal = gate ?? (d.frame.arg === 1 ? self.view.refuse : null);
+        if (d.frame.arg === 2) self.notify({ type: 'VIEW_STATE', on: gate === null ? 1 : 0, reason: gate ?? 0, leftS: 600 });
         else if (d.frame.arg === 1) {
           self.view.starts += 1;
           if (refusal !== null) self.notify({ type: 'VIEW_STATE', on: 0, reason: refusal, leftS: 600 });
           else {
             self.view.on = true;
+            self.view.reaim = reaim;
             self.notify({ type: 'VIEW_STATE', on: 1, reason: 0, leftS: 600 });
           }
         } else if (d.frame.arg === 0) {
           self.view.stops += 1;
+          if (self.view.on) self.view.recalibrations += 1;   // any stream's stop recalibrates
           self.view.on = false;
           self.notify({ type: 'VIEW_STATE', on: 0, reason: 0, leftS: 600 });
         }

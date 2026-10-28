@@ -25,9 +25,9 @@ import { processTimers } from '@/lib/timers';
 import { ensureInstallMarker } from './early';
 import { asPhonesRecord, nextPhones, type PhonesEvent, type PhonesRecord } from './newPhone';
 import { loadDashcamTripFacts, type DashcamTripFacts } from './facts';
-import { asPaired, BT_OPT_IN_KEY, BUZZER_TOO_KEY, LAST_PHONES_KEY, PAIRED_KEY, type PairedDashcam } from './keys';
+import { asPaired, asReaim, BT_OPT_IN_KEY, BUZZER_TOO_KEY, LAST_PHONES_KEY, PAIRED_KEY, REAIM_KEY, type PairedDashcam } from './keys';
 import { AUDIO_UNKNOWN, createDashcamLink, type AudioOutputProbe, type DashcamLink, type LinkContext, type Lifecycle, type LinkSnapshot } from './link';
-import { COMMAND } from './protocol';
+import { COMMAND, STATUS_FLAG } from './protocol';
 import { dashpalSecrets, type DashpalSecrets, type StoredAuth } from './secure';
 import { createDashcamStore, UNATTACHED_KEEP_MS } from './store';
 import type { DashcamTransport, TransportTarget } from './transport';
@@ -49,6 +49,8 @@ export interface DashcamState {
   loaded: boolean;
   /** "A new phone was paired with your DashPal" waits to be dismissed (`newPhone.ts`) */
   newPhone: boolean;
+  /** the paired DashPal's camera needs re-aiming (its STATUS bit 7, kept here while it is off: `dashcam.reaim`) */
+  reaim: boolean;
 }
 
 export interface DashcamRuntime {
@@ -177,6 +179,22 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   let phonesChain: Promise<void> = Promise.resolve();
   /** the last STATUS phone count fed to the record (per connection) */
   let fedStatusAt: number | null = null;
+  /** the DashPal whose camera needs re-aiming (`dashcam.reaim`), and its persistence chain */
+  let reaimFor: string | null = null;
+  let reaimChain: Promise<void> = Promise.resolve();
+
+  /** The re-aim record follows (persisted in order); the caller notifies (`notify` feeds STATUS before it reads the state). */
+  function setReaim(next: string | null): void {
+    if (next === reaimFor) return;
+    reaimFor = next;
+    const value = next;
+    reaimChain = reaimChain
+      .then(async () => {
+        if (value) await settings.set(REAIM_KEY, { dashcamId: value });
+        else await settings.remove(REAIM_KEY);
+      })
+      .catch((err: unknown) => report(err, 're-aim'));
+  }
 
   function phonesEvent(e: PhonesEvent): void {
     const next = nextPhones(phones, e);
@@ -200,6 +218,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
     if (!st || !paired || snap.lifecycle !== 'connected' || st.at === fedStatusAt) return;
     fedStatusAt = st.at;
     phonesEvent({ kind: 'count', dashcamId: paired.dashcamId, count: st.bondCount, now: now() });
+    // the camera's re-aim flag: the dashcam's own (bit 7 is 0 on firmware before 3.6, which has no aim watch)
+    setReaim((st.flags & STATUS_FLAG.REAIM) !== 0 ? paired.dashcamId : null);
   }
   const listeners = new Set<(s: DashcamState) => void>();
   let buzzerToo = false;
@@ -335,12 +355,20 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   });
 
   function state(): DashcamState {
-    return { link: link.snapshot(), buzzerToo, btOptIn, loaded, newPhone: phones?.notice === true && phones.dashcamId === link.snapshot().paired?.dashcamId };
+    const pairedId = link.snapshot().paired?.dashcamId;
+    return {
+      link: link.snapshot(),
+      buzzerToo,
+      btOptIn,
+      loaded,
+      newPhone: phones?.notice === true && phones.dashcamId === pairedId,
+      reaim: reaimFor !== null && reaimFor === pairedId,
+    };
   }
 
   function notify(): void {
+    feedStatus(link.snapshot());   // first: what it changes (the phone count, the re-aim flag) is in this state
     const s = state();
-    feedStatus(s.link);
     driveLinkService(s.link);
     syncRepeat(s.link);
     for (const fn of [...listeners]) {
@@ -518,8 +546,9 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
   const ready = (async () => {
     try {
       void (deps.ensureInstallMarker ?? ensureInstallMarker)().catch((e: unknown) => report(e, 'install marker'));
-      const got = await settings.getMany([PAIRED_KEY, BUZZER_TOO_KEY, BT_OPT_IN_KEY, LAST_PHONES_KEY]);
+      const got = await settings.getMany([PAIRED_KEY, BUZZER_TOO_KEY, BT_OPT_IN_KEY, LAST_PHONES_KEY, REAIM_KEY]);
       phones = asPhonesRecord(got[LAST_PHONES_KEY]);
+      reaimFor = asReaim(got[REAIM_KEY]);
       let paired = asPaired(got[PAIRED_KEY]);
       if (!paired && got[PAIRED_KEY] !== null && got[PAIRED_KEY] !== undefined) {
         // A link v1 pairing (Bluetooth bonding), or an unreadable record: no DashPal speaks it, so
@@ -639,6 +668,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       await secrets.writeEnabled(true).catch((e: unknown) => report(e, 'secure flag'));
       await secrets.writeTarget({ peripheralId: record.peripheralId, dashcamId: record.dashcamId }).catch((e: unknown) => report(e, 'secure target'));
       if (phones && phones.dashcamId !== record.dashcamId) phonesEvent({ kind: 'reset' });
+      if (reaimFor !== null && reaimFor !== record.dashcamId) setReaim(null);
       link.setPaired(record);
       syncRepeat();
       notify();
@@ -675,6 +705,7 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
       await secrets.deleteAuth().catch((e: unknown) => report(e, 'delete key'));
       await secrets.writeTarget(null).catch((e: unknown) => report(e, 'secure target'));
       phonesEvent({ kind: 'reset' });
+      setReaim(null);
       link.setPaired(null);
       syncRepeat();
       notify();
