@@ -1,8 +1,9 @@
 /** @jest-environment node */
 // The re-aim flow (`reaim.ts`): the paired DashPal's live picture outside setup (firmware 3.6) —
-// start, the first image, a stall and its retries, giving up, refusals, Done (the stop, and COMMAND
-// 2 when no picture ever came), firmware too old, no link, RoadWise leaving the front, the link
-// going down.
+// start, the first image, a stall and its retries, giving up, refusals, Done (the stop, once more
+// when it fails, and COMMAND 2 when no picture ever came or the stop never went through), firmware
+// too old, no link (the picture starting once it is up), RoadWise leaving the front, the link going
+// down and coming back.
 import type { LinkSnapshot } from '../link';
 import { COMMAND, type AimFrame, type ViewStateFrame } from '../protocol';
 import { createReaimFlow, REAIM_FIRST_MS, REAIM_GIVE_UP_MS, REAIM_STALL_MS, supportsReaim, type ReaimDeps, type ReaimPhase } from '../reaim';
@@ -24,10 +25,15 @@ function rig(o: { firmware?: string | null; lifecycle?: LinkSnapshot['lifecycle'
   let seq = 0;
   const timers = new Map<number, { at: number; fn: () => void }>();
   const subs: string[] = [];
+  const failing = { stops: 0 };
   const deps: ReaimDeps = {
     link: {
       command: async (op, arg = 0, opts = {}) => {
         sent.push(`${op}:${arg}${opts.withResponse === false ? ':nr' : ''}`);
+        if (op === COMMAND.AIM && arg === 0 && failing.stops > 0) {
+          failing.stops -= 1;
+          return false;
+        }
         return true;
       },
       onViewFrames: (fn) => {
@@ -71,6 +77,7 @@ function rig(o: { firmware?: string | null; lifecycle?: LinkSnapshot['lifecycle'
     images,
     aims,
     snap,
+    failing,
     view: (f: AimFrame | ViewStateFrame) => viewFn?.(f),
     rec: (r: number[]) => recordFn?.(r),
     async advance(ms: number) {
@@ -176,8 +183,40 @@ test('not connected: offline, nothing sent, Done sends nothing', async () => {
   const r = rig({ lifecycle: 'idle' });
   await r.flow.start();
   expect(r.flow.phase().status).toBe('offline');
+  await r.advance(1000);
   await r.flow.close();
   expect(r.sent).toEqual([]);
+  r.snap.lifecycle = 'connected';
+  await r.advance(1000);                                                        // closed: it never starts
+  expect(r.sent).toEqual([]);
+});
+
+test('opened with no link: the picture starts on its own once DashPal connects', async () => {
+  const r = rig({ lifecycle: 'idle' });
+  await r.flow.start();
+  await r.advance(750);
+  expect(r.flow.phase().status).toBe('offline');
+  expect(r.sent).toEqual([]);
+  r.snap.lifecycle = 'connected';
+  await r.advance(250);
+  expect(r.flow.phase().status).toBe('starting');
+  expect(r.subs).toEqual(['sub']);
+  expect(r.sent).toEqual([`${COMMAND.AIM}:1`]);
+});
+
+test('Done when the stop fails: once more, and COMMAND 2 when it never went through', async () => {
+  for (const [fails, recal] of [[1, false], [2, true]] as const) {
+    const r = rig();
+    await r.flow.start();
+    r.view(VIEW_ON);
+    r.rec(record(1, JPEG));
+    await r.advance(250);
+    r.failing.stops = fails;
+    await r.flow.close();
+    expect(r.sent.filter((c) => c === `${COMMAND.AIM}:0`)).toHaveLength(2);
+    expect(r.sent.includes(`${COMMAND.RECALIBRATE}:0`)).toBe(recal);
+    expect(r.subs.at(-1)).toBe('unsub');
+  }
 });
 
 test('the link going down while live: offline, the picture dropped; RoadWise leaving the front stops it and coming back starts it', async () => {
@@ -197,6 +236,10 @@ test('the link going down while live: offline, the picture dropped; RoadWise lea
   await r.advance(250);
   expect(r.flow.phase().status).toBe('offline');
   expect(r.aims.at(-1)).toBeNull();
+  r.snap.lifecycle = 'connected';                                               // back: the picture again
+  await r.advance(250);
+  expect(r.flow.phase().status).toBe('starting');
+  expect(r.sent.at(-1)).toBe(`${COMMAND.AIM}:1`);
 });
 
 test('supportsReaim reads the DIS / INFO firmware', () => {

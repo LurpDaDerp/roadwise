@@ -5,9 +5,11 @@
 // sheet's `AimView`. Nothing here stores, logs or reports a record or an image: they go to the
 // listeners only, and every open image is zeroed when the stream starts again or stops.
 //
-// Done stops the stream (COMMAND 10 arg 0), and the dashcam recalibrates and clears its re-aim
-// flag. When no picture ever came (a refusal, firmware before 3.6), Done sends COMMAND 2 instead,
-// so the Recalibrate row always recalibrates. The timings are the setup's (`setup.ts`).
+// Done stops the stream (COMMAND 10 arg 0, once more when it fails with the link up), and the dashcam
+// recalibrates and clears its re-aim flag. When no picture ever came (a refusal, firmware before
+// 3.6) or the dashcam never took the stop, Done sends COMMAND 2 instead, so the Recalibrate row
+// always recalibrates. Opened with no link (or the link lost), the picture starts once the link is
+// up. The timings are the setup's (`setup.ts`).
 import type { DashcamLink } from './link';
 import { AIM_ARG, COMMAND, viewReason, type AimFrame, type ViewReason } from './protocol';
 import type { DashcamTransport } from './transport';
@@ -25,7 +27,7 @@ export const REAIM_MIN_FIRMWARE: readonly [number, number] = [3, 6];
 /** The refusals Try again can help with (mtu cannot change; the others can, once the car stops or a moment later). */
 export const REAIM_RETRY: readonly ViewReason[] = ['moving', 'drive', 'budget', 'busy', 'camera', 'memory', 'no_state', 'not_allowed', 'hold_ended', 'ok'];
 
-/** idle: not started; offline: no link to the DashPal; unsupported: firmware before 3.6. */
+/** idle: not started; offline: no link to the DashPal (the picture starts once it is up); unsupported: firmware before 3.6. */
 export type ReaimStatus = 'idle' | 'offline' | 'unsupported' | 'starting' | 'live' | 'stalled' | 'refused';
 
 export interface ReaimPhase {
@@ -160,19 +162,48 @@ export function createReaimFlow(deps: ReaimDeps): ReaimFlow {
     });
   }
 
-  /** The picture stops: no reading and the open images zeroed at once; then COMMAND 10 arg 0 (`send`) and VIEW off. */
-  async function stop(o: { send: boolean }): Promise<void> {
-    if (!wanted) return;
+  /** COMMAND 10 arg 0, once more when it fails with the link up; false when the dashcam never took it. */
+  async function sendStop(): Promise<boolean> {
+    for (let i = 0; i < 2; ++i) {
+      if (!linked()) return true;   // the link gone ends the stream on the dashcam
+      const ok = await deps.link.command(COMMAND.AIM, AIM_ARG.STOP).catch((e: unknown) => {
+        report(e, 'stop');
+        return false;
+      });
+      if (ok) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The picture stops: no reading and the open images zeroed at once; then COMMAND 10 arg 0 (`send`) and VIEW off.
+   * Resolves false when the stop was sent and the dashcam never took it.
+   */
+  async function stop(o: { send: boolean }): Promise<boolean> {
+    if (!wanted) return true;
     wanted = false;
     streamOn = false;
     lastImageAt = null;
     assembler.wipe();
     emitAim(null);
     ++gen;
+    let took = true;
     await step(async () => {
-      if (o.send && linked()) await deps.link.command(COMMAND.AIM, AIM_ARG.STOP).catch((e: unknown) => report(e, 'stop'));
+      if (o.send) took = await sendStop();
       await deps.transport()?.unsubscribePairedView().catch((e: unknown) => report(e, 'unsubscribe'));
     });
+    return took;
+  }
+
+  /** Offline with the sheet open: the picture starts once the link is up (a look every `REAIM_TICK_MS`). */
+  function awaitLink(): void {
+    if (timer !== null || closed) return;
+    timer = deps.setTimer(() => {
+      timer = null;
+      if (closed || phase.status !== 'offline') return;
+      if (linked() && deps.transport()) void start();
+      else awaitLink();
+    }, REAIM_TICK_MS);
   }
 
   function arm(): void {
@@ -192,6 +223,7 @@ export function createReaimFlow(deps: ReaimDeps): ReaimFlow {
     if (!linked()) {
       await stop({ send: false });
       set({ status: 'offline', reason: null });
+      awaitLink();
       return;
     }
     if (refusal) {
@@ -221,6 +253,7 @@ export function createReaimFlow(deps: ReaimDeps): ReaimFlow {
     if (closed || wanted) return;
     if (!linked()) {
       set({ status: 'offline', reason: null });
+      awaitLink();
       return;
     }
     if (supportsReaim(deps.link.snapshot().firmware) === false) {
@@ -230,6 +263,7 @@ export function createReaimFlow(deps: ReaimDeps): ReaimFlow {
     const t = deps.transport();
     if (!t) {
       set({ status: 'offline', reason: null });
+      awaitLink();
       return;
     }
     if (!appActive) {
@@ -273,10 +307,11 @@ export function createReaimFlow(deps: ReaimDeps): ReaimFlow {
       closed = true;
       if (timer !== null) deps.clearTimer(timer);
       timer = null;
-      await stop({ send: true });
+      const took = await stop({ send: true });
       offFrames();
-      // no picture ever came: the Recalibrate row still recalibrates (a stream's stop does it on the dashcam)
-      if (!everOn && linked()) await deps.link.command(COMMAND.RECALIBRATE, 0).catch((e: unknown) => report(e, 'recalibrate'));
+      // no picture ever came, or the dashcam never took the stop: the Recalibrate row still recalibrates (a stream's
+      // stop does it on the dashcam)
+      if ((!everOn || !took) && linked()) await deps.link.command(COMMAND.RECALIBRATE, 0).catch((e: unknown) => report(e, 'recalibrate'));
     },
 
     setAppActive(active) {
