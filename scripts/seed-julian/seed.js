@@ -7,7 +7,8 @@
  *
  *   node scripts/seed-julian/seed.js --dry                      build everything and print what the app would show; touches nothing
  *   node scripts/seed-julian/seed.js --local                    seed the local Supabase stack
- *   node scripts/seed-julian/seed.js --linked                   seed the linked (hosted) project
+ *   SUPABASE_SERVICE_ROLE_KEY=<secret key> node scripts/seed-julian/seed.js --linked
+ *                                                               seed the linked (hosted) project
  *   node scripts/seed-julian/seed.js --linked --replace         start over: delete the demo accounts first, then seed
  *   node scripts/seed-julian/seed.js --linked --remove          delete the demo accounts and nothing else
  *   node scripts/seed-julian/seed.js --linked --remove --restore-test-name   ... and give julian_test back its old name
@@ -22,8 +23,10 @@
  * What else it does, and only this:
  *   * the existing "julian" account (the author's test account) is renamed "julian_test", so the demo
  *     can have the name (an UPDATE of that one profile's username, undone with --restore-test-name)
- *   * signs the demo drivers up (e-mail and password, as the app does) and onboards them through the app's
- *     own RPCs (claim_username, complete_onboarding, update_profile)
+ *   * creates the demo drivers through the Auth admin API with their e-mail already confirmed (so no
+ *     confirmation mail goes to the demo addresses), signs in as each with e-mail and password, as
+ *     the app does, and onboards them through the app's own RPCs (claim_username,
+ *     complete_onboarding, update_profile)
  *   * friendships and the two pending requests are inserted directly, dated across the last months
  *   * one drive of Julian's as a passenger is marked "Wasn't driving", and two events on drives of
  *     the last week are reported (a hazard brake, a phone that was mounted), through the same private
@@ -32,8 +35,10 @@
  *     nothing else
  *
  * `private.*` is not on the Data API, so SQL goes through `supabase db query` (the CLI must be logged
- * in and, for --linked, linked to the project). Accounts are made with the app's own e-mail sign-up and
- * the publishable key every phone carries; no secret key is read.
+ * in and, for --linked, linked to the project). Accounts are created with the secret key, from
+ * SUPABASE_SERVICE_ROLE_KEY as in seed-demo.js (on the local stack `supabase status` gives it when the
+ * variable is unset); everything a demo driver does after that goes through the publishable key every
+ * phone carries.
  */
 require('./tshook.js');
 const crypto = require('crypto');
@@ -112,16 +117,27 @@ const safeParse = (v) => {
   }
 };
 
-/** The project's publishable key, from the CLI: the one every phone is built with. No secret key is read or needed. */
+/**
+ * The project's keys. The publishable key, from the CLI, is the one every phone is built with: each
+ * demo driver's own calls use it. The secret key creates the accounts through the Auth admin API; it
+ * comes from SUPABASE_SERVICE_ROLE_KEY, as in seed-demo.js, or on the local stack from
+ * `supabase status` when that is unset.
+ */
 function readKeys(target) {
   const args = (target.flag === '--local' ? ['supabase', 'status', '-o', 'json'] : ['supabase', 'projects', 'api-keys', '--project-ref', target.ref, '-o', 'json']).map(quote);
   const r = spawnSync(npx, args, { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32' });
   const parsed = parseJson(r.stdout ?? '');
   if (parsed === null) throw new Error(`could not read the project keys from the CLI:\n${r.stdout}\n${r.stderr}`);
-  if (target.flag === '--local') return { publishable: parsed.PUBLISHABLE_KEY ?? parsed.ANON_KEY };
+  const fromEnv = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+  if (target.flag === '--local') {
+    const secret = fromEnv ?? parsed.SECRET_KEY ?? parsed.SERVICE_ROLE_KEY ?? null;
+    if (!secret) throw new Error('`supabase status` printed no secret key: set SUPABASE_SERVICE_ROLE_KEY');
+    return { publishable: parsed.PUBLISHABLE_KEY ?? parsed.ANON_KEY, secret };
+  }
   const publishable = parsed.find((k) => k.type === 'publishable')?.api_key;
   if (!publishable) throw new Error('the project has no publishable key');
-  return { publishable };
+  if (!fromEnv) throw new Error("set SUPABASE_SERVICE_ROLE_KEY to the project's secret key (Project Settings > API Keys): the demo accounts are created through the Auth admin API");
+  return { publishable, secret: fromEnv };
 }
 
 /** A JSON value as a dollar-quoted SQL literal. */
@@ -276,18 +292,21 @@ async function retrying(label, call) {
   }
 }
 
-/** Signs a demo driver up the way the app does (e-mail and password, no confirmation) and onboards them through the app's own RPCs. */
+/**
+ * Creates a demo driver through the Auth admin API with the e-mail already confirmed (the project asks
+ * an app sign-up to confirm it with a mailed code; no mail goes to the demo addresses), signs in as them
+ * with e-mail and password the way the app does, and onboards them through the app's own RPCs.
+ */
 async function createAccount(target, url, keys, person, password) {
   const { createClient } = require('@supabase/supabase-js');
   const opts = { auth: { persistSession: false, autoRefreshToken: false } };
+  const admin = createClient(url, keys.secret, opts);
+  const created = await retrying('create account', () => admin.auth.admin.createUser({ email: person.email, password, email_confirm: true }));
+  if (created.error) throw new Error(`create account ${person.email}: ${created.error.message}`);
   const client = createClient(url, keys.publishable, opts);
-  const signedUp = await retrying('sign up', () => client.auth.signUp({ email: person.email, password }));
-  if (signedUp.error) throw new Error(`sign up ${person.email}: ${signedUp.error.message}`);
-  if (!signedUp.data.session) {
-    // the project asks for e-mail confirmation: the demo drivers need none
-    throw new Error(`sign up ${person.email}: no session (is e-mail confirmation on?)`);
-  }
-  const id = signedUp.data.user.id;
+  const signedIn = await retrying('sign in', () => client.auth.signInWithPassword({ email: person.email, password }));
+  if (signedIn.error) throw new Error(`sign in ${person.email}: ${signedIn.error.message}`);
+  const id = created.data.user.id;
   const rpc = async (fn, args) => {
     const { data: out, error: err } = await retrying(fn, () => client.rpc(fn, args));
     if (err) throw new Error(`${fn} (${person.username}): ${err.message}`);
