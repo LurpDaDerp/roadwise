@@ -160,7 +160,7 @@ export interface SpeedingEpisode {
 export interface SpeedingReading {
   /** The row's speed over the posted limit it is judged on (1 = at the limit). */
   ratio: number;
-  /** mph past the speeding line (L + T): over the line when above 0. */
+  /** mph past the speeding line (`speedingLine`, A = 1.16 L − 0.8): over the line when above 0. */
   overMph: number;
 }
 

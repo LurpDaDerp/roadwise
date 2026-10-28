@@ -26,7 +26,7 @@ export const PHONE_PICKUP_MIN_ROWS = 3;
 export const PHONE_PUTDOWN_QUIET_S = 10;
 /** A pickup in hand up to this many seconds is moderate; longer is severe. */
 export const PHONE_SEVERE_S = 15;
-/** A speeding episode ends after this long back under L + T − `SPEEDING_END_BUFFER_MPH`. */
+/** A speeding episode ends after this long back under the speeding line less `SPEEDING_END_BUFFER_MPH`. */
 export const SPEEDING_END_S = 5;
 export const SPEEDING_END_BUFFER_MPH = 2;
 /**

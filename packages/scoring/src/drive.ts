@@ -3,11 +3,11 @@
 // Rating are in rating.ts.
 //
 // Pure and deterministic: no clock, no randomness, no imports outside this package.
-import { clamp, roundTo } from './num';
+import { roundTo } from './num';
 import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_MPH, MIN_SCORED_MILES, MIN_SCORED_S, PHONE_SEVERE_S } from './thresholds';
 
 /** Bumped whenever the rules a drive is judged by change; stored with every drive. */
-export const SCORING_VERSION = 9;
+export const SCORING_VERSION = 10;
 
 export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'phone_pickup' | 'eyes_off' | 'drowsy';
 
@@ -24,8 +24,6 @@ export const isDashcamType = (type: EventType): type is DashcamEventType =>
 
 /** Colour: minor = yellow, moderate = orange, severe = red. */
 export type Tier = 'minor' | 'moderate' | 'severe';
-
-export type Zone = 'school' | 'construction';
 
 /**
  * What the detector measured. Every value is re-checked when read: a missing, non-numeric or
@@ -47,9 +45,9 @@ export type DriveEventMeasured = {
   /** harsh events: the peak force, g; the event's weight reads it against its type's threshold. */
   peakG?: number;
   /**
-   * speeding: the sum, over every over-the-line row, of (row speed − (L + T)) in mph, 1 dp. Absent
-   * on an event an older app recorded: its Speed weight then reads its tier's assumed mean over
-   * (`LEGACY_MEAN_OVER_MPH`).
+   * speeding: the sum, over every over-the-line row, of (row speed − the speeding line) in mph,
+   * 1 dp. Absent on an event an older app recorded: its Speed weight then reads its tier's assumed
+   * mean over (`LEGACY_MEAN_OVER_MPH`).
    */
   overMphS?: number;
   /** A DashPal event. */
@@ -73,8 +71,6 @@ export interface DriveEvent {
    * episode's length (the Attention weight reads it).
    */
   durationS: number;
-  /** A school or construction zone: the speeding line's tolerance is 2 mph there. */
-  zone?: Zone | null;
   /** removed = accepted dispute → counted nowhere. */
   status?: 'active' | 'removed';
   /** What the detector measured (`DriveEventMeasured`); the weights read it. */
@@ -126,20 +122,28 @@ export function keepDashcamEvents<E extends DashcamLimitEvent>(uploaded: readonl
   });
 }
 
+/** The speeding line is never closer than this to the posted limit (mph): it matters under about 11 mph. */
+export const SPEEDING_TOLERANCE_MIN_MPH = 1;
+
 /**
- * T(L): tolerance over the posted limit, mph: 0.175 × (L − 8) rounded, less 1, between 3 and 9
- * (25 → 3, 35 → 4, 45 → 5, 55 → 7, 65 → 9). Fixed at 2 in a school or construction zone. The
- * speeding line is L + T: speeding is judged, weighed and alerted from it.
+ * T(L): the tolerance over the posted limit, mph: 0.16 L − 0.8 (25 → 3.2, 35 → 4.8, 45 → 6.4,
+ * 55 → 8, 65 → 9.6), never under `SPEEDING_TOLERANCE_MIN_MPH`. Written (4L − 20) / 25.
  */
-export function speedTolerance(limitMph: number, zone?: Zone | null): number {
-  if (zone) return 2;
-  // 0.175 = 7/40; the integer form keeps exact halves (L = 28 → 3.5) exact.
-  return clamp(Math.round((7 * (limitMph - 8)) / 40) - 1, 3, 9);
+export function speedTolerance(limitMph: number): number {
+  return Math.max(SPEEDING_TOLERANCE_MIN_MPH, (4 * limitMph - 20) / 25);
 }
 
-/** Tier by how far the speed is beyond L + T: >0 minor, >4 moderate, >9 severe; null if not over. */
-export function speedTier(speedMph: number, limitMph: number, zone?: Zone | null): Tier | null {
-  const over = roundTo(speedMph - (limitMph + speedTolerance(limitMph, zone)), 6);
+/**
+ * The speeding line A(L) = L + T(L) = 1.16 L − 0.8 mph (at least L + 1): speeding is judged,
+ * weighed and alerted from it, and the halo's tint is half way to red there.
+ */
+export function speedingLine(limitMph: number): number {
+  return limitMph + speedTolerance(limitMph);
+}
+
+/** Tier by how far the speed is beyond the speeding line: >0 minor, >4 moderate, >9 severe; null if not over. */
+export function speedTier(speedMph: number, limitMph: number): Tier | null {
+  const over = roundTo(speedMph - speedingLine(limitMph), 6);
   if (over <= 0) return null;
   if (over > 9) return 'severe';
   if (over > 4) return 'moderate';

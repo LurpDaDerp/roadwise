@@ -64,6 +64,9 @@ export interface DriveNumbers {
 
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
+/** How far over a limit (mph) the speeding line sits, to the nearest mph: 3 at 25, 5 at 35, 10 at 65. */
+const overAt = (limitMph: number): number => Math.round(speedTolerance(limitMph));
+
 /** Each category as a sentence names it. */
 const AXIS_WORD: Record<AxisKey, string> = {
   acceleration: 'starts',
@@ -130,7 +133,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Speeding',
     icon: 'speedometer-outline',
     lines: [
-      `Speeding starts a few mph over the posted limit: ${speedTolerance(25)} over at 25 mph, ${speedTolerance(35)} at 35, ${speedTolerance(45)} at 45, ${speedTolerance(55)} at 55 and ${speedTolerance(65)} at 65 (${speedTolerance(25, 'school')} in a school or construction zone).`,
+      `Speeding starts a little over the posted limit, and a little further over on faster roads: about ${overAt(25)} mph over at 25 mph, ${overAt(35)} at 35, ${overAt(45)} at 45, ${overAt(55)} at 55 and ${overAt(65)} at 65.`,
       `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and more the further over you are.`,
       'Where the limit isn’t known, nothing counts as speeding.',
     ],

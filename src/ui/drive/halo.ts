@@ -4,8 +4,8 @@
 //
 // Severity is one number `s` in [0, 1], never rounded:
 // - Speeding: a tint from the speed shown over the limit the sign shows (`speedingTint`: 0 at the
-//   limit, 1 at 1.7 × it), from the first moment the speed passes the sign; it pulses only while the
-//   row is over the speeding line (L + T).
+//   limit, 0.5 at that limit's speeding line, rising ever faster to 1), from the first moment the
+//   speed passes the sign; it pulses only while the row is over the speeding line (`speedingLine`).
 // - DashPal: a critical 0.80 + 0.07 per level + 0.02 per second (≤ 1); a warning, driver-not-visible
 //   among them, 0.50 + 0.03 per second (≤ 0.80); a continuous advisory 0.30 + 0.01 per second (≤ 0.45,
 //   below a warning's start).
@@ -14,7 +14,7 @@
 // pulse means a warning, faster the higher `s`. Sudden events burst: a few quick pulses (2.5 a
 // second), then back. Each event shakes the ring sideways once, more for a more serious one.
 // Around the ring, outside everything that pulses, a compass turns with the car (`compassGeometry`).
-import type { EventType, Tier } from '@scoring';
+import { speedTolerance, type EventType, type Tier } from '@scoring';
 import { interpolateColor } from 'react-native-reanimated';
 
 import { HALO_BURST, HALO_MAX_SCALE, HALO_RAMP_STOPS, type HudPalette } from './hudTokens';
@@ -86,17 +86,25 @@ export function glowWeight(layer: number, s: number): number {
 
 // ——— speeding ———
 
-/** The tint is full red at this many times the posted limit (1.7 ×). */
-export const HALO_TINT_FULL_RATIO = 1.7;
+/** The tint at the speeding line: half way to red. */
+export const HALO_TINT_AT_LINE = 0.5;
+/** How fast the tint's rise steepens: each tolerance more past the limit multiplies its rise by 3. */
+export const HALO_TINT_BASE = 3;
+/** The tint is full red this many tolerances past the limit: log₃ 5 ≈ 1.465 (42 mph on a 35, 79 on a 65). */
+export const HALO_TINT_FULL_D = Math.log(1 + (HALO_TINT_BASE - 1) / HALO_TINT_AT_LINE) / Math.log(HALO_TINT_BASE);
 
 /**
- * The halo's speeding tint from the speed shown over the limit the sign shows (`speedingRatio`): 0
- * at or under the limit, rising straight to 1 at 1.7 × it, so just over the limit is all but the
- * calm colour and it grows with every mph over. 0 with no ratio (the sign shows "-").
+ * The halo's speeding tint from the speed shown over the limit the sign shows (`speedingRatio`) and
+ * that limit (mph): with d the speed's way from the limit (0) to its speeding line (1), the tint is
+ * 0.5 × (3^d − 1) / 2: 0 at or under the limit, all but calm just over it, 0.5 at the line and
+ * rising ever faster to full red at d = log₃ 5, held there. 0 with no ratio or limit (the sign
+ * shows "-").
  */
-export function speedingTint(ratio: number | null): number {
-  if (ratio === null || !Number.isFinite(ratio)) return 0;
-  return Math.min(1, Math.max(0, (ratio - 1) / (HALO_TINT_FULL_RATIO - 1)));
+export function speedingTint(ratio: number | null, limitMph: number | null): number {
+  if (ratio === null || limitMph === null || !Number.isFinite(ratio) || !(limitMph > 0) || !Number.isFinite(limitMph)) return 0;
+  const d = ((ratio - 1) * limitMph) / speedTolerance(limitMph);
+  if (!(d > 0)) return 0;
+  return Math.min(1, (HALO_TINT_AT_LINE * (HALO_TINT_BASE ** d - 1)) / (HALO_TINT_BASE - 1));
 }
 
 // ——— distraction ———
@@ -164,7 +172,7 @@ export interface HaloInput {
   status: 'idle' | 'recording' | 'finalizing';
   /** the speeding tint (`speedingTint`), 0 = none */
   speeding: number;
-  /** the row is over the speeding line (L + T): the only time speeding pulses */
+  /** the row is over the speeding line (`speedingLine`): the only time speeding pulses */
   speedingOver: boolean;
   /** an event that just happened, or null */
   shake: HaloShake | null;

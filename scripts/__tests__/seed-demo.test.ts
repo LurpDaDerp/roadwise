@@ -166,7 +166,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
       expect(env.events.every((e) => e.status === 'active')).toBe(true);
       expect([env.scored, env.reason]).toEqual(d.trip.short ? [false, 'too_short'] : [true, null]);
       expect([env.scoringVersion, env.payload.origin, env.payload.notDrivingExpired]).toEqual([SCORING_VERSION, 'manual', false]);
-      expect(SCORING_VERSION).toBe(9);
+      expect(SCORING_VERSION).toBe(10);
       expect(env.payload.exposure).toEqual(d.payload.exposure);
     }
   });

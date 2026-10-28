@@ -78,12 +78,12 @@ export interface DriveLive {
   limitMph: number | null;
   /**
    * The halo's speeding tint (`speedingTint` of the speed shown over the limit the sign shows): 0 at
-   * or under that limit and while the sign shows "-", 1 (full red) at 1.7 × it.
+   * or under that limit and while the sign shows "-", 0.5 at its speeding line, 1 (full red) past it.
    */
   speedingTint: number;
   /** The speed shown is over the limit the sign shows (the spoken speed says so). */
   overSign: boolean;
-  /** The current row is over the speeding line (L + T): the halo pulses. */
+  /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. */
   speedingOver: boolean;
   /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
@@ -114,7 +114,7 @@ export const selectLive = (s: DriveState) => ({
   clientTripId: s.clientTripId,
   rowSpeedMph: rowSpeedMphOf(s),
   limitMph: s.limitMph,
-  speedingTint: speedingTint(s.speedingRatio),
+  speedingTint: speedingTint(s.speedingRatio, s.limitMph),
   overSign: s.speedingRatio !== null && s.speedingRatio > 1,
   speedingOver: s.speedingOver,
   lastShake: s.lastShake,

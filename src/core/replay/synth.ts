@@ -87,7 +87,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** 20 s at 41 mph on a 35 (T = 4: minor above 39): one minor episode of 20 s. */
+  /** 20 s at 41 mph on a 35 (T = 4.8: minor above 39.8): one minor episode of 20 s. */
   'speeding-minor': () => ({
     name: 'speeding-minor',
     rows: drive(240, (i) => ({ speedMph: between(i, 60, 80) ? 41 : 34 })),
@@ -119,21 +119,21 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 3, durationMax: 3 }],
   }),
 
-  /** Hovering at 37 mph (between L+T−2 = 37 and L+T = 39) after 8 s over keeps the episode open: one incident. */
+  /** Hovering at 38 mph (between the line less 2, 37.8, and the line, 39.8) after 8 s over keeps the episode open: one incident. */
   'speeding-hover': () => ({
     name: 'speeding-hover',
-    rows: drive(240, (i) => ({ speedMph: between(i, 60, 68) ? 42 : between(i, 68, 90) ? 37 : between(i, 90, 98) ? 42 : 34 })),
+    rows: drive(240, (i) => ({ speedMph: between(i, 60, 68) ? 42 : between(i, 68, 90) ? 38 : between(i, 90, 98) ? 42 : 34 })),
     limits: [posted(35)],
     expected: [{ type: 'speeding', startsNear: at(60), tier: 'minor', durationMin: 15, durationMax: 17 }],
   }),
 
   /**
-   * Five scattered 1-s blips over L+T, hovering at 37 (in the 2-mph buffer) between them: one episode
-   * of five over rows, one minor event (the hover between them adds no seconds).
+   * Five scattered 1-s blips over the speeding line, hovering at 38 (in the 2-mph buffer) between
+   * them: one episode of five over rows, one minor event (the hover between them adds no seconds).
    */
   'speeding-blip-hover': () => ({
     name: 'speeding-blip-hover',
-    rows: drive(200, (i) => ({ speedMph: between(i, 60, 100) && i % 8 === 0 ? 41 : between(i, 60, 100) ? 37 : 34 })),
+    rows: drive(200, (i) => ({ speedMph: between(i, 60, 100) && i % 8 === 0 ? 41 : between(i, 60, 100) ? 38 : 34 })),
     limits: [posted(35)],
     expected: [{ type: 'speeding', startsNear: at(64), tier: 'minor', durationMin: 5, durationMax: 5 }],
   }),

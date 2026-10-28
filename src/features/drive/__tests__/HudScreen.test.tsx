@@ -162,7 +162,9 @@ let lastShown: { speedMph: number | null; speedAccelMph: number; speedAt: number
 function split(over: LiveOver, base: typeof lastShown): { live: Partial<DriveLive>; shown: typeof lastShown } {
   const { speedMph, speedAccelMph, speedAt, speedingRatio, ...given } = over;
   const rest: Partial<DriveLive> =
-    speedingRatio === undefined ? given : { speedingTint: speedingTint(speedingRatio), overSign: speedingRatio !== null && speedingRatio > 1, ...given };
+    speedingRatio === undefined
+      ? given
+      : { speedingTint: speedingTint(speedingRatio, given.limitMph === undefined ? 35 : given.limitMph), overSign: speedingRatio !== null && speedingRatio > 1, ...given };
   const shown = {
     speedMph: speedMph === undefined ? base.speedMph : speedMph,
     speedAccelMph: speedAccelMph ?? (speedMph === undefined ? base.speedAccelMph : 0),
@@ -363,8 +365,11 @@ describe('speed and limit', () => {
 });
 
 describe('the halo while speeding', () => {
-  // limit 35: the speeding line at 39 (T 4); the tint full red at 1.7 x 35 = 59.5; one row per second
-  const at = (mph: number, line = 39, limit = 35) => ({ speedMph: mph, speedingRatio: mph / limit, speedingOver: mph > line });
+  // limit 35: the speeding line at 39.8 (T 4.8), the tint half way to red there and full red at
+  // 35 + 4.8 × log3 5 = 42.03; one row per second
+  const at = (mph: number, line = 39.8, limit = 35) => ({ speedMph: mph, speedingRatio: mph / limit, speedingOver: mph > line });
+  /** The tint at `mph` on a 35: 0.5 × (3^d − 1) / 2, d = (mph − 35) / 4.8, at most 1. */
+  const tint35 = (mph: number) => Math.min(1, 0.25 * (3 ** ((mph - 35) / 4.8) - 1));
 
   test('within the limit: calm, flowing, the speed white', async () => {
     await renderHud({ rowTs: T });
@@ -378,15 +383,15 @@ describe('the halo while speeding', () => {
   test('past the limit, under the speeding line: a faint tint from the limit, still flowing, no pulse; spoken "over the limit"', async () => {
     await renderHud({ rowTs: T, ...at(37) });
     expect(halo()).toMatchObject({ mode: 'speeding', flow: true, pulsePeriodMs: 0, warning: false });
-    expect(halo().colorSeverity).toBeCloseTo((37 / 35 - 1) / 0.7, 9);
+    expect(halo().colorSeverity).toBeCloseTo(tint35(37), 9);
     expect(screen.getByLabelText(/over the limit/)).toBeTruthy();
   });
 
   test.each([
-    [40, (40 / 35 - 1) / 0.7],
-    [45, (45 / 35 - 1) / 0.7],
-    [52, (52 / 35 - 1) / 0.7],
-    [70, 1],
+    [40, tint35(40)],
+    [41, tint35(41)],
+    [42, tint35(42)],
+    [52, 1],
   ])('over the speeding line at %s mph: tinted %s from the limit, pulsing, no flow', async (mph, s) => {
     await renderHud({ rowTs: T, ...at(mph) });
     expect(halo().mode).toBe('speeding');
@@ -400,7 +405,7 @@ describe('the halo while speeding', () => {
     expect(halo().pulsePeriodMs).toBeGreaterThan(0);
     await h.update({ rowTs: T + 1000, ...at(38) });
     expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: true });
-    expect(halo().colorSeverity).toBeCloseTo((38 / 35 - 1) / 0.7, 9);
+    expect(halo().colorSeverity).toBeCloseTo(tint35(38), 9);
     await h.update({ rowTs: T + 2000, ...at(34) });
     expect(halo().mode).toBe('calm');
     expect(screen.queryByLabelText(/over the limit/)).toBeNull();
@@ -411,16 +416,17 @@ describe('the halo while speeding', () => {
     expect(halo().mode).toBe('calm');
   });
 
-  test('hovering at the line (39.1 / 38.9): the pulse comes and goes with the row, the colour barely moves; the scrim dims under a tint alone', async () => {
+  test('hovering at the line (39.9 / 39.7): the pulse comes and goes with the row, the colour barely moves; the scrim dims under a tint alone', async () => {
     const h = await renderHud({ rowTs: T - 1000, ...at(30) });
     const tints: number[] = [];
     for (let i = 0; i < 12; i += 1) {
-      await h.update({ rowTs: T + i * 1000, ...at(i % 2 === 0 ? 39.1 : 38.9) });
+      await h.update({ rowTs: T + i * 1000, ...at(i % 2 === 0 ? 39.9 : 39.7) });
       tints.push(halo().colorSeverity);
       expect(halo().pulsePeriodMs > 0).toBe(i % 2 === 0);
       expect(halo().warning).toBe(i % 2 === 0);
     }
-    expect(Math.max(...tints) - Math.min(...tints)).toBeLessThan(0.01);
+    // At the line the tint rises about 0.17 a mph: 0.2 mph either side of it moves it about 0.03.
+    expect(Math.max(...tints) - Math.min(...tints)).toBeLessThan(0.05);
     await h.update({ rowTs: T + 20_000, ...at(37) });
     await act(() => jest.advanceTimersByTime(DIM_AFTER_MS));
     expect(screen.getByTestId('hud-dim')).toBeTruthy();
@@ -1539,9 +1545,10 @@ describe('layout, accessibility and Reduce Motion', () => {
 
   test('Reduce Motion: no pulse, no flow, colours unchanged, a burst as colour only', async () => {
     mockStill = true;
-    const h = await renderHud({ rowTs: T, speedMph: 52, speedingRatio: 52 / 35, speedingOver: true });
+    const h = await renderHud({ rowTs: T, speedMph: 41, speedingRatio: 41 / 35, speedingOver: true });
     expect(halo()).toMatchObject({ mode: 'speeding', pulsePeriodMs: 0, flow: false });
-    expect(halo().colorSeverity).toBeCloseTo((52 / 35 - 1) / 0.7, 9);
+    // On a 35, 41 is 6 mph over: d = 6 / 4.8, the tint 0.5 × (3^d − 1) / 2.
+    expect(halo().colorSeverity).toBeCloseTo(0.25 * (3 ** (6 / 4.8) - 1), 9);
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
     expect(halo()).toMatchObject({ mode: 'burst', colorSeverity: 1, burst: null });
     expect(screen.queryByTestId('hud-halo-flow', HIDDEN)).toBeNull();

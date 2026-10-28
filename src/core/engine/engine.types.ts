@@ -256,7 +256,7 @@ export interface EngineSnapshot {
    * the Live Activity's speed colour tint from it; speeding itself is judged by the detector.
    */
   speedingRatio: number | null;
-  /** The current row is over the speeding line (L + T): the halo pulses. False when not recording. */
+  /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. False when not recording. */
   speedingOver: boolean;
   /**
    * The last GPS course, degrees clockwise from true north, from a valid fix with a known course

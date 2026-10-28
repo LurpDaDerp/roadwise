@@ -21,7 +21,7 @@ const LNG0 = -122.3321;
 const M_PER_DEG = 111_320;
 const mLng = (m: number): number => m / (M_PER_DEG * Math.cos((LAT * Math.PI) / 180));
 
-/** 20 rows east along the corridor at 20 m/s (44.7 mph), past a 35 mph limit's line (39). */
+/** 20 rows east along the corridor at 20 m/s (44.7 mph), past a 35 mph limit's line (39.8). */
 const ROWS = Array.from({ length: 20 }, (_, i) => row({ lat: LAT, lng: LNG0 + mLng(20 * i), speed: 20, course: 90, ts: T0 + i * 1000 }, i));
 
 /** The corridor: one east-west road, 35 mph. */

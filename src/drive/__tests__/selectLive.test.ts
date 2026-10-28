@@ -41,6 +41,9 @@ describe('selectLive: the driving screen re-renders only for what it draws', () 
     expect(b.speedingTint).toBeGreaterThan(a.speedingTint);
     expect(a.overSign).toBe(true);
     expect(selectLive(state({ speedingRatio: 30 / 35 }))).toMatchObject({ speedingTint: 0, overSign: false });
+    // Half way to red at the speeding line of the limit the sign shows (39.8 on a 35, 28.2 on a 25).
+    expect(selectLive(state({ speedingRatio: 39.8 / 35 })).speedingTint).toBeCloseTo(0.5, 9);
+    expect(selectLive(state({ limitMph: 25, speedingRatio: 28.2 / 25 })).speedingTint).toBeCloseTo(0.5, 9);
   });
 
   test("the wait built afresh on every publish, and the Live Activity's weather line, are no new slice", () => {

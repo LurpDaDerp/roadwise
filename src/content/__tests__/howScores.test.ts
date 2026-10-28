@@ -57,6 +57,11 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
     `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
   );
   expect(section(false, 'drive-score')[4]).toBe(`A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`);
+  // The speeding line, 1.16 L − 0.8 mph, to the nearest mph; no zones.
+  expect(section(true, 'speeding')[0]).toBe(
+    'Speeding starts a little over the posted limit, and a little further over on faster roads: about 3 mph over at 25 mph, 5 at 35, 6 at 45, 8 at 55 and 10 at 65.'
+  );
+  expect(all(true).join(' ')).not.toMatch(/school|construction|zone/);
   expect(section(true, 'speeding')[1]).toBe('You hear a chime and see “Slow down” when you cross that line. Every second over it counts, and more the further over you are.');
   // Every event counts, weighed by how serious it was and against the whole drive.
   expect(section(true, 'drive-score')[3]).toBe(

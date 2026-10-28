@@ -397,7 +397,7 @@ describe('a drive', () => {
     expect(h.host.snapshot()).toMatchObject({ status: 'recording', lockedOut: true, origin: 'manual', speedingTier: 'severe' });
     const update = h.display.states.at(-1)!;
     expect(update).toMatchObject({ unit: 'mph', points: null, pointsDelta: null, speeding: true, notDrivingAvailable: true, weatherKind: null, weatherText: null });
-    expect(update.speedTint).toBe(speedTintOf(h.host.snapshot().speedingRatio, false));
+    expect(update.speedTint).toBe(speedTintOf(h.host.snapshot().speedingRatio, h.host.snapshot().limitMph, false));
     expect(update.speedTint).toMatch(/^#[0-9A-F]{6}$/);
     // the halo's speed goes along, for the Live Activity to carry as the halo does
     const snap = h.host.snapshot();

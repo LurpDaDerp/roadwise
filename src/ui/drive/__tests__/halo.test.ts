@@ -21,7 +21,9 @@ import {
   glowStops,
   glowWeight,
   HALO_CALM,
-  HALO_TINT_FULL_RATIO,
+  HALO_TINT_AT_LINE,
+  HALO_TINT_BASE,
+  HALO_TINT_FULL_D,
   haloGeometry,
   haloNumeralPt,
   haloVisual,
@@ -46,35 +48,61 @@ const palettes: [string, HudPalette][] = [
 ];
 const samples = Array.from({ length: 101 }, (_, i) => i / 100);
 
-describe('the speeding tint, from the posted limit', () => {
-  test('0 at or under the limit, rising straight to full red at 1.7 × it; just over is all but calm', () => {
-    expect(HALO_TINT_FULL_RATIO).toBe(1.7);
-    expect(speedingTint(0.8)).toBe(0);
-    expect(speedingTint(1)).toBe(0);
-    expect(speedingTint(1.035)).toBeCloseTo(0.05, 9);
-    expect(speedingTint(1.21)).toBeCloseTo(0.3, 9);
-    expect(speedingTint(1.385)).toBeCloseTo(0.55, 9);
-    expect(speedingTint(1.7)).toBe(1);
-    expect(speedingTint(2.5)).toBe(1);
+describe('the speeding tint, from the posted limit to its speeding line and past it', () => {
+  /** The ratio of a speed to a limit, as the engine publishes it. */
+  const at = (mph: number, limit: number) => speedingTint(mph / limit, limit);
+
+  test('0 at or under the limit; 0.5 × (3^d − 1) / 2 past it, d the way from the limit (0) to the line (1)', () => {
+    expect([HALO_TINT_AT_LINE, HALO_TINT_BASE]).toEqual([0.5, 3]);
+    expect(HALO_TINT_FULL_D).toBeCloseTo(Math.log(5) / Math.log(3), 12);
+    expect(at(28, 35)).toBe(0);
+    expect(at(35, 35)).toBe(0);
+    // On a 35 the line is 39.8 (T 4.8).
+    expect(at(35 + 4.8 * 0.5, 35)).toBeCloseTo(0.25 * (Math.sqrt(3) - 1), 9);
+    expect(at(39.8, 35)).toBeCloseTo(0.5, 9);
+    expect(at(35 + 4.8 * HALO_TINT_FULL_D, 35)).toBeCloseTo(1, 9);
+    expect(at(50, 35)).toBe(1);
   });
 
-  test('no ratio (no usable limit or speed) is no tint', () => {
-    expect(speedingTint(null)).toBe(0);
-    expect(speedingTint(Number.NaN)).toBe(0);
-    expect(speedingTint(Number.POSITIVE_INFINITY)).toBe(0);
+  test('half way to red at the speeding line of every limit, and full red log3 5 tolerances past the limit', () => {
+    for (const [limit, line] of [
+      [10, 11],
+      [25, 28.2],
+      [35, 39.8],
+      [45, 51.4],
+      [55, 63],
+      [65, 74.6],
+      [85, 97.8],
+    ] as const) {
+      expect(at(line, limit)).toBeCloseTo(0.5, 9);
+      expect(at(limit + HALO_TINT_FULL_D * (line - limit) + 0.01, limit)).toBe(1);
+    }
   });
 
-  test.each([
-    [25, 3],
-    [35, 4],
-    [45, 5],
-    [65, 9],
-  ])('on a %i (T %i): 1 mph over is all but calm (ΔE_OK under 5); the points line is under a fifth of the way to red', (limit, t) => {
-    const near = speedingTint((limit + 1) / limit);
-    expect(deltaEOk(rampColor(ringRamp(HUD.day), near), HUD.day.haloCalm)).toBeLessThan(5);
-    const line = speedingTint((limit + t) / limit);
-    expect(line).toBeGreaterThan(0);
-    expect(line).toBeLessThan(0.2);
+  test('convex: every step over the limit adds more tint than the one before, up to full red', () => {
+    let last = 0;
+    let rise = 0;
+    for (let mph = 35.5; mph <= 42; mph += 0.5) {
+      const s = at(mph, 35);
+      expect(s - last).toBeGreaterThan(rise);
+      rise = s - last;
+      last = s;
+    }
+  });
+
+  test('no ratio or no limit (the sign shows "-") is no tint', () => {
+    expect(speedingTint(null, 35)).toBe(0);
+    expect(speedingTint(1.2, null)).toBe(0);
+    expect(speedingTint(Number.NaN, 35)).toBe(0);
+    expect(speedingTint(Number.POSITIVE_INFINITY, 35)).toBe(0);
+    expect(speedingTint(1.2, 0)).toBe(0);
+  });
+
+  test.each([25, 35, 45, 65])('on a %i: 1 mph over is only faintly tinted (ΔE_OK under 8, a tenth of the way to red at most)', (limit) => {
+    const near = at(limit + 1, limit);
+    expect(near).toBeGreaterThan(0);
+    expect(near).toBeLessThan(0.11);
+    expect(deltaEOk(rampColor(ringRamp(HUD.day), near), HUD.day.haloCalm)).toBeLessThan(8);
   });
 });
 

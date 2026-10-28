@@ -430,11 +430,13 @@ describe('the driving screen contract', () => {
     expect(ratioNow().ratio).toBe(ratioNow().shown);
     expect(ratioNow().ratio!).toBeGreaterThan(1);
     expect(h.engine.snapshot().speedingOver).toBe(true);
-    // A steady 35 on a 35: at the limit, not over the line (L + T = 39).
+    // A steady 35 on a 35: at the limit, not over the line (1.16 L − 0.8 = 39.8).
     await feed(h, after(5, { speed: mph(35) }));
     expect(h.engine.snapshot().speedingRatio).toBeCloseTo(1, 2);
     expect(h.engine.snapshot().speedingOver).toBe(false);
-    await feed(h, seq([1, { speed: mph(39.5), ts: T0 + 36_000 }]));
+    await feed(h, seq([1, { speed: mph(39.5), ts: T0 + 35_500 }]));
+    expect(h.engine.snapshot().speedingOver).toBe(false);
+    await feed(h, seq([1, { speed: mph(40.2), ts: T0 + 36_000 }]));
     expect(h.engine.snapshot().speedingOver).toBe(true);
     expect(ratioNow().ratio).toBe(ratioNow().shown);
     // An untrusted speed, or a fix the detector refuses (25 m) but the sign still shows: tinted, never judged.
@@ -524,9 +526,9 @@ describe('speeding alerts and the event shake', () => {
 
   test('the first over row alerts at once and shakes the halo once; the chime repeats while over', async () => {
     const h = await started();
-    await feed(h, over(20, 47));
+    await feed(h, over(20, 47.8));
     const speeding = h.alerts.filter((a) => a.type === 'speeding');
-    // 47 on a 35 is 8 past the line: repeats every 8 / 2.6 × 0.85^(elapsed / 10) s (about 3 s here).
+    // 47.8 on a 35 is 8 past the line (39.8): repeats every 8 / 2.6 × 0.85^(elapsed / 10) s (about 3 s here).
     expect(speeding.map((a) => [rowOf(a.at), a.repeat === true])).toEqual([
       [0, false],
       [3, true],
@@ -557,16 +559,16 @@ describe('speeding alerts and the event shake', () => {
 
   test('hovering at the line is one episode: no new alert, repeats only on rows over the line; 5 s under the buffer ends it', async () => {
     const h = await started();
-    // 2 over, 10 hovering at 37 (L + T − 2), 2 over: one alert; nothing sounds while under.
-    await feed(h, [...over(2, 41), ...over(10, 37, 2), ...over(2, 41, 12)]);
+    // 2 over, 10 hovering at 38 (above the line less 2, 37.8), 2 over: one alert; nothing sounds while under.
+    await feed(h, [...over(2, 41.8), ...over(10, 38, 2), ...over(2, 41.8, 12)]);
     const shown = () => h.alerts.filter((a) => a.type === 'speeding' && a.repeat !== true);
     expect(shown()).toHaveLength(1);
     const sounded = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
-    // 41 is 2 past the line: 8 / 1.4 s = 5.7 s; the row back over at 12 is due at once.
+    // 41.8 is 2 past the line: 8 / 1.4 s = 5.7 s; the row back over at 12 is due at once.
     expect(sounded).toEqual([0, 12]);
     expect(h.snapshots.at(-1)!.speedingOver).toBe(true);
-    // 5 rows under 37 end the episode; the next over row is a new alert.
-    await feed(h, [...over(5, 30, 14), ...over(1, 41, 19)]);
+    // 5 rows under 37.8 end the episode; the next over row is a new alert.
+    await feed(h, [...over(5, 30, 14), ...over(1, 41.8, 19)]);
     expect(shown()).toHaveLength(2);
   });
 
@@ -575,7 +577,7 @@ describe('speeding alerts and the event shake', () => {
     await feed(h, over(60, 70));
     const at = h.alerts.filter((a) => a.type === 'speeding').map((a) => rowOf(a.at));
     const gaps = at.slice(1).map((t, i) => t - at[i]!);
-    // 31 past the line: 8 / 7.2 s ≈ 1.1, held at the 2-s floor.
+    // 30.2 past the line: 8 / 7.04 s ≈ 1.1, held at the 2-s floor.
     expect(gaps.length).toBeGreaterThan(20);
     expect(gaps.every((g) => g === 2)).toBe(true);
   });

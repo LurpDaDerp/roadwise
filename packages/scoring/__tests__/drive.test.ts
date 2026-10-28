@@ -2,6 +2,7 @@ import {
   DASHCAM_EVENT_TYPES,
   SCORING_VERSION,
   SPEEDING_MAX_OVER_MPH,
+  SPEEDING_TOLERANCE_MIN_MPH,
   classifyDrive,
   dashcamDrive,
   isDashcamType,
@@ -10,6 +11,7 @@ import {
   speedTier,
   speedTolerance,
   speedingChargedS,
+  speedingLine,
   tooShort,
   type DriveEvent,
   type EventType,
@@ -23,51 +25,69 @@ const ev = (p: Partial<DriveEvent> & Pick<DriveEvent, 'type' | 'tier'>): DriveEv
   return { id: `e${seq}`, startedAt: 1_000_000 + seq * 1000, durationS: 0, ...p };
 };
 
-describe('speedTolerance — T(L) for every row of the spec table', () => {
+describe('speedTolerance and speedingLine — A(L) = 1.16 L − 0.8, at least L + 1', () => {
   test.each([
-    [25, 3],
-    [30, 3],
-    [35, 4],
-    [40, 5],
-    [45, 5],
-    [50, 6],
-    [55, 7],
-    [60, 8],
-    [65, 9],
-    [70, 9],
-  ])('L=%i → T=%i', (L, T) => expect(speedTolerance(L)).toBe(T));
+    [12, 1.12],
+    [15, 1.6],
+    [20, 2.4],
+    [25, 3.2],
+    [30, 4],
+    [35, 4.8],
+    [40, 5.6],
+    [45, 6.4],
+    [50, 7.2],
+    [55, 8],
+    [60, 8.8],
+    [65, 9.6],
+    [70, 10.4],
+    [75, 11.2],
+    [80, 12],
+    [85, 12.8],
+  ])('L=%i → T=%f', (L, T) => {
+    expect(speedTolerance(L)).toBeCloseTo(T, 9);
+    expect(speedingLine(L)).toBeCloseTo(1.16 * L - 0.8, 9);
+  });
 
-  test('low limits clamp up to 3 (L=20 without a zone: 2.1 → 2, less 1 → 1)', () => expect(speedTolerance(20)).toBe(3));
-  test('high limits clamp down to 9 (L=68: 10.5 → 11, less 1 → 10)', () => expect(speedTolerance(68)).toBe(9));
-  test('school and construction zones fix T at 2', () => {
-    expect(speedTolerance(20, 'school')).toBe(2);
-    expect(speedTolerance(65, 'construction')).toBe(2);
-    expect(speedTolerance(65, null)).toBe(9);
+  test('the line is never closer than 1 mph to the limit (under about 11 mph the formula gives less)', () => {
+    expect(SPEEDING_TOLERANCE_MIN_MPH).toBe(1);
+    expect(speedTolerance(5)).toBe(1);
+    expect(speedTolerance(10)).toBe(1);
+    expect(speedTolerance(11)).toBe(1);
+    expect(speedingLine(5)).toBe(6);
+    expect(speedingLine(10)).toBe(11);
+  });
+
+  test('above the floor the tolerance rises 0.16 mph for every mph of limit', () => {
+    for (let L = 12; L < 85; L += 1) expect(speedTolerance(L + 1) - speedTolerance(L)).toBeCloseTo(0.16, 9);
   });
 });
 
 describe('speedTier — tier boundaries for every row', () => {
-  // [limit, zone, minor above, moderate above, severe above]
+  // [limit, minor above, moderate above, severe above]: the line, the line + 4, the line + 9
   test.each([
-    [20, 'school', 22, 26, 31],
-    [25, null, 28, 32, 37],
-    [30, null, 33, 37, 42],
-    [35, null, 39, 43, 48],
-    [45, null, 50, 54, 59],
-    [55, null, 62, 66, 71],
-    [60, null, 68, 72, 77],
-    [65, null, 74, 78, 83],
-    [70, null, 79, 83, 88],
-  ] as const)('L=%i (%s): minor >%i, moderate >%i, severe >%i', (L, zone, minor, moderate, severe) => {
-    expect(speedTier(minor, L, zone)).toBeNull();
-    expect(speedTier(minor + 0.1, L, zone)).toBe('minor');
-    expect(speedTier(moderate, L, zone)).toBe('minor');
-    expect(speedTier(moderate + 0.1, L, zone)).toBe('moderate');
-    expect(speedTier(severe, L, zone)).toBe('moderate');
-    expect(speedTier(severe + 0.1, L, zone)).toBe('severe');
+    [10, 11, 15, 20],
+    [20, 22.4, 26.4, 31.4],
+    [25, 28.2, 32.2, 37.2],
+    [30, 34, 38, 43],
+    [35, 39.8, 43.8, 48.8],
+    [45, 51.4, 55.4, 60.4],
+    [55, 63, 67, 72],
+    [60, 68.8, 72.8, 77.8],
+    [65, 74.6, 78.6, 83.6],
+    [70, 80.4, 84.4, 89.4],
+  ] as const)('L=%i: minor >%f, moderate >%f, severe >%f', (L, minor, moderate, severe) => {
+    expect(speedTier(minor, L)).toBeNull();
+    expect(speedTier(minor + 0.1, L)).toBe('minor');
+    expect(speedTier(moderate, L)).toBe('minor');
+    expect(speedTier(moderate + 0.1, L)).toBe('moderate');
+    expect(speedTier(severe, L)).toBe('moderate');
+    expect(speedTier(severe + 0.1, L)).toBe('severe');
   });
 
-  test('under the limit is not speeding', () => expect(speedTier(10, 25)).toBeNull());
+  test('under the limit, and between the limit and the line, is not speeding', () => {
+    expect(speedTier(10, 25)).toBeNull();
+    expect(speedTier(28, 25)).toBeNull();
+  });
 });
 
 describe('speeding: charged seconds', () => {
@@ -199,9 +219,12 @@ describe('keepDashcamEvents passes a phone pickup untouched', () => {
   });
 });
 
-test('SCORING_VERSION is 9 and the barrel exports the API, and nothing about points', () => {
-  expect(SCORING_VERSION).toBe(9);
-  expect(barrel.SCORING_VERSION).toBe(9);
+test('SCORING_VERSION is 10 and the barrel exports the API, and nothing about points or zones', () => {
+  expect(SCORING_VERSION).toBe(10);
+  expect(barrel.SCORING_VERSION).toBe(10);
+  expect(barrel.speedingLine).toBe(speedingLine);
+  expect(speedTolerance.length).toBe(1);
+  expect(speedTier.length).toBe(2);
   expect(barrel.phonePickupTier).toBe(phonePickupTier);
   expect(barrel.classifyDrive).toBe(classifyDrive);
   expect(barrel.dashcamDrive).toBe(dashcamDrive);

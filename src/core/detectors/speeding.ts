@@ -1,15 +1,16 @@
 // Speeding episodes (product spec "Speeding"): a usable row (an actionable limit, a speed the phone
 // rates at 2 m/s or better, a good fix; from the drive's first row, with no warm-up) whose speed is
-// beyond the speeding line L + T(L) is an over row. The first over row opens an episode (the driving
-// screen alerts on it, "Slow down"); the episode ends after `SPEEDING_END_S` rows in a row back under
-// L + T − 2 mph or without a usable row (hovering in that 2-mph buffer neither extends nor ends it,
-// so hovering at the line is one episode, alerted once). Every episode is an event from its first
+// beyond the speeding line A(L) = 1.16 L − 0.8 mph (`speedingLine`, at least L + 1) is an over row.
+// The first over row opens an episode (the driving screen alerts on it, "Slow down"); the episode
+// ends after `SPEEDING_END_S` rows in a row back under A − 2 mph or without a usable row (hovering
+// in that 2-mph buffer neither extends nor ends it, so hovering at the line is one episode, alerted
+// once). Every episode is an event from its first
 // over row, however short: there is no grace, and every second over the line weighs on Speed.
 //
 // The event: `startedAt` the first over row, `durationS` every over row, the tier by its peak,
 // `measured.overMphS` the mph past the line summed over every over row (what the Speed weight
 // reads), and the peak speed with the limit there.
-import { speedTier, speedTolerance, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, type Tier } from '@scoring';
+import { speedingLine, speedTier, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode, SpeedingEpisode, SpeedingReading } from '../engine/types';
 import { gnssPoor, knownSpeedMph, limitMphFor, round1, speedTrusted } from './common';
@@ -22,9 +23,9 @@ interface Episode {
   startedAt: number;
   /** Over rows so far: the event's `durationS`. */
   overRows: number;
-  /** Σ (speed − (L + T)) over every over row, mph (unrounded). */
+  /** Σ (speed − A) over every over row, mph (unrounded). */
   overMphS: number;
-  /** Consecutive rows back under L + T − 2 (or without a usable row). */
+  /** Consecutive rows back under A − 2 (or without a usable row). */
   belowRows: number;
   peak: Tier;
   peakSpeedMph: number;
@@ -70,7 +71,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
       const speedMph = knownSpeedMph(row);
       // No warm-up: speeding is read off the GPS speed and the posted limit alone, from the first row.
       const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && !gnssPoor(row);
-      const line = usable ? limitMph + speedTolerance(limitMph) : null;
+      const line = usable ? speedingLine(limitMph) : null;
       now = usable && line !== null ? { ratio: speedMph / limitMph, overMph: speedMph - line } : null;
       const tier = usable ? speedTier(speedMph, limitMph) : null;
 
@@ -92,7 +93,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
 
       if (ep === null) return [];
       ep.current = null;
-      // Hovering between L + T − 2 and L + T neither extends the episode nor ends it; a row that is
+      // Hovering between A − 2 and A neither extends the episode nor ends it; a row that is
       // not usable cannot vouch for the speed, so it counts toward the end.
       const under = !usable || line === null || speedMph < line - SPEEDING_END_BUFFER_MPH;
       ep.belowRows = under ? ep.belowRows + 1 : 0;

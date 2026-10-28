@@ -785,7 +785,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       points: null,
       pointsDelta: null,
       stopped: s.stopped,
-      speedTint: speedTintOf(s.speedingRatio, night()),
+      speedTint: speedTintOf(s.speedingRatio, s.limitMph, night()),
       speeding: s.speedingTier !== null,
       notDrivingAvailable: notDrivingAvailable(),
       weatherKind: w?.kind ?? null,
