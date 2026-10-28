@@ -24,11 +24,18 @@ export interface DashcamStatus {
   fix: string | null;
   /** The chip's dot: ok (connected), warn (not connected, or a device that cannot prove it is the DashPal), bad (needs the driver). */
   dot: 'ok' | 'warn' | 'bad';
+  /** The camera needs re-aiming (STATUS bit 7, kept while the DashPal is off): a yellow dot in place of an ok or a warn one. */
+  reaim: boolean;
 }
 
 const s = dashpalCopy.screen;
 
 export function dashcamStatus(state: DashcamState | null): DashcamStatus {
+  const s = linkStatus(state);
+  return { ...s, reaim: s.kind !== 'unpaired' && state?.reaim === true };
+}
+
+function linkStatus(state: DashcamState | null): Omit<DashcamStatus, 'reaim'> {
   const link = state?.link;
   if (!link || !link.paired) return { kind: 'unpaired', label: dashpalCopy.settingsRow.subtitle.unpaired, fix: null, dot: 'warn' };
   switch (link.lifecycle) {

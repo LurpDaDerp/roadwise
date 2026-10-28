@@ -5,6 +5,7 @@ import type { PermissionsAdapter } from '@/core/permissions';
 import { dashpalCopy } from '@/dashcam/copy';
 import { COMMAND, SOUND } from '@/dashcam/protocol';
 import { AddPhoneSheet } from '@/dashcam/ui/AddPhoneSheet';
+import { ReaimSheet } from '@/dashcam/ui/ReaimSheet';
 import type { DashcamState } from '@/dashcam/runtime';
 import { dashcamStatus } from '@/dashcam/ui/status';
 import { useDashcamRuntime, useDashcamSelector } from '@/dashcam/ui/useDashcam';
@@ -31,6 +32,7 @@ function selectScreen(s: DashcamState | null) {
     phones: connected ? (s?.link.status?.bondCount ?? null) : null,
     newPhone: s?.newPhone ?? false,
     buzzerToo: s?.buzzerToo ?? false,
+    reaim: s?.reaim ?? false,
   };
 }
 
@@ -39,14 +41,22 @@ function selectScreen(s: DashcamState | null) {
  * DashPal" (the setup sheet, looking for a DashPal in pairing mode). Paired: the link's status and its fix (Set up again for a DashPal that no longer knows
  * this phone or a device that cannot prove it is the DashPal), how many phones are paired with the
  * dashcam (its STATUS count, while connected; from 2, how to remove one), the one-time notice of a
- * phone this phone did not add, "Also beep on DashPal", a test sound, recalibrate, "Add another
- * phone" (only while connected: opens the dashcam's pairing mode for one phone for 2 minutes, with
- * the time left) and "Forget DashPal".
+ * phone this phone did not add, "Also beep on DashPal", a test sound, Recalibrate (the camera view
+ * to re-aim DashPal by, `ReaimSheet`, marked "Camera needs adjusting" while DashPal says so; DashPal
+ * recalibrates when it closes), "Add another phone" (only while connected: opens the dashcam's pairing
+ * mode for one phone for 2 minutes, with the time left) and "Forget DashPal". `openAim` (Home's
+ * reminder, `aim=1`) opens the camera view at once.
  */
-export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAdapter; now?: () => number; setup?: SetupFlowDeps } }) {
+export function DashcamScreen({
+  deps = {},
+  openAim = false,
+}: {
+  deps?: { adapter?: PermissionsAdapter; now?: () => number; setup?: SetupFlowDeps };
+  openAim?: boolean;
+}) {
   const th = useTheme();
   const runtime = useDashcamRuntime();
-  const { status, paired, connected, phones, newPhone, buzzerToo } = useDashcamSelector(selectScreen);
+  const { status, paired, connected, phones, newPhone, buzzerToo, reaim } = useDashcamSelector(selectScreen);
   const now = deps.now ?? Date.now;
   const [notice, setNotice] = useState<{ tone: 'info' | 'warning'; message: string } | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
@@ -54,6 +64,14 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
   const [sheet, setSheet] = useState<{ at: number } | null>(null);
   /** the setup sheet: search mode (Set up DashPal) or the paired DashPal (Set up again) */
   const [setup, setSetup] = useState<SetupStart | null>(null);
+  /** the camera view (Recalibrate; Home's reminder) */
+  const [aim, setAim] = useState(openAim);
+  // reached again with aim=1 while the screen is open: the camera view opens (state adjusted while rendering)
+  const [seenOpenAim, setSeenOpenAim] = useState(openAim);
+  if (seenOpenAim !== openAim) {
+    setSeenOpenAim(openAim);
+    if (openAim) setAim(true);
+  }
 
   const command = async (op: number, arg: number) => {
     if (!runtime) return;
@@ -160,7 +178,15 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
           <Card>
             <View style={{ gap: th.space.sm }}>
               <Button label={copy.test} variant="secondary" disabled={working} onPress={() => void command(COMMAND.TEST_SOUND, SOUND.GLANCE)} testID="dashcam-test" />
-              <Button label={copy.recalibrate} variant="secondary" disabled={working} onPress={() => void command(COMMAND.RECALIBRATE, 0)} testID="dashcam-recalibrate" />
+              <Button label={copy.recalibrate} variant="secondary" disabled={working} onPress={() => setAim(true)} testID="dashcam-recalibrate" />
+              {reaim ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.xs }} testID="dashcam-reaim-needed">
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: th.colors.warning }} />
+                  <Text variant="footnote" tone="warning">
+                    {copy.reaim.needs}
+                  </Text>
+                </View>
+              ) : null}
               <Button label={copy.addPhone} variant="secondary" disabled={working || !connected} onPress={() => void addPhone()} testID="dashcam-add-phone" />
               {!connected ? (
                 <Text variant="footnote" tone="muted" testID="dashcam-add-phone-needs-link">
@@ -176,6 +202,7 @@ export function DashcamScreen({ deps = {} }: { deps?: { adapter?: PermissionsAda
 
       <PairWizardSheet start={setup} onClose={() => setSetup(null)} deps={{ adapter: deps.adapter, ...deps.setup }} />
       {paired ? <AddPhoneSheet openedAt={sheet?.at ?? null} onClose={() => setSheet(null)} now={now} /> : null}
+      {paired ? <ReaimSheet visible={aim} onClose={() => setAim(false)} /> : null}
 
       <Sheet visible={confirmForget} onClose={() => setConfirmForget(false)} title={copy.forgetConfirm.title} testID="dashcam-forget-sheet">
         <Text variant="body">{copy.forgetConfirm.body}</Text>

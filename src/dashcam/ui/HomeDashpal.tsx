@@ -17,6 +17,7 @@ import type { DashcamRuntime, DashcamState } from '../runtime';
 import type { SetupStart } from '../setup';
 import { NewPhoneCard } from './NewPhoneCard';
 import { PairCard } from './PairCard';
+import { ReaimCard } from './ReaimCard';
 import { isSetupOpen } from './setupOpen';
 import { useDashcamRuntime, useDashcamSelector } from './useDashcam';
 import { PairWizardSheet } from './wizard/PairWizardSheet';
@@ -33,7 +34,8 @@ export interface HomeDashpalDeps {
 }
 
 /**
- * Home's DashPal slot: the one-time new-phone card, and under it the card of a DashPal ready to pair
+ * Home's DashPal slot: the one-time new-phone card, the reminder that the paired DashPal's camera
+ * needs adjusting (`ReaimCard`: a tap opens Settings › DashPal with its camera view), and under them the card of a DashPal ready to pair
  * nearby (`../detector.ts`: looked for when Home comes into view, when RoadWise returns to the front
  * on Home, and on pull to refresh, `pull` counting the pulls), which opens the setup sheet on that
  * DashPal. The cards hide while a drive records; an open sheet stays (setup says it stopped).
@@ -44,6 +46,7 @@ export function HomeDashpal({ hidden = false, pull = 0, deps = {} }: { hidden?: 
   return (
     <>
       <NewPhoneCard hidden={hidden} />
+      <ReaimCard hidden={hidden} />
       {runtime && !hidden ? <PairOffer runtime={runtime} pull={pull} deps={deps} onOpen={setSetup} /> : null}
       {runtime ? <PairWizardSheet start={setup} onClose={() => setSetup(null)} deps={deps.setup} /> : null}
     </>

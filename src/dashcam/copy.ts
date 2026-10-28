@@ -2,6 +2,8 @@
 // dashcam actually do. The product name is DashPal; its Bluetooth name is `DashPal-XXXX`.
 import { t } from '@/i18n';
 
+import type { ViewReason } from './protocol';
+
 export const dashpalCopy = {
   name: 'DashPal',
 
@@ -60,6 +62,34 @@ export const dashpalCopy = {
     },
     notConnected: 'Connect to your DashPal first.',
     commandFailed: "That didn't reach your DashPal. Try again.",
+    /** The camera needs re-aiming (STATUS bit 7) and the re-aim sheet the Recalibrate row opens. */
+    reaim: {
+      needs: 'Camera needs adjusting',
+      title: 'Adjust DashPal’s camera',
+      good: 'Good position. Sit as you drive, look at the road, then tap Done.',
+      privacy: 'The picture is encrypted and goes only to this phone. It’s never saved. DashPal beeps twice and its light blinks dash-dot while it sends.',
+      recalibrates: 'When you tap Done, DashPal learns again where the road is.',
+      offline: 'Connect to DashPal first: turn the car on and keep RoadWise open.',
+      unsupported: 'This DashPal needs a firmware update to show its camera here. Tap Done to recalibrate it.',
+      refused: {
+        moving: 'Stop the car to adjust the camera.',
+        drive: 'Stop the car to adjust the camera.',
+        budget: 'Camera view time is used up. Press DashPal’s button 5 times for 10 more minutes.',
+        busy: 'Another phone or the USB viewer is using the camera view.',
+        camera: 'DashPal’s camera isn’t ready. Try again in a moment.',
+        memory: 'DashPal’s camera isn’t ready. Try again in a moment.',
+        no_state: 'The picture stopped. Try again.',
+        mtu: 'Your phone’s Bluetooth can’t show the picture.',
+        not_allowed: 'Another phone is setting up DashPal. Try again later.',
+        hold_ended: 'The picture stopped. Try again.',
+        ok: 'The picture stopped. Try again.',
+      } as Readonly<Record<ViewReason, string>>,
+      tryAgain: 'Try again',
+      done: 'Done',
+      homeTitle: 'Adjust DashPal’s camera',
+      homeBody: 'It can’t see you well. Tap to re-aim it.',
+      homeHint: 'Opens DashPal’s camera view',
+    },
   },
 
   setup: {

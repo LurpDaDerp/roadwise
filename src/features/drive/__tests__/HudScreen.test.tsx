@@ -1367,6 +1367,8 @@ describe('DashPal (plan §7.10)', () => {
   const { setActiveDashcam } = require('@/dashcam/registry') as typeof import('@/dashcam/registry');
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
   const { createFakeDashcamRuntime, PAIRED } = require('@/dashcam/__fixtures__/fakeRuntime') as typeof import('@/dashcam/__fixtures__/fakeRuntime');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+  const { dashpalCopy } = require('@/dashcam/copy') as typeof import('@/dashcam/copy');
 
   afterEach(async () => {
     await act(async () => setActiveDashcam(null));
@@ -1398,6 +1400,20 @@ describe('DashPal (plan §7.10)', () => {
     expect(screen.getByTestId('hud-dashpal-dot-warn', HIDDEN)).toHaveStyle({ backgroundColor: p.inkMuted });
     await act(async () => rt.set({ link: { lifecycle: 'needs_repair' } }));
     expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
+  });
+
+  test('the camera needs adjusting: a yellow dot in place of the green or the grey one, display only; red still wins', async () => {
+    const rt = createFakeDashcamRuntime({ link: { paired: PAIRED, lifecycle: 'connected' }, reaim: true });
+    await act(async () => setActiveDashcam(rt));
+    await renderHud();
+    expect(screen.getByTestId('hud-dashpal-dot-reaim', HIDDEN)).toHaveStyle({ backgroundColor: p.minor });
+    expect(screen.getByTestId('hud-dashpal-chip').props.accessibilityLabel).toContain(dashpalCopy.screen.reaim.needs);
+    await act(async () => rt.set({ link: { lifecycle: 'connecting' } }));
+    expect(screen.getByTestId('hud-dashpal-dot-reaim', HIDDEN)).toHaveStyle({ backgroundColor: p.minor });
+    await act(async () => rt.set({ link: { lifecycle: 'needs_repair' } }));
+    expect(screen.getByTestId('hud-dashpal-dot-bad')).toBeTruthy();
+    await act(async () => rt.set({ link: { lifecycle: 'connected' }, reaim: false }));
+    expect(screen.getByTestId('hud-dashpal-dot-ok')).toBeTruthy();
   });
 
   test('a compact window with "Not driving?" offered: the DashPal banner yields to the link; the halo still bursts', async () => {

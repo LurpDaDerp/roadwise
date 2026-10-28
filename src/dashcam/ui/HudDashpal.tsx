@@ -89,16 +89,18 @@ function DashpalBannerView({ visual, palette }: { visual: DashcamVisual; palette
 export const DashpalHudBanner = memo(DashpalBannerView);
 
 function DashpalChipView({ status, palette }: { status: DashcamStatus; palette: HudPalette }) {
-  // Not yet linked is a quiet grey, not the minor tier's yellow (that is speeding and events only).
-  const dot = status.dot === 'ok' ? palette.gain : status.dot === 'bad' ? palette.severe : palette.inkMuted;
+  // Not yet linked is a quiet grey. The camera needing re-aiming is the minor tier's yellow in place of
+  // the green or the grey dot (display only: it is adjusted from Home or Settings); red still wins.
+  const reaim = status.reaim && status.dot !== 'bad';
+  const dot = reaim ? palette.minor : status.dot === 'ok' ? palette.gain : status.dot === 'bad' ? palette.severe : palette.inkMuted;
   return (
     <View
       testID="hud-dashpal-chip"
       accessible
-      accessibilityLabel={`${dashpalCopy.chip}: ${status.label}`}
+      accessibilityLabel={`${dashpalCopy.chip}: ${status.label}${reaim ? ` · ${dashpalCopy.screen.reaim.needs}` : ''}`}
       style={[styles.chip, { backgroundColor: palette.chrome, borderColor: palette.chromeEdge }]}
     >
-      <View testID={`hud-dashpal-dot-${status.dot}`} style={[styles.dot, { backgroundColor: dot }]} />
+      <View testID={`hud-dashpal-dot-${reaim ? 'reaim' : status.dot}`} style={[styles.dot, { backgroundColor: dot }]} />
       <Text allowFontScaling={false} style={[styles.chipText, { color: palette.inkMuted }]}>
         {dashpalCopy.chip}
       </Text>

@@ -1,5 +1,6 @@
 // A DashPal runtime stand-in for screen tests: a state the test sets, and every action recorded.
 import type { LinkSnapshot } from '../link';
+import type { AimFrame, ViewStateFrame } from '../protocol';
 import type { PairedDashcam } from '../keys';
 import type { DashcamRuntime, DashcamState } from '../runtime';
 import type { DashcamTransport } from '../transport';
@@ -28,12 +29,17 @@ export interface FakeDashcamRuntime extends DashcamRuntime {
   transportValue: DashcamTransport | null;
   /** what addPhone resolves with */
   addPhoneResult: { openedAt: number } | null;
+  /** an AIM or VIEW_STATE frame on the paired link (the re-aim flow's `link.onViewFrames`) */
+  viewFrame(f: AimFrame | ViewStateFrame): void;
+  /** `transportValue` becomes a transport with the paired picture only; `record` feeds its listener */
+  withPairedView(): { subscribed(): boolean; record(r: number[]): void };
 }
 
 export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'link'>> & { link?: Partial<LinkSnapshot> } = {}): FakeDashcamRuntime {
   const listeners = new Set<(s: DashcamState) => void>();
   let state: DashcamState = { buzzerToo: false, btOptIn: false, loaded: true, newPhone: false, reaim: false, ...initial, link: linkSnapshot(initial.link) };
   const log: string[] = [];
+  const viewListeners = new Set<(f: AimFrame | ViewStateFrame) => void>();
   const rt: FakeDashcamRuntime = {
     log,
     commandResult: true,
@@ -50,7 +56,35 @@ export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'li
         listeners.delete(fn);
       };
     },
-    link: {} as DashcamRuntime['link'],
+    // the paired link as the re-aim flow uses it: a command logs as `command:op:arg`, like `command`
+    link: {
+      command: async (op: number, arg = 0) => {
+        log.push(`command:${op}:${arg}`);
+        return rt.commandResult;
+      },
+      onViewFrames: (fn: (f: AimFrame | ViewStateFrame) => void) => {
+        viewListeners.add(fn);
+        return () => void viewListeners.delete(fn);
+      },
+      snapshot: () => state.link,
+    } as unknown as DashcamRuntime['link'],
+    viewFrame(f) {
+      for (const fn of [...viewListeners]) fn(f);
+    },
+    withPairedView() {
+      let listener: ((r: number[]) => void) | null = null;
+      rt.transportValue = {
+        subscribePairedView: async (fn: (r: number[]) => void) => {
+          log.push('subscribePairedView');
+          listener = fn;
+        },
+        unsubscribePairedView: async () => {
+          log.push('unsubscribePairedView');
+          listener = null;
+        },
+      } as unknown as DashcamTransport;
+      return { subscribed: () => listener !== null, record: (r) => listener?.(r) };
+    },
     transport: () => rt.transportValue,
     row: () => {},
     adopt: async () => {},

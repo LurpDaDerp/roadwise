@@ -68,7 +68,16 @@ const away = (s: string | null | undefined): boolean => s === 'inactive' || s ==
  * newest one, loaded with no cache); RoadWise leaving the front covers the picture and drops it in
  * the same render, before the system takes its snapshot.
  */
-export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' | 'onAim'>; status: AimStatus }) {
+export function AimView({
+  flow,
+  status,
+  goodHint,
+}: {
+  flow: Pick<SetupFlow, 'onViewFrame' | 'onAim'>;
+  status: AimStatus;
+  /** the line for a good aim (hint 0) where the button is not Next (the re-aim sheet's Done) */
+  goodHint?: string;
+}) {
   const th = useTheme();
   const [layers, setLayers] = useState<Layers>(EMPTY);
   const [aim, setAim] = useState<AimFrame | null>(null);
@@ -100,11 +109,11 @@ export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' 
         setGood(now);
         if (now && !was) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         if (a) {
-          const said = announcer.current.next(aimLine(a), now && !was, at);
+          const said = announcer.current.next(goodHint !== undefined && a.hint === 0 ? goodHint : aimLine(a), now && !was, at);
           if (said) announce(said);
         }
       }),
-    [flow]
+    [flow, goodHint]
   );
 
   // No AIM for a second: no reading (a neutral frame, "Waiting for the picture…", no verdict).
@@ -142,7 +151,8 @@ export function AimView({ flow, status }: { flow: Pick<SetupFlow, 'onViewFrame' 
 
   const live = status === 'live' || status === 'stalled';
   const fresh = live ? aim : null;
-  const line = status === 'starting' ? copy.starting : status === 'stalled' ? copy.stalled : aimLine(fresh);
+  const line =
+    status === 'starting' ? copy.starting : status === 'stalled' ? copy.stalled : goodHint !== undefined && fresh?.hint === 0 ? goodHint : aimLine(fresh);
   const layer = (key: 'a' | 'b') => {
     const uri = layers[key];
     if (uri === null) return null;

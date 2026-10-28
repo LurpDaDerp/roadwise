@@ -13,7 +13,7 @@ const { join } = require('path') as { join(...p: string[]): string };
 const src = (...p: string[]) => readFileSync(join(__dirname, '..', ...p), 'utf8');
 
 /** The files the picture and its AIM frames pass through. */
-const PICTURE = ['view.ts', 'aim.ts', 'ui/wizard/AimView.tsx', 'ui/wizard/AimBorder.tsx', 'ui/wizard/StepAim.tsx'];
+const PICTURE = ['view.ts', 'aim.ts', 'reaim.ts', 'ui/wizard/AimView.tsx', 'ui/wizard/AimBorder.tsx', 'ui/wizard/StepAim.tsx', 'ui/ReaimSheet.tsx'];
 
 describe('the aiming picture stays in memory', () => {
   it.each(PICTURE)('%s imports no storage, file, secure store or app store module and logs nothing', (file) => {
@@ -32,6 +32,20 @@ describe('the aiming picture stays in memory', () => {
     // An image reaches nothing but the frame listeners.
     expect(text.match(/r\.image\.jpeg/g)).toHaveLength(1);
     expect(text).toMatch(/for \(const fn of \[\.\.\.frameListeners\]\) \{\s*try \{\s*fn\(r\.image\.jpeg\);/);
+  });
+
+  it('the re-aim flow hands the picture to the sheet’s listeners only, and never a record, an image or an AIM value to a report', () => {
+    const text = src('reaim.ts');
+    for (const call of text.match(/report\([^;]*\);/g) ?? []) expect(call).not.toMatch(/\brec\b|jpeg|image|\.score|\.hint|AimFrame|frame\b/i);
+    expect(text.match(/r\.image\.jpeg/g)).toHaveLength(1);
+    expect(text).toMatch(/for \(const fn of \[\.\.\.frameListeners\]\) \{\s*try \{\s*fn\(r\.image\.jpeg\);/);
+  });
+
+  it('the transport hands the paired link’s VIEW records to the re-aim listener and never to a report', () => {
+    const text = src('transport.ts');
+    const body = text.slice(text.indexOf('function onPairedView'), text.indexOf('/** iOS restored these'));
+    expect(body).toContain('listener(r.frame)');
+    expect(body).not.toMatch(/report\(/);
   });
 
   it('the transport hands VIEW records to the setup listener and never to a report', () => {

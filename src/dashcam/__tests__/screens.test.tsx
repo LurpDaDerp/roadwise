@@ -25,6 +25,13 @@ jest.mock('expo-haptics', () => ({
   notificationAsync: jest.fn(async () => {}),
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }));
+jest.mock('expo-screen-capture', () => ({ usePreventScreenCapture: jest.fn() }));
+// expo-image as a plain view (the re-aim sheet's picture)
+jest.mock('expo-image', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
+  const { View } = require('react-native') as typeof import('react-native');
+  return { Image: (p: Record<string, unknown>) => <View {...p} /> };
+});
 jest.mock('expo-camera', () => {
   const { View } = jest.requireActual<typeof import('react-native')>('react-native');
   return {
@@ -233,11 +240,48 @@ describe('Settings › DashPal', () => {
       fireEvent(await screen.findByTestId('dashcam-buzzer-too'), 'valueChange', true);
     });
     await tap('dashcam-test');
-    await tap('dashcam-recalibrate');
     await tap('dashcam-forget');
     await tap('dashcam-forget-confirm');
-    expect(rt.log).toEqual(['buzzerToo:true', 'command:6:1', 'command:2:0', 'forget']);
+    expect(rt.log).toEqual(['buzzerToo:true', 'command:6:1', 'forget']);
     expect(screen.queryByTestId('dashcam-notice')).toBeNull();
+  });
+
+  it('Recalibrate opens the camera view (the re-aim sheet): the picture is asked for; Done with no picture recalibrates and closes it', async () => {
+    const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, firmware: 'dms-core 3.6', status: { state: 3, flags: 0, fpsX10: 200, tempC: 40, bondCount: 1, at: 1 } } });
+    const view = rt.withPairedView();
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<DashcamScreen deps={{ adapter: fakeAdapter() }} />);
+    expect(screen.queryByTestId('dashcam-reaim-needed')).toBeNull();
+    await tap('dashcam-recalibrate');
+    expect(await screen.findByTestId('reaim-sheet')).toBeTruthy();
+    await waitFor(() => expect(rt.log).toEqual(['subscribePairedView', 'command:10:1']));
+    expect(view.subscribed()).toBe(true);
+    await act(async () => rt.viewFrame({ type: 'VIEW_STATE', on: 0, reason: 3, leftS: 600 }));
+    expect(await screen.findByTestId('reaim-refused')).toHaveTextContent(dashpalCopy.screen.reaim.refused.drive);
+    await tap('reaim-done');
+    await waitFor(() => expect(rt.log.at(-1)).toBe('command:2:0'));
+    await waitFor(() => expect(screen.queryByTestId('reaim-sheet')).toBeNull());
+  });
+
+  it('the camera needs adjusting: the Recalibrate row says so', async () => {
+    const rt = createFakeDashcamRuntime({ reaim: true, link: { lifecycle: 'idle', paired: PAIRED } });
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<DashcamScreen deps={{ adapter: fakeAdapter() }} />);
+    expect(await screen.findByTestId('dashcam-reaim-needed')).toHaveTextContent(dashpalCopy.screen.reaim.needs);
+  });
+
+  it('reached from the Home reminder (aim=1): the camera view opens by itself; not connected, it says so and Done sends nothing', async () => {
+    const rt = createFakeDashcamRuntime({ reaim: true, link: { lifecycle: 'idle', paired: PAIRED } });
+    setActiveDashcam(rt);
+    const w = await appWorld();
+    await w.render(<DashcamScreen openAim deps={{ adapter: fakeAdapter() }} />);
+    expect(await screen.findByTestId('reaim-sheet')).toBeTruthy();
+    expect(await screen.findByTestId('reaim-status')).toHaveTextContent(dashpalCopy.screen.reaim.offline);
+    await tap('reaim-done');
+    await waitFor(() => expect(screen.queryByTestId('reaim-sheet')).toBeNull());
+    expect(rt.log).toEqual([]);
   });
 
   it('Add another phone: a sheet with the 2:00 countdown and where to set it up on the other phone; no QR code and no code', async () => {
@@ -341,7 +385,7 @@ describe('Settings › DashPal', () => {
     expect(rt.log).toEqual([]);
     await act(async () => rt.set({ link: { lifecycle: 'connected' } }));
     rt.commandResult = false;
-    await tap('dashcam-recalibrate');
+    await tap('dashcam-test');
     expect(screen.getByTestId('dashcam-notice')).toHaveTextContent(dashpalCopy.screen.commandFailed, { exact: false });
   });
 });
@@ -371,6 +415,33 @@ describe('Home: the new-phone card', () => {
     const w = await appWorld();
     await w.render(<NewPhoneCard hidden={hidden} />);
     expect(screen.queryByTestId('home-dashpal-new-phone')).toBeNull();
+  });
+});
+
+describe('Home: the camera needs adjusting', () => {
+  it('a reminder while the paired DashPal says so; a tap opens Settings › DashPal with its camera view', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+    const { ReaimCard } = require('../ui/ReaimCard') as typeof import('../ui/ReaimCard');
+    mockRouter.push.mockClear();
+    setActiveDashcam(createFakeDashcamRuntime({ reaim: true, link: { lifecycle: 'idle', paired: PAIRED } }));
+    const w = await appWorld();
+    await w.render(<ReaimCard />);
+    expect(await screen.findByTestId('home-dashpal-reaim')).toHaveTextContent(dashpalCopy.screen.reaim.homeTitle, { exact: false });
+    await tap('home-dashpal-reaim');
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/settings/dashcam', params: { aim: '1' } });
+  });
+
+  it.each([
+    ['during a drive', { reaim: true, link: { lifecycle: 'connected' as const, paired: PAIRED } }, true],
+    ['with no DashPal paired', { reaim: true, link: { lifecycle: 'unpaired' as const, paired: null } }, false],
+    ['while the camera is fine', { reaim: false, link: { lifecycle: 'connected' as const, paired: PAIRED } }, false],
+  ])('nothing %s', async (_name, state, hidden) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+    const { ReaimCard } = require('../ui/ReaimCard') as typeof import('../ui/ReaimCard');
+    setActiveDashcam(createFakeDashcamRuntime(state));
+    const w = await appWorld();
+    await w.render(<ReaimCard hidden={hidden} />);
+    expect(screen.queryByTestId('home-dashpal-reaim')).toBeNull();
   });
 });
 
