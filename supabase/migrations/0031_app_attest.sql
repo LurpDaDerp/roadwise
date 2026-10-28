@@ -138,10 +138,11 @@ begin
     end if;
     return 'taken';
   end if;
-  perform private.stamp_ios(p_user);
   -- at most 10 keys a user: the least recently used go
   delete from private.app_attest_keys k where k.user_id = p_user and k.key_id in (
     select x.key_id from private.app_attest_keys x where x.user_id = p_user order by x.last_used_at desc, x.created_at desc, x.key_id offset 10);
+  -- key rows before the iPhone time, in the order an upload takes them (key, then stamp): no deadlock
+  perform private.stamp_ios(p_user);
   return 'saved';
 end $$;
 

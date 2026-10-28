@@ -1,6 +1,7 @@
 // Tests only: a real App Attest attestation and assertion an iPhone made (iOS 14.4, Apple's
-// development environment), from the test fixtures of veehaitch/devicecheck-appattest
-// (src/test/resources/ios-14.4.yaml, Apache-2.0): team 6MURL8TA57, bundle
+// development environment), from the test fixtures of https://github.com/veehaitch/devicecheck-appattest
+// (src/test/resources/ios-14.4.yaml), by veehaitch, licensed under the Apache License 2.0
+// (https://www.apache.org/licenses/LICENSE-2.0); listed in THIRD_PARTY_NOTICES.md. Team 6MURL8TA57, bundle
 // de.vincent-haupert.apple-appattest-poc, made 2021-01-23 around 12:13 UTC (the credential
 // certificate is valid 2021-01-22 12:13:35 to 2021-01-25 12:13:35). The attestation's client data is
 // "wurzelpfropf"; the assertion signs the same client data with counter 1.
