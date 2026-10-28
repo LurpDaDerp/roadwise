@@ -11,11 +11,16 @@ import { localCheck, normaliseUsername } from '@/features/onboarding/steps/Usern
 import { t } from '@/i18n';
 import { Button, Screen, Text, useTheme } from '@/ui';
 
+import { EmailCodeScreen, emailCodeCopy } from './EmailCodeScreen';
 import {
   claimChosenUsername,
+  keepChosenPassword,
   PASSWORD_MIN,
   registerWithPassword,
+  resendEmailCode,
   signInWithPassword,
+  verifyEmailCode,
+  type VerifyResult,
 } from './emailPassword';
 import { legalState } from './legal';
 import { LegalLinks } from './LegalLinks';
@@ -35,9 +40,22 @@ export const signInCopy = {
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
+ * An address waiting for the code from its confirmation mail. A sign-up holds the username and
+ * password chosen on the form (in memory only) until the code confirms the address.
+ */
+type PendingCode = {
+  email: string;
+  signUp: { username: string; password: string } | null;
+  codeSent: boolean;
+  error: string | null;
+};
+
+/**
  * The one sign-in screen: Sign in with Apple, Google, or an email and password, behind one
  * required checkbox. Nothing asks for an age or a birth date; the tick is the attestation, sent
- * after sign-in (`accept_terms`).
+ * after sign-in (`accept_terms`). An email account confirms its address on the code screen
+ * (`EmailCodeScreen`) before it is signed in: after Create account, and after a sign-in to an
+ * account whose address was never confirmed.
  */
 export function SignInScreen() {
   const th = useTheme();
@@ -60,6 +78,7 @@ export function SignInScreen() {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'apple' | 'google' | 'email' | null>(null);
+  const [pending, setPending] = useState<PendingCode | null>(null);
 
   // Every visit starts unticked, and a tick left from an earlier visit is dropped.
   useEffect(() => {
@@ -115,9 +134,28 @@ export function SignInScreen() {
       ? nameOk && passwordOk && confirm === password
       : password.length > 0;
 
+  // The name is claimed before the profile is read again, so setup finds it already taken and skips
+  // its own username step.
+  const claimUsername = async (name: string) => {
+    if (await claimChosenUsername(name)) await refreshProfile().catch(() => {});
+  };
+
   const submit = run('email', async () => {
     if (!creating) {
       const result = await signInWithPassword(email, password);
+      if (result === 'unconfirmed') {
+        // The right password on an address never confirmed: a fresh code, and the code screen. A
+        // send refused for coming too soon means one went out within the minute, still good.
+        const sent = await resendEmailCode(email);
+        const went = sent === 'sent' || sent === 'rate_limited';
+        setPending({
+          email: email.trim(),
+          signUp: null,
+          codeSent: went,
+          error: went ? null : sent === 'offline' ? emailCodeCopy.offline : emailCodeCopy.resendFailed,
+        });
+        return;
+      }
       if (result !== 'ok') {
         setError(
           result === 'invalid'
@@ -131,9 +169,11 @@ export function SignInScreen() {
     }
     const result = await registerWithPassword(email, password);
     if (result === 'ok') {
-      // The name is claimed before the profile is read again, so setup finds it already taken and
-      // skips its own username step.
-      if (await claimChosenUsername(username)) await refreshProfile().catch(() => {});
+      await claimUsername(username);
+      return;
+    }
+    if (result === 'confirm_email') {
+      setPending({ email: email.trim(), signUp: { username, password }, codeSent: true, error: null });
       return;
     }
     setError(
@@ -143,11 +183,35 @@ export function SignInScreen() {
           ? t('signIn.passwordWeak')
           : result === 'rate_limited'
             ? signInCopy.rateLimited
-            : result === 'confirm_email'
-              ? t('signIn.confirmEmail')
-              : t('signIn.errorGeneric')
+            : t('signIn.errorGeneric')
     );
   });
+
+  // The right code signs the driver in. After a sign-up, the password chosen on the form replaces
+  // any left by an earlier sign-up to this address that was never confirmed (`keepChosenPassword`),
+  // and the username chosen there is claimed.
+  const verifyCode = async (code: string): Promise<VerifyResult> => {
+    if (pending === null) return 'error';
+    const result = await verifyEmailCode(pending.email, code);
+    if (result !== 'ok' || pending.signUp === null) return result;
+    await claimUsername(pending.signUp.username);
+    await keepChosenPassword(pending.signUp.password);
+    return 'ok';
+  };
+
+  if (pending !== null) {
+    return (
+      <EmailCodeScreen
+        email={pending.email}
+        codeSent={pending.codeSent}
+        initialError={pending.error}
+        onVerify={verifyCode}
+        onResend={() => resendEmailCode(pending.email)}
+        onBack={() => setPending(null)}
+      />
+    );
+  }
+
   const switchMode = () => {
     setError(null);
     setMode(creating ? 'signIn' : 'create');

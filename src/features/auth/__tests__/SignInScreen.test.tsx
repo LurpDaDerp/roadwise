@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
@@ -16,8 +16,13 @@ const mockRegister = jest.fn(
     'ok' as 'ok' | 'confirm_email' | 'exists' | 'weak_password' | 'rate_limited' | 'error'
 );
 const mockSignInPassword = jest.fn(
-  async (_email: string, _password: string) => 'ok' as 'ok' | 'invalid' | 'rate_limited' | 'error'
+  async (_email: string, _password: string) => 'ok' as 'ok' | 'invalid' | 'unconfirmed' | 'rate_limited' | 'error'
 );
+const mockVerify = jest.fn(
+  async (_email: string, _code: string) => 'ok' as 'ok' | 'wrong_code' | 'rate_limited' | 'offline' | 'error'
+);
+const mockResend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'rate_limited' | 'offline' | 'error');
+const mockKeepPassword = jest.fn(async (_password: string) => {});
 const mockClaim = jest.fn(async (_username: string) => true);
 const mockRefreshProfile = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
@@ -41,6 +46,9 @@ jest.mock('@/features/auth/emailPassword', () => ({
   registerWithPassword: (email: string, password: string) => mockRegister(email, password),
   signInWithPassword: (email: string, password: string) => mockSignInPassword(email, password),
   claimChosenUsername: (username: string) => mockClaim(username),
+  verifyEmailCode: (email: string, code: string) => mockVerify(email, code),
+  resendEmailCode: (email: string) => mockResend(email),
+  keepChosenPassword: (password: string) => mockKeepPassword(password),
 }));
 jest.mock('@/data/supabase/session', () => ({
   useSession: () => ({ refreshProfile: mockRefreshProfile }),
@@ -82,6 +90,9 @@ beforeEach(() => {
   mockRegister.mockReset().mockResolvedValue('ok');
   mockSignInPassword.mockReset().mockResolvedValue('ok');
   mockClaim.mockReset().mockResolvedValue(true);
+  mockVerify.mockReset().mockResolvedValue('ok');
+  mockResend.mockReset().mockResolvedValue('sent');
+  mockKeepPassword.mockReset().mockResolvedValue(undefined);
   mockRefreshProfile.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
   executed.length = 0;
@@ -281,7 +292,6 @@ describe('creating an account with an email and password', () => {
     ['exists', 'That email already has an account. Sign in instead.'],
     ['weak_password', 'That password is too weak. Use at least 8 characters.'],
     ['rate_limited', 'Too many tries. Try again in a minute.'],
-    ['confirm_email', 'Check your email to confirm your account, then sign in.'],
     ['error', "Couldn't sign in. Try again."],
   ] as const)('a refused registration (%s) says so in place and claims nothing', async (result, words) => {
     mockRegister.mockResolvedValueOnce(result);
@@ -343,5 +353,129 @@ describe('signing in with an email and password', () => {
     expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
     expect(screen.getByLabelText('Password').props.value).toBe('');
     expect(screen.getByLabelText('Confirm password')).toBeTruthy();
+  });
+});
+
+describe('confirming the address with the mailed code', () => {
+  const REGISTER = { name: 'Create account' };
+  const SIGN_IN = { name: 'Sign in with email' };
+  const register = async () => {
+    mockRegister.mockResolvedValueOnce('confirm_email');
+    await mount();
+    await tick();
+    await fireEvent.changeText(screen.getByLabelText('Email'), ' Ava@Example.com ');
+    await fireEvent.changeText(screen.getByLabelText('Username'), 'ava_01');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse');
+    await fireEvent.changeText(screen.getByLabelText('Confirm password'), 'correct horse');
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    await screen.findByText('Check your email');
+  };
+  const typeCode = (code: string) => fireEvent.changeText(screen.getByLabelText('6-digit code'), code);
+
+  test('a sign-up goes to the code screen, naming the address, with nothing claimed yet', async () => {
+    await register();
+    expect(screen.getByText('We sent a 6-digit code to Ava@Example.com.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('6-digit code').props.textContentType).toBe('oneTimeCode');
+    expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+    expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockResend).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('the right code signs in, then the username from the form is claimed and the profile read again', async () => {
+    await register();
+    await typeCode('123456');
+    await waitFor(() => expect(mockKeepPassword).toHaveBeenCalledTimes(1));
+    expect(mockVerify).toHaveBeenCalledWith('Ava@Example.com', '123456');
+    expect(mockClaim).toHaveBeenCalledWith('ava_01');
+    expect(mockRefreshProfile).toHaveBeenCalledTimes(1);
+    // The password chosen on the form replaces any left by an earlier, never-confirmed sign-up.
+    expect(mockKeepPassword).toHaveBeenCalledWith('correct horse');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('a wrong code claims nothing and says so in place', async () => {
+    mockVerify.mockResolvedValueOnce('wrong_code');
+    await register();
+    await typeCode('000000');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That code is wrong or has expired. Check it, or send a new one.'
+    );
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockKeepPassword).not.toHaveBeenCalled();
+  });
+
+  test('Resend code sends a fresh code to the same address', async () => {
+    jest.useFakeTimers();
+    try {
+      await register();
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
+      expect(mockResend).toHaveBeenCalledWith('Ava@Example.com');
+      expect(await screen.findByText('We sent a new code.')).toBeOnTheScreen();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('"Use a different email" goes back to the form with everything typed there kept', async () => {
+    await register();
+    await fireEvent.press(screen.getByRole('button', { name: 'Use a different email' }));
+    expect(screen.getByLabelText('Email').props.value).toBe(' Ava@Example.com ');
+    expect(screen.getByLabelText('Username').props.value).toBe('ava_01');
+    expect(screen.getByLabelText('Password').props.value).toBe('correct horse');
+    expect(screen.getByLabelText('Confirm password').props.value).toBe('correct horse');
+    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getByRole('button', REGISTER)).toBeEnabled();
+  });
+
+  const signInUnconfirmed = async () => {
+    mockSignInPassword.mockResolvedValueOnce('unconfirmed');
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'correct horse');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+  };
+
+  test('signing in to an address never confirmed sends a fresh code and goes to the code screen', async () => {
+    await signInUnconfirmed();
+    expect(await screen.findByText('Check your email')).toBeOnTheScreen();
+    expect(mockResend).toHaveBeenCalledWith('ava@example.com');
+    expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await typeCode('123456');
+    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('ava@example.com', '123456'));
+    // Nothing was chosen on a form: no username to claim, no password to set.
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockKeepPassword).not.toHaveBeenCalled();
+  });
+
+  test('a code sent within the minute still counts: the code screen waits out the rest', async () => {
+    mockResend.mockResolvedValueOnce('rate_limited');
+    await signInUnconfirmed();
+    expect(await screen.findByText('Check your email')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('a fresh code that could not be sent shows why, with Resend code ready', async () => {
+    mockResend.mockResolvedValueOnce('offline');
+    await signInUnconfirmed();
+    expect(await screen.findByRole('alert')).toHaveTextContent("You're offline. Check your connection and try again.");
+    expect(screen.getByRole('button', { name: 'Resend code' })).toBeEnabled();
+  });
+
+  test('back from the code screen reached by sign-in is the sign-in form', async () => {
+    await signInUnconfirmed();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Use a different email' }));
+    expect(screen.getByRole('button', SIGN_IN)).toBeTruthy();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
   });
 });
