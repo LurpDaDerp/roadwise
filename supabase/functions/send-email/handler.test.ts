@@ -188,11 +188,61 @@ Deno.test('a payload that is not Auth’s shape, a code that is not digits or an
   }
 });
 
-Deno.test('only POST, and nothing over the size cap is read', async () => {
+Deno.test('only POST', async () => {
   const w = world();
   const got = await call(w, new Request('http://localhost/', { method: 'GET' }));
   assertEquals(got.status, 405);
+});
+
+Deno.test('a body over the cap with its length declared is refused (413) before it is read', async () => {
+  const w = world();
   const big = await signed('x'.repeat(MAX_BODY_BYTES + 1));
-  assertEquals((await call(w, big)).status, 401);
-  assertEquals(w.sent.length, 0);
+  assertEquals((await call(w, big)).status, 413);
+  assertEquals([w.taken.length, w.sent.length], [0, 0]);
+});
+
+Deno.test('a chunked body with no length is cut off at the cap: the stream is cancelled, never read to its end', async () => {
+  const chunk = new Uint8Array(16_384).fill(120);
+  let pulled = 0;
+  let cancelled = false;
+  // An endless stream: reading it whole would never finish.
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const req = new Request('http://localhost/functions/v1/send-email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'webhook-id': 'msg_x', 'webhook-timestamp': String(NOW), 'webhook-signature': 'v1,x' },
+    body: stream,
+  });
+  assertEquals(req.headers.get('content-length'), null);
+  const w = world();
+  assertEquals((await call(w, req)).status, 413);
+  assert(cancelled, 'the stream was cancelled');
+  // The cap (64 KB) is passed on the 5th 16 KB chunk; nothing much past it is pulled.
+  assert(pulled <= 6, `pulled ${pulled} chunks`);
+  assertEquals([w.taken.length, w.sent.length], [0, 0]);
+});
+
+Deno.test('a chunked body under the cap is read whole and checked as usual', async () => {
+  const signedReq = await signed(payload('signup'));
+  const text = await signedReq.text();
+  const bytes = new TextEncoder().encode(text);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, 10));
+      controller.enqueue(bytes.slice(10));
+      controller.close();
+    },
+  });
+  const headers = new Headers(signedReq.headers);
+  headers.delete('content-length');
+  const w = world();
+  assertEquals(await call(w, new Request(signedReq.url, { method: 'POST', headers, body: stream })), { status: 200, body: {} });
+  assertEquals(w.sent.length, 1);
 });

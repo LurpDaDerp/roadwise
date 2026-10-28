@@ -12,7 +12,7 @@
 //     Auth's public endpoints would otherwise mint guessable codes for any address.
 //
 // Order, cheapest refusal first: method; the hook secret set and well formed (else 500, logged);
-// the body (64 KB) and its signature (else 401); the payload's shape (else 400); the type; Resend
+// the body (64 KB, streamed, else 413) and its signature (else 401); the payload's shape (else 400); the type; Resend
 // set up (RESEND_API_KEY and RESEND_FROM, else 500, logged); the code is digits; the cap; the send
 // (a refusal or no answer is 502).
 //
@@ -63,11 +63,34 @@ async function sha256(text: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 }
 
-/** The body as text, or null when it is larger than `MAX_BODY_BYTES`. */
+/**
+ * The body as text, or null when it is larger than `MAX_BODY_BYTES`: refused on a declared length
+ * over the cap without reading, and cut off at the cap while streaming, so a chunked body with no
+ * length is never buffered past it (the function is public: the signature is checked after this).
+ */
 async function readBody(req: Request): Promise<string | null> {
   if (Number(req.headers.get('content-length')) > MAX_BODY_BYTES) return null;
-  const bytes = new Uint8Array(await req.arrayBuffer());
-  return bytes.byteLength > MAX_BODY_BYTES ? null : new TextDecoder().decode(bytes);
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(out);
 }
 
 export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<Response> {
@@ -82,7 +105,11 @@ export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<
       return refuse(500, 'Email is not set up.');
     }
     const body = await readBody(req);
-    if (body === null || !(await verifyHook(keys, req.headers, body, deps.nowS()))) {
+    if (body === null) {
+      log.warn('[send-email] refused: body over the size cap', { id });
+      return json(413, { error: { http_code: 413, message: 'Payload too large.' } });
+    }
+    if (!(await verifyHook(keys, req.headers, body, deps.nowS()))) {
       log.warn('[send-email] refused: signature', { id });
       return json(401, { error: { http_code: 401, message: 'Invalid signature.' } });
     }
