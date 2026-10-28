@@ -85,6 +85,8 @@ export interface AnalyticsData {
   trend: Trend;
   /** Every scored drive not yet archived, newest first (the Drives list, which pages them ten at a time). */
   drives: LocalDrive[];
+  /** Some scored drive is archived (past 183 days): an empty Drives list says "in the last 6 months". */
+  archivedDrives: boolean;
   /**
    * Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips): the
    * routes the drives hold, then the route pool's (the archived drives').
@@ -130,7 +132,12 @@ export function useAnalytics(range: Range): AnalyticsData {
   // list), the grid and the totals (every drive, archived ones included).
   const lifetime = useMemo(() => {
     const list = drives ?? [];
-    return { allTime: allTimeTotals(list), grid: driveGrid(list, null), drives: scoredSince(list, null).filter((d) => d.archived !== true) };
+    return {
+      allTime: allTimeTotals(list),
+      grid: driveGrid(list, null),
+      drives: scoredSince(list, null).filter((d) => d.archived !== true),
+      archivedDrives: list.some((d) => d.archived === true),
+    };
   }, [drives]);
   // The range's time over the limit reads its speeding events (the year and 90 days' read holds every range's).
   const rangeEventList = rangeEvents.data;

@@ -185,6 +185,9 @@ export const analyticsCopy = {
     /** The header for a screen reader, without the middle dot. */
     spoken: (n: number) => (n === 0 ? 'Drives, none yet' : `Drives, ${n}`),
     empty: 'No drives yet',
+    /** None listed, but older drives (past 183 days, archived) still count in the totals. */
+    spokenArchived: 'Drives, none in the last 6 months',
+    emptyArchived: 'No drives in the last 6 months',
     showMore: 'Show more',
     clean: 'Clean',
     noEvents: 'No events',

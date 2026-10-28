@@ -232,6 +232,7 @@ test('past the 183 days a drive leaves the drive list but every all-time number 
   const after = result.current;
   // The list (and its "Drives · n") holds only the drives with a recap.
   expect(after.drives.map((d) => d.clientTripId)).toEqual([uuid(1), uuid(2), uuid(3), uuid(4)]);
+  expect([before.archivedDrives, after.archivedDrives]).toEqual([false, true]);
   // Every all-time and Year number is the same.
   expect(after.allTime).toEqual({ ...before.allTime, longestClean: { value: 45, clientTripId: null } });
   expect(after.grid).toEqual(before.grid);

@@ -1247,4 +1247,14 @@ describe('DrivesCard', () => {
     await press(screen.getByTestId('analytics-drives-toggle'));
     expect(screen.queryByTestId('analytics-drives-list')).toBeNull();
   });
+
+  test('none in the list but older drives archived (past 183 days): “in the last 6 months”, not “yet”', async () => {
+    await draw(<DrivesCard drives={[]} onOpen={jest.fn()} archived />);
+    expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, none in the last 6 months');
+    expect(screen.getByText('Drives · 0')).toBeOnTheScreen();
+    expect(screen.getByTestId('analytics-drives-empty')).toHaveTextContent('No drives in the last 6 months');
+    // With drives listed the flag changes nothing.
+    await draw(<DrivesCard drives={drives(2)} onOpen={jest.fn()} archived />);
+    expect(screen.getByTestId('analytics-drives-toggle')).toHaveAccessibleName('Drives, 2');
+  });
 });

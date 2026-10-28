@@ -66,11 +66,12 @@ function Row({ drive, onPress }: { drive: LocalDrive; onPress: () => void }) {
 }
 
 /**
- * Every scored drive, all time, behind a "Drives · 12" header that opens and closes the list
- * (closed at first): ten rows, then "Show more" adds ten at a time, so only the rows asked for
- * are drawn however many drives there are.
+ * Every scored drive not past 183 days, behind a "Drives · 12" header that opens and closes the
+ * list (closed at first): ten rows, then "Show more" adds ten at a time, so only the rows asked for
+ * are drawn however many drives there are. With none listed but older (archived) drives counted
+ * elsewhere (`archived`), it says "No drives in the last 6 months" rather than "No drives yet".
  */
-export function DrivesCard({ drives, onOpen }: { drives: readonly LocalDrive[]; onOpen: (clientTripId: string) => void }) {
+export function DrivesCard({ drives, onOpen, archived = false }: { drives: readonly LocalDrive[]; onOpen: (clientTripId: string) => void; archived?: boolean }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(DRIVES_PAGE);
@@ -85,7 +86,7 @@ export function DrivesCard({ drives, onOpen }: { drives: readonly LocalDrive[]; 
         onPress={canOpen ? () => setOpen((o) => !o) : undefined}
         // With nothing to open it is only the card's heading, read as "Drives, none yet".
         accessibilityRole={canOpen ? 'button' : 'header'}
-        accessibilityLabel={c.spoken(count)}
+        accessibilityLabel={count === 0 && archived ? c.spokenArchived : c.spoken(count)}
         accessibilityState={canOpen ? { expanded: open } : undefined}
         style={({ pressed }) => ({
           flexDirection: 'row',
@@ -103,7 +104,7 @@ export function DrivesCard({ drives, onOpen }: { drives: readonly LocalDrive[]; 
           <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={t.size.icon} color={t.colors.textMuted} />
         ) : (
           <Text variant="subhead" tone="muted" testID="analytics-drives-empty">
-            {c.empty}
+            {archived ? c.emptyArchived : c.empty}
           </Text>
         )}
       </Pressable>

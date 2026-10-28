@@ -86,7 +86,7 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
           <TimeOfDayCard grid={data.grid} nightPct={data.allTime.nightPct} />
           <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} />
           <SpotsCard view={spots} onOpen={openSpot} />
-          <DrivesCard drives={data.drives} onOpen={onOpenDrive} />
+          <DrivesCard drives={data.drives} onOpen={onOpenDrive} archived={data.archivedDrives} />
           <CategorySheet
             axis={sheet.axis}
             visible={sheet.open}

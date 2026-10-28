@@ -46,7 +46,8 @@ export function analytics(list: readonly LocalDrive[], range: Range = 'week', ov
     grid: driveGrid(list, null),
     // No events: every Score point reads 100.
     trend: trend(list, [], range, NOW),
-    drives: scoredSince(list, null),
+    drives: scoredSince(list, null).filter((d) => d.archived !== true),
+    archivedDrives: list.some((d) => d.archived === true),
     routes,
     region: fitLines(routes),
     loading: false,
