@@ -311,12 +311,25 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     d.update(state({ speed: 35 }));
     expect(speeds(set)).toEqual([30, 32, 33, 35]);
     expect(clock.armed()).toEqual([]);
-    // the end drops a held change
+    // a change that comes and goes inside the second never goes out late
     now = 3200;
+    d.update(state({ speed: 35, speedTint: '#E0884F' }));
+    expect(clock.armed()).toEqual([800]);
+    now = 3500;
+    d.update(state({ speed: 35 }));
+    expect(clock.armed()).toEqual([]);
+    now = 4000;
+    clock.run();
+    expect(set).toHaveBeenCalledTimes(4);
+    // the end drops a held change
+    now = 4200;
     d.update(state({ speed: 36 }));
+    now = 4400;
+    d.update(state({ speed: 37 }));
+    expect(clock.armed()).toEqual([800]);
     d.end();
     expect(clock.armed()).toEqual([]);
-    expect(speeds(set)).toEqual([30, 32, 33, 35]);
+    expect(speeds(set)).toEqual([30, 32, 33, 35, 36]);
 
     // Android never holds: its change goes out with the first update past its 3 s
     const android = manual();

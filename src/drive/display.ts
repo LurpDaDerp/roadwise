@@ -216,11 +216,15 @@ export function createDriveDisplay(
   /**
    * iOS: `state` came inside the second. It is held (the newest wins) and sent when the second is
    * up, with the halo's number then, if it shows something new by then: a change now, or a number
-   * still being carried.
+   * still being carried. One that shows nothing new also drops what waited (a tint that came and
+   * went inside the second never goes out late).
    */
   function hold(state: DriveDisplayState, shown: DriveDisplayState, now: number): void {
     const due = lastAt + minInterval;
-    if (same(last, shown) && !stillCarrying(due)) return;
+    if (same(last, shown) && !stillCarrying(due)) {
+      dropHeld();
+      return;
+    }
     held = state;
     if (cancelHeld !== null) return;
     cancelHeld = later(
