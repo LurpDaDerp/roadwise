@@ -41,6 +41,26 @@ test('with nothing due it writes nothing and says nothing', async () => {
   off();
 });
 
+test('the archive frees what it clears with secure_delete on, inside its transaction, and puts the setting back', async () => {
+  const seen: string[] = [];
+  const spy = (on: Db): Db => ({
+    execute: (sql, params) => {
+      if (sql.startsWith('PRAGMA secure_delete')) seen.push(sql);
+      return on.execute(sql, params);
+    },
+    transaction: (fn) => on.transaction((tx) => fn(spy(tx))),
+  });
+  const before = (await db.execute('PRAGMA secure_delete')).rows[0];
+  expect(await archiveOldDrives(spy(db), NOW)).toBe(1);
+  expect(seen).toEqual(['PRAGMA secure_delete', 'PRAGMA secure_delete = ON', ...(before?.secure_delete === 0 ? ['PRAGMA secure_delete = OFF'] : [])]);
+  expect((await db.execute('PRAGMA secure_delete')).rows[0]).toEqual(before);
+});
+
+test('a recording row older than any drive (12 h, a stale one) does not hold archiving back', async () => {
+  await createTripsRepo(db).insert({ client_trip_id: 'stale', started_at: NOW - 13 * 3_600_000, tz: 'UTC', status: 'recording' }, NOW);
+  expect(await archiveOldDrives(db, NOW)).toBe(1);
+});
+
 test('a drive under way keeps the database: nothing is archived and the job says so (null)', async () => {
   await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: NOW - 60_000, tz: 'UTC', status: 'recording' }, NOW);
   expect(await archiveOldDrives(db, NOW)).toBeNull();

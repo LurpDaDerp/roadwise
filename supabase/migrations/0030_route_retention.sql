@@ -8,18 +8,24 @@
 --   * public.route_pool (id, user_id, polyline) and nothing else: no time, no trip id, no order (the
 --     id is random and every read orders by it). RLS on and no grant to any API role: it is read
 --     only through list_my_route_pool (the caller's own lines, for a restore on a new phone) and
---     export_account. Deleting the account deletes its lines (on delete cascade).
+--     export_account. Deleting the account deletes its lines (on delete cascade). Nor does the
+--     storage date a line: a run that adds lines for a driver writes that driver's whole pool again
+--     (same ids) in random order, so every one of their lines carries that run's transaction id and
+--     a shuffled place on disk, and none can be told apart as the new one or tied to a drive the
+--     run archived.
 --   * trips.archived_at: when the job archived the drive. An archived drive's polyline is '' and its
 --     events' lat and lng are null; only a kept, scored drive's route is pooled (what the phone's All
 --     trips map draws: not "Wasn't driving", not unscored, not merged away), any other is dropped.
 --   * private.route_retention() is the 183 days, in one place. private.archive_old_routes(p_batch)
---     archives one batch of the oldest due drives; private.archive_old_routes_daily() runs batches
---     until none is left (at most 40 of 500) and deletes the map_feedback rows past the 183 days, on
---     pg_cron at 04:10 UTC ('route-archive'). Both are idempotent: an archived drive is never picked
---     again, and a row another transaction holds waits for the next batch (skip locked).
+--     archives one batch of the oldest due drives; private.archive_old_routes_run() is one batch of
+--     1 000 and the map_feedback cleanup, on pg_cron every 10 minutes from 04:00 to 04:50 UTC
+--     ('route-archive'): each run is its own transaction (no lock held across batches), up to 6 000
+--     drives a day, and a backlog carries on the next day. Both are idempotent: an archived drive is
+--     never picked again, and a row another transaction holds waits for the next run (skip locked).
 --   * map_feedback (a wrong-limit report's place, logged with no user or trip) is written in the
 --     same transaction as the report's event_disputes row, so its created_at equals that row's and
---     would tie the place back to the driver's drive: it goes at 183 days like the event's own place.
+--     would tie the place back to the driver's drive. A report comes at most 7 days after its drive
+--     ended, so the place goes at 176 days (183 less 7): never later than the drive's own places.
 --   * list_my_drives says whether a drive is archived ('archived'), so a restore stores it as one.
 --   * export_account is format 5: route_pool holds the driver's pooled lines (in random order).
 --   * get_heatmap is unchanged: a friend's heat map is the last 90 days of routes.
@@ -60,10 +66,16 @@ grant select, insert, update, delete on public.route_pool to service_role;
 -- not archived yet. A kept, scored drive's non-empty route goes into the pool; every drive of the
 -- batch then has its route emptied, its events' places deleted and archived_at stamped. Returns how
 -- many drives it archived (0 when none is due).
+--
+-- A driver who gains lines has their whole pool written again, the old lines with their ids and the
+-- new ones, in random order, in this transaction: every line of theirs then carries this
+-- transaction's id (xmin) and sits in one freshly shuffled run of rows, so neither the system
+-- columns nor the physical order say which line is new or which archived drive it came from.
 create or replace function private.archive_old_routes(p_batch int default 500) returns int
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_ids uuid[];
+  v_users uuid[];
 begin
   if p_batch is null or p_batch not between 1 and 5000 then
     raise exception 'batch must be between 1 and 5000' using errcode = 'invalid_parameter_value';
@@ -77,35 +89,47 @@ begin
   if cardinality(v_ids) = 0 then
     return 0;
   end if;
-  insert into public.route_pool (user_id, polyline)
-    select t.user_id, t.polyline from public.trips t
-    where t.id = any(v_ids) and t.scored and not t.not_driving and t.merged_into is null and t.polyline <> '';
+  -- the routes pooled: a kept, scored drive's (what the phone's All trips map draws)
+  v_users := array(
+    select distinct t.user_id from public.trips t
+    where t.id = any(v_ids) and t.scored and not t.not_driving and t.merged_into is null and t.polyline <> '');
+  if cardinality(v_users) > 0 then
+    -- the order by builds the whole set first, so every old row is deleted before any is written again
+    with moved as (
+      delete from public.route_pool r where r.user_id = any(v_users)
+      returning r.id, r.user_id, r.polyline)
+    insert into public.route_pool (id, user_id, polyline)
+      select x.id, x.user_id, x.polyline from (
+        select m.id, m.user_id, m.polyline from moved m
+        union all
+        select gen_random_uuid(), t.user_id, t.polyline from public.trips t
+        where t.id = any(v_ids) and t.scored and not t.not_driving and t.merged_into is null and t.polyline <> '') x
+      order by random();
+  end if;
   update public.trip_events set lat = null, lng = null
     where trip_id = any(v_ids) and (lat is not null or lng is not null);
   update public.trips set polyline = '', archived_at = now() where id = any(v_ids);
   return cardinality(v_ids);
 end $$;
 
--- archive_old_routes_daily(): batches of 500 until one comes back short (at most 40, 20 000 drives a
--- run; a backlog carries on the next day), then the wrong-limit places past the 183 days. Returns
--- how many drives it archived.
-create or replace function private.archive_old_routes_daily() returns int
+-- archive_old_routes_run(): one pg_cron run in one transaction: a batch of 1 000 due drives, then
+-- the wrong-limit places past 176 days (183 less the 7 days a report may come after its drive).
+-- Returns how many drives it archived. Six runs a day commit separately instead of one procedure
+-- committing between batches: a procedure with a SET clause or SECURITY DEFINER cannot COMMIT, and
+-- every private function pins its search_path.
+create or replace function private.archive_old_routes_run() returns int
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_n int;
-  v_total int := 0;
 begin
-  for i in 1..40 loop
-    v_n := private.archive_old_routes(500);
-    v_total := v_total + v_n;
-    exit when v_n < 500;
-  end loop;
-  delete from public.map_feedback where created_at < now() - private.route_retention();
-  return v_total;
+  v_n := private.archive_old_routes(1000);
+  delete from public.map_feedback where created_at < now() - (private.route_retention() - interval '7 days');
+  return v_n;
 end $$;
 
--- the same name again replaces the job (cron.schedule upserts by name)
-select cron.schedule('route-archive', '10 4 * * *', 'select private.archive_old_routes_daily()');
+-- every 10 minutes from 04:00 to 04:50 UTC; the same name again replaces the job (cron.schedule
+-- upserts by name)
+select cron.schedule('route-archive', '*/10 4 * * *', 'select private.archive_old_routes_run()');
 
 -- ---------------------------------------------------------------------------
 -- client reads
@@ -196,7 +220,7 @@ begin
     'format_version', 5,
     'exported_at', now(),
     'about', jsonb_build_object('excluded', jsonb_build_array(
-      'device push tokens and push delivery receipts', 'rate-limit counters', 'the merge-check end point of your latest drive')),
+      'device push tokens and push delivery receipts', 'rate-limit counters')),
     'account', v_account,
     'profile', (select to_jsonb(p) - 'flagged' from public.profiles p where p.id = p_user),
     'consents', coalesce((select jsonb_agg(to_jsonb(c) order by c.created_at) from public.consents c where c.user_id = p_user), '[]'::jsonb),
@@ -229,7 +253,7 @@ end $$;
 -- ---------------------------------------------------------------------------
 revoke all on function private.route_retention() from public, anon, authenticated;
 revoke all on function private.archive_old_routes(int) from public, anon, authenticated;
-revoke all on function private.archive_old_routes_daily() from public, anon, authenticated;
+revoke all on function private.archive_old_routes_run() from public, anon, authenticated;
 revoke all on function public.list_my_route_pool(uuid, int) from public, anon, authenticated;
 grant execute on function public.list_my_route_pool(uuid, int) to authenticated;
 notify pgrst, 'reload schema';

@@ -371,6 +371,9 @@ test('a v12 database steps up to v13: every drive stays as it was, not archived,
   expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(before.map((r) => ({ ...r, archived_at: null })));
   expect((await db.execute('SELECT lat, lng FROM trip_events')).rows).toEqual([{ lat: 47.6, lng: -122.3 }]);
   expect(await columns(db, 'route_pool')).toEqual(['polyline']);
+  // No rowid: the pool is kept in the lines' order, never the order they were added.
+  expect(String((await db.execute("SELECT sql FROM sqlite_master WHERE name = 'route_pool'")).rows[0]?.sql)).toMatch(/WITHOUT ROWID/);
+  await expect(db.execute('SELECT rowid FROM route_pool')).rejects.toThrow();
   expect((await db.execute('SELECT COUNT(*) AS n FROM route_pool')).rows).toEqual([{ n: 0 }]);
   // A line is held once.
   expect((await db.execute("INSERT OR IGNORE INTO route_pool (polyline) VALUES ('_p~iF~ps|U')")).changes).toBe(1);

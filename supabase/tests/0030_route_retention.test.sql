@@ -1,13 +1,15 @@
 -- 0030_route_retention: drives that ended more than 183 days ago lose their route and their events'
 -- places; a kept, scored drive's route moves into the driver's route pool (a line with no date and no
 -- drive), nothing else's does; every number the stats read stays, so the all-time sums are the same
--- after the job as before it; the job is idempotent and also deletes the wrong-limit places past the
--- 183 days; the pool is readable only through list_my_route_pool (the caller's own) and the export;
--- get_heatmap still serves the last 90 days and no pool line; deleting the account deletes its lines.
+-- after the job as before it; the job is idempotent and also deletes the wrong-limit places past 176
+-- days; a run that adds a line writes the driver's whole pool again (same ids, new row versions); the
+-- pool is readable only through list_my_route_pool (the caller's own) and the export; get_heatmap
+-- still serves the last 90 days and no pool line; deleting the account deletes its lines. Every count
+-- is of this test's two drivers, so other drives in the database change nothing.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(43);
+select plan(45);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -49,10 +51,22 @@ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, s
     now() - interval '200 days 10 minutes', 3, 47.6201, -122.3502, '{"source": "dashcam"}'),
   ('a0000000-0000-4000-8000-0000000000a4', 'e0000000-0000-4000-8000-0000000000e3', '00000000-0000-0000-0000-000000000001', 'hard_brake', 'minor',
     now() - interval '10 days 10 minutes', 2, 47.6001, -122.3002, '{"peakG": 0.5}');
--- wrong-limit places: one past the 183 days, one inside them
+-- wrong-limit places (this test's own, told apart by their limits): past 183 days, between 176 and
+-- 183 (a report can come 7 days after its drive), and inside 176
 insert into public.map_feedback (lat, lng, limit_mph, speed_mph, created_at) values
-  (47.6101, -122.3402, 35, 41, now() - interval '200 days'),
-  (47.7101, -122.4402, 25, 33, now() - interval '20 days');
+  (47.6101, -122.3402, 111, 41, now() - interval '200 days'),
+  (47.6501, -122.3802, 112, 41, now() - interval '180 days'),
+  (47.7101, -122.4402, 113, 33, now() - interval '170 days');
+
+-- every run the cron job would make, until nothing of this test's is left due
+create function pg_temp.run_job() returns void language plpgsql as $$
+begin
+  while private.archive_old_routes_run() = 1000 loop
+  end loop;
+end $$;
+create function pg_temp.archived_count() returns int language sql stable as $$
+  select count(*)::int from public.trips
+  where user_id in ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002') and archived_at is not null $$;
 
 -- ---------------------------------------------------------------------------
 -- the pool's shape, RLS and grants; the job's functions and schedule
@@ -68,13 +82,13 @@ select ok(not has_table_privilege('authenticated', 'public.route_pool', 'SELECT,
 select is(private.route_retention(), interval '183 days', 'routes and places are kept 183 days');
 select ok((select prosecdef and proconfig @> array['search_path=public'] from pg_proc where oid = 'private.archive_old_routes(int)'::regprocedure),
   'archive_old_routes runs as its owner with its search_path pinned');
-select ok((select prosecdef and proconfig @> array['search_path=public'] from pg_proc where oid = 'private.archive_old_routes_daily()'::regprocedure),
-  'so does the daily run');
+select ok((select prosecdef and proconfig @> array['search_path=public'] from pg_proc where oid = 'private.archive_old_routes_run()'::regprocedure),
+  'so does the cron run');
 select ok(not has_function_privilege('authenticated', 'private.archive_old_routes(int)', 'EXECUTE')
-  and not has_function_privilege('anon', 'private.archive_old_routes_daily()', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'private.archive_old_routes_daily()', 'EXECUTE'), 'no API role runs the job');
+  and not has_function_privilege('anon', 'private.archive_old_routes_run()', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'private.archive_old_routes_run()', 'EXECUTE'), 'no API role runs the job');
 select is((select array[schedule, command] from cron.job where jobname = 'route-archive'),
-  array['10 4 * * *', 'select private.archive_old_routes_daily()'], 'the job runs daily at 04:10 UTC');
+  array['*/10 4 * * *', 'select private.archive_old_routes_run()'], 'the job runs every 10 minutes from 04:00 to 04:50 UTC, each run its own transaction');
 select ok(has_function_privilege('authenticated', 'public.list_my_route_pool(uuid, int)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.list_my_route_pool(uuid, int)', 'EXECUTE'), 'a signed-in driver reads their own pool; anon cannot');
 select throws_ok($$ select private.archive_old_routes(0) $$, '22023', 'batch must be between 1 and 5000', 'the batch is bounded');
@@ -87,7 +101,8 @@ create temporary table sums_before as select
   private.stat_sums('00000000-0000-0000-0000-000000000001', now() - interval '365 days') as a_year,
   private.stat_sums('00000000-0000-0000-0000-000000000002', null) as b_all;
 
-select is(private.archive_old_routes_daily(), 5, 'the five drives that ended more than 183 days ago are archived (A''s four, B''s one)');
+select pg_temp.run_job();
+select is(pg_temp.archived_count(), 5, 'the five drives that ended more than 183 days ago are archived (A''s four, B''s one)');
 select is((select array_agg(t.polyline = '' and t.archived_at is not null order by t.id) from public.trips t
     where t.id in ('a0000000-0000-4000-8000-0000000000a1', 'a0000000-0000-4000-8000-0000000000a2', 'a0000000-0000-4000-8000-0000000000a3',
                    'a0000000-0000-4000-8000-0000000000a6', 'b0000000-0000-4000-8000-0000000000b1')),
@@ -109,10 +124,14 @@ select is((select array_agg(polyline) from public.route_pool where user_id = '00
 select is((select array[private.stat_sums('00000000-0000-0000-0000-000000000001', null), private.stat_sums('00000000-0000-0000-0000-000000000001', now() - interval '365 days'),
       private.stat_sums('00000000-0000-0000-0000-000000000002', null)] from sums_before),
   (select array[a_all, a_year, b_all] from sums_before), 'every all-time and year sum is the same after the job as before it');
-select is((select count(*)::int from public.map_feedback), 1, 'the wrong-limit place past the 183 days is deleted');
-select is((select lat from public.map_feedback), 47.7101::float8, 'the one inside them stays');
-select is(private.archive_old_routes_daily(), 0, 'a second run finds nothing to do');
-select is((select count(*)::int from public.route_pool), 2, 'and pools nothing twice');
+select is((select array_agg(limit_mph order by limit_mph) from public.map_feedback where limit_mph between 111 and 113), array[113],
+  'the wrong-limit places past 176 days are deleted (never after their drive''s own places); the one inside them stays');
+create temporary table pool_after_first as select id, user_id, ctid as at from public.route_pool
+  where user_id in ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002');
+select pg_temp.run_job();
+select is(pg_temp.archived_count(), 5, 'a second run archives nothing more');
+select is((select array_agg(r.ctid = f.at order by r.polyline) from public.route_pool r join pool_after_first f on f.id = r.id), array[true, true],
+  'and pools nothing twice: with nothing gained, no line is written again');
 
 -- ---------------------------------------------------------------------------
 -- what a driver reads
@@ -155,9 +174,22 @@ select is((select e -> 'route_pool' from ex), '["A_OLD"]'::jsonb, 'with the driv
 select is((select position('B_OLD' in e::text) from ex), 0, 'and nothing of another driver''s');
 reset role;
 
+-- ---------------------------------------------------------------------------
+-- a run that gains a driver a line writes their whole pool again
+-- ---------------------------------------------------------------------------
+select pg_temp.trip('a0000000-0000-4000-8000-0000000000a7', '00000000-0000-0000-0000-000000000001', now() - interval '250 days', 'A_OLD2');
+select pg_temp.run_job();
+select is((select array_agg(polyline order by polyline) from public.route_pool where user_id = '00000000-0000-0000-0000-000000000001'), array['A_OLD', 'A_OLD2'],
+  'the new line joins A''s pool');
+select is((select array[(r.id = f.id)::text, (r.ctid <> f.at)::text] from public.route_pool r join pool_after_first f on f.id = r.id
+    where r.user_id = '00000000-0000-0000-0000-000000000001'), array['true', 'true'],
+  'A''s older line keeps its id (a restore pages by it) but is written again: a new row version, in the same transaction as the new line, so neither the system columns nor the order on disk say which line is new');
+select is((select array_agg(r.ctid = f.at) from public.route_pool r join pool_after_first f on f.id = r.id
+    where r.user_id = '00000000-0000-0000-0000-000000000002'), array[true], 'B gained nothing: B''s pool is untouched');
+
 delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
 select is((select count(*)::int from public.route_pool where user_id = '00000000-0000-0000-0000-000000000001'), 0, 'deleting the account deletes its lines');
-select is((select count(*)::int from public.route_pool), 1, 'and only its own');
+select is((select count(*)::int from public.route_pool where user_id = '00000000-0000-0000-0000-000000000002'), 1, 'and only its own');
 
 select * from finish();
 rollback;

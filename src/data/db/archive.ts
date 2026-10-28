@@ -28,6 +28,12 @@ export const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 /** A drive that ended before this (epoch ms) is due to be archived at `now`. */
 export const archiveCutoff = (now: number): number => now - RETENTION_MS;
 
+/**
+ * A drive lasts at most 12 hours (`MAX_DRIVE_MS`): a `recording` row started longer ago than this is
+ * stale (crash recovery's to settle) and does not hold archiving back.
+ */
+export const RECORDING_MAX_MS = 12 * 60 * 60 * 1000;
+
 /** Settled: the server answered (`scored`, `unscored`, `not_driving`) or never will (`failed`). */
 export const ARCHIVABLE_STATUSES: readonly TripStatus[] = ['scored', 'unscored', 'not_driving', 'failed'];
 
@@ -64,7 +70,8 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
   const due = `SELECT client_trip_id FROM trips WHERE ${DUE}`;
   await on.execute(
     `INSERT OR IGNORE INTO route_pool (polyline)
-       SELECT polyline FROM trips WHERE ${DUE} AND status = 'scored' AND polyline IS NOT NULL AND polyline != ''`,
+       SELECT polyline FROM trips WHERE ${DUE} AND status = 'scored' AND polyline IS NOT NULL AND polyline != ''
+       ORDER BY random()`,
     [cutoff]
   );
   await on.execute(`UPDATE trip_events SET lat = NULL, lng = NULL WHERE client_trip_id IN (${due}) AND (lat IS NOT NULL OR lng IS NOT NULL)`, [cutoff]);
@@ -86,16 +93,19 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
   return changes;
 }
 
-/** Whether a drive is under way (`recording`): the archive job leaves the database to it. */
-export async function isRecording(on: Db): Promise<boolean> {
-  const { rows } = await on.execute("SELECT EXISTS (SELECT 1 FROM trips WHERE status = 'recording') AS r");
+/**
+ * Whether a drive is under way at `now` (`recording`, started within `RECORDING_MAX_MS`): the
+ * archive job leaves the database to it.
+ */
+export async function isRecording(on: Db, now: number): Promise<boolean> {
+  const { rows } = await on.execute("SELECT EXISTS (SELECT 1 FROM trips WHERE status = 'recording' AND started_at > ?) AS r", [now - RECORDING_MAX_MS]);
   return asNumber(rows[0] ?? {}, 'r') !== 0;
 }
 
 /** The pooled routes: lines with nothing else, drawn beside the routes the drives still hold. */
 export function createRoutePoolRepo(db: Db) {
   return {
-    /** Every pooled line, in the table's own order (no order means anything here). */
+    /** Every pooled line, in the table's own order: the lines' own (it has no rowid). */
     async list(on: Db = db): Promise<string[]> {
       const { rows } = await on.execute('SELECT polyline FROM route_pool');
       return rows.flatMap((row) => (typeof row.polyline === 'string' && row.polyline !== '' ? [row.polyline] : []));

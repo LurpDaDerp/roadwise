@@ -121,10 +121,12 @@ test('the pool holds a line once, and never an empty one', async () => {
   expect((await pool.list()).sort()).toEqual(['a', 'b', 'c']);
 });
 
-test('a recording drive is seen', async () => {
-  expect(await isRecording(db)).toBe(false);
-  await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: NOW, tz: 'UTC', status: 'recording' }, NOW);
-  expect(await isRecording(db)).toBe(true);
+test('a recording drive is seen; a recording row older than a drive can last (12 h) is stale and is not', async () => {
+  expect(await isRecording(db, NOW)).toBe(false);
+  await createTripsRepo(db).insert({ client_trip_id: 'stale', started_at: NOW - 13 * 3_600_000, tz: 'UTC', status: 'recording' }, NOW);
+  expect(await isRecording(db, NOW)).toBe(false);
+  await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: NOW - 60_000, tz: 'UTC', status: 'recording' }, NOW);
+  expect(await isRecording(db, NOW)).toBe(true);
 });
 
 test('a "Wasn’t driving" drive whose upload is still owed waits, however old, until the upload is done', async () => {

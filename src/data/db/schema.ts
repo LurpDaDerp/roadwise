@@ -414,11 +414,12 @@ export const SCHEMA_V12: readonly string[] = [
  * - `route_pool`: the archived scored drives' routes, one line each, with nothing that says which
  *   drive or when: the All trips map draws them beside the routes the drives still hold. A line is
  *   stored once (a restore that brings the server's copy of a line this phone already pooled adds
- *   nothing).
+ *   nothing). It has no rowid: the table is kept in the lines' own order, never in the order they
+ *   were added, so a line's place says nothing about its drive or its date.
  */
 export const SCHEMA_V13: readonly string[] = [
   'ALTER TABLE trips ADD COLUMN archived_at INTEGER',
   `CREATE TABLE route_pool (
-    polyline TEXT NOT NULL UNIQUE
-  )`,
+    polyline TEXT PRIMARY KEY NOT NULL
+  ) WITHOUT ROWID`,
 ];
