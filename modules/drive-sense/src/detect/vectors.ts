@@ -65,7 +65,10 @@ const lastEndAt = (decidedSec: number, northM: number): DetectLastEnd => ({
 export type SlowStep = { row: DetectRow } | { report: SlowReport };
 
 /** A row, or a check at `check` (`waitUntil`: a Start-card drive still waiting for driving speed). */
-export type EndStep = { row: DetectRow; automotive: boolean } | { check: number; walkSince: number | null; waitUntil?: number | null };
+/** A row (with its pedometer count, `steps`, when it has one) or a check (`carGoneSince`: the car link's "gone since", absent: null). */
+export type EndStep =
+  | { row: DetectRow; automotive: boolean; steps?: number }
+  | { check: number; walkSince: number | null; waitUntil?: number | null; carGoneSince?: number | null };
 
 export interface ExpectedStart {
   index: number;
@@ -231,11 +234,15 @@ const statusIn = (o: Partial<StatusInputs> = {}): StatusInputs => ({
 });
 
 const steps = (rows: DetectRow[], automotive = false): EndStep[] => rows.map((row) => ({ row, automotive }));
-const check = (sec: number, walkSec: number | null = null, waitSec?: number): EndStep => ({
+const check = (sec: number, walkSec: number | null = null, waitSec?: number, goneSec?: number): EndStep => ({
   check: at(sec),
   walkSince: walkSec === null ? null : at(walkSec),
   ...(waitSec === undefined ? {} : { waitUntil: at(waitSec) }),
+  ...(goneSec === undefined ? {} : { carGoneSince: at(goneSec) }),
 });
+/** Rows with a pedometer count each (`count(sec)`). */
+const stepRows = (rows: DetectRow[], count: (sec: number) => number): EndStep[] =>
+  rows.map((row) => ({ row, automotive: false, steps: count(Math.round((row.ts - T0) / 1000)) }));
 const none = { due: null, overdue: null };
 
 /** A live report for the slow-traffic path `sec` s after T0: confident moving car motion unless told. */
@@ -716,6 +723,65 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   { name: 'starts after: an empty candidate counts toward it', kind: 'startsAfter', starts: [-3000, -500, 0].map(at), since: at(0), sawVehicle: false, expected: [-3000, -500, 0].map(at) },
 
   // ——— the native safety stop ———
+  {
+    name: 'end: a step walk (15 steps in 20 s, nothing over 3 mph for 15 s) is overdue at its row\'s end; native stops 10 s later; a JS end opens the linger',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 40, 0), (s) => Math.max(0, s - 12) * 2), check(25), check(26), check(35), check(36)],
+    expected: [
+      { due: null, overdue: null, linger: true },
+      { due: null, overdue: 'walking', linger: true },
+      { due: null, overdue: 'walking', linger: true },
+      { due: 'walking', overdue: 'walking', linger: true },
+    ],
+  },
+  {
+    name: 'end: a step walk the car drives on from (over 3 mph) is void',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 30, 0), (s) => Math.max(0, s - 12) * 2), ...steps(vrows(31, 32, 5)), ...steps(vrows(33, 40, 0)), check(40)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
+  {
+    name: 'end: 10 steps in 20 s is no step walk',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 60, 0), (s) => Math.floor((s - 11) / 2)), check(60)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
+  {
+    name: 'end: a pedometer that starts again (a lower count) is no step walk',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 30, 0), () => 200), ...stepRows(vrows(31, 50, 0), (s) => (s === 31 ? 0 : 1)), check(50)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
+  {
+    name: 'end: the car link gone 15 s with nothing over 3 mph since is overdue (a still end); native stops a minute later',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 90, 0)), check(26, null, undefined, 12), check(27, null, undefined, 12), check(86, null, undefined, 12), check(87, null, undefined, 12)],
+    expected: [
+      { due: null, overdue: null, linger: false },
+      { due: null, overdue: 'still', linger: true },
+      { due: null, overdue: 'still', linger: true },
+      { due: 'still', overdue: 'still', linger: true },
+    ],
+  },
+  {
+    name: 'end: a car link gone while the car still moves never ends the drive',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 20, 20)), ...steps(vrows(21, 100, 0)), check(100, null, undefined, 15)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
+  {
+    name: 'end: no car-link end while a Start-card drive waits',
+    kind: 'end',
+    startedAt: at(0),
+    steps: [...steps(vrows(0, 10, 20)), ...steps(vrows(11, 100, 0)), check(100, null, 300, 12)],
+    expected: [{ due: null, overdue: null, linger: false }],
+  },
   {
     name: 'end: still, a JS end is overdue at 5 min after the last movement and native stops a minute later',
     kind: 'end',

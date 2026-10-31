@@ -344,6 +344,12 @@ export interface EngineDeps {
    * (`motion.ts`). Default: none.
    */
   parkingSpots?(): readonly { lat: number; lng: number }[];
+  /**
+   * iOS: since when the paired car or CarPlay has been gone, continuously, in the open drive that
+   * had it (native's debounced `goneSince`), or null: 15 s of it with the car not over 3 mph since
+   * ends the drive (`motion.ts`). Default: never.
+   */
+  carGoneSince?(): number | null;
   /** Failures that must not stop the engine (a finalizer that threw, a subscriber that threw). */
   onError?(err: unknown): void;
 }

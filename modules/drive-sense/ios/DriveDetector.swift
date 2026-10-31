@@ -46,6 +46,8 @@ final class DriveDetector {
   var lastVehicleTs: Double?
   /// The candidate is the watch after an automatic end (`linger`): no hourly cap, rest or parked spot.
   var lingering = false
+  /// The drive's step count (rows' `steps`, the safety stop's step walk).
+  let pedometer = PedometerSource()
   var clock: DispatchSourceTimer?
   var wakeTask: UIBackgroundTaskIdentifier = .invalid
   var waking = false
@@ -206,10 +208,11 @@ final class DriveDetector {
   }
 
   /// DriveSense `stopCapture`: a recording drive's end from JS (its cut, else now); else a plain
-  /// capture's. A JS end that a JS end rule would have made by now was automatic: the watch lingers.
+  /// capture's. A JS end JS calls automatic (`end.automatic`: the parking spot's, among others) or
+  /// that a JS end rule would have made by now was automatic: the watch lingers.
   func stopCapture(end: CaptureEnd?) {
     if isRecording {
-      commitEnd(cause: "js", endedAt: end?.drivingEndedAt ?? DriveDetector.now(), linger: automaticEndDue())
+      commitEnd(cause: "js", endedAt: end?.drivingEndedAt ?? DriveDetector.now(), linger: end?.automatic == true || automaticEndDue())
     } else {
       capture.stopPlainCapture()
     }

@@ -2182,3 +2182,25 @@ describe('the recap notification with the real host (plan decision 3)', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 });
+
+describe('iOS: the car-link end (round 11)', () => {
+  test("native's car-link 'gone since' ends the drive 15 s on with the car stopped, cut at the last movement; native hears it was automatic", async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(40, { speedMps: 15 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE });
+    const parked = rows(30, { t0: T0 + 40_000, speedMps: 0 });
+    await feedIos(h, parked.slice(0, 5));
+    h.detect.setCarGoneSince(T0 + 45_000);
+    // The row at T0 + 59 s ends at T0 + 60 s: 15 s after the link went.
+    await feedIos(h, parked.slice(5, 19));
+    expect(h.host.snapshot().status).toBe('recording');
+    await feedIos(h, parked.slice(19, 20));
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { clientTripId: NATIVE, endCause: 'stopped' } });
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ automatic: true });
+    expect((await createTripsRepo(db).get(NATIVE))?.ended_at).toBeLessThanOrEqual(T0 + 40_000);
+    await h.host.stop({ endOpenTrip: false });
+  });
+});

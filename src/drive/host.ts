@@ -349,13 +349,18 @@ export async function isJournaled(db: Db, detect: Pick<DriveDetectApi, 'listDriv
 /**
  * What native takes from a drive that closed at `at` (`stopCapture`'s end): its driving end (the
  * cut where the car last moved, or the End tap), and whether the car was still at driving speed as
- * it ended. A drive that is not kept passes null as its driving end.
+ * it ended. A drive that is not kept passes null as its driving end. `automatic` (iOS): an
+ * automatic end rule ended it (`isAutomaticEnd`), so the detector watches on at once for the car
+ * setting off again.
  */
-export function captureEndOf(session: Readonly<TripSession>, at: number, kept: boolean): CaptureEnd {
+export function captureEndOf(session: Readonly<TripSession>, at: number, kept: boolean, automatic = false): CaptureEnd {
   const last = session.lastDroveAt;
   const drivingAtEnd = last !== null && session.lastSpeed !== null && session.lastSpeed.ts === last && at - last <= DRIVING_AT_END_MS;
-  return { drivingEndedAt: kept ? (session.endedAt ?? at) : null, drivingAtEnd };
+  return { drivingEndedAt: kept ? (session.endedAt ?? at) : null, drivingAtEnd, ...(automatic ? { automatic: true } : {}) };
 }
+
+/** An end one of the engine's automatic rules made (still, parking spot, car link, walking, step walk, 12 h): never a manual one or an orphan. */
+export const isAutomaticEnd = (cause: EndCause | null): boolean => cause === 'stopped' || cause === 'walking' || cause === 'limit';
 export type DisplayUnit = 'mph' | 'km/h';
 
 /** A whole speed or limit in the display's unit; null stays null. */
@@ -505,6 +510,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let budget: NotDrivingBudget | null = null;
   /** The open drive's known parking spots (`parkingSpots.ts`), read as it opens. */
   let parkingSpots: readonly { lat: number; lng: number }[] = [];
+  /** iOS: native's car-link "gone since" for the live drive (`carLink`), or null. */
+  let carGoneSince: number | null = null;
   let hudFocused = false;
   /** `hudVisible()` as last settled (the budget counts while it holds). */
   let visibleNow = false;
@@ -555,7 +562,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!persist) return;
     const id = session.clientTripId;
     const closedAt = now();
-    captureEnd = captureEndOf(session, closedAt, true);
+    captureEnd = captureEndOf(session, closedAt, true, ios && isAutomaticEnd(session.endCause));
     try {
       // The phone catches up to the dashcam (≤ 3 s) before the drive's facts are read.
       try {
@@ -698,6 +705,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // A Start-card drive still waiting for driving speed: its wait ends it (`endWait`), never the still or walking end.
     holdEnds: () => waiting !== null,
     parkingSpots: () => parkingSpots,
+    carGoneSince: () => carGoneSince,
     onError: (e) => report(e, 'engine'),
   });
 
@@ -933,6 +941,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     budget = persist ? await budgetFor(db, id, now()).catch(() => null) : null;
     budget ??= { clientTripId: id, spentMs: 0, expired: false, updatedAt: now() };
     parkingSpots = persist ? await readParkingSpots(db, (e) => report(e, 'parkingSpots')) : [];
+    // A drive opens with the link as native has it now; the live `carLink` keeps it from here.
+    carGoneSince = null;
+    if (ios && detect !== null && detect.available) {
+      carGoneSince = await detect
+        .carLinkState()
+        .then((c) => c.goneSince)
+        .catch(() => null);
+    }
     persistedSpent = budget.spentMs;
     lastCountedRowTs = null;
     lastAccrualAt = now();
@@ -1774,7 +1790,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (detect !== null) {
       subscriptions.push(
         remover(detect.addListener('driveStarted', (e) => void run(() => onDriveStarted(e), 'driveStarted'))),
-        remover(detect.addListener('driveEnded', (e) => void run(() => onDriveEnded(e), 'driveEnded')))
+        remover(detect.addListener('driveEnded', (e) => void run(() => onDriveEnded(e), 'driveEnded'))),
+        // The car link's "gone since" (live only): the engine's car-link end reads it at each row.
+        remover(
+          detect.addListener('carLink', (c) => {
+            carGoneSince = c.goneSince;
+          })
+        )
       );
     }
     if (deps.appState) {

@@ -24,6 +24,7 @@ import {
   endClockAt,
   endDue,
   endOnRow,
+  endOnSteps,
   lingerAfterJsEnd,
   motionGate,
   noteVeto,
@@ -151,10 +152,12 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
       for (const step of v.steps) {
         if ('row' in step) {
           clock = endOnRow(clock, step.row, step.automotive);
+          if (step.steps !== undefined) clock = endOnSteps(clock, step.row.ts, step.steps);
         } else {
           const waitUntil = step.waitUntil ?? null;
-          const d = endDue(clock, v.startedAt, step.check, step.walkSince, waitUntil);
-          results.push({ ...d, linger: lingerAfterJsEnd(clock, v.startedAt, step.check, step.walkSince, waitUntil) });
+          const gone = step.carGoneSince ?? null;
+          const d = endDue(clock, v.startedAt, step.check, step.walkSince, waitUntil, gone);
+          results.push({ ...d, linger: lingerAfterJsEnd(clock, v.startedAt, step.check, step.walkSince, waitUntil, gone) });
         }
       }
       return { results };

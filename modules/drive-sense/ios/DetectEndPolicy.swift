@@ -1,8 +1,14 @@
 // The native safety stop and the "Not driving?" rest (plan §3.4, §3.6): the Swift mirror of the end
 // half of `src/detect/policy.ts`. JS decides a drive's end and its cut (R1); native stops sensing
-// on its own only when JS has not, 10 s after the JS walking end or a minute after another JS rule
-// would have fired, and never computes a cut. Pure: Foundation only.
+// on its own only when JS has not, 10 s after the JS walking end or step walk or a minute after
+// another JS rule would have fired, and never computes a cut. Pure: Foundation only.
 import Foundation
+
+/// One row's pedometer count (policy.ts `EndClock.steps`).
+struct StepMark: Equatable {
+  var ts: Double
+  var steps: Int
+}
 
 /// What the still clock and the walking veto know, row by row (policy.ts `EndClock`).
 struct EndClock: Equatable {
@@ -24,6 +30,12 @@ struct EndClock: Equatable {
   var prevDrive: Bool = false
   /// The second of the last two trusted rows in a row at 10 mph or more (JS's `lastDroveAt`).
   var lastDroveTs: Double?
+  /// The last trusted row over 3 mph (`END_CRAWL_MPS`).
+  var lastFastTs: Double?
+  /// The rows' pedometer counts in the last `STEP_WINDOW_MS`, oldest first (`endOnSteps`).
+  var steps: [StepMark] = []
+  /// When the step walk was first due (JS's row clock: the row's end), until the car next goes over 3 mph.
+  var stepWalkTs: Double?
 }
 
 extension DetectPolicy {
@@ -47,6 +59,11 @@ extension DetectPolicy {
       c.lastFixMps = r.speed
       c.lastFixLat = r.lat
       c.lastFixLng = r.lng
+      // Over 3 mph the car may be moving: a step walk due before it is void.
+      if r.speed > END_CRAWL_MPS {
+        c.lastFastTs = r.ts
+        c.stepWalkTs = nil
+      }
       if c.paceRun >= MOVE_PACE_ROWS || far {
         c.lastMoveTs = r.ts
         c.holdMs = 0
@@ -64,6 +81,28 @@ extension DetectPolicy {
     return c
   }
 
+  /// policy.ts `endOnSteps`: a row's pedometer count (after `endOnRow` for the same row), as JS's
+  /// step walk reads it: the counts of the last `STEP_WINDOW_MS` (a lower count is a pedometer that
+  /// started again, and starts the log again), and the step walk due at the row's end once they span
+  /// `STEP_WALK_MIN` steps or more with no trusted fix over 3 mph in the `STEP_CALM_MS` before it.
+  /// Once due it stays due (`stepWalkTs`) until the car goes over 3 mph.
+  static func endOnSteps(_ c0: EndClock, ts: Double, steps: Int) -> EndClock {
+    var c = c0
+    if let last = c0.steps.last, steps < last.steps {
+      c.steps = [StepMark(ts: ts, steps: steps)]
+    } else if let last = c0.steps.last, ts <= last.ts {
+      c.steps = c0.steps
+    } else {
+      c.steps = c0.steps.filter { $0.ts >= ts - STEP_WINDOW_MS } + [StepMark(ts: ts, steps: steps)]
+    }
+    let t = ts + ROW_MS
+    let calm = c.lastFastTs.map { t - $0 > STEP_CALM_MS } ?? true
+    var walked = false
+    if let first = c.steps.first, let newest = c.steps.last { walked = newest.steps - first.steps >= STEP_WALK_MIN }
+    if c.stepWalkTs == nil, walked, calm { c.stepWalkTs = t }
+    return c
+  }
+
   /// policy.ts `walkStanding`: the standing walk's arrival, or nil once the car has driven at or
   /// after it; as JS voids a walk the car drove after, only a walk that arrived after the car was
   /// last at driving speed counts toward the walking end or the linger.
@@ -74,22 +113,29 @@ extension DetectPolicy {
   }
 
   /// policy.ts `endDue`: `overdue` = a JS rule would have ended the drive by now (a walk standing 10 s
-  /// that the car has not driven since, with no fix over 3 mph in the last 15 s, 5 min still, 12 h);
-  /// `due` = the same plus the slack (10 s on the walk, a minute on the others). Each "limit",
-  /// "walking", "still" or nil, in that order of precedence.
-  /// `waitUntil`: a Start-card drive still waiting for driving speed: no walking end, and the still
-  /// end only once that deadline has passed too.
-  static func endDue(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> (due: String?, overdue: String?) {
+  /// that the car has not driven since, with no fix over 3 mph in the last 15 s; a step walk
+  /// (`endOnSteps`); 5 min still; the paired car or CarPlay gone `CAR_GONE_MS` with no trusted fix
+  /// over 3 mph since, `carGoneSince` being the car link's debounced "gone since"; 12 h);
+  /// `due` = the same plus the slack (10 s on either walk, a minute on the others). Each "limit",
+  /// "walking", "still" or nil, in that order of precedence (the car link's end is a still one).
+  /// `waitUntil`: a Start-card drive still waiting for driving speed: no walking or car-link end,
+  /// and the still end only once that deadline has passed too.
+  static func endDue(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil, carGoneSince: Double? = nil) -> (due: String?, overdue: String?) {
     var carDriving = false
     if let mps = c.lastFixMps, let ts = c.lastFixTs { carDriving = mps > END_CRAWL_MPS && now - ts <= WALK_STALE_FIX_MS }
     let age = now - startedAt
     var walked: Double = -1
     if let w = walkStanding(c, walkSince), !carDriving, waitUntil == nil { walked = now - w }
+    var stepped: Double = -1
+    if let s = c.stepWalkTs, waitUntil == nil { stepped = now - s }
     let still = now - c.lastMoveTs - c.holdMs
+    var gone: Double = -1
+    if let g = carGoneSince, waitUntil == nil, c.lastFastTs.map({ $0 < g }) ?? true { gone = now - g }
     func pick(_ slack: Double, _ walkSlack: Double) -> String? {
       if age >= MAX_DRIVE_MS + slack { return "limit" }
-      if walked >= WALK_END_MS + walkSlack { return "walking" }
+      if walked >= WALK_END_MS + walkSlack || stepped >= walkSlack { return "walking" }
       if still >= STILL_END_MS + slack, waitUntil.map({ now >= $0 + slack }) ?? true { return "still" }
+      if gone >= CAR_GONE_MS + slack { return "still" }
       return nil
     }
     return (pick(SAFETY_SLACK_MS, WALK_SAFETY_SLACK_MS), pick(0, 0))
@@ -103,10 +149,12 @@ extension DetectPolicy {
   /// walking end comes 10 s after the walk began as the phone dates it, so as soon as 3 s after the
   /// report arrived, and it lets a carried phone at 5 mph or under end the drive; native counts from
   /// the arrival and keeps no carried state, and a spare linger is harmless.
+  /// A step walk due (`stepWalkTs`) is one too: JS ended it on the row native just recorded.
   /// Never on a walk while a Start-card drive still waits for driving speed.
-  static func lingerAfterJsEnd(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil) -> Bool {
-    let o = endDue(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil).overdue
+  static func lingerAfterJsEnd(_ c: EndClock, startedAt: Double, now: Double, walkSince: Double?, waitUntil: Double? = nil, carGoneSince: Double? = nil) -> Bool {
+    let o = endDue(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil, carGoneSince: carGoneSince).overdue
     if o == "still" || o == "walking" { return true }
+    if waitUntil == nil, c.stepWalkTs != nil { return true }
     guard waitUntil == nil, let w = walkStanding(c, walkSince), now - w >= WALK_STAND_MIN_MS - ROW_MS else { return false }
     guard let mps = c.lastFixMps, let ts = c.lastFixTs else { return true }
     return mps <= WALKER_PACE_MAX_MPS || now - ts > WALK_STALE_FIX_MS

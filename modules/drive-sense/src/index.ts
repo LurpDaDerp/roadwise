@@ -234,12 +234,14 @@ const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.le
 
 /**
  * `stopCapture`'s native arguments (kind, endedAt, drivingAtEnd): "now" with nothing known,
- * "dropped" for a drive not kept, "at" with its driving end. Only a valid `end` is ever sent.
+ * "dropped" for a drive not kept, "at" with its driving end, "auto" the same for one a JS
+ * automatic end rule ended (`automatic`). Only a valid `end` is ever sent.
  */
 function captureEndArgs(end: CaptureEnd | undefined): [string, number, boolean] {
   if (end === undefined || end === null || typeof end !== 'object') return ['now', 0, false];
   const atEnd = end.drivingAtEnd === true;
-  return end.drivingEndedAt === null ? ['dropped', 0, atEnd] : ['at', end.drivingEndedAt, atEnd];
+  if (end.drivingEndedAt === null) return ['dropped', 0, atEnd];
+  return [end.automatic === true ? 'auto' : 'at', end.drivingEndedAt, atEnd];
 }
 
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);

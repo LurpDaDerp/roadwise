@@ -565,9 +565,11 @@ describe('iOS drive detector: the state machine (text)', () => {
     // a JS end is automatic by the shared policy helper (policy.ts lingerAfterJsEnd), the carried
     // phone's walking pace included
     const auto = fn(d, 'func automaticEndDue()');
-    expect(auto).toMatch(/return DetectPolicy\.lingerAfterJsEnd\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil\)/);
+    expect(auto).toMatch(/return DetectPolicy\.lingerAfterJsEnd\(endClock, startedAt: startedAt, now: DriveDetector\.now\(\), walkSince: walkSince, waitUntil: r\.waitUntil, carGoneSince: CarLink\.shared\.goneSince\)/);
     const helper = fn(code('DetectEndPolicy.swift'), 'static func lingerAfterJsEnd(');
-    expect(helper).toMatch(/let o = endDue\(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)\.overdue\s*if o == "still" \|\| o == "walking" \{ return true \}/);
+    expect(helper).toMatch(/let o = endDue\(c, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil, carGoneSince: carGoneSince\)\.overdue\s*if o == "still" \|\| o == "walking" \{ return true \}/);
+    // a step walk JS ended on the row native just recorded (its row clock runs a row ahead)
+    expect(helper).toMatch(/if waitUntil == nil, c\.stepWalkTs != nil \{ return true \}/);
     // a walk standing JS's 3 s floor less a row, unless a trusted fix over a walker's pace 15 s old
     // or less says the car is driving
     expect(helper).toMatch(/guard waitUntil == nil, let w = walkStanding\(c, walkSince\), now - w >= WALK_STAND_MIN_MS - ROW_MS else \{ return false \}\s*guard let mps = c\.lastFixMps, let ts = c\.lastFixTs else \{ return true \}\s*return mps <= WALKER_PACE_MAX_MPS \|\| now - ts > WALK_STALE_FIX_MS/);
@@ -575,7 +577,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(tsPolicy).toContain('const walk = walkStanding(c, walkSince);\n  if (waitUntil !== null || walk === null || now - walk < DETECT.WALK_STAND_MIN_MS - DETECT.ROW_MS) return false;');
     expect(tsPolicy).toContain('return c.lastFix === null || c.lastFix.mps <= DETECT.WALKER_PACE_MAX_MPS || now - c.lastFix.ts > DETECT.WALK_STALE_FIX_MS;');
     // the self-test answers it for every end check
-    expect(code('DetectSelfTest.swift')).toMatch(/let linger = DetectPolicy\.lingerAfterJsEnd\(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil\)/);
+    expect(code('DetectSelfTest.swift')).toMatch(/let linger = DetectPolicy\.lingerAfterJsEnd\(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil, carGoneSince: gone\)/);
     // a region exit during the linger is never dropped as "busy": the linger becomes an ordinary
     // watch from the exit (vehicle signs keep it open, an hourly cap entry, its evidence kept)
     const wake = fn(d, 'func onWake(');
@@ -626,13 +628,28 @@ describe('iOS drive detector: the state machine (text)', () => {
     const rec = fn(detector(), 'func record(');
     expect(rec).toMatch(/line\["seq"\] = nextSeq\s*nextSeq \+= 1\s*journal\.appendRow\(driveId, line\)\s*capture\.emitRow\(line, ts: Int64\(d\.ts\)\)/);
     expect(rec).toMatch(/func record\(_ d: DetectRow, _ body: \[String: Any\], evaluate: Bool = true\)/);
-    expect(rec).toMatch(/endClock = DetectPolicy\.endOnRow\(endClock, d, automotiveNow: automotiveNow\(\)\)\s*if walkSince != nil && DetectPolicy\.walkStanding\(endClock, walkSince\) == nil \{ walkSince = nil \}\s*if evaluate \{ evaluateEnd\(\) \}/);
+    expect(rec).toMatch(/endClock = DetectPolicy\.endOnRow\(endClock, d, automotiveNow: automotiveNow\(\)\)\s*if let n = steps \{ endClock = DetectPolicy\.endOnSteps\(endClock, ts: d\.ts, steps: n\) \}\s*if walkSince != nil && DetectPolicy\.walkStanding\(endClock, walkSince\) == nil \{ walkSince = nil \}\s*if evaluate \{ evaluateEnd\(\) \}/);
+    // the pedometer's count rides on the row (journal and JS alike) once it has one
+    expect(rec).toMatch(/let steps = pedometer\.steps\s*if let n = steps \{ line\["steps"\] = n \}\s*line\["seq"\] = nextSeq/);
+  });
+
+  it('the pedometer: counts from the drive\'s start while it records (a resume goes on from it), stops at every end, only with step counting and Motion & Fitness', () => {
+    const d = detector();
+    expect(fn(d, 'func beginDrive(')).toMatch(/pedometer\.start\(driveId: driveId, from: Date\(timeIntervalSince1970: start\.startedAt \/ 1000\)\)/);
+    expect(fn(d, 'func resumeDrive(')).toMatch(/self\.pedometer\.start\(driveId: driveId, from: Date\(timeIntervalSince1970: startedAt \/ 1000\)\)/);
+    for (const f of ['func commitEnd(', 'func notDriving()', 'func wipe(']) expect({ f, stops: /pedometer\.stop\(\)/.test(fn(d, f)) }).toEqual({ f, stops: true });
+    const ped = code('PedometerSource.swift');
+    expect(ped).toMatch(/CMPedometer\.isStepCountingAvailable\(\)/);
+    expect(ped).toMatch(/CMPedometer\.authorizationStatus\(\) == \.authorized/);
+    expect(ped).toMatch(/pedometer\.startUpdates\(from: from\)/);
+    expect(ped).toMatch(/if error != nil \{/);
+    expect(fn(ped, 'func stop()')).toMatch(/pedometer\.stopUpdates\(\)/);
   });
 
   it('the safety stop: the policy decides; native commits with endedAt = when it decided and tells JS; a JS end is journaled as "js" and not echoed', () => {
     const d = detector();
     const ev = fn(d, 'func evaluateEnd()');
-    expect(ev).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r\.waitUntil\)/);
+    expect(ev).toMatch(/DetectPolicy\.endDue\(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r\.waitUntil, carGoneSince: CarLink\.shared\.goneSince\)/);
     expect(ev).toMatch(/if let cause = d\.due \{\s*commitEnd\(cause: cause, endedAt: now, linger: cause == "still" \|\| cause == "walking"\)/);
     const end = fn(d, 'func commitEnd(');
     expect(end).toMatch(/"k": "end"/);
@@ -643,7 +660,9 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(end).toMatch(/if let f = lastFix \{ r\.lastEnd = DetectLastEnd\(decidedAt: now, cut: cause == "js" \? endedAt : now, lat: f\.lat, lng: f\.lng, driveId: driveId\) \}/);
     expect(end).toMatch(/if r\.state == "armed", let f = lastFix \{ wakes\.setParked\(f\) \}/);
     expect(end).not.toMatch(/r\.lastEnd = lastFix\.map|setParked\(lastFix\)/);
-    expect(fn(d, 'func stopCapture(')).toMatch(/commitEnd\(cause: "js", endedAt: end\?\.drivingEndedAt \?\? DriveDetector\.now\(\), linger: automaticEndDue\(\)\)/);
+    // a JS end JS calls automatic (`stopCapture`'s "auto": the parking spot's among others) lingers too
+    expect(fn(d, 'func stopCapture(')).toMatch(/commitEnd\(cause: "js", endedAt: end\?\.drivingEndedAt \?\? DriveDetector\.now\(\), linger: end\?\.automatic == true \|\| automaticEndDue\(\)\)/);
+    expect(code('CaptureEnd.swift')).toMatch(/case "at", "auto":\s*guard endedAt\.isFinite && endedAt >= 0 else \{ return nil \}\s*return CaptureEnd\(drivingEndedAt: endedAt, drivingAtEnd: drivingAtEnd, automatic: kind == "auto"\)/);
     expect(moduleCode()).toMatch(/AsyncFunction\("stopCapture"\)[\s\S]{0,140}DriveDetector\.shared\.stopCapture\(end: CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\)/);
   });
 
@@ -827,12 +846,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectStartPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq', 'slowTrafficCarMs', 'slowTrafficHeld', 'slowTrafficReport', 'slowTrafficConfirmed', 'slowTrafficStep', 'carLinked', 'carMostOfDrive', 'linkStep']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endOnSteps', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq', 'slowTrafficCarMs', 'slowTrafficHeld', 'slowTrafficReport', 'slowTrafficConfirmed', 'slowTrafficStep', 'carLinked', 'carMostOfDrive', 'linkStep']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
     for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'veto', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status', 'slow', 'link', 'car']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['slowTrafficReport(', 'slowTrafficStep(', 'slowTrafficCarMs(', 'linkStep(', 'carLinked(', 'carMostOfDrive(', 'confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
+    for (const call of ['slowTrafficReport(', 'slowTrafficStep(', 'slowTrafficCarMs(', 'linkStep(', 'carLinked(', 'carMostOfDrive(', 'confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endOnSteps(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded and goes back over a stop the car rolled (5 mph) into; the
@@ -870,7 +889,10 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     );
     // the drive's walking end is 10 s with its own 10 s slack; the still end and the cap keep a
     // minute (the candidate and the rest keep a 20 s walk)
-    expect(code('DetectEndPolicy.swift')).toMatch(/if walked >= WALK_END_MS \+ walkSlack \{ return "walking" \}/);
+    expect(code('DetectEndPolicy.swift')).toMatch(/if walked >= WALK_END_MS \+ walkSlack \|\| stepped >= walkSlack \{ return "walking" \}/);
+    // the step walk takes the walk's slack; the car link's end is a still one with the still end's
+    expect(code('DetectEndPolicy.swift')).toMatch(/if let g = carGoneSince, waitUntil == nil, c\.lastFastTs\.map\(\{ \$0 < g \}\) \?\? true \{ gone = now - g \}/);
+    expect(code('DetectEndPolicy.swift')).toMatch(/if gone >= CAR_GONE_MS \+ slack \{ return "still" \}/);
     // a walk the car has driven since (two trusted rows at 10 mph or more in a row, the second at or
     // after its arrival) never counts, as JS voids it (machine.ts checkFoot)
     const end = code('DetectEndPolicy.swift');

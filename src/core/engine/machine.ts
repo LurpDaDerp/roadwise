@@ -10,7 +10,8 @@
 // after a reported walk began (the report standing 3 s at least) with the car at 3 mph or slower,
 // or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2), or once the
 // pedometer counts a walk (`motion.ts` step walk), or after a minute stopped at a known parking
-// spot (`motion.ts`; the spots are the host's, `deps.parkingSpots`). Every end
+// spot (`motion.ts`; the spots are the host's, `deps.parkingSpots`), or 15 s after the paired car
+// or CarPlay went with the car not over 3 mph since (`deps.carGoneSince`). Every end
 // but a prompt manual one closes the drive where the car last moved (`closeAtLastMovement`; a
 // walking end at or before the walk began): a manual end `MANUAL_CUT_AFTER_S` or more after the
 // idle clock's base is cut too, a sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
@@ -40,6 +41,7 @@ import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './display
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import {
   calmFor,
+  carGoneEnds,
   carStillDriving,
   fastRow,
   footReading,
@@ -347,6 +349,7 @@ export function createEngine(deps: EngineDeps): Engine {
     if (await checkFoot(row.ts + ROW_MS)) return;
     if (await checkSteps(row.ts + ROW_MS)) return;
     if (await checkParked(row.ts + ROW_MS)) return;
+    if (await checkCarGone(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -441,6 +444,19 @@ export function createEngine(deps: EngineDeps): Engine {
     if (vehicle !== null && (vehicle.standing || vehicle.at > t - PARK_STOP_MS)) return false;
     const spots = deps.parkingSpots?.() ?? [];
     if (spots.length === 0 || !nearSpot(s.lastFix, spots)) return false;
+    await finalize((open) => closeAtLastMovement(open, 'stopped'));
+    return true;
+  }
+
+  /**
+   * The car-link end at `t` (row clock): the paired car or CarPlay gone 15 s with no trusted fix over
+   * 3 mph since (`motion.ts` `carGoneEnds`, from `deps.carGoneSince`). A still end, cut at the last
+   * movement. Never on a replayed row (the link's state is now, not then). True when it ended the drive.
+   */
+  async function checkCarGone(t: number): Promise<boolean> {
+    if (status !== 'recording' || held() || replaying) return false;
+    const s = session as TripSession;
+    if (!carGoneEnds(deps.carGoneSince?.() ?? null, s.startedAt, lastFastAt, t)) return false;
     await finalize((open) => closeAtLastMovement(open, 'stopped'));
     return true;
   }
@@ -627,7 +643,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status === 'recording') await release();
         return;
       case 'tick':
-        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts))) await checkParked(e.ts);
+        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts)) && !(await checkParked(e.ts))) await checkCarGone(e.ts);
         return;
     }
   }

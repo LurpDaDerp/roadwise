@@ -174,12 +174,14 @@ enum DetectSelfTest {
       if step["row"] != nil {
         guard let r = rowOf(step["row"]) else { return nil }
         clock = DetectPolicy.endOnRow(clock, r, automotiveNow: jsonBool(step["automotive"]) ?? false)
+        if let n = jsonNumber(step["steps"]) { clock = DetectPolicy.endOnSteps(clock, ts: r.ts, steps: Int(n)) }
       } else {
         guard let now = jsonNumber(step["check"]) else { return nil }
         let walkSince = jsonNumber(step["walkSince"])
         let waitUntil = jsonNumber(step["waitUntil"])
-        let d = DetectPolicy.endDue(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil)
-        let linger = DetectPolicy.lingerAfterJsEnd(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil)
+        let gone = jsonNumber(step["carGoneSince"])
+        let d = DetectPolicy.endDue(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil, carGoneSince: gone)
+        let linger = DetectPolicy.lingerAfterJsEnd(clock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: waitUntil, carGoneSince: gone)
         results.append(["due": d.due.map { $0 as Any } ?? NSNull(), "overdue": d.overdue.map { $0 as Any } ?? NSNull(), "linger": linger])
       }
     }

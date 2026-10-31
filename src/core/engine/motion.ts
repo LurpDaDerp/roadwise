@@ -26,7 +26,11 @@
 //   or of a saved place, and no confident in-a-vehicle report standing or arriving in those 60 s:
 //   the drive ends as a still end (`stopped`), cut at the stop. Only once the drive has reached
 //   driving speed, and never on a replayed row (no motion reports come with one).
-// While a Start-card drive still waits for driving speed neither applies.
+// - The car link (iOS): the paired car or CarPlay gone `CAR_GONE_MS` (15 s) continuously during a
+//   drive that had it (native's debounced "gone since", the host's `deps.carGoneSince`), with no
+//   trusted fix over 3 mph since it went: a still end (`stopped`), cut at the last movement. A
+//   disconnect while the car moves never ends a drive; a reconnect clears it. Never on a replayed row.
+// While a Start-card drive still waits for driving speed none of them applies.
 import type { MotionActivity } from '@drive-sense';
 import { WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
 
@@ -130,6 +134,21 @@ export function stepWalk(log: readonly StepMark[]): { since: number } | null {
 
 /** The car has had no trusted fix over 3 mph in the `STEP_CALM_MS` up to `t` (row clock); `lastFastAt` is the last such row's time. */
 export const calmFor = (lastFastAt: number | null, t: number, ms: number): boolean => lastFastAt === null || t - lastFastAt > ms;
+
+// --- the car link -------------------------------------------------------------------------------
+
+/** The car-link end: the paired car or CarPlay gone this long, with no trusted fix over 3 mph since. */
+export const CAR_GONE_MS = 15_000;
+
+/**
+ * The car-link end at `t` (row clock): gone since `goneSince` (at or after the drive's start, so an
+ * old reading never counts) for `CAR_GONE_MS` or more, and no trusted fix over 3 mph since it went
+ * (`lastFastAt` before it).
+ */
+export function carGoneEnds(goneSince: number | null, startedAt: number, lastFastAt: number | null, t: number): boolean {
+  if (goneSince === null || goneSince < startedAt || t - goneSince < CAR_GONE_MS) return false;
+  return lastFastAt === null || lastFastAt < goneSince;
+}
 
 // --- the known parking spot -----------------------------------------------------------------------
 

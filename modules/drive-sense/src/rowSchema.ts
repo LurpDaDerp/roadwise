@@ -232,6 +232,7 @@ export const captureModeSchema = z.enum(['mounted', 'pocket', 'auto']);
 export const captureEndSchema: z.ZodType<CaptureEnd> = z.strictObject({
   drivingEndedAt: z.number().finite().nonnegative().nullable(),
   drivingAtEnd: z.boolean(),
+  automatic: z.boolean().optional(),
 });
 export const captureRateSchema = z.enum(['full', 'low']);
 export const thermalLevelSchema: z.ZodType<ThermalLevel> = z.enum([

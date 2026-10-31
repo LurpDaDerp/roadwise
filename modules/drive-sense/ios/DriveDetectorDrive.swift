@@ -96,6 +96,7 @@ extension DriveDetector {
     lastFix = nil
     endClock = DetectPolicy.endClockAt(now)
     CarLink.shared.beginDrive()
+    pedometer.start(driveId: driveId, from: Date(timeIntervalSince1970: start.startedAt / 1000))
     capture.openCapture(startedAt: start.startedAt, mode: kind == "auto" ? "auto" : "mounted")
     let kept = buffer.items.filter { $0.row.ts >= firstTs }
     buffer.clear()
@@ -113,13 +114,15 @@ extension DriveDetector {
     syncWakes()
   }
 
-  /// One row of the drive: journaled and emitted with the next `seq`, the safety-stop clock fed and
-  /// (a live row) checked. A walk the car has driven since (the walk to the car, a misread at a
-  /// light or at speed) is dropped, as JS drops it, so the next confident walking report starts a
-  /// new one.
+  /// One row of the drive: journaled and emitted with the next `seq` and the pedometer's count so far
+  /// (`steps`, once it has one), the safety-stop clock fed and (a live row) checked. A walk the car
+  /// has driven since (the walk to the car, a misread at a light or at speed) is dropped, as JS
+  /// drops it, so the next confident walking report starts a new one.
   func record(_ d: DetectRow, _ body: [String: Any], evaluate: Bool = true) {
     guard let driveId = rec?.driveId else { return }
     var line = body
+    let steps = pedometer.steps
+    if let n = steps { line["steps"] = n }
     line["seq"] = nextSeq
     nextSeq += 1
     journal.appendRow(driveId, line)
@@ -128,6 +131,7 @@ extension DriveDetector {
     CarLink.shared.countRow()
     if DetectPolicy.trusted(d) { lastFix = (lat: d.lat, lng: d.lng) }
     endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow: automotiveNow())
+    if let n = steps { endClock = DetectPolicy.endOnSteps(endClock, ts: d.ts, steps: n) }
     if walkSince != nil && DetectPolicy.walkStanding(endClock, walkSince) == nil { walkSince = nil }
     if evaluate { evaluateEnd() }
   }
@@ -138,7 +142,7 @@ extension DriveDetector {
   func evaluateEnd() {
     guard var r = rec, isRecording, let startedAt = r.startedAt else { return }
     let now = DriveDetector.now()
-    let d = DetectPolicy.endDue(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r.waitUntil)
+    let d = DetectPolicy.endDue(endClock, startedAt: startedAt, now: now, walkSince: walkSince, waitUntil: r.waitUntil, carGoneSince: CarLink.shared.goneSince)
     if let cause = d.due {
       commitEnd(cause: cause, endedAt: now, linger: cause == "still" || cause == "walking")
       return
@@ -164,6 +168,7 @@ extension DriveDetector {
     let lingerAfter = linger && r.waitUntil == nil
     // A drive that reached driving speed tells the car link which outputs it had (before the clock resets).
     CarLink.shared.endDrive(driveId: driveId, endedAt: endedAt, drove: endClock.lastDroveTs != nil)
+    pedometer.stop()
     let lastSeq = nextSeq - 1
     let rowTs = lastRowTs
     journal.appendMarker(driveId, [
@@ -196,7 +201,7 @@ extension DriveDetector {
   /// fix at a walker's pace or under (a carried phone), more than 15 s old, or missing.
   func automaticEndDue() -> Bool {
     guard let r = rec, isRecording, let startedAt = r.startedAt else { return false }
-    return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil)
+    return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil, carGoneSince: CarLink.shared.goneSince)
   }
 
   /// "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests
@@ -207,6 +212,7 @@ extension DriveDetector {
     let lastSeq = nextSeq - 1
     let rowTs = lastRowTs
     CarLink.shared.endDrive(driveId: driveId, endedAt: now, drove: false)
+    pedometer.stop()
     journal.delete(driveId)
     r.state = "suppressed"
     r.since = now
@@ -260,6 +266,7 @@ extension DriveDetector {
     lingering = false
     save(DetectStateRecord())
     CarLink.shared.wipe()
+    pedometer.stop()
     wakes.stop()
     journal.wipe(done: done)
     emitState(waiting ? "cancelled" : "disarmed")

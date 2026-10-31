@@ -258,3 +258,48 @@ describe('vehicleReading', () => {
     expect(vehicleReading({ ...act('automotive', T0), exit: true })).toBe('clear');
   });
 });
+
+describe('the car link', () => {
+  test('gone 15 s with nothing over 3 mph since: a still end cut at the last movement', async () => {
+    let gone: number | null = null;
+    const h = await started({ carGoneSince: () => gone });
+    const rows = path(T0, DRIVE, { n: 60, mps: 0 });
+    await feed(h, rows.slice(0, 65));
+    // The link goes at T0 + 65 s (stopped since T0 + 60 s): 15 s later, at the row ending T0 + 80 s, the drive ends.
+    gone = T0 + 65_000;
+    await feed(h, rows.slice(65, 79));
+    expect(status(h)).toBe('recording');
+    await feed(h, rows.slice(79, 80));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', cut: true, endedAt: DRIVE_END });
+  });
+
+  test('a disconnect while the car moves does nothing, nor one from before the drive', async () => {
+    const moving = await started({ carGoneSince: () => T0 + 50_000 });
+    await feed(moving, path(T0, DRIVE, { n: 60, mps: 0 }));
+    expect(status(moving)).toBe('recording');
+    const old = await started({ carGoneSince: () => T0 - 1000 });
+    await feed(old, path(T0, DRIVE, { n: 60, mps: 0 }));
+    expect(status(old)).toBe('recording');
+  });
+
+  test('a reconnect inside the 15 s cancels it', async () => {
+    let gone: number | null = null;
+    const h = await started({ carGoneSince: () => gone });
+    const rows = path(T0, DRIVE, { n: 90, mps: 0 });
+    await feed(h, rows.slice(0, 65));
+    gone = T0 + 65_000;
+    await feed(h, rows.slice(65, 75));
+    gone = null;
+    await feed(h, rows.slice(75, 120));
+    expect(status(h)).toBe('recording');
+  });
+
+  test('never while a Start-card drive waits, nor on replayed rows', async () => {
+    const held = await started({ carGoneSince: () => T0 + 61_000, holdEnds: () => true });
+    await feed(held, path(T0, DRIVE, { n: 60, mps: 0 }));
+    expect(status(held)).toBe('recording');
+    const replayed = await started({ carGoneSince: () => T0 + 61_000 });
+    await feed(replayed, path(T0, DRIVE, { n: 60, mps: 0 }), true);
+    expect(status(replayed)).toBe('recording');
+  });
+});

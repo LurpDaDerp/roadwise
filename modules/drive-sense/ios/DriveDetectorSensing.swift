@@ -85,8 +85,9 @@ extension DriveDetector {
   }
 
   /// The car link changed (the route, a pairing, a drive's outputs): JS hears it at once ("carLink",
-  /// never buffered). Round 11 E's car-link end hooks here: mid-drive, CarLink.shared.goneSince is
-  /// the debounced "car disconnected since" (nil again once the car is back).
+  /// never buffered). Mid-drive, CarLink.shared.goneSince is the debounced "car disconnected since"
+  /// (nil again once the car is back): JS's car-link end reads it, and the safety stop's mirror
+  /// (`evaluateEnd`, every row and tick) does too.
   func onCarLink() {
     EventHub.detect.emitLive("carLink", CarLink.shared.json())
   }
@@ -238,6 +239,8 @@ extension DriveDetector {
       // The still clock restarts at the last row journaled (a kill at a light does not end the drive).
       self.endClock = DetectPolicy.endClockAt(s.lastRowTs ?? now)
       CarLink.shared.beginDrive()
+      // The count goes on from the drive's start, so its rows' steps keep growing past the gap.
+      self.pedometer.start(driveId: driveId, from: Date(timeIntervalSince1970: startedAt / 1000))
       self.capture.beginSensing()
       self.capture.openCapture(startedAt: startedAt, mode: r.origin == "manual" ? "mounted" : "auto")
       self.startClock()

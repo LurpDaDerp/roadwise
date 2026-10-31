@@ -197,10 +197,14 @@ describe('every method goes to native with its arguments', () => {
     await DriveSense.stopCapture({ drivingEndedAt: 1_760_000_000_000, drivingAtEnd: true });
     await DriveSense.stopCapture({ drivingEndedAt: null, drivingAtEnd: false });
     await DriveSense.stopCapture(undefined);
+    await DriveSense.stopCapture({ drivingEndedAt: 1_760_000_000_000, drivingAtEnd: false, automatic: true });
+    await DriveSense.stopCapture({ drivingEndedAt: null, drivingAtEnd: false, automatic: true });
     expect(mockNative.stopCapture!.mock.calls).toEqual([
       ['at', 1_760_000_000_000, true],
       ['dropped', 0, false],
       ['now', 0, false],
+      ['auto', 1_760_000_000_000, false],
+      ['dropped', 0, false],
     ]);
   });
 

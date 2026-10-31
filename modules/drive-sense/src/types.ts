@@ -69,6 +69,11 @@ export interface CaptureEnd {
   drivingEndedAt: number | null;
   /** The car was still at driving speed as the drive ended (it was ended while driving on). */
   drivingAtEnd: boolean;
+  /**
+   * iOS: a JS automatic end rule ended it (the still, walking, step, parking-spot or car-link end),
+   * so the detector watches on at once for the car setting off again (its linger). Absent: false.
+   */
+  automatic?: boolean;
 }
 /** rev1: I5 — `low` = coarse location, no IMU, rows only when a fix arrives. */
 export type CaptureRate = 'full' | 'low';
