@@ -37,6 +37,7 @@ const V3_ROUTES = [
   '(app)/achievements.tsx',
   '(app)/settings/index.tsx',
   '(app)/settings/privacy-zones.tsx',
+  '(app)/settings/places.tsx',
   '(app)/settings/notifications.tsx',
   '(app)/settings/alerts.tsx',
   '(app)/settings/account.tsx',

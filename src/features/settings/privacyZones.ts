@@ -1,12 +1,13 @@
 /**
- * Privacy zones (plan §1 decision 6, §10): up to 3 circles, 200–800 m, stored only on this phone
+ * Privacy zones (plan §1 decision 6, §10): up to 6 circles, 200–800 m, stored only on this phone
  * under `privacy.zones`. The drive pipeline trims routes and event dots inside them before anything
- * is uploaded, so the server, share cards and heat maps never see where a zone is.
+ * is uploaded, so the server, share cards and heat maps never see where a zone is. A zone made from
+ * a saved place (`src/features/places`) carries the place's id and follows it when it moves.
  */
 import type { SettingsRepo } from '@/data/db/settings';
 
 export const PRIVACY_ZONES_KEY = 'privacy.zones';
-export const MAX_ZONES = 3;
+export const MAX_ZONES = 6;
 export const MIN_RADIUS_M = 200;
 export const MAX_RADIUS_M = 800;
 export const RADIUS_STEP_M = 50;
@@ -19,6 +20,8 @@ export interface PrivacyZone {
   lat: number;
   lng: number;
   radiusM: number;
+  /** The saved place this zone hides, when it was made from one. */
+  placeId?: string;
 }
 
 export type ZoneProblem = 'name_empty' | 'name_long' | 'radius' | 'center' | 'too_many';
@@ -63,7 +66,14 @@ function isZone(v: unknown): v is PrivacyZone {
 /** The stored zones; anything malformed is skipped, never fatal. */
 export async function readZones(settings: Pick<SettingsRepo, 'get'>): Promise<PrivacyZone[]> {
   const raw = await settings.get<unknown>(PRIVACY_ZONES_KEY);
-  return Array.isArray(raw) ? raw.filter(isZone).slice(0, MAX_ZONES) : [];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(isZone)
+    .slice(0, MAX_ZONES)
+    .map((z) => {
+      const { placeId, ...rest } = z;
+      return typeof placeId === 'string' && placeId !== '' ? { ...rest, placeId } : rest;
+    });
 }
 
 /** Saves the list, names trimmed. Rejects (writing nothing) when the list breaks a rule. */
@@ -72,9 +82,12 @@ export async function writeZones(settings: Pick<SettingsRepo, 'set'>, zones: rea
   if (problem) throw new Error(`privacy zones: ${problem}`);
   await settings.set(
     PRIVACY_ZONES_KEY,
-    zones.map((z) => ({ id: z.id, name: z.name.trim(), lat: z.lat, lng: z.lng, radiusM: z.radiusM }))
+    zones.map((z) => ({ id: z.id, name: z.name.trim(), lat: z.lat, lng: z.lng, radiusM: z.radiusM, ...(z.placeId ? { placeId: z.placeId } : {}) }))
   );
 }
+
+/** The zone made from the saved place `placeId`, if there is one. */
+export const zoneOfPlace = (zones: readonly PrivacyZone[], placeId: string): PrivacyZone | undefined => zones.find((z) => z.placeId === placeId);
 
 /** A new zone id; unique enough for three local rows. */
 export function newZoneId(now: number = Date.now()): string {

@@ -10,6 +10,7 @@ import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
+import { usePlaces } from '@/features/places/usePlaces';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
@@ -162,6 +163,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const profile = summary.data?.profile;
   const edit = useProfileEdit();
   const auto = useAutoDrivesSwitch();
+  const { places } = usePlaces();
 
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
@@ -261,6 +263,13 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
       </Section>
 
       <Section title={copy.you}>
+        <LinkRow
+          icon="home-outline"
+          title={copy.places.title}
+          subtitle={copy.places.subtitle((places ?? []).map((p) => p.name))}
+          onPress={() => router.push(SETTINGS_HREFS.places)}
+          testID="settings-places"
+        />
         <SegmentRow<Units> title={copy.units} value={shownUnits} segments={UNIT_SEGMENTS} onChange={(v) => void onUnits(v)} testID="settings-units" />
         <ListRow
           title={copy.appearance.title}

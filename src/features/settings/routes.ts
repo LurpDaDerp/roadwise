@@ -7,6 +7,7 @@ export const SETTINGS_HREFS = {
   alerts: '/settings/alerts' as Href,
   notifications: '/settings/notifications' as Href,
   privacyZones: '/settings/privacy-zones' as Href,
+  places: '/settings/places' as Href,
   deleteAccount: '/settings/delete-account' as Href,
   blocked: '/settings/blocked' as Href,
   permissions: '/settings/permissions' as Href,

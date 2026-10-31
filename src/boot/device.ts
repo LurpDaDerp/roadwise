@@ -23,6 +23,7 @@ import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
+import { PLACE_NAMES_KEY, PLACES_CARD_DISMISSED_KEY, PLACES_KEY } from '@/features/places/model';
 
 import { autoDetectOff } from './autoDetect';
 
@@ -68,12 +69,19 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 /** The driver's own data a plain sign-out removes (the owner key stays, so a return restores from the server). */
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'problem_spots', 'route_pool', 'trips'];
 /**
- * The zones, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the last drive's
- * "Not driving?" budget, the problem spots' bookkeeping, and the record of how far this driver's
- * restore ran: their drives just left the phone, so the next sign-in restores them again from the top.
+ * The zones, the saved places (with the addresses looked up for learned ones, and whether Home's
+ * places card was closed), the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the
+ * last drive's "Not driving?" budget, the problem spots' bookkeeping, and the record of how far this
+ * driver's restore ran: their drives just left the phone, so the next sign-in restores them again
+ * from the top.
  */
 export const SIGN_OUT_SETTINGS: readonly string[] = [
   'privacy.zones',
+  PLACES_KEY,
+  PLACE_NAMES_KEY,
+  PLACES_CARD_DISMISSED_KEY,
+  // Home's "Pair your car" card was closed (the drive-path work owns the card).
+  'home.carCardDismissed',
   DROP_NOTICE_KEY,
   NOT_DRIVING_KEY,
   SPOTS_META_KEY,

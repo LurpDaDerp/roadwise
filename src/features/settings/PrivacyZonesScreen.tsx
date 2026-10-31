@@ -1,16 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, TextInput, View } from 'react-native';
+import { Alert, Pressable, Switch, TextInput, View } from 'react-native';
 
 import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import type { SavedPlace } from '@/features/places/model';
+import { usePlaces } from '@/features/places/usePlaces';
 import { requestSpotRecompute } from '@/features/spots/recompute';
 import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, Text, useFontScale, useTheme, withAlpha } from '@/ui';
 
 import { settingsCopy } from './copy';
 import { loadMaps, US_REGION } from './maps';
-import { RowIcon, Section, TopBar } from './parts';
+import { LinkRow, RowIcon, Section, TopBar } from './parts';
+import { SETTINGS_HREFS } from './routes';
 import {
   DEFAULT_RADIUS_M,
   MAX_RADIUS_M,
@@ -27,6 +31,7 @@ import {
 } from './privacyZones';
 
 const copy = settingsCopy.zones;
+const placeCopy = copy.places;
 
 export type LocateResult = { ok: true; lat: number; lng: number } | { ok: false; reason: 'denied' | 'failed' };
 
@@ -53,7 +58,18 @@ interface Draft {
   lat: number | null;
   lng: number | null;
   radiusM: number;
+  /** A saved place's zone: its name and centre are the place's, only its size is edited here. */
+  placeId?: string;
+  /** That place's address, for the editor's line. */
+  address?: string;
 }
+
+const placeIcons: Record<SavedPlace['kind'], keyof typeof Ionicons.glyphMap> = {
+  home: 'home-outline',
+  work: 'briefcase-outline',
+  school: 'school-outline',
+  custom: 'location-outline',
+};
 
 const EMPTY_DRAFT: Draft = { id: null, name: '', lat: null, lng: null, radiusM: DEFAULT_RADIUS_M };
 
@@ -66,15 +82,20 @@ export interface PrivacyZonesDeps {
 }
 
 /**
- * `/settings/privacy-zones`: up to 3 places whose surroundings never show on a map. Each zone is a
- * name, a centre (current location, or a tap on the map) and a 200–800 m radius set with a
- * stepper. Everything stays on this phone.
+ * `/settings/privacy-zones`: up to 6 places whose surroundings never show on a map. First the
+ * driver's saved places (Settings › Places), each with a switch that hides it under a 300 m zone
+ * centred on it (a tap on a hidden one sets its size), or a row to add places when there are none.
+ * Then the other zones, each a name, a centre (current location, or a tap on the map) and a
+ * 200–800 m radius set with a stepper. Everything stays on this phone.
  */
 export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
   const th = useTheme();
+  const router = useRouter();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
+  const { places } = usePlaces();
   const [zones, setZones] = useState<PrivacyZone[] | null>(null);
+  const [fullNote, setFullNote] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [problem, setProblem] = useState<ZoneProblem | null>(null);
   const [saveError, setSaveError] = useState(false);
@@ -119,6 +140,7 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
       lat: draft.lat as number,
       lng: draft.lng as number,
       radiusM: draft.radiusM,
+      ...(draft.placeId ? { placeId: draft.placeId } : {}),
     };
     const next = adding ? [...zones, zone] : zones.map((z) => (z.id === zone.id ? zone : z));
     if (await persist(next)) setDraft(null);
@@ -145,6 +167,41 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
   };
 
   const full = (zones?.length ?? 0) >= MAX_ZONES;
+  const saved = places ?? [];
+  const placeZone = (p: SavedPlace) => zones?.find((z) => z.placeId === p.id);
+  // A zone whose place was removed is an ordinary zone again.
+  const others = (zones ?? []).filter((z) => z.placeId === undefined || !saved.some((p) => p.id === z.placeId));
+
+  /** Hide a place under a zone of its own, centred on it. */
+  const hidePlace = (p: SavedPlace) => {
+    if (!zones) return;
+    if (full) {
+      setFullNote(true);
+      return;
+    }
+    setFullNote(false);
+    const zone: PrivacyZone = { id: newZoneId(), name: p.name.slice(0, ZONE_NAME_MAX), lat: p.lat, lng: p.lng, radiusM: DEFAULT_RADIUS_M, placeId: p.id };
+    void persist([...zones, zone]);
+  };
+
+  /** Show a place on maps again: its zone goes, after a check. */
+  const showPlace = (p: SavedPlace) => {
+    Alert.alert(placeCopy.stopTitle(p.name), copy.removeBody, [
+      { text: copy.cancel, style: 'cancel' },
+      {
+        text: placeCopy.stop,
+        style: 'destructive',
+        onPress: () => {
+          void persist((zones ?? []).filter((z) => z.placeId !== p.id)).then((ok) => {
+            if (ok) setDraft(null);
+          });
+        },
+      },
+    ]);
+  };
+
+  const editPlaceZone = (p: SavedPlace, z: PrivacyZone) =>
+    open({ id: z.id, name: z.name, lat: p.lat, lng: p.lng, radiusM: z.radiusM, placeId: p.id, address: [p.address, p.area].filter((s) => s !== '').join(', ') });
 
   return (
     <Screen scroll testID="privacy-zones-screen">
@@ -152,9 +209,32 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
       <Text variant="body">{copy.intro}</Text>
       {saveError ? <Banner tone="danger" message={copy.saveError} testID="zones-save-error" /> : null}
 
-      {zones && zones.length > 0 ? (
-        <Section footer={full ? copy.max : undefined} testID="zones-list">
-          {zones.map((z) => (
+      {places && zones ? (
+        saved.length > 0 ? (
+          <Section title={placeCopy.title} footer={fullNote ? placeCopy.full : placeCopy.footer} testID="zones-places">
+            {saved.map((p) => {
+              const z = placeZone(p);
+              return (
+                <PlaceZoneRow
+                  key={p.id}
+                  place={p}
+                  zone={z}
+                  onToggle={(on) => (on ? hidePlace(p) : showPlace(p))}
+                  onPress={() => (z ? editPlaceZone(p, z) : hidePlace(p))}
+                />
+              );
+            })}
+          </Section>
+        ) : (
+          <Section>
+            <LinkRow icon="home-outline" title={placeCopy.add.title} subtitle={placeCopy.add.subtitle} onPress={() => router.push(SETTINGS_HREFS.places)} testID="zones-add-places" />
+          </Section>
+        )
+      ) : null}
+
+      {zones && others.length > 0 ? (
+        <Section title={saved.length > 0 ? placeCopy.others : undefined} footer={full ? copy.max : undefined} testID="zones-list">
+          {others.map((z) => (
             <ListRow
               key={z.id}
               testID={`zone-${z.id}`}
@@ -166,7 +246,7 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
             />
           ))}
         </Section>
-      ) : zones ? (
+      ) : zones && saved.length === 0 ? (
         <EmptyState icon="eye-off-outline" title={copy.empty} body={copy.emptyBody} testID="zones-empty" />
       ) : null}
 
@@ -180,7 +260,7 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
       <Sheet
         visible={draft !== null}
         onClose={() => setDraft(null)}
-        title={draft?.id ? copy.editTitle : copy.newTitle}
+        title={draft?.placeId ? placeCopy.editTitle(draft.name) : draft?.id ? copy.editTitle : copy.newTitle}
         scroll
         testID="zone-editor"
       >
@@ -199,13 +279,57 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
             problem={problem}
             locate={deps.locate ?? locateOnce}
             onSave={() => void onSave()}
-            onRemove={
-              draft.id ? () => onRemove(zones?.find((z) => z.id === draft.id) ?? (draft as PrivacyZone)) : undefined
-            }
+            onRemove={(() => {
+              const linked = draft.placeId ? saved.find((p) => p.id === draft.placeId) : undefined;
+              if (linked) return () => showPlace(linked);
+              return draft.id ? () => onRemove(zones?.find((z) => z.id === draft.id) ?? (draft as PrivacyZone)) : undefined;
+            })()}
           />
         ) : null}
       </Sheet>
     </Screen>
+  );
+}
+
+/** A saved place in Privacy zones: its name, whether it's hidden (and how wide), and the switch that hides it. */
+function PlaceZoneRow({ place, zone, onToggle, onPress }: { place: SavedPlace; zone: PrivacyZone | undefined; onToggle: (on: boolean) => void; onPress: () => void }) {
+  const th = useTheme();
+  const line = zone ? placeCopy.hidden(zone.radiusM) : placeCopy.shown;
+  return (
+    <Pressable
+      accessible={false}
+      onPress={onPress}
+      testID={`zones-place-${place.id}`}
+      style={({ pressed }) => ({
+        minHeight: 56,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: th.space.md,
+        paddingVertical: th.space.md,
+        paddingHorizontal: th.space.lg,
+        backgroundColor: pressed ? th.colors.surfaceRaised : 'transparent',
+      })}
+    >
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <RowIcon name={zone ? 'eye-off-outline' : placeIcons[place.kind]} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text variant="body">{place.name}</Text>
+        <Text variant="footnote" tone="muted">
+          {line}
+        </Text>
+      </View>
+      <Switch
+        testID={`zones-place-${place.id}-switch`}
+        accessibilityLabel={placeCopy.hideLabel(place.name)}
+        accessibilityHint={line}
+        value={zone !== undefined}
+        onValueChange={onToggle}
+        trackColor={{ true: th.colors.accent, false: th.colors.border }}
+        ios_backgroundColor={th.colors.border}
+        thumbColor="#FFFFFF"
+      />
+    </Pressable>
   );
 }
 
@@ -245,6 +369,8 @@ function ZoneEditor({
   const [locateError, setLocateError] = useState<'denied' | 'failed' | null>(null);
   const maps = loadMaps();
   const hasCenter = draft.lat !== null && draft.lng !== null;
+  // A saved place's zone: named and centred by the place, so only its size is set here.
+  const linked = draft.placeId !== undefined;
   // A fix that lands after this editor closed belongs to no draft (a reopened editor is a new one).
   const mounted = useRef(true);
   useEffect(() => {
@@ -266,6 +392,11 @@ function ZoneEditor({
 
   return (
     <View style={{ gap: th.space.lg, paddingBottom: th.space.lg }}>
+      {linked ? (
+        <Text variant="body" tone="muted" testID="zone-place-center">
+          {placeCopy.centered(draft.address || draft.name)}
+        </Text>
+      ) : (
       <View style={{ gap: th.space.sm }}>
         <Text variant="headline">{copy.name}</Text>
         <TextInput
@@ -295,6 +426,7 @@ function ZoneEditor({
           ))}
         </View>
       </View>
+      )}
 
       <View style={{ gap: th.space.sm }}>
         <Text variant="headline">{copy.size}</Text>
@@ -332,16 +464,20 @@ function ZoneEditor({
       </View>
 
       <View style={{ gap: th.space.sm }}>
-        <Text variant="headline">{copy.center}</Text>
-        <Button
-          label={locating ? copy.locating : copy.useLocation}
-          icon="locate"
-          variant="secondary"
-          size="md"
-          loading={locating}
-          onPress={() => void locateHere()}
-          testID="zone-use-location"
-        />
+        {linked ? null : (
+          <>
+            <Text variant="headline">{copy.center}</Text>
+            <Button
+              label={locating ? copy.locating : copy.useLocation}
+              icon="locate"
+              variant="secondary"
+              size="md"
+              loading={locating}
+              onPress={() => void locateHere()}
+              testID="zone-use-location"
+            />
+          </>
+        )}
         {locateError ? (
           <Text variant="footnote" tone="danger" accessibilityRole="alert">
             {locateError === 'denied' ? copy.locationDenied : copy.locationFailed}
@@ -349,9 +485,11 @@ function ZoneEditor({
         ) : null}
         {maps ? (
           <>
-            <Text variant="footnote" tone="muted">
-              {copy.pickOnMap}
-            </Text>
+            {linked ? null : (
+              <Text variant="footnote" tone="muted">
+                {copy.pickOnMap}
+              </Text>
+            )}
             <View
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
@@ -369,7 +507,7 @@ function ZoneEditor({
                     ? { latitude: draft.lat as number, longitude: draft.lng as number, latitudeDelta: 0.03, longitudeDelta: 0.03 }
                     : undefined
                 }
-                onPress={(e) => onChange({ ...draft, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
+                onPress={linked ? undefined : (e) => onChange({ ...draft, lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
                 showsPointsOfInterests={false}
                 toolbarEnabled={false}
               >
@@ -386,9 +524,11 @@ function ZoneEditor({
             </View>
           </>
         ) : null}
-        <Text variant="footnote" tone={hasCenter ? 'success' : 'muted'} testID="zone-center-status">
-          {hasCenter ? copy.centerSet : copy.noCenter}
-        </Text>
+        {linked ? null : (
+          <Text variant="footnote" tone={hasCenter ? 'success' : 'muted'} testID="zone-center-status">
+            {hasCenter ? copy.centerSet : copy.noCenter}
+          </Text>
+        )}
       </View>
 
       {problem ? (
@@ -397,8 +537,8 @@ function ZoneEditor({
         </Text>
       ) : null}
 
-      <Button label={copy.save} onPress={onSave} testID="zone-save" />
-      {onRemove ? <Button label={copy.remove} variant="destructive" size="md" onPress={onRemove} testID="zone-remove" /> : null}
+      <Button label={linked ? placeCopy.saveSize : copy.save} onPress={onSave} testID="zone-save" />
+      {onRemove ? <Button label={linked ? placeCopy.stop : copy.remove} variant="destructive" size="md" onPress={onRemove} testID="zone-remove" /> : null}
     </View>
   );
 }

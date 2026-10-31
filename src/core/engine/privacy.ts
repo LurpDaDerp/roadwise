@@ -30,7 +30,7 @@ export interface PrivacyZone {
 
 /** Settings key the privacy zones live under (WP9 edits them; this reads them). */
 export const PRIVACY_ZONES_KEY = 'privacy.zones';
-export const MAX_ZONES = 3;
+export const MAX_ZONES = 6;
 export const ZONE_RADIUS_M = { min: 200, max: 800 } as const;
 
 /** The first and last 0.25 mi of every route are trimmed at least (`TRIM_ENDS_M`, 402 m, from the scoring package)… */

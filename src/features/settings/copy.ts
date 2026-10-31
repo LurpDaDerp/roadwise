@@ -51,7 +51,13 @@ export const settingsCopy = {
     alerts: { title: 'Alerts', subtitle: 'Voice, sound and vibration' },
     permissions: { title: 'Permissions', subtitle: 'What RoadWise can use on this phone' },
     privacy: 'Privacy',
-    zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 3 set`) },
+    zones: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Hide routes near home or school' : `${n} of 6 set`) },
+    /** Home, Work, School and the driver's own places. */
+    places: {
+      title: 'Places',
+      subtitle: (names: readonly string[]) =>
+        names.length === 0 ? 'Home, work, school and more' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`,
+    },
     /** What friends can see. Nobody but a friend ever sees any of it. */
     sharing: {
       rating: { title: 'Safety Rating', subtitle: 'Friends can see your Safety Rating' },
@@ -110,7 +116,23 @@ export const settingsCopy = {
     local: 'Zones stay on this phone. They’re never uploaded.',
     trim: 'The first and last quarter mile of every drive is always hidden too.',
     add: 'Add a zone',
-    max: 'You can set up to 3 zones.',
+    max: 'You can set up to 6 zones.',
+    /** The saved places, each with a switch that hides it. */
+    places: {
+      title: 'Your places',
+      hidden: (radiusM: number) => `Hidden · ${radiusM} m radius`,
+      shown: 'Not hidden',
+      footer: 'Turn a place on to make it a zone, centered on its address. Tap a hidden place to change its size.',
+      add: { title: 'Add your places', subtitle: 'Home, work, school and more' },
+      others: 'Other zones',
+      full: 'You already have 6 zones. Delete one to hide this place.',
+      hideLabel: (name: string) => `Hide ${name}`,
+      editTitle: (name: string) => `${name} zone`,
+      centered: (address: string) => `Centered on ${address}.`,
+      stopTitle: (name: string) => `Stop hiding ${name}?`,
+      stop: 'Stop hiding',
+      saveSize: 'Save size',
+    },
     empty: 'No zones yet',
     emptyBody: 'Add home or school so drives near them stay private.',
     radius: (m: number) => `${m} m radius`,
@@ -141,7 +163,7 @@ export const settingsCopy = {
       name_long: 'Keep the name to 20 characters.',
       radius: 'Pick a size between 200 and 800 m.',
       center: 'Set the center first.',
-      too_many: 'You can set up to 3 zones.',
+      too_many: 'You can set up to 6 zones.',
     },
     saveError: "Couldn't save your zones. Try again.",
   },

@@ -60,10 +60,16 @@ describe('zone rules', () => {
     expect(zoneProblem(zone(over))).toBe(problem);
   });
 
-  it('allows at most 3 zones', () => {
-    const three = [zone({ id: 'a' }), zone({ id: 'b' }), zone({ id: 'c' })];
-    expect(zonesProblem(three)).toBeNull();
-    expect(zonesProblem([...three, zone({ id: 'd' })])).toBe('too_many');
+  it('allows at most 6 zones', () => {
+    const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => zone({ id }));
+    expect(zonesProblem(six)).toBeNull();
+    expect(zonesProblem([...six, zone({ id: 'g' })])).toBe('too_many');
+  });
+
+  it('keeps the saved place a zone was made from', async () => {
+    const settings = createSettingsRepo(memoryDb());
+    await writeZones(settings, [zone({ placeId: 'home' }), zone({ id: 'z2' })]);
+    expect(await readZones(settings)).toEqual([zone({ placeId: 'home' }), zone({ id: 'z2' })]);
   });
 
   it('steps the radius by 50 m and never past the bounds', () => {
@@ -124,12 +130,12 @@ describe('the privacy zones screen', () => {
     expect(await readZones(w.settings)).toEqual([]);
   });
 
-  it('turns Add off at 3 zones', async () => {
+  it('turns Add off at 6 zones', async () => {
     const w = await appWorld({
-      settings: { [PRIVACY_ZONES_KEY]: [zone({ id: 'a' }), zone({ id: 'b', name: 'School' }), zone({ id: 'c', name: 'Work' })] },
+      settings: { [PRIVACY_ZONES_KEY]: ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => zone({ id, name: `Zone ${id}` })) },
     });
     await w.render(<PrivacyZonesScreen />);
-    await screen.findByTestId('zone-c');
+    await screen.findByTestId('zone-f');
     expect(screen.getByTestId('zones-add')).toBeDisabled();
     expect(screen.getByText(settingsCopy.zones.max)).toBeOnTheScreen();
   });
