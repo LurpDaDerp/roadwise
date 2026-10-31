@@ -116,7 +116,7 @@ describe('RadarCard', () => {
     expect(screen.getByRole('header', { name: 'How it works' })).toBeOnTheScreen();
     const body = screen.getByTestId('radar-how-body');
     expect(body).toHaveTextContent(
-      "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one looks at your last 90 days, recent weeks a bit more, and judges you per chance to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long it stays in your hand while you're moving. You start from a typical driver's score and move from there with every drive."
+      "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one covers your last 90 days, with recent weeks counting a bit more, and compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score and move from there with every drive."
     );
     // No em dash, no points.
     expect(String(body.props.children)).not.toMatch(/—|points?\b/i);
@@ -835,7 +835,7 @@ describe('CategorySheet', () => {
     await draw(<CategorySheet {...props} axis="attention" score={null} dashpalPaired={false} onPairDashpal={onPairDashpal} />);
     expect(screen.getByRole('header', { name: 'Attention' })).toBeOnTheScreen();
     expect(screen.getByText('Attention comes from DashPal')).toBeOnTheScreen();
-    expect(screen.getByText('Pair a DashPal and it will score how well you stay focused on the road.')).toBeOnTheScreen();
+    expect(screen.getByText('Pair a DashPal to get a score for how focused you stay on the road.')).toBeOnTheScreen();
     expect(screen.queryByTestId('category-range')).toBeNull();
     await press(screen.getByRole('button', { name: 'Set up DashPal' }));
     expect(onPairDashpal).toHaveBeenCalled();
@@ -872,14 +872,14 @@ describe('CategorySheet', () => {
     expect(screen.getByLabelText('Time in hand, 1 minute')).toBeOnTheScreen();
     expect(screen.getByTestId('category-rate')).toHaveTextContent('1.0 pickups an hour at driving speed');
     const how = screen.getByTestId('category-phone-how');
-    expect(within(how).getByText("A pickup counts once the car is going 10 mph or more. From then, every second your phone stays in your hand while you're moving counts too.")).toBeOnTheScreen();
+    expect(within(how).getByText("A pickup counts once the car is going 10 mph or more. After that, every second your phone is in your hand while you're moving counts too.")).toBeOnTheScreen();
     expect(within(how).getByText("Put it down and pick it up again within 10 s and it's still one pickup.")).toBeOnTheScreen();
     expect(screen.queryByText(/—|!|pts|points/)).toBeNull();
   });
 
   test('Phone use in kilometres says its speed in km/h; other categories have no such lines', async () => {
     expect(analyticsCopy.category.phoneHow('km')[0]).toBe(
-      "A pickup counts once the car is going 16 km/h or more. From then, every second your phone stays in your hand while you're moving counts too."
+      "A pickup counts once the car is going 16 km/h or more. After that, every second your phone is in your hand while you're moving counts too."
     );
     await draw(<CategorySheet {...props} axis="braking" score={72} />);
     expect(screen.queryByTestId('category-phone-how')).toBeNull();
