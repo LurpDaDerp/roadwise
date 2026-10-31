@@ -15,6 +15,12 @@
  * that lands before the navigator is mounted waits for it. It is never held past the drive, never
  * replayed, and starts nothing.
  *
+ * The recap's "I wasn't driving" (an automatic drive's): with no drive under way it waits for the
+ * navigator (a cold launch from the action included), then asks its confirm when it is offered
+ * (`passengerOffered`: the recap never opened, the drive ended 30 minutes ago at most) and marks the
+ * drive on "Mark as passenger"; otherwise it opens the recap, as a tap on the notification does
+ * (held like one during a drive).
+ *
  * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
  * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
  * A drive recap held because a drive records (the recap of the drive before) opens the driving
@@ -33,10 +39,12 @@ import { router, usePathname, type Href } from 'expo-router';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { useDataSource } from '@/data/queries';
+import { markNotDriving } from '@/data/sync/driveActions';
 
 import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
 import { DRIVE_HREF, drivingHrefOf, SUMMARY_HREF } from './hrefs';
+import { confirmPassenger, passengerOffered, passengerTapOf } from './passenger';
 import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
@@ -58,6 +66,8 @@ export interface NotificationsHostProps {
   ready?: boolean;
   /** Where a route is opened. Defaults to `router.push` (`router.navigate` for the driving screen). */
   navigate?: (href: string) => void;
+  /** The passenger confirm; resolves true for "Mark as passenger". Defaults to the system alert. */
+  confirmPassenger?: () => Promise<boolean>;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -107,6 +117,38 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const deferrals = useRef(0);
   /** A tap for the driving screen (the recording note, or a recap held while a drive records) waiting for the navigator. */
   const driveTap = useRef(false);
+  /** A recap's "I wasn't driving" waiting for the navigator: its drive and the response itself. */
+  const passengerTap = useRef<{ clientTripId: string; response: Notifications.NotificationResponse } | null>(null);
+  /** Hands a response to `handleResponse` (set by the listener effect). */
+  const route = useRef<(r: Notifications.NotificationResponse) => void>(() => {});
+
+  /**
+   * A waiting "I wasn't driving", once the navigator is up: a drive under way makes it a recap tap
+   * (held); else the confirm when offered, or the recap. Reads only refs.
+   */
+  const openPassenger = useRef(() => {
+    const tap = passengerTap.current;
+    if (tap === null || !latest.current.ready) return;
+    passengerTap.current = null;
+    const l = latest.current;
+    if (l.props.isBusy()) {
+      route.current(tap.response);
+      return;
+    }
+    const report = (e: unknown) => l.props.onError?.(e, 'notifications.passenger');
+    void (async () => {
+      const offered = await passengerOffered(l.db, tap.clientTripId, l.now()).catch((e: unknown) => {
+        report(e);
+        return false;
+      });
+      if (!offered) {
+        route.current(tap.response);
+        return;
+      }
+      if (!(await (l.props.confirmPassenger ?? confirmPassenger)())) return;
+      await markNotDriving(tap.clientTripId, { db: l.db, now: l.now }, { via: 'notification' });
+    })().catch(report);
+  });
 
   /** Opens the driving screen for a waiting tap, once the navigator is up. Reads only refs. */
   const openDrive = useRef(() => {
@@ -154,6 +196,16 @@ export function NotificationsHost(props: NotificationsHostProps): null {
         openDrive.current();
         return;
       }
+      // The recap's "I wasn't driving", with no drive under way: the confirm, once the navigator is up.
+      const passengerTrip = passengerTapOf(r);
+      if (passengerTrip !== null && !latest.current.props.isBusy()) {
+        passengerTap.current = { clientTripId: passengerTrip, response: r };
+        openPassenger.current();
+        return;
+      }
+      route.current(r);
+    };
+    route.current = (r: Notifications.NotificationResponse) => {
       handleResponse(r, deps())
         .then((out) => {
           if (out.kind !== 'deferred') return;
@@ -184,8 +236,9 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const { subscribeBusy } = props;
   useEffect(() => {
     if (!ready) return;
-    // A recording-note tap that came before the navigator.
+    // A recording-note tap, or a recap's "I wasn't driving", that came before the navigator.
     openDrive.current();
+    openPassenger.current();
     let replaying = false;
     const tryReplay = () => {
       if (replaying || !mayHavePending.current) return;

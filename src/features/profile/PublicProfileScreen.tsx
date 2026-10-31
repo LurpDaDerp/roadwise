@@ -5,6 +5,8 @@ import { Alert, View } from 'react-native';
 import { statsFrom, type StatSums } from '@scoring';
 import { AXES } from '@/features/analytics/model';
 import { useUnits } from '@/data/queries/units';
+import { passengerRidesShown, usePassengerRides } from '@/data/server/passengerRides';
+import { recapCopy } from '@/features/drives/copy';
 import { formatStat, STAT_LABEL } from '@/features/drives/stats';
 import { backOrHome, TopBar } from '@/features/settings/parts';
 import { useHeatmap, useMemberStats, useProfile, useServerAction, type PublicProfile, type Relationship } from '@/features/social/api';
@@ -60,7 +62,8 @@ function confirm(title: string, body: string | undefined, yes: string, no: strin
 /**
  * `/u/<username>`: another driver's card, the friend button for where the two of you are, then
  * what they share with you as a friend: their category scores, badges, 30-day stats and heat map,
- * each only when they turned it on. Report / Block. Not found and blocked look the same.
+ * each only when they turned it on. A friend's passenger rides this month show under the buttons
+ * whatever they share, when there are any. Report / Block. Not found and blocked look the same.
  */
 export function PublicProfileScreen({ username }: { username: string }) {
   const th = useTheme();
@@ -72,6 +75,8 @@ export function PublicProfileScreen({ username }: { username: string }) {
   // Report from the menu opens once the menu sheet has gone (iOS shows one modal at a time).
   const [reportNext, setReportNext] = useState(false);
   const p = profile.data;
+  const sees = p !== undefined && (p.relationship === 'friend' || p.relationship === 'self');
+  const passengerRides = passengerRidesShown(usePassengerRides(p?.user_id ?? null, { enabled: sees }));
 
   const relate = async (a: RelationAction) => {
     if (!p) return;
@@ -113,6 +118,11 @@ export function PublicProfileScreen({ username }: { username: string }) {
       <ProfileHeader username={p.username} safetyRating={p.safety_rating} ranked={p.ranked} />
       {action.error ? <Banner tone="danger" message={action.error} testID="relationship-error" /> : null}
       <RelationshipButtons rel={p.relationship} pending={action.pending !== null} onPress={(a) => void relate(a)} />
+      {sees && passengerRides !== null ? (
+        <Text variant="subhead" tone="muted" testID="public-passenger-rides">
+          {recapCopy.passengerRides(passengerRides)}
+        </Text>
+      ) : null}
 
       {p.scores ? <CategoriesCard scores={p.scores} /> : null}
 

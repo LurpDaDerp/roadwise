@@ -17,7 +17,8 @@ export type ServerRoot =
   | 'blocked'
   | 'memberStats'
   | 'heatmap'
-  | 'notificationPrefs';
+  | 'notificationPrefs'
+  | 'passengerRides';
 
 const FRIENDSHIP: readonly ServerRoot[] = ['friends', 'profile', 'search', 'friends-board', 'memberStats', 'heatmap'];
 
@@ -36,6 +37,8 @@ const WRITE_ROOTS: Readonly<Record<string, readonly ServerRoot[] | 'all'>> = {
 
 /** Roots a settled drive or drive action moves, besides the summary. */
 const AFTER_DRIVE_STALE: readonly ServerRoot[] = ['friends-board', 'profile', 'memberStats', 'heatmap'];
+/** Roots a settled drive or drive action refetches now (a passenger ride moves the month's count). */
+const AFTER_DRIVE_NOW: readonly ServerRoot[] = ['summary', 'passengerRides'];
 
 function inRoots(roots: readonly ServerRoot[]) {
   return (q: Query): boolean => q.queryKey[0] === 'server' && roots.includes(q.queryKey[2] as ServerRoot);
@@ -49,10 +52,10 @@ export function invalidateAfterWrite(qc: QueryClient, fn: string): Promise<void>
   return qc.invalidateQueries({ predicate: inRoots(roots) });
 }
 
-/** After the server settled a drive upload or a drive action: refetch the summary, mark boards stale. */
+/** After the server settled a drive upload or a drive action: refetch the summary and the passenger rides, mark boards stale. */
 export async function invalidateAfterDrive(qc: QueryClient): Promise<void> {
   await Promise.all([
-    qc.invalidateQueries({ predicate: inRoots(['summary']) }),
+    qc.invalidateQueries({ predicate: inRoots(AFTER_DRIVE_NOW) }),
     qc.invalidateQueries({ predicate: inRoots(AFTER_DRIVE_STALE), refetchType: 'none' }),
   ]);
 }

@@ -6,7 +6,10 @@
 // written the drive's samples go. On an iPhone the upload carries App Attest headers over its exact
 // body bytes (`src/data/devices/appAttest.ts`); a server answer of `attest_required` has the phone
 // attest a key, silently, and send the drive once more at once. A `trip-actions` item posts a
-// dispute or "wasn't driving" and resolves the optimistic `pending` rows.
+// dispute or "wasn't driving" and resolves the optimistic `pending` rows; a "wasn't driving" from
+// the recap notification goes to the `mark_passenger_ride` RPC instead (no monthly mark), and is
+// resolved the same way. A `passenger-ride` item (the in-drive "Not driving?", whose drive is never
+// uploaded) posts its trip id and day to `record_passenger_ride`; there is nothing local to resolve.
 //
 // Rules:
 // - **Never while the engine is recording or finalizing**: a drain competes for SQLite's write lock.
@@ -31,11 +34,24 @@ import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
-import { deviceOwnerIs, finalizeIdempotencyKey, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
-import { ATTEST_REQUIRED_CODE, classifyInvokeError, DisputeResultSchema, FUNCTION_NOT_FOUND_CODE, isDatabaseLocked, NotDrivingResultSchema, type Failure } from '@/data/sync/response';
+import { deviceOwnerIs, finalizeIdempotencyKey, PassengerRideSchema, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
+import {
+  ATTEST_REQUIRED_CODE,
+  classifyInvokeError,
+  classifyRpcError,
+  DisputeResultSchema,
+  FUNCTION_NOT_FOUND_CODE,
+  isDatabaseLocked,
+  NotDrivingResultSchema,
+  type Failure,
+} from '@/data/sync/response';
 
 export const FINALIZE_FUNCTION = 'finalize-trip';
 export const ACTIONS_FUNCTION = 'trip-actions';
+/** The recap notification's "I wasn't driving" (an automatic drive; no monthly mark). */
+export const PASSENGER_MARK_RPC = 'mark_passenger_ride';
+/** The in-drive "Not driving?": a passenger ride with no drive behind it. */
+export const PASSENGER_RIDE_RPC = 'record_passenger_ride';
 /** How long a settled queue item is kept before it is purged (its body is the whole drive). */
 export const PURGE_DONE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** After a wake declined because the engine was recording, try again this long after. */
@@ -278,6 +294,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     }
   }
 
+  /** A PostgREST RPC, answered as `invoke` answers a function. */
+  async function callRpc(fn: string, args: Record<string, unknown>): Promise<{ ok: true; data: unknown } | { ok: false; failure: Failure }> {
+    const rpc = supabase.rpc?.bind(supabase);
+    if (!rpc) return { ok: false, failure: { kind: 'retryable', code: 'network', status: null, retryAfterS: null } };
+    try {
+      const { data, error } = await rpc(fn, args);
+      if (error) return { ok: false, failure: classifyRpcError(error) };
+      return { ok: true, data };
+    } catch (error) {
+      return { ok: false, failure: classifyRpcError(error) };
+    }
+  }
+
   async function fenced(uid: string, write: (tx: Db) => Promise<void>): Promise<boolean> {
     return db.transaction(async (tx) => {
       if (!(await deviceOwnerIs(tx, uid))) return false;
@@ -314,7 +343,10 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     if (!parsed.success) return { kind: 'refused', error: 'invalid_payload' };
     const action = parsed.data;
     const body = action.action === 'not_driving' ? { action: 'not_driving', clientTripId: action.clientTripId } : action;
-    const res = await invoke(ACTIONS_FUNCTION, body);
+    const res =
+      action.action === 'not_driving' && action.via === 'notification'
+        ? await callRpc(PASSENGER_MARK_RPC, { p_client_trip_id: action.clientTripId })
+        : await invoke(ACTIONS_FUNCTION, body);
     if (!res.ok) {
       if (res.failure.kind === 'terminal' && ALREADY_APPLIED.has(res.failure.code)) return alreadyApplied(uid, action, res.failure.code);
       // The server does not hold the drive yet because its upload is still owed: no refusal. The
@@ -337,6 +369,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       await trips.update(action.clientTripId, { status: 'not_driving', clean: null, server_id: result.data.tripId }, now(), tx);
     });
     return written ? { kind: 'done' } : { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
+  }
+
+  /** An in-drive passenger ride: its trip id and day go up, and nothing local waits on the answer. */
+  async function runPassenger(item: QueueItem): Promise<Outcome> {
+    const parsed = PassengerRideSchema.safeParse(parseJson(item.payload_json));
+    if (!parsed.success) return { kind: 'refused', error: 'invalid_payload' };
+    const res = await callRpc(PASSENGER_RIDE_RPC, { p_client_trip_id: parsed.data.clientTripId, p_local_day: parsed.data.localDay });
+    return res.ok ? { kind: 'done' } : failureOutcome(res.failure);
   }
 
   /**
@@ -478,7 +518,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         let outcome: Outcome;
         try {
           if (!isSyncKind(item.kind)) outcome = { kind: 'refused', error: 'unknown_kind' };
-          else outcome = item.kind === 'finalize-trip' ? await runFinalize(item, uid) : await runAction(item, uid);
+          else if (item.kind === 'finalize-trip') outcome = await runFinalize(item, uid);
+          else if (item.kind === 'passenger-ride') outcome = await runPassenger(item);
+          else outcome = await runAction(item, uid);
           // One token refresh per pass, then the item goes straight back for the next round.
           if (outcome.kind === 'retry' && outcome.error === 'unauthorized' && !refreshed) {
             refreshed = true;

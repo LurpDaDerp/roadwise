@@ -3,7 +3,8 @@
  * ends while the driving screen is not in front to open the recap itself (RoadWise behind or the
  * phone locked, or RoadWise in front on another screen): "24 min · 12.0 mi. See how it went."
  * Tapping it opens the recap (`/drives/<id>?fresh=1`). An automatic drive that ends on its own in
- * the background posts it like any other. Each drive posts its recap once, and it stays up; a drive
+ * the background posts it like any other; an automatic drive's recap (its "Not driving?" never run
+ * out) carries the one action, "I wasn't driving" (`category`, `features/notifications/passenger.ts`). Each drive posts its recap once, and it stays up; a drive
  * discarded with "Not driving?", or not kept, posts nothing.
  *
  * Attached before the drive host boots, so a drive the boot stores (native ended it while no
@@ -54,6 +55,8 @@ export interface SummaryRequest {
   title: string;
   body: string;
   url: string;
+  /** The notification category (its action buttons), or none. */
+  categoryIdentifier?: string;
 }
 
 /** Everything this module asks of the OS. */
@@ -78,6 +81,8 @@ export interface SummaryNotifierDeps {
   now?: () => number;
   /** The driver's units for the distance (`summaryUnits(db)`); miles when absent or unreadable. */
   units?: () => Promise<Units>;
+  /** The recap's category for a drive (`recapCategory(db)`: an automatic drive's action); none when absent or unreadable. */
+  category?: (clientTripId: string) => Promise<string | null>;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -110,6 +115,7 @@ export function createExpoSummaryPort(): SummaryNotificationPort {
           title: req.title,
           body: req.body,
           data: { kind: DRIVE_SUMMARY_KIND, url: req.url, clientTripId: req.clientTripId },
+          ...(req.categoryIdentifier ? { categoryIdentifier: req.categoryIdentifier } : {}),
           ...({ channelId: SUMMARY_CHANNEL_ID } as object),
         },
         trigger: null,
@@ -186,6 +192,7 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     if (due !== 'held' && appState.currentState === 'active' && screenShowsEnd()) return;
     if (!(await port.permissionGranted())) return;
     const body = summaryCopy.body(f.durationS, f.miles, await unitsNow());
+    const category = await (deps.category?.(f.clientTripId) ?? Promise.resolve(null)).catch(() => null);
     if (detached) return;
     // Another drive recording (or this end still finishing): this recap waits until none is open.
     if (host.snapshot().status !== 'idle') {
@@ -199,6 +206,7 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
       title: summaryCopy.title,
       body,
       url: summaryHref(f.clientTripId),
+      ...(category ? { categoryIdentifier: category } : {}),
     });
   };
 

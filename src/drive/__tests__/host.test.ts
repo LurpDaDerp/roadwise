@@ -808,7 +808,7 @@ describe('"Not driving?"', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
-  test('cancels the drive: the trip, its samples and events go, nothing is queued or told; the capture stops', async () => {
+  test('cancels the drive: the trip, its samples and events go, only its passenger ride is queued (the id and the day); the capture stops', async () => {
     const h = build();
     await h.host.boot();
     await drive(h, rows(60, { speedMps: 25 }));
@@ -818,7 +818,10 @@ describe('"Not driving?"', () => {
     expect(await createTripsRepo(db).get(uuid(1))).toBeNull();
     expect(await createSamplesRepo(db).count(uuid(1))).toBe(0);
     expect(await createEventsRepo(db).listByTrip(uuid(1))).toEqual([]);
-    expect(await createQueueRepo(db).countByStatus('pending')).toBe(0);
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(1);
+    const ride = await createQueueRepo(db).byKey(`passenger:${uuid(1)}`);
+    expect(ride).toMatchObject({ kind: 'passenger-ride', status: 'pending' });
+    expect(JSON.parse(ride!.payload_json)).toEqual({ clientTripId: uuid(1), localDay: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(await readDropNotice(db)).toBeNull();
     expect(h.source.calls.at(-1)).toBe('stopCapture');
     expect(h.display.log.at(-1)).toBe('end');
@@ -840,10 +843,13 @@ describe('"Not driving?"', () => {
     expect(await h.host.cancelDrive()).toBe(true);
     expect(h.source.calls.at(-1)).toBe('stopCapture');
     expect(h.host.snapshot().status).toBe('idle');
-    expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: uuid(1), driveId: null });
+    expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: uuid(1), driveId: null, localDay: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(await createQueueRepo(db).byKey(`passenger:${uuid(1)}`)).toBeNull();
     failWrites = false;
     expect(await finishPendingCancel(db, null)).toBe(uuid(1));
     expect(await createTripsRepo(db).get(uuid(1))).toBeNull();
+    // The launch queues the passenger ride the failed cancel could not.
+    expect(await createQueueRepo(db).byKey(`passenger:${uuid(1)}`)).toMatchObject({ kind: 'passenger-ride' });
   });
 });
 
@@ -1158,7 +1164,7 @@ describe('iOS: the drive detector', () => {
     const told = h.detect.notDriving.bind(h.detect);
     h.detect.notDriving = async () => {
       tripWhenTold.push(await createTripsRepo(db).get(NATIVE));
-      expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: NATIVE, driveId: NATIVE });
+      expect(await createSettingsRepo(db).get(CANCEL_KEY)).toEqual({ clientTripId: NATIVE, driveId: NATIVE, localDay: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
       return told();
     };
     await h.host.boot();
@@ -1193,10 +1199,13 @@ describe('iOS: the drive detector', () => {
     // The process died right after writing the marker: native still records, the trip is stored.
     await createSettingsRepo(db).set(CANCEL_KEY, { clientTripId: NATIVE, driveId: NATIVE });
     expect(h.detect.snapshot).toMatchObject({ state: 'recording', driveId: NATIVE });
+    const day = (await createTripsRepo(db).get(NATIVE))!.local_day;
     expect(await finishPendingCancel(db, h.detect)).toBe(NATIVE);
     expect(h.detect.snapshot.state).toBe('suppressed');
     expect(h.detect.journal.has(NATIVE)).toBe(false);
     expect(await createTripsRepo(db).get(NATIVE)).toBeNull();
+    // A marker an older build wrote has no day: the ride takes the trip's.
+    expect(JSON.parse((await createQueueRepo(db).byKey(`passenger:${NATIVE}`))!.payload_json)).toEqual({ clientTripId: NATIVE, localDay: day });
     // A fresh host finds nothing to take in.
     const next = buildIos({ detect: h.detect as DriveDetectApi, source: h.source });
     await next.host.boot();

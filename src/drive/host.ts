@@ -22,7 +22,8 @@
 //   report standing 3 s at least, once the car is at 3 mph or slower or its last speed is over
 //   15 s old, 12 h, End); native
 //   stops on its own only as a fallback and the engine then cuts at the last movement. "Not
-//   driving?" discards the drive (`cancelDrive`), only while its 2-minute visible budget lasts,
+//   driving?" discards the drive (`cancelDrive`) and queues its passenger ride (the trip id and its
+//   day, nothing more), only while its 2-minute visible budget lasts,
 //   and never while a Start-card drive still waits (its Cancel discards it then; the wait spends
 //   none of the budget).
 // - **One queue.** Every engine dispatch and the native command that follows it run on one serial
@@ -63,12 +64,13 @@ import { createSpotWatcher, type SpotNudge, type SpotWatcher } from '@/core/spot
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
 import { createSettingsRepo, createTripsRepo, type Db, type TripStatus } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
+import { enqueuePassengerRide } from '@/data/sync/queue';
 import type { AppStateLike } from '@/data/foreground';
 import { readWatchSpots } from '@/data/queries/spots';
 import { WEATHER_TITLES } from '@/features/weather/copy';
 import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
 import { processTimers } from '@/lib/timers';
-import { sunIsDown } from '@/lib/time';
+import { dayKey, sunIsDown } from '@/lib/time';
 import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
 
 import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
@@ -363,11 +365,17 @@ export const inDisplayUnit = (mph: number | null, unit: DisplayUnit): number | n
 /**
  * At a launch, before any drive is recovered: a "Not driving?" the last process did not finish is
  * finished. Native is told first (iOS: the drive still recording is cancelled, an ended journal
- * deleted), then the trip goes whole, then the marker. Returns the cancelled trip's id, or null
+ * deleted), then its passenger ride is queued (again, if the last process got that far: it is
+ * idempotent), then the trip goes whole, then the marker. Returns the cancelled trip's id, or null
  * when nothing was pending. Rejects (the marker kept for the next launch) when the trip cannot be
- * deleted.
+ * deleted. `now`: the clock for the queue (and the day, when neither the marker nor the trip has it).
  */
-export async function finishPendingCancel(db: Db, detect: DriveDetectApi | null, onError?: (e: unknown, ctx: string) => void): Promise<string | null> {
+export async function finishPendingCancel(
+  db: Db,
+  detect: DriveDetectApi | null,
+  onError?: (e: unknown, ctx: string) => void,
+  now: () => number = Date.now
+): Promise<string | null> {
   const c = await readCancelMarker(db);
   if (c === null) return null;
   if (detect !== null && detect.available && c.driveId !== null) {
@@ -379,6 +387,9 @@ export async function finishPendingCancel(db: Db, detect: DriveDetectApi | null,
       onError?.(e, 'notDriving');
     }
   }
+  const trip = c.localDay === null ? await createTripsRepo(db).get(c.clientTripId).catch(() => null) : null;
+  const localDay = c.localDay ?? trip?.local_day ?? dayKey(new Date(trip?.started_at ?? now()), trip?.tz);
+  await enqueuePassengerRide(db, { clientTripId: c.clientTripId, localDay }, now()).catch((e: unknown) => onError?.(e, 'notDriving'));
   await dropTrip(db, c.clientTripId);
   await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => onError?.(e, 'notDriving'));
   await clearCancelMarker(db);
@@ -590,16 +601,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /**
-   * "Not driving?": the drive goes whole; nothing is kept, sent or told. Order: a durable marker first, then native (iOS: it deletes the journal and
-   * rests; Android's capture stops after the task, whatever happens here), then the trip, then the
-   * marker. A kill anywhere in between is finished at the next launch (`finishPendingCancel`), and
-   * a trip that cannot be deleted never leaves native recording.
+   * "Not driving?": the drive goes whole; nothing of it is kept or sent but its passenger ride (the
+   * trip id and its day, through the sync queue). Order: a durable marker first, then native (iOS:
+   * it deletes the journal and rests; Android's capture stops after the task, whatever happens
+   * here), then the passenger ride, then the trip, then the marker. A kill anywhere in between is
+   * finished at the next launch (`finishPendingCancel`), and a trip that cannot be deleted never
+   * leaves native recording.
    */
   async function onCancel(session: Readonly<TripSession>): Promise<void> {
     const id = session.clientTripId;
     const driveId = liveDrive !== null && liveDrive.clientTripId === id ? liveDrive.driveId : null;
     captureEnd = null;
-    if (persist) await writeCancelMarker(db, { clientTripId: id, driveId }).catch((e: unknown) => report(e, 'notDriving'));
+    const localDay = dayKey(new Date(session.startedAt), tz());
+    if (persist) await writeCancelMarker(db, { clientTripId: id, driveId, localDay }).catch((e: unknown) => report(e, 'notDriving'));
     // A plain capture (the Start fallback) is no detector drive: it stops after this task, as on Android.
     if (ios && detect !== null && !plainCapture) {
       // Native deletes the journal and rests until walking or 5 min still; it is no capture of ours to stop.
@@ -615,6 +629,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     finalizedPending = persist;
     if (unfinalized?.clientTripId === id) unfinalized = null;
     if (persist) {
+      await enqueuePassengerRide(db, { clientTripId: id, localDay }, now()).catch((e: unknown) => report(e, 'notDriving'));
       // A failure here keeps the marker: the next launch deletes the trip.
       await dropTrip(db, id);
       await createSettingsRepo(db).remove(NOT_DRIVING_KEY).catch((e: unknown) => report(e, 'notDriving'));

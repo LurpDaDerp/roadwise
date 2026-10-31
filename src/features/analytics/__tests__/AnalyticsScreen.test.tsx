@@ -17,6 +17,12 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 const SPOT = { id: 's1', kind: 'speeding', state: 'active', lastHitTrip: 'd5' };
 let mockSpots: unknown = { computed: true, eligible: true, active: [SPOT], clearedRecently: 0 };
 jest.mock('@/data/queries/spots', () => ({ useSpots: () => ({ data: mockSpots, isLoading: false, isError: false }) }));
+// This month's passenger rides: the server's count (its hook has its own tests).
+let mockPassengerRides: unknown = undefined;
+jest.mock('@/data/server/passengerRides', () => ({
+  usePassengerRides: () => ({ data: mockPassengerRides }),
+  passengerRidesShown: (q: { data?: { this_month: number } }) => (q.data && q.data.this_month > 0 ? q.data.this_month : null),
+}));
 jest.mock('../spots', () => {
   const { Pressable, Text, View } = jest.requireActual<typeof import('react-native')>('react-native');
   return {
@@ -92,6 +98,16 @@ test('top to bottom: radar, summary, all time, the range group (its toggle at th
   await draw(<AnalyticsScreen />);
   expect(screen.getByRole('header', { name: 'Analytics' })).toBeOnTheScreen();
   expect(order()).toEqual(SECTIONS);
+});
+
+test('the month’s passenger rides show under the drives’ header when there are any, and nothing when none', async () => {
+  mockPassengerRides = { this_month: 4 };
+  await draw(<AnalyticsScreen />);
+  expect(within(screen.getByTestId('analytics-drives')).getByTestId('analytics-passenger-rides')).toHaveTextContent('4 passenger rides this month');
+  mockPassengerRides = { this_month: 0 };
+  await draw(<AnalyticsScreen />);
+  expect(screen.queryByTestId('analytics-passenger-rides')).toBeNull();
+  mockPassengerRides = undefined;
 });
 
 test('the radar centre is the 90-day Safety Rating of the categories around it, whole and bold', async () => {

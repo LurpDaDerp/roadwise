@@ -135,6 +135,45 @@ export async function classifyInvokeError(error: unknown, now: number): Promise<
   return { kind, code, status, retryAfterS };
 }
 
+/**
+ * The passenger RPCs' fixed refusals (`0034_passenger_rides.sql`) → the codes the device keeps on
+ * the drive (`sync_error`), in the words of `trip-actions`' own where they mean the same.
+ */
+export const PASSENGER_REFUSALS: Readonly<Record<string, string>> = {
+  'trip not found': FUNCTION_NOT_FOUND_CODE,
+  'the not driving option expired': 'not_driving_expired',
+  'the passenger mark came too late': 'passenger_too_late',
+  'not an automatic drive': 'not_automatic',
+  'invalid local day': 'invalid_local_day',
+};
+
+/**
+ * Classify an error from a PostgREST RPC call (`supabase.rpc`), the way `classifyInvokeError`
+ * reads a function's. An error with no code never reached the database (no network): retried, as
+ * a transport failure. The writers' fixed refusals are terminal, under their codes; their
+ * rate limit ("too many requests") waits 10 minutes. A function PostgREST does not know yet
+ * (`PGRST202`: the migration is not on the server) is the missing-function case, reopened like a
+ * 404. A JWT PostgREST refuses is `unauthorized`. Anything else, a timeout or a conflict among
+ * them, was not decided: retried.
+ */
+export function classifyRpcError(error: unknown): Failure {
+  const record = asRecord(error);
+  const code = typeof record.code === 'string' ? record.code : '';
+  const message = typeof record.message === 'string' ? record.message : '';
+  if (code === '') return { kind: 'retryable', code: 'network', status: null, retryAfterS: null };
+  if (code === 'PGRST202') return { kind: 'retryable', code: 'http_404', status: 404, retryAfterS: null };
+  if (code.startsWith('PGRST3')) return { kind: 'unauthorized', code: 'unauthorized', status: 401, retryAfterS: null };
+  if (message === 'too many requests') return { kind: 'retryable', code: 'too_many_requests', status: 429, retryAfterS: 600 };
+  const known = PASSENGER_REFUSALS[message];
+  if (known !== undefined && (code === '42501' || code === 'P0002' || code === '22023')) {
+    return { kind: 'terminal', code: known, status: code === 'P0002' ? 404 : 403, retryAfterS: null };
+  }
+  if (code === '42501' || code === '22023' || code === '22P02' || code === 'P0002' || code.startsWith('PGRST1')) {
+    return { kind: 'terminal', code: `pg_${code}`.toLowerCase().slice(0, MAX_CODE), status: 400, retryAfterS: null };
+  }
+  return { kind: 'retryable', code: `pg_${code}`.toLowerCase().slice(0, MAX_CODE), status: 503, retryAfterS: null };
+}
+
 /** SQLite's one contention failure, which the driver deliberately does not retry (see `driver.ts`). */
 export function isDatabaseLocked(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

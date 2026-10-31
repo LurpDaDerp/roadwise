@@ -5,6 +5,7 @@ import { Pressable, View } from 'react-native';
 import type { LocalDrive } from '@/data/queries/rows';
 import { useUnits } from '@/data/queries/units';
 import { eventTally } from '@/features/drives/DriveRow';
+import { recapCopy } from '@/features/drives/copy';
 import { formatWhen } from '@/features/drives/format';
 import type { Units } from '@/lib/units';
 import { Button, Card, Divider, Text, useTheme } from '@/ui';
@@ -70,8 +71,19 @@ function Row({ drive, onPress }: { drive: LocalDrive; onPress: () => void }) {
  * list (closed at first): ten rows, then "Show more" adds ten at a time, so only the rows asked for
  * are drawn however many drives there are. With none listed but older (archived) drives counted
  * elsewhere (`archived`), it says "No drives in the last 6 months" rather than "No drives yet".
+ * Under the header, "4 passenger rides this month" when the driver claimed any (`passengerRides`).
  */
-export function DrivesCard({ drives, onOpen, archived = false }: { drives: readonly LocalDrive[]; onOpen: (clientTripId: string) => void; archived?: boolean }) {
+export function DrivesCard({
+  drives,
+  onOpen,
+  archived = false,
+  passengerRides = null,
+}: {
+  drives: readonly LocalDrive[];
+  onOpen: (clientTripId: string) => void;
+  archived?: boolean;
+  passengerRides?: number | null;
+}) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(DRIVES_PAGE);
@@ -108,6 +120,11 @@ export function DrivesCard({ drives, onOpen, archived = false }: { drives: reado
           </Text>
         )}
       </Pressable>
+      {passengerRides !== null && passengerRides > 0 ? (
+        <Text variant="footnote" tone="muted" style={{ paddingHorizontal: t.space.lg, paddingBottom: t.space.md, marginTop: -t.space.sm }} testID="analytics-passenger-rides">
+          {recapCopy.passengerRides(passengerRides)}
+        </Text>
+      ) : null}
       {open && canOpen ? (
         <View testID="analytics-drives-list">
           {drives.slice(0, shown).map((d) => (

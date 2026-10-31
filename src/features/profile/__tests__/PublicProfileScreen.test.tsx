@@ -83,6 +83,29 @@ beforeEach(() => {
 });
 afterEach(() => clearQueryClients());
 
+describe('passenger rides', () => {
+  function serveRides(p: PublicProfile, thisMonth: number) {
+    mockRpc.mockImplementation(async (fn: string) => (fn === 'get_profile' ? p : fn === 'get_passenger_rides' ? { this_month: thisMonth } : null));
+  }
+
+  it('a friend’s passenger rides this month show, whatever they share', async () => {
+    serveRides(profile({ relationship: 'friend' }), 3);
+    const w = await appWorld();
+    await w.render(<PublicProfileScreen username="Swift_Fox" />);
+    expect(await screen.findByTestId('public-passenger-rides', {}, { timeout: 3000 })).toHaveTextContent('3 passenger rides this month');
+    expect(mockRpc).toHaveBeenCalledWith('get_passenger_rides', { p_user_id: 'u-fox' });
+  });
+
+  it('a stranger’s are never asked for', async () => {
+    serveRides(profile({ relationship: 'none' }), 3);
+    const w = await appWorld();
+    await w.render(<PublicProfileScreen username="Swift_Fox" />);
+    await screen.findByTestId('profile-username', {}, { timeout: 3000 });
+    expect(screen.queryByTestId('public-passenger-rides')).toBeNull();
+    expect(mockRpc).not.toHaveBeenCalledWith('get_passenger_rides', expect.anything());
+  });
+});
+
 describe('relationship buttons', () => {
   it.each<[Relationship, string[]]>([
     ['none', ['Add friend']],

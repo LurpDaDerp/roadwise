@@ -733,8 +733,10 @@ function defaultDiagnostics(host: DriveHost, db: Db, onError: (error: unknown) =
 function defaultSummaryNotifier(host: DriveHost, db: Db): LaunchSummaryNotifier {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
   const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred with the notifier
+  const { recapCategory } = require('@/features/notifications/passenger') as typeof import('@/features/notifications/passenger');
   // The driving screen in focus shows a drive's end itself (it opens the recap): no notification then.
-  return attachSummaryNotifier(host, { units: summaryUnits(db), isSummaryVisible: isDriveScreenFocused });
+  return attachSummaryNotifier(host, { units: summaryUnits(db), isSummaryVisible: isDriveScreenFocused, category: recapCategory(db) });
 }
 
 /**

@@ -182,11 +182,12 @@ export const RULES: readonly Rule[] = [
     scope: ['app/(tabs)/home.tsx', 'src/features/home/'],
   },
   {
-    // No RoadWise notification has buttons (PRODUCT.md). A category set from JS would add buttons
-    // nothing handles.
-    name: 'no JS notification categories',
+    // One category only (PRODUCT.md): an automatic drive's recap with "I wasn't driving", set up
+    // beside the channels and handled by the one response listener. Anywhere else a category would
+    // add buttons nothing handles.
+    name: 'one JS notification category, set up in one place',
     names: ['setNotificationCategoryAsync'],
-    allowed: [],
+    allowed: ['src/features/notifications/categories.ts'],
   },
   {
     // JS watches for nothing in the background: the iPhone's detector is native and hands JS a

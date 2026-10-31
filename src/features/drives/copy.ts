@@ -60,7 +60,10 @@ export const recapCopy = {
   /** The refusals a later tap can get past: the line shows under "Wasn't driving", which stays. */
   refusalsRetry: {
     not_found: 'This drive hasn’t reached the server yet. Try again in a moment.',
+    passenger_too_late: 'Your passenger mark from the notification arrived too late. You can still use “Wasn’t driving”.',
   } as Readonly<Record<string, string>>,
+  /** "4 passenger rides this month": own Analytics and the profile friends see. */
+  passengerRides: (n: number) => `${n} passenger ${n === 1 ? 'ride' : 'rides'} this month`,
   report: {
     sent: "Thanks. We'll check it and update this drive.",
     accepted: 'Report accepted · event removed',

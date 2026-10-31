@@ -1,6 +1,7 @@
 /**
  * The two things a user may do to a stored drive (plan §4, §10): report one event, or mark the
- * drive as "wasn't driving". Both update the local rows optimistically to `pending`, queue the
+ * drive as "wasn't driving" (from the recap, or from the recap notification's "I wasn't driving",
+ * which uses no monthly mark). Both update the local rows optimistically to `pending`, queue the
  * request to `trip-actions`, and let the runner resolve them to the server's answer. A drive whose
  * upload has not gone yet (it waits for a session, or a busy database) is made due at once, ahead
  * of the action: the server must hold the drive before it can act on it.
@@ -50,8 +51,12 @@ export async function reportEvent(clientTripId: string, eventId: string, reason:
 
 export type NotDrivingOutcome = 'queued' | 'already' | 'missing';
 
-/** "Wasn't driving": the drive leaves the Safety Rating and the week's goals once the server agrees. */
-export async function markNotDriving(clientTripId: string, deps: DriveActionDeps): Promise<NotDrivingOutcome> {
+/**
+ * "Wasn't driving": the drive leaves the Safety Rating and the week's goals once the server agrees.
+ * `via: 'notification'`: the recap notification's "I wasn't driving" on an automatic drive (asked
+ * before its recap was ever opened), sent as the server's passenger mark, which uses no monthly mark.
+ */
+export async function markNotDriving(clientTripId: string, deps: DriveActionDeps, opts: { via?: 'notification' } = {}): Promise<NotDrivingOutcome> {
   const { db } = deps;
   const now = deps.now ?? Date.now;
   const trips = createTripsRepo(db);
@@ -63,7 +68,7 @@ export async function markNotDriving(clientTripId: string, deps: DriveActionDeps
     await trips.update(clientTripId, { status: 'not_driving' }, at, tx);
     // The drive's waiting upload goes first (the same due time, queued earlier).
     await createQueueRepo(db).makeDue(finalizeIdempotencyKey(clientTripId), at, tx);
-    await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status }, at, tx);
+    await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status, ...(opts.via ? { via: opts.via } : {}) }, at, tx);
   });
   emitDataChanged({ source: 'enqueue' });
   if (deps.queryClient) await invalidateDrive(deps.queryClient, clientTripId);

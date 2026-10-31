@@ -90,6 +90,26 @@ test('a kept drive that ends while the app is not in front posts "Your drive rec
   n.detach();
 });
 
+test('an automatic drive’s recap carries the category its "I wasn’t driving" action belongs to; a category that cannot be read leaves it off', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const category = jest.fn(async (id: string) => {
+    if (id === 'bad') throw new Error('db');
+    return id === 'auto' ? 'autoDriveRecap' : null;
+  });
+  const n = attach(host, { port: p, appState: { currentState: 'background' }, category });
+  for (const [id, at] of [['auto', 5], ['manual', 6], ['bad', 7]] as const) {
+    set({ status: 'idle', lastFinalized: kept(id, at) });
+    await n.settled();
+  }
+  expect(scheduled.map((r) => [r.clientTripId, r.categoryIdentifier])).toEqual([
+    ['auto', 'autoDriveRecap'],
+    ['manual', undefined],
+    ['bad', undefined],
+  ]);
+  n.detach();
+});
+
 test('kilometres when the driver uses them; without numbers, the last sentence alone; no points', async () => {
   const { host, set } = hostStub({});
   const { p, scheduled } = port();

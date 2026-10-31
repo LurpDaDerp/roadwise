@@ -16,11 +16,13 @@ import {
 
 export const FINALIZE_KIND: SyncKind = 'finalize-trip';
 export const ACTIONS_KIND: SyncKind = 'trip-actions';
+export const PASSENGER_KIND: SyncKind = 'passenger-ride';
 
 /** Deterministic per trip, so a finalize retried after a failure cannot queue the same trip twice. */
 export const finalizeIdempotencyKey = (clientTripId: string): string => `trip:${clientTripId}`;
 export const disputeIdempotencyKey = (eventId: string): string => `dispute:${eventId}`;
 export const notDrivingIdempotencyKey = (clientTripId: string): string => `not_driving:${clientTripId}`;
+export const passengerIdempotencyKey = (clientTripId: string): string => `passenger:${clientTripId}`;
 
 /**
  * Where the last signed-in user's id is kept, so work queued between drains can be stamped with
@@ -58,6 +60,11 @@ export { DisputeActionSchema };
 export const NotDrivingActionSchema = NotDrivingWireSchema.extend({
   /** The local status to restore when the server refuses. Device-only; stripped before the post. */
   previousStatus: z.string().optional(),
+  /**
+   * `notification`: the recap notification's "I wasn't driving" on an automatic drive, sent to the
+   * `mark_passenger_ride` RPC (no monthly mark) rather than to `trip-actions`. Device-only.
+   */
+  via: z.literal('notification').optional(),
 }).strict();
 export const TripActionSchema = z.discriminatedUnion('action', [DisputeActionSchema, NotDrivingActionSchema]);
 export type TripAction = z.infer<typeof TripActionSchema>;
@@ -83,6 +90,28 @@ export async function enqueueAction(db: Db, action: TripAction, now: number = Da
   const key = valid.action === 'dispute' ? disputeIdempotencyKey(valid.eventId) : notDrivingIdempotencyKey(valid.clientTripId);
   const owner = await currentOwnerUid(db);
   const item = await createQueueRepo(db).enqueue(ACTIONS_KIND, valid, key, now, on, owner);
+  if (!on) emitDataChanged({ source: 'enqueue' });
+  return item;
+}
+
+/**
+ * A passenger ride the drive itself never reaches the server for: the in-drive "Not driving?",
+ * whose drive is deleted. Only the trip id and its local day (`YYYY-MM-DD`) go, to the
+ * `record_passenger_ride` RPC.
+ */
+export const PassengerRideSchema = z
+  .object({ clientTripId: z.uuid(), localDay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
+  .strict();
+export type PassengerRide = z.infer<typeof PassengerRideSchema>;
+
+/**
+ * Queue an in-drive passenger ride. Idempotent on the trip: the drive host queues it as it
+ * discards the drive, and a launch that finishes a "Not driving?" a kill interrupted queues it again.
+ */
+export async function enqueuePassengerRide(db: Db, ride: PassengerRide, now: number = Date.now(), on?: Db): Promise<QueueItem> {
+  const valid = PassengerRideSchema.parse(ride);
+  const owner = await currentOwnerUid(db);
+  const item = await createQueueRepo(db).enqueue(PASSENGER_KIND, valid, passengerIdempotencyKey(valid.clientTripId), now, on, owner);
   if (!on) emitDataChanged({ source: 'enqueue' });
   return item;
 }

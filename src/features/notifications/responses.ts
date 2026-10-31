@@ -3,7 +3,8 @@
  *
  * `routeForResponse` is pure: it reads the notification's `data.url` and lets through only the
  * routes a notification may open. Anything else opens Home; a response that is not shaped like one
- * opens nothing. `handleResponse` navigates, or (while a drive is under way or the navigator is
+ * opens nothing. The recap's "I wasn't driving" opens the recap here too: `NotificationsHost` asks
+ * its confirm first when it is offered, and hands it here when it is not. `handleResponse` navigates, or (while a drive is under way or the navigator is
  * not mounted yet) holds the href in settings for `replayPendingHref`. The drive's recording note
  * is not handled here: `NotificationsHost` opens the driving screen for it, and it is never held.
  */
@@ -12,6 +13,7 @@ import * as Notifications from 'expo-notifications';
 import { createSettingsRepo, type Db } from '@/data/db';
 
 import { ALLOWED_HREFS, isAllowedHref, SUMMARY_HREF } from './hrefs';
+import { PASSENGER_ACTION_ID } from './passenger';
 
 /** Settings key: `{ href, at }` of a tap held while the app could not navigate. */
 export const PENDING_HREF_KEY = 'notifications.pendingHref';
@@ -43,7 +45,7 @@ export function routeForResponse(response: Notifications.NotificationResponse | 
   const content = notification.request.content;
   if (!isRecord(content)) return null;
   // A dismissal or any other system action is not a request to open anything.
-  if (r.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return null;
+  if (r.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER && r.actionIdentifier !== PASSENGER_ACTION_ID) return null;
   const data = content.data;
   const href = isRecord(data) && data.url !== undefined ? allowHref(data.url) : FALLBACK_HREF;
   const clientTripId = SUMMARY_HREF.exec(href)?.[1];

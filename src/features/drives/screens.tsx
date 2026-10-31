@@ -1,10 +1,11 @@
 /**
  * The drive screens wired to their data: local drives from `@/data/queries` (plan §10), their
- * scores, the server summary for "Wasn't driving" uses left, and the drive actions.
+ * scores, the server summary for "Wasn't driving" uses left, and the drive actions. A recap shown
+ * is marked seen (`recapSeen.ts`): its notification's "I wasn't driving" then only opens it.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
 import { useDataSource, useDb, useDriveDetail, useDriveHistory } from '@/data/queries';
@@ -16,6 +17,7 @@ import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
 import { HistoryView } from './HistoryView';
+import { markRecapSeen } from './recapSeen';
 import type { HistoryFilter } from './model';
 import { driveSummaryHref, HOME_HREF } from './routes';
 import { SummaryView } from './SummaryView';
@@ -68,6 +70,10 @@ export function DriveSummaryScreen() {
   const { now } = useDataSource();
   // Animate only on the first render after a drive ends, not when coming back to it.
   const [isFresh] = useState(fresh === '1');
+  const shown = detail.data ? detail.data.drive.clientTripId : null;
+  useEffect(() => {
+    if (shown !== null) markRecapSeen(db, shown).catch(() => {});
+  }, [db, shown]);
 
   if (!detail.data) {
     return (
