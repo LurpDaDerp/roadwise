@@ -12,6 +12,8 @@ import { SummaryView, type SummaryViewProps } from '../SummaryView';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
+// The "Save as Home?" card reads the phone's drives and places; it has its own tests (src/features/places).
+jest.mock('@/features/places/DrivePlacePrompt', () => ({ DrivePlacePrompt: () => null }));
 
 // Dynamic Type at the phone's default (jest's own window says 2×).
 jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({

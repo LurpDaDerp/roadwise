@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
+import { DrivePlacePrompt } from '@/features/places/DrivePlacePrompt';
 import { formatDistance, type Units } from '@/lib/units';
 import { Button, Card, Divider, IconButton, Text, useTheme } from '@/ui';
 import { opaque, over } from '@/ui/sky/color';
@@ -129,6 +130,8 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
 
         {/* 2. Route map */}
         <RouteMap runs={runs} lead={lead} events={rows.map((r) => r.event)} highlighted={selected} />
+        {/* "Save as Home?" when this drive's end or start is surely Home, Work or School (nothing otherwise) */}
+        <DrivePlacePrompt clientTripId={drive.clientTripId} />
 
         {/* 3. The score card: the hero (or the drive's state) with Share beside it, then the events */}
         <Card testID="summary-score-card">

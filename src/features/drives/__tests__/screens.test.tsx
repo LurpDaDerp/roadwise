@@ -7,6 +7,8 @@ import { DriveHistoryScreen, DriveSummaryScreen } from '../screens';
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), dismissTo: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 let mockParams: Record<string, string> = { clientTripId: 'a1' };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter, useLocalSearchParams: () => mockParams }));
+// The "Save as Home?" card reads the phone's drives and places; it has its own tests (src/features/places).
+jest.mock('@/features/places/DrivePlacePrompt', () => ({ DrivePlacePrompt: () => null }));
 
 const mockNow = new Date(2026, 9, 5, 15, 0, 0).getTime();
 const mockOk = <T,>(data: T) => ({ data, isLoading: false, isError: false, isRefetching: false, refetch: jest.fn() });

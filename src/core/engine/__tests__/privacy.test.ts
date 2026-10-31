@@ -21,15 +21,18 @@ const track = (n: number, bearingDeg = 90, from: LatLng = HOME): TrackPoint[] =>
   }));
 };
 
-test('parseZones keeps at most 3 well-formed zones, clamping the radius and clipping the name', () => {
+test('parseZones keeps at most 6 well-formed zones, clamping the radius and clipping the name', () => {
   const zones = parseZones([
     { id: 'a', name: 'Home', lat: 47.6, lng: -122.3, radiusM: 100 },
     { id: 'b', name: 'A very long zone name indeed', lat: 47.7, lng: -122.3, radiusM: 5000 },
     { lat: 'x' },
     { id: 'c', name: 'School', lat: 47.8, lng: -122.3, radiusM: 300 },
-    { id: 'd', name: 'Fourth', lat: 47.9, lng: -122.3, radiusM: 300 },
+    { id: 'd', name: 'Work', lat: 47.9, lng: -122.3, radiusM: 400 },
+    { id: 'e', name: 'Gym', lat: 48.0, lng: -122.3, radiusM: 500 },
+    { id: 'f', name: 'Park', lat: 48.1, lng: -122.3, radiusM: 600, placeId: 'place-1' },
+    { id: 'g', name: 'Seventh', lat: 48.2, lng: -122.3, radiusM: 300 },
   ]);
-  expect(zones.map((z) => z.radiusM)).toEqual([200, 800, 300]);
+  expect(zones.map((z) => z.radiusM)).toEqual([200, 800, 300, 400, 500, 600]);
   expect(zones[1]!.name).toHaveLength(20);
   expect(parseZones(null)).toEqual([]);
 });
