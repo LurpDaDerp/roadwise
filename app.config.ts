@@ -78,6 +78,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
         // targets/live-drive-widget), started locally or by RoadWise's push-to-start.
         NSSupportsLiveActivities: true,
+        // The larger update budget iOS grants a Live Activity that updates often (the speed, about
+        // once a second while RoadWise is behind or the screen is off); the driver can turn it off
+        // in Settings › RoadWise › Live Activities › More Frequent Updates.
+        NSSupportsLiveActivitiesFrequentUpdates: true,
         // The DashPal dashcam (react-native-ble-manager, no config plugin: its plugin can add
         // location permissions with a maxSdkVersion that would break drive location on Android 12+).
         // The usage string is shown only to a driver who sets up a DashPal (the BLE manager is never

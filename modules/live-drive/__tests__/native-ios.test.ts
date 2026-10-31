@@ -446,10 +446,11 @@ describe('live-drive: the widget extension target', () => {
 });
 
 describe('live-drive: app config wiring', () => {
-  it('app.config.ts loads the apple-targets plugin and declares NSSupportsLiveActivities', () => {
+  it('app.config.ts loads the apple-targets plugin and declares NSSupportsLiveActivities, with frequent updates (the larger update budget)', () => {
     const src = fs.readFileSync(path.join(ROOT, 'app.config.ts'), 'utf8');
     expect(src).toMatch(/'@bacons\/apple-targets'/);
     expect(src).toMatch(/NSSupportsLiveActivities: true/);
+    expect(src).toMatch(/NSSupportsLiveActivitiesFrequentUpdates: true/);
     expect(src).toMatch(/appleTeamId/);
   });
 

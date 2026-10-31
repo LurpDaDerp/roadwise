@@ -11,6 +11,14 @@
 // throttle (the weather line, the "Not driving?" hint running out). Every state goes out wearing the
 // app's current sky (`displayLook.ts`).
 //
+// iOS, RoadWise in front (`setFront`): nobody sees the Live Activity then (iOS keeps an app's own
+// activity out of the Dynamic Island while the app is in use, and the lock screen isn't showing),
+// and every update spends the budget iOS meters a Live Activity's updates against, so the activity
+// that does show later (the screen off, RoadWise behind) would get throttled. In front it takes only
+// the minute keepalive (its stale date never runs out); the moment RoadWise goes behind (the lock
+// button, another app, the notification shade) the newest state goes out at once, and from then on
+// once a second again.
+//
 // iOS, the lock screen's number: given the halo's speed (`SpeedCarry`: the engine's estimate, its
 // acceleration and the time it stands for), each update shows the halo's number at that moment,
 // the estimate carried on from its time along its acceleration (`carriedSpeed`) and rounded with
@@ -60,6 +68,11 @@ export interface DriveDisplay {
   end(): void;
   /** iOS: a Live Activity is running (a pushed or local one); false where none can run. */
   isRunning?(): Promise<boolean>;
+  /**
+   * iOS: RoadWise is in front (AppState `active`) or not. In front the Live Activity takes only the
+   * minute keepalive; going behind sends the newest state at once. Ignored on Android.
+   */
+  setFront?(front: boolean): void;
 }
 
 /** The two native sinks, as far as they exist. */
@@ -179,6 +192,9 @@ export function createDriveDisplay(
   /** iOS: the newest state the throttle holds (as the host gave it), and the timer that sends it. */
   let held: DriveDisplayState | null = null;
   let cancelHeld: (() => void) | null = null;
+  /** iOS: RoadWise is in front (`setFront`), and the drive's newest state as the host gave it. */
+  let front = false;
+  let newest: DriveDisplayState | null = null;
   const later =
     deps.later ??
     ((fn: () => void, ms: number) => {
@@ -238,10 +254,18 @@ export function createDriveDisplay(
     );
   }
 
-  /** `state` in the current sky with the halo's number at this moment, through the throttle. */
+  /**
+   * `state` in the current sky with the halo's number at this moment, through the throttle. iOS in
+   * front: only the keepalive, whatever changed (nothing is held).
+   */
   function sendNow(state: DriveDisplayState): void {
     const now = deps.now();
     const shown = carried(wearing(state, look()), now);
+    if (ios && front) {
+      dropHeld();
+      if (now - lastAt >= DISPLAY_KEEPALIVE_MS) send(shown, true);
+      return;
+    }
     if (!send(shown, false) && ios && now - lastAt < minInterval) hold(state, shown, now);
   }
 
@@ -290,21 +314,41 @@ export function createDriveDisplay(
       carry = null;
       whole = null;
       unit = state.unit;
+      if (ios) newest = state;
       const worn = wearing(state, look());
       // iOS: starts the activity, or adopts the one running (pushed, or started earlier); false is fine.
       if (ios) call(live === null ? null : () => live.start(toLive(worn)), deps.onError);
       send(worn, true);
     },
     update(state, c) {
-      if (ios) take(c ?? null, state, deps.now());
+      if (ios) {
+        take(c ?? null, state, deps.now());
+        newest = state;
+      }
       sendNow(state);
     },
     refresh(state, c) {
       const now = deps.now();
       if (ios && c !== undefined) take(c, state, now);
+      if (ios) newest = state;
+      // In front it goes out on going behind (or with the keepalive).
+      if (ios && front) return;
       const s = carried(wearing(state, look()), now);
       if (same(last, s)) return;
       send(s, true);
+    },
+    setFront(f) {
+      if (!ios || f === front) return;
+      front = f;
+      if (f) {
+        dropHeld();
+        return;
+      }
+      // Behind: the lock screen and the island show the activity from now on.
+      if (newest === null) return;
+      const now = deps.now();
+      const s = carried(wearing(newest, look()), now);
+      if (!same(last, s)) send(s, true);
     },
     end() {
       // Exactly one end path: iOS ends the Live Activity through `LiveDrive.end()` (a `setDriveDisplay`
@@ -319,6 +363,7 @@ export function createDriveDisplay(
       }
       dropHeld();
       last = null;
+      newest = null;
       lastAt = Number.NEGATIVE_INFINITY;
       speedShown = false;
       limitShown = false;

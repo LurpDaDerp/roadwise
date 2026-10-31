@@ -807,6 +807,18 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
+  /**
+   * Whether RoadWise is in front, for the Live Activity: in front nobody sees it, so it takes only
+   * the keepalive and keeps iOS's update budget for when the screen is off (display.ts). Never throws.
+   */
+  function tellFront(front: boolean): void {
+    try {
+      deps.display?.setFront?.(front);
+    } catch (e) {
+      report(e, 'display');
+    }
+  }
+
   /** A change the lock screen must show now (the weather line, the hint running out). Never throws. */
   function refreshDisplay(): void {
     const s = engine.snapshot();
@@ -1747,8 +1759,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     if (deps.appState) {
       let wasActive = appActive();
+      tellFront(wasActive);
       const sub = deps.appState.addEventListener('change', () => {
         const active = appActive();
+        tellFront(active);
         updateVisibility();
         if (active && !wasActive) {
           void run(async () => {

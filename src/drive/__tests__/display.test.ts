@@ -482,6 +482,80 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     }
   });
 
+  test('RoadWise in front: nobody sees the Live Activity, so it takes only the minute keepalive; going behind sends the newest state at once', () => {
+    let now = 0;
+    const clock = manual();
+    const { set, live } = sinks();
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    d.setFront!(true);
+    d.start(state({ speed: null, limit: null }));
+    expect(live.start).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenCalledTimes(1);
+    // in front: no first-speed or first-limit bypass, no per-second changes, nothing held
+    for (let i = 1; i <= 30; i += 1) {
+      now = i * 1000;
+      d.update(state({ speed: 30 + i, limit: 35 }), { mps: mph(30 + i), accel: 0, at: now });
+      now += 400;
+      d.update(state({ speed: 30 + i, limit: 35, speedTint: '#E0884F' }));
+    }
+    d.refresh!(state({ speed: 60, limit: 35, notDrivingAvailable: true }));
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(clock.armed()).toEqual([]);
+    // the keepalive, so the stale date never runs out while RoadWise is in front
+    now = 60_000;
+    d.update(state({ speed: 61, limit: 35 }), { mps: mph(61), accel: 0, at: now });
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 61, limit: 35 }));
+    now = 60_500;
+    d.update(state({ speed: 62, limit: 35, notDrivingAvailable: true }), { mps: mph(62), accel: 0, at: now });
+    expect(set).toHaveBeenCalledTimes(2);
+    // behind (the lock button, another app, the notification shade): the newest goes at once,
+    // inside the second, with the halo's number
+    now = 60_700;
+    d.setFront!(false);
+    expect(set).toHaveBeenCalledTimes(3);
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 62, limit: 35, notDrivingAvailable: true }));
+    // behind, once a second again
+    now = 61_000;
+    d.update(state({ speed: 63, limit: 35, notDrivingAvailable: true }), { mps: mph(63), accel: 0, at: now });
+    expect(set).toHaveBeenCalledTimes(3);
+    expect(clock.armed()).toEqual([700]);
+    now = 61_700;
+    clock.run();
+    expect(speeds(set)).toEqual([null, 61, 62, 63]);
+    // telling it the same twice changes nothing; going behind with nothing new sends nothing
+    d.setFront!(false);
+    expect(set).toHaveBeenCalledTimes(4);
+    d.setFront!(true);
+    d.setFront!(false);
+    expect(set).toHaveBeenCalledTimes(4);
+    // back in front, a change held for the second is dropped (it waits for going behind)
+    now = 62_000;
+    d.update(state({ speed: 64, limit: 35, notDrivingAvailable: true }), { mps: mph(64), accel: 0, at: now });
+    expect(clock.armed()).toEqual([700]);
+    d.setFront!(true);
+    expect(clock.armed()).toEqual([]);
+    now = 63_000;
+    d.end();
+    // after the end nothing waits to go out
+    d.setFront!(false);
+    expect(set).toHaveBeenCalledTimes(4);
+    expect(live.end).toHaveBeenCalledTimes(1);
+  });
+
+  test('Android ignores whether RoadWise is in front (its notification shows in the shade)', () => {
+    let now = 0;
+    const sent: DriveDisplayState[] = [];
+    const a = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android' });
+    a.setFront!(true);
+    a.start(state());
+    now = 3000;
+    a.update(state({ speed: 31 }));
+    expect(sent.map((s) => s.speed)).toEqual([30, 31]);
+    a.setFront!(false);
+    expect(sent).toHaveLength(2);
+  });
+
   test('the end and the next start forget the carried number', () => {
     let now = 0;
     const { set, live } = sinks();

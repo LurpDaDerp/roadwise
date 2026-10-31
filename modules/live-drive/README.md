@@ -81,6 +81,10 @@ WidgetKit + ActivityKit) in the navy/gold palette (`$widgetBackground` #001D3D, 
 available on iOS 16. `LiveDriveAttributes.swift` must stay byte-identical in `modules/live-drive/ios`
 and `targets/live-drive-widget`; `__tests__/native-ios.test.ts` compares the two files.
 
-`app.config.ts` loads `@bacons/apple-targets` and sets `NSSupportsLiveActivities: true`. The
+`app.config.ts` loads `@bacons/apple-targets` and sets `NSSupportsLiveActivities: true` and
+`NSSupportsLiveActivitiesFrequentUpdates: true` (the larger update budget; the driver can turn it off
+in Settings › RoadWise › Live Activities). Updates come about once a second while RoadWise is behind
+and once a minute while it is in front, where nobody sees the activity (`src/drive/display.ts`
+`setFront`), so the budget goes to the screen-off lock screen. The
 extension is signed with `ios.appleTeamId` (from `EXPO_APPLE_TEAM_ID`); without it, `npx expo
 prebuild` warns and Xcode asks for a team.

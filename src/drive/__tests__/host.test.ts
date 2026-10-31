@@ -70,15 +70,18 @@ function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: str
   };
 }
 
-function fakeDisplay(running = false): DriveDisplay & { log: string[]; states: DriveDisplayState[]; carries: (SpeedCarry | null | undefined)[]; running: boolean } {
+function fakeDisplay(running = false): DriveDisplay & { log: string[]; states: DriveDisplayState[]; carries: (SpeedCarry | null | undefined)[]; fronts: boolean[]; running: boolean } {
   const log: string[] = [];
   const states: DriveDisplayState[] = [];
   const carries: (SpeedCarry | null | undefined)[] = [];
+  const fronts: boolean[] = [];
   const d = {
     log,
     states,
     carries,
+    fronts,
     running,
+    setFront: (f: boolean) => void fronts.push(f),
     start: (s: DriveDisplayState) => {
       states.push(s);
       log.push(`start ${s.speed}/${s.limit}${s.stopped ? ' stopped' : ''}`);
@@ -1862,6 +1865,23 @@ describe('iOS: the push-to-start once the confirming rows are in (plan decision 
     await flush(m);
     expect(r.pushed).toEqual([]);
     await m.host.stop({ endOpenTrip: false });
+  });
+
+  test('the display hears whether RoadWise is in front: at boot and at every change (inactive counts as behind), before the Live Activity starts on coming to the front', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    expect(h.display.fronts).toEqual([true]);
+    h.appState.set('inactive');
+    h.appState.set('background');
+    expect(h.display.fronts).toEqual([true, false, false]);
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    const before = h.display.log.length;
+    h.appState.set('active');
+    expect(h.display.fronts).toEqual([true, false, false, true]);
+    await flush(h);
+    expect(h.display.log.slice(before).some((l) => l.startsWith('start'))).toBe(true);
+    await h.host.stop({ endOpenTrip: false });
   });
 
   test('RoadWise coming to the front starts the Live Activity locally and drops a push still waiting or to be asked again', async () => {
