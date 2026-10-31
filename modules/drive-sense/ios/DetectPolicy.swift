@@ -111,9 +111,13 @@ enum DetectPolicy {
   static let TRUSTED_HACC_M: Double = 30
   static let TRUSTED_SPEED_ACC_MPS: Double = 2
   static let SLOW_CAR_MS: Double = 90_000
+  static let SLOW_CAR_SPAN_MS: Double = 30_000
+  static let SLOW_CAR_COVER_MIN: Double = 0.8
   static let SLOW_PATH_M: Double = 800
   static let SLOW_NET_M: Double = 400
   static let SLOW_AVG_MPS: Double = 3.57632
+  static let SLOW_STEP_SLACK: Double = 1.5
+  static let SLOW_STEP_PAD_M: Double = 5
   static let LINK_MIN_MPS: Double = 2.2352
   static let LINK_NO_CAR_MPS: Double = 6.7056
   static let LINK_PACE_ROWS: Int = 2

@@ -1,7 +1,7 @@
 // Settings › Your car (iPhone): pair the car whose Bluetooth or CarPlay is connected now (up to 3,
 // family cars), see the paired ones and forget any. The output connected now is offered first; with
-// several connected, each can be chosen. A name that reads like headphones is warned about, and the
-// driver can still go on. Nothing pairs without the tap.
+// several connected, each can be chosen. A name that reads like headphones or a hearing aid can't be
+// paired (CarPlay always can). Nothing pairs without the tap.
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
@@ -11,7 +11,7 @@ import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Button, ListRow, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { carCopy } from './copy';
-import { CARS_MAX, isPaired, looksLikeHeadphones, outputName, preselect } from './model';
+import { canPair, CARS_MAX, isPaired, outputName, preselect } from './model';
 import { useCarLink } from './useCarLink';
 
 const copy = carCopy.screen;
@@ -78,9 +78,9 @@ function CarLinkBody({ state, failed, onPair, onForget }: { state: CarLinkState;
           <Text variant="body" testID="car-ask">
             {chosenPaired ? copy.already(outputName(chosen)) : copy.ask(outputName(chosen))}
           </Text>
-          {!chosenPaired && looksLikeHeadphones(chosen.name) ? <Banner tone="warning" message={copy.headphones} testID="car-headphones" /> : null}
+          {!chosenPaired && !canPair(chosen) ? <Banner tone="warning" message={copy.headphones} testID="car-headphones" /> : null}
           {!chosenPaired && full ? <Banner tone="info" message={copy.full} testID="car-full" /> : null}
-          {chosenPaired ? null : <Button label={copy.use} onPress={() => run(onPair(chosen.uid))} disabled={full} loading={busy} testID="car-use" />}
+          {chosenPaired ? null : <Button label={copy.use} onPress={() => run(onPair(chosen.uid))} disabled={full || !canPair(chosen)} loading={busy} testID="car-use" />}
         </View>
       ) : null}
       {failed ? <Banner tone="danger" message={copy.failed} testID="car-failed" /> : null}

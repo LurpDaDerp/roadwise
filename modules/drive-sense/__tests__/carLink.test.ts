@@ -6,7 +6,7 @@
 import { CAR_NAME_MAX, CAR_UID_MAX, carLinkStateSchema } from '../src/detect';
 
 declare const __dirname: string;
-import { DETECT, carLinked } from '../src/detect/policy';
+import { DETECT, carLinked, SLOW_TRAFFIC_START, slowTrafficHeld, slowTrafficReport } from '../src/detect/policy';
 import type { CarLinkState, CarOutput } from '../src/detect/types';
 import { createFakeDriveDetect } from '../src/fakeDetect';
 
@@ -46,7 +46,7 @@ describe('the fake car link', () => {
     expect((await d.pairCar('nobody')).cars).toHaveLength(1);
     d.setCarRoute([
       { uid: 'b', name: 'B', type: 'bluetoothA2DP' },
-      { uid: 'c', name: 'C', type: 'bluetoothLE' },
+      { uid: 'c', name: 'C', type: 'bluetoothA2DP' },
       { uid: 'e', name: 'E', type: 'bluetoothHFP' },
     ]);
     await d.pairCar('b');
@@ -110,6 +110,8 @@ describe('the contract schema', () => {
   test('takes a full state and refuses a malformed one', () => {
     expect(carLinkStateSchema.safeParse(ok).success).toBe(true);
     expect(carLinkStateSchema.safeParse({ ...ok, current: [{ ...civic, type: 'usbAudio' }] }).success).toBe(false);
+    // a Bluetooth LE output is a hearing aid on iPhone: never a car
+    expect(carLinkStateSchema.safeParse({ ...ok, current: [{ ...civic, type: 'bluetoothLE' }] }).success).toBe(false);
     expect(carLinkStateSchema.safeParse({ ...ok, cars: [1, 2, 3, 4].map((i) => ({ ...civic, uid: `u${i}`, pairedAt: 1 })) }).success).toBe(false);
     expect(carLinkStateSchema.safeParse({ ...ok, current: [{ ...civic, uid: '' }] }).success).toBe(false);
     expect(carLinkStateSchema.safeParse({ ...ok, extra: true }).success).toBe(false);
@@ -134,5 +136,14 @@ describe('the contract schema', () => {
     expect(src).toMatch(/guard s\.utf16\.count > limit else \{ return s \}/);
     expect(src).toMatch(/let k = String\(c\)\.utf16\.count\s*if units \+ k > limit \{ break \}/);
     expect(src).not.toMatch(/portName\.prefix/);
+  });
+});
+
+describe('the slow path and the link: on foot never holds or starts', () => {
+  test('a slow candidate marked on foot holds no evidence (it waits 3 min, not 5)', () => {
+    const car = slowTrafficReport(SLOW_TRAFFIC_START, { at: 0, automotive: true, stationary: false, onFoot: false, confident: true });
+    expect(slowTrafficHeld(car, 60_000)).toBe(true);
+    const walked = slowTrafficReport(car, { at: 30_000, automotive: false, stationary: false, onFoot: true, confident: true });
+    expect(slowTrafficHeld(walked, 60_000)).toBe(false);
   });
 });

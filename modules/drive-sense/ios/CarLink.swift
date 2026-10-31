@@ -104,7 +104,6 @@ final class CarLink {
     switch t {
     case .bluetoothA2DP: return "bluetoothA2DP"
     case .bluetoothHFP: return "bluetoothHFP"
-    case .bluetoothLE: return "bluetoothLE"
     case .carAudio: return "carAudio"
     default: return nil
     }

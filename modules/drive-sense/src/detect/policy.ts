@@ -44,17 +44,25 @@ export const DETECT = {
   TRUSTED_SPEED_ACC_MPS: 2,
   /**
    * The slow-traffic confirmation (`slowTrafficStep`), beside the speed evidence: inside one
-   * candidate, confident moving car motion standing 90 s in all, a trusted path of 800 m whose last
-   * fix is 400 m in a straight line from its first, trusted rows over 3 mph averaging 8 mph, and no
+   * candidate, confident moving car motion standing 90 s in all, from at least two confident
+   * automotive reports 30 s or more apart, with a confident automotive report (moving or standing)
+   * standing for 80 % of the time since the first trusted row over 3 mph; a trusted path of 800 m
+   * whose last fix is 400 m in a straight line from its first (each step at most 1.5 times what the
+   * faster of its two rows could cover, plus 5 m); trusted rows over 3 mph averaging 8 mph; and no
    * confident walking, running or cycling report since the candidate opened.
    */
   SLOW_CAR_MS: 90_000,
+  SLOW_CAR_SPAN_MS: 30_000,
+  SLOW_CAR_COVER_MIN: 0.8,
   SLOW_PATH_M: 800,
   SLOW_NET_M: 400,
   SLOW_AVG_MPS: 3.57632,
+  SLOW_STEP_SLACK: 1.5,
+  SLOW_STEP_PAD_M: 5,
   /**
    * The car link start (`linkStep`): with a paired car's audio (or any CarPlay) current, two trusted
-   * rows in a row at 5 mph or more, not on-foot vetoed, each with fresh car motion or at 15 mph or more.
+   * rows in a row at 5 mph or more, the candidate not marked on foot, each with fresh car motion;
+   * with CarPlay current, at 15 mph or more without it too.
    */
   LINK_MIN_MPS: 2.2352,
   LINK_NO_CAR_MPS: 6.7056,
@@ -368,21 +376,29 @@ export interface SlowReport {
 
 /**
  * The slow-traffic path's accumulators for one candidate: the confident moving car motion banked
- * (`carMs`) and the standing report's arrival when it is car motion (`carSince`); whether a
- * confident on-foot report arrived since the candidate opened (for good); the first and last
- * trusted fix, the trusted path between them; the sum and count of the trusted rows over 3 mph (the
+ * (`carMs`) and the standing report's arrival when it is car motion (`carSince`); the automotive
+ * coverage (any confident automotive report, a car standing at a light too) banked since the first
+ * trusted row over 3 mph (`vehMs`, `moveStartTs`) and the standing report's arrival when it is one
+ * (`vehSince`); the first and last confident automotive report's arrival; whether a confident
+ * on-foot report arrived since the candidate opened (for good); the first and last trusted fix (with
+ * its speed), the trusted path between them; the sum and count of the trusted rows over 3 mph (the
  * average); the first trusted row at 5 mph or more (`runStartTs`, where the trace-back starts) and
  * the last trusted row over 3 mph.
  */
 export interface SlowTrafficState {
   carMs: number;
   carSince: number | null;
+  vehMs: number;
+  vehSince: number | null;
+  firstCarAt: number | null;
+  lastCarAt: number | null;
   onFoot: boolean;
   first: LatLng | null;
-  last: { ts: number; lat: number; lng: number } | null;
+  last: { ts: number; lat: number; lng: number; mps: number } | null;
   pathM: number;
   sumMps: number;
   movingRows: number;
+  moveStartTs: number | null;
   runStartTs: number | null;
   lastMoveTs: number | null;
 }
@@ -390,12 +406,17 @@ export interface SlowTrafficState {
 export const SLOW_TRAFFIC_START: SlowTrafficState = Object.freeze({
   carMs: 0,
   carSince: null,
+  vehMs: 0,
+  vehSince: null,
+  firstCarAt: null,
+  lastCarAt: null,
   onFoot: false,
   first: null,
   last: null,
   pathM: 0,
   sumMps: 0,
   movingRows: 0,
+  moveStartTs: null,
   runStartTs: null,
   lastMoveTs: null,
 });
@@ -405,30 +426,53 @@ export function slowTrafficCarMs(s: SlowTrafficState, now: number): number {
   return s.carSince !== null && now > s.carSince ? s.carMs + (now - s.carSince) : s.carMs;
 }
 
-/** The slow-traffic path holds evidence: some car motion (the candidate then waits 5 min, not 3). */
-export const slowTrafficHeld = (s: SlowTrafficState, now: number): boolean => slowTrafficCarMs(s, now) > 0;
+/** The automotive coverage by `now` since the first trusted row over 3 mph: banked plus the standing automotive report's stretch since then. */
+export function slowTrafficVehMs(s: SlowTrafficState, now: number): number {
+  if (s.moveStartTs === null || s.vehSince === null) return s.vehMs;
+  const from = Math.max(s.vehSince, s.moveStartTs);
+  return now > from ? s.vehMs + (now - from) : s.vehMs;
+}
+
+/** The slow-traffic path holds evidence: some car motion and not on foot (the candidate then waits 5 min, not 3). */
+export const slowTrafficHeld = (s: SlowTrafficState, now: number): boolean => !s.onFoot && slowTrafficCarMs(s, now) > 0;
 
 /**
- * One live report. A report stands until the next replaces it: the car motion standing until now is
- * banked, and a confident automotive report that is not stationary starts a new stretch (anything
- * else, a low-confidence one too, stands as no car motion). A confident walking, running or cycling
- * report marks the candidate on foot for good.
+ * One live report. A report stands until the next replaces it: the car motion and the automotive
+ * coverage standing until now are banked; a confident automotive report starts a new coverage
+ * stretch (a car standing at a light too) and, when not stationary, a new car motion stretch
+ * (anything else, a low-confidence one too, stands as neither), and dates the first and last
+ * automotive report. A confident walking, running or cycling report marks the candidate on foot
+ * for good.
  */
 export function slowTrafficReport(s: SlowTrafficState, r: SlowReport): SlowTrafficState {
   const carMs = s.carSince !== null && r.at > s.carSince ? s.carMs + (r.at - s.carSince) : s.carMs;
   const car = r.confident && r.automotive && !r.stationary;
-  return { ...s, carMs, carSince: car ? r.at : null, onFoot: s.onFoot || (r.confident && r.onFoot) };
+  const veh = r.confident && r.automotive;
+  return {
+    ...s,
+    carMs,
+    carSince: car ? r.at : null,
+    vehMs: slowTrafficVehMs(s, r.at),
+    vehSince: veh ? r.at : null,
+    firstCarAt: veh ? (s.firstCarAt ?? r.at) : s.firstCarAt,
+    lastCarAt: veh ? r.at : s.lastCarAt,
+    onFoot: s.onFoot || (r.confident && r.onFoot),
+  };
 }
 
 /**
- * Whether the slow-traffic path confirms: never on foot; 90 s of car motion, an 800 m trusted path,
- * the last trusted fix 400 m in a straight line from the first, and an 8 mph average over the
- * trusted rows over 3 mph.
+ * Whether the slow-traffic path confirms: never on foot; 90 s of car motion, from automotive reports
+ * 30 s or more apart, with automotive coverage for 80 % of the time since the first trusted row over
+ * 3 mph; an 800 m trusted path, the last trusted fix 400 m in a straight line from the first, and an
+ * 8 mph average over the trusted rows over 3 mph.
  */
 export function slowTrafficConfirmed(s: SlowTrafficState, now: number): boolean {
   if (s.onFoot || s.first === null || s.last === null || s.movingRows === 0) return false;
+  if (s.firstCarAt === null || s.lastCarAt === null || s.moveStartTs === null) return false;
   return (
     slowTrafficCarMs(s, now) >= DETECT.SLOW_CAR_MS &&
+    s.lastCarAt - s.firstCarAt >= DETECT.SLOW_CAR_SPAN_MS &&
+    slowTrafficVehMs(s, now) >= DETECT.SLOW_CAR_COVER_MIN * (now - s.moveStartTs) &&
     s.pathM >= DETECT.SLOW_PATH_M &&
     distanceM(s.first, s.last) >= DETECT.SLOW_NET_M &&
     s.sumMps / s.movingRows >= DETECT.SLOW_AVG_MPS
@@ -437,27 +481,35 @@ export function slowTrafficConfirmed(s: SlowTrafficState, now: number): boolean 
 
 /**
  * One row of the slow-traffic path. As the speed evidence, 5 min with no trusted row over 3 mph
- * forgets it all (not the on-foot mark; a standing car report starts its stretch again here). A
- * trusted row over 3 mph adds the step from the last trusted fix to the path when that fix is at most
- * `AUTO_ROW_GAP_MAX_MS` older (a stopped car's GPS jitter, and a jump across a gap, add nothing),
- * and its speed to the average; every trusted row is the last fix (and the first, when none is yet).
+ * forgets it all (not the on-foot mark; a standing car or automotive report starts its stretch
+ * again here, and two new reports 30 s apart are needed). A trusted row over 3 mph adds the step
+ * from the last trusted fix to the path when that fix is at most `AUTO_ROW_GAP_MAX_MS` older (a
+ * stopped car's GPS jitter, and a jump across a gap, add nothing), never more than 1.5 times what the
+ * faster of the two rows covers in the time plus 5 m (a GPS jump inside the gap adds no more), and
+ * its speed to the average; the first one starts the coverage clock; every trusted row is the last
+ * fix (and the first, when none is yet).
  */
 export function slowTrafficStep(s: SlowTrafficState, r: DetectRow): { state: SlowTrafficState; confirmed: boolean } {
   const n: SlowTrafficState =
     s.lastMoveTs !== null && r.ts - s.lastMoveTs >= DETECT.AUTO_FORGET_MS
-      ? { ...SLOW_TRAFFIC_START, onFoot: s.onFoot, carSince: s.carSince === null ? null : r.ts }
+      ? { ...SLOW_TRAFFIC_START, onFoot: s.onFoot, carSince: s.carSince === null ? null : r.ts, vehSince: s.vehSince === null ? null : r.ts }
       : s;
   const ok = trusted(r);
   const moved = ok && r.speed > DETECT.STOP_MPS;
   const gap = n.last === null ? -1 : r.ts - n.last.ts;
-  const pathM = moved && n.last !== null && gap > 0 && gap <= DETECT.AUTO_ROW_GAP_MAX_MS ? n.pathM + distanceM(n.last, r) : n.pathM;
+  let pathM = n.pathM;
+  if (moved && n.last !== null && gap > 0 && gap <= DETECT.AUTO_ROW_GAP_MAX_MS) {
+    const cap = (Math.max(r.speed, n.last.mps) * gap * DETECT.SLOW_STEP_SLACK) / 1000 + DETECT.SLOW_STEP_PAD_M;
+    pathM += Math.min(distanceM(n.last, r), cap);
+  }
   const state: SlowTrafficState = {
     ...n,
     first: ok && n.first === null ? { lat: r.lat, lng: r.lng } : n.first,
-    last: ok ? { ts: r.ts, lat: r.lat, lng: r.lng } : n.last,
+    last: ok ? { ts: r.ts, lat: r.lat, lng: r.lng, mps: r.speed } : n.last,
     pathM,
     sumMps: moved ? n.sumMps + r.speed : n.sumMps,
     movingRows: moved ? n.movingRows + 1 : n.movingRows,
+    moveStartTs: n.moveStartTs ?? (moved ? r.ts : null),
     runStartTs: n.runStartTs ?? (ok && r.speed >= DETECT.MOVE_MPS ? r.ts : null),
     lastMoveTs: moved ? r.ts : n.lastMoveTs,
   };
@@ -477,31 +529,52 @@ export function carLinked(current: readonly CarPort[], paired: readonly string[]
   return current.some((o) => o.type === 'carAudio' || paired.includes(o.uid));
 }
 
+/** CarPlay (`carAudio`) is among the current outputs: a car for certain, which a paired Bluetooth output is not. */
+export function carPlayOn(current: readonly CarPort[]): boolean {
+  return current.some((o) => o.type === 'carAudio');
+}
+
 /** "Most of the drive": an output current for more than half the rows of a drive of 2 min or more. */
 export function carMostOfDrive(withRows: number, rows: number): boolean {
   return rows >= DETECT.CAR_DRIVE_MIN_ROWS && withRows > rows * DETECT.CAR_DRIVE_SHARE_MIN;
 }
 
-/** The car link start in progress: the run of link rows, when it began, the last one's time. */
+/**
+ * The car link start in progress: the run of link rows, when it began, the last one's time, and the
+ * candidate's on-foot mark (a confident walking, running or cycling report since it opened, lifted
+ * only by a later confident automotive report).
+ */
 export interface LinkState {
   run: number;
   runStartTs: number | null;
   prevTs: number | null;
+  onFoot: boolean;
 }
 
-export const LINK_START: LinkState = Object.freeze({ run: 0, runStartTs: null, prevTs: null });
+export const LINK_START: LinkState = Object.freeze({ run: 0, runStartTs: null, prevTs: null, onFoot: false });
+
+/** One live report into the link's on-foot mark: a confident on-foot report sets it, a later confident automotive one lifts it; anything else changes nothing. */
+export function linkReport(s: LinkState, r: SlowReport): LinkState {
+  if (!r.confident) return s;
+  if (r.onFoot) return { ...s, onFoot: true };
+  if (r.automotive) return { ...s, onFoot: false };
+  return s;
+}
 
 /**
- * One row of the car link start: with the link up (`linked`), a trusted row at 5 mph or more, not
- * on-foot vetoed, with fresh car motion or at 15 mph or more (headphones on a bike, or on a walk to
- * a bus stop, never start a drive), extends the run when it follows the last one within
- * `AUTO_ROW_GAP_MAX_MS`, else begins one; any other row ends it. Two in a row confirm.
+ * One row of the car link start: with the link up (`linked`) and the candidate not on foot, a
+ * trusted row at 5 mph or more with fresh car motion (with CarPlay current, `carPlay`, at 15 mph or
+ * more without it too; a paired Bluetooth output alone could be headphones on a bike), extends the
+ * run when it follows the last one within `AUTO_ROW_GAP_MAX_MS`, else begins one; any other row
+ * ends it (the on-foot mark stays). Two in a row confirm.
  */
-export function linkStep(s: LinkState, r: DetectRow, linked: boolean, veto: boolean, carFresh: boolean): { state: LinkState; confirmed: boolean } {
-  const ok = linked && !veto && trusted(r) && r.speed >= DETECT.LINK_MIN_MPS && (carFresh || r.speed >= DETECT.LINK_NO_CAR_MPS);
-  if (!ok) return { state: LINK_START, confirmed: false };
+export function linkStep(s: LinkState, r: DetectRow, linked: boolean, carPlay: boolean, carFresh: boolean): { state: LinkState; confirmed: boolean } {
+  const ok = linked && !s.onFoot && trusted(r) && r.speed >= DETECT.LINK_MIN_MPS && (carFresh || (carPlay && r.speed >= DETECT.LINK_NO_CAR_MPS));
+  if (!ok) return { state: { ...LINK_START, onFoot: s.onFoot }, confirmed: false };
   const goesOn = s.run > 0 && s.prevTs !== null && r.ts - s.prevTs > 0 && r.ts - s.prevTs <= DETECT.AUTO_ROW_GAP_MAX_MS;
-  const state: LinkState = goesOn ? { run: s.run + 1, runStartTs: s.runStartTs ?? r.ts, prevTs: r.ts } : { run: 1, runStartTs: r.ts, prevTs: r.ts };
+  const state: LinkState = goesOn
+    ? { run: s.run + 1, runStartTs: s.runStartTs ?? r.ts, prevTs: r.ts, onFoot: s.onFoot }
+    : { run: 1, runStartTs: r.ts, prevTs: r.ts, onFoot: s.onFoot };
   return { state, confirmed: state.run >= DETECT.LINK_PACE_ROWS };
 }
 

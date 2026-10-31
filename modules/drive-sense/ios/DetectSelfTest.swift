@@ -29,11 +29,23 @@ enum DetectSelfTest {
     case "slow":
       return slow(v)
     case "link":
-      guard let rows = rowsOf(v["rows"]) else { return nil }
-      let link = flags(v["link"]), veto = flags(v["veto"]), car = flags(v["car"])
+      guard let rows = rowsOf(v["rows"]), let list = v["reports"] as? [Any] else { return nil }
+      let link = flags(v["link"]), carPlay = flags(v["carPlay"]), car = flags(v["car"])
+      var reports: [(at: Double, automotive: Bool, onFoot: Bool, confident: Bool)] = []
+      for raw in list {
+        guard let o = raw as? [String: Any], let at = jsonNumber(o["at"]), let automotive = jsonBool(o["automotive"]),
+              let onFoot = jsonBool(o["onFoot"]), let confident = jsonBool(o["confident"]) else { return nil }
+        reports.append((at, automotive, onFoot, confident))
+      }
+      reports.sort { $0.at < $1.at }
       var s = LinkState()
+      var k = 0
       for (i, r) in rows.enumerated() {
-        let st = DetectPolicy.linkStep(s, r, linked: i < link.count && link[i], veto: i < veto.count && veto[i], carFresh: i < car.count && car[i])
+        while k < reports.count && reports[k].at <= r.ts {
+          s = DetectPolicy.linkReport(s, automotive: reports[k].automotive, onFoot: reports[k].onFoot, confident: reports[k].confident)
+          k += 1
+        }
+        let st = DetectPolicy.linkStep(s, r, linked: i < link.count && link[i], carPlay: i < carPlay.count && carPlay[i], carFresh: i < car.count && car[i])
         s = st.state
         if st.confirmed { return ["confirmedAt": r.ts, "runStartTs": opt(s.runStartTs)] }
       }

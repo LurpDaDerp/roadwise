@@ -846,12 +846,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectStartPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endOnSteps', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq', 'slowTrafficCarMs', 'slowTrafficHeld', 'slowTrafficReport', 'slowTrafficConfirmed', 'slowTrafficStep', 'carLinked', 'carMostOfDrive', 'linkStep']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'endOnSteps', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq', 'slowTrafficCarMs', 'slowTrafficHeld', 'slowTrafficReport', 'slowTrafficConfirmed', 'slowTrafficStep', 'slowTrafficVehMs', 'carLinked', 'carPlayOn', 'carMostOfDrive', 'linkReport', 'linkStep']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
     for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'veto', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status', 'slow', 'link', 'car']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['slowTrafficReport(', 'slowTrafficStep(', 'slowTrafficCarMs(', 'linkStep(', 'carLinked(', 'carMostOfDrive(', 'confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endOnSteps(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
+    for (const call of ['slowTrafficReport(', 'slowTrafficStep(', 'slowTrafficCarMs(', 'linkReport(', 'linkStep(', 'carLinked(', 'carMostOfDrive(', 'confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endOnSteps(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded and goes back over a stop the car rolled (5 mph) into; the
@@ -977,7 +977,13 @@ describe('iOS drive detector: slow traffic and the car link (text)', () => {
     const row = fn(detector(), 'func onRow(');
     expect(row).toMatch(/if step\.confirmed \{\s*confirm\(kind, from: confirmState\.runStartTs\)\s*return\s*\}\s*guard kind == "auto" else \{ return \}/);
     expect(row).toMatch(/let slowStep = DetectPolicy\.slowTrafficStep\(slowState, d\)\s*slowState = slowStep\.state/);
-    expect(row).toMatch(/let link = DetectPolicy\.linkStep\(linkState, d, linked: CarLink\.shared\.linked, veto: veto, carFresh: carFresh\(\)\)\s*linkState = link\.state/);
+    expect(row).toMatch(/let link = DetectPolicy\.linkStep\(linkState, d, linked: CarLink\.shared\.linked, carPlay: DetectPolicy\.carPlayOn\(CarLink\.shared\.current\), carFresh: carFresh\(\)\)\s*linkState = link\.state/);
+    // the link's on-foot mark: every live report while a candidate watches
+    expect(fn(detector(), 'func onActivity(')).toMatch(/linkState = DetectPolicy\.linkReport\(linkState, automotive: a\.automotive, onFoot: a\.walking \|\| a\.cycling, confident: a\.confident\)/);
+    // only live rows count toward the car link's tally, never the rows replayed at the confirmation
+    expect(fn(detector(), 'func record(')).toMatch(/if evaluate \{ CarLink\.shared\.countRow\(\) \}/);
+    // a slow candidate on foot holds nothing: slowTrafficHeld is false on foot (both twins)
+    expect(code('DetectStartPolicy.swift')).toMatch(/static func slowTrafficHeld\(_ s: SlowTrafficState, _ now: Double\) -> Bool \{ !s\.onFoot && slowTrafficCarMs\(s, now\) > 0 \}/);
     expect(row).toMatch(/if slowStep\.confirmed \{\s*confirm\(kind, from: slowState\.runStartTs\)\s*\} else if link\.confirmed \{\s*confirm\(kind, from: linkState\.runStartTs\)\s*\}/);
     // every live report feeds the slow path's car motion and on-foot mark while a candidate watches
     expect(fn(detector(), 'func onActivity(')).toMatch(/if phase == "candidate" \{\s*slowState = DetectPolicy\.slowTrafficReport\(slowState, at: a\.at, automotive: a\.automotive, stationary: a\.stationary, onFoot: a\.walking \|\| a\.cycling, confident: a\.confident\)/);
@@ -994,7 +1000,9 @@ describe('iOS drive detector: slow traffic and the car link (text)', () => {
     const link = code('CarLink.swift');
     expect(link).toMatch(/AVAudioSession\.sharedInstance\(\)\.currentRoute\.outputs\.compactMap/);
     expect(link).toMatch(/forName: AVAudioSession\.routeChangeNotification, object: nil, queue: \.main/);
-    for (const port of ['bluetoothA2DP', 'bluetoothHFP', 'bluetoothLE', 'carAudio']) expect(link).toContain(`case .${port}: return "${port}"`);
+    for (const port of ['bluetoothA2DP', 'bluetoothHFP', 'carAudio']) expect(link).toContain(`case .${port}: return "${port}"`);
+    // a Bluetooth LE output is a hearing aid on iPhone: never read as a car
+    expect(link).not.toMatch(/\.bluetoothLE/);
     expect(link).toMatch(/default: return nil/);
     // the pairing persists in its own UserDefaults key, read again at every relaunch and first unlock
     expect(link).toMatch(/static let key = "drivesense\.carLink"/);
@@ -1013,7 +1021,7 @@ describe('iOS drive detector: slow traffic and the car link (text)', () => {
 
   it('drives teach it: each recorded row counts the outputs; a drive that reached driving speed keeps those current for most of it; "Not driving?" keeps none', () => {
     const d = detector();
-    expect(fn(d, 'func record(')).toMatch(/CarLink\.shared\.countRow\(\)/);
+    expect(fn(d, 'func record(')).toMatch(/if evaluate \{ CarLink\.shared\.countRow\(\) \}/);
     expect(fn(d, 'func beginDrive(')).toMatch(/CarLink\.shared\.beginDrive\(\)/);
     expect(fn(d, 'func resumeDrive(')).toMatch(/CarLink\.shared\.beginDrive\(\)/);
     expect(fn(d, 'func commitEnd(')).toMatch(/CarLink\.shared\.endDrive\(driveId: driveId, endedAt: endedAt, drove: endClock\.lastDroveTs != nil\)/);

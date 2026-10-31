@@ -14,10 +14,14 @@ export const SUGGEST_DRIVES = 2;
 /** The name the screens show: the phone's own name for it, or its kind. */
 export const outputName = (o: Pick<CarOutput, 'name' | 'type'>): string => (o.name.trim() !== '' ? o.name.trim() : carCopy.unnamed(o.type));
 
-const HEADPHONES = /\b(air ?pods|beats|powerbeats|(ear)?buds|galaxy buds|pixel buds|ear ?phones|head ?phones|headset|wh-?1000|wf-?1000|quietcomfort|soundcore|shokz)/i;
+const HEADPHONES =
+  /\b(air ?pods|pods|beats|powerbeats|(ear)?buds|galaxy buds|pixel buds|ear ?phones|head ?phones|headset|wh-?1000|wf-?1000|sony wh|sony wf|quietcomfort|bose|jabra|jbl|sennheiser|nothing ear|soundcore|shokz|hearing|phonak|oticon|resound|signia|starkey)/i;
 
-/** A name that reads like headphones or earbuds, not a car. */
+/** A name that reads like headphones, earbuds or a hearing aid, not a car. */
 export const looksLikeHeadphones = (name: string): boolean => HEADPHONES.test(name);
+
+/** Whether an output can be paired: CarPlay always, a Bluetooth output only when its name doesn't read like headphones or a hearing aid. */
+export const canPair = (o: Pick<CarOutput, 'name' | 'type'>): boolean => o.type === 'carAudio' || !looksLikeHeadphones(o.name);
 
 export const isPaired = (s: CarLinkState, uid: string): boolean => s.cars.some((c) => c.uid === uid);
 
@@ -56,7 +60,7 @@ export function carSuggestion(s: CarLinkState): CarOutput | null {
     (x) =>
       !isPaired(s, x.output.uid) &&
       !s.notMine.includes(x.output.uid) &&
-      !looksLikeHeadphones(x.output.name) &&
+      canPair(x.output) &&
       (x.drives >= SUGGEST_DRIVES || (x.output.type === 'carAudio' && x.drives >= 1))
   );
   picks.sort((a, b) => b.drives - a.drives || b.newest - a.newest);

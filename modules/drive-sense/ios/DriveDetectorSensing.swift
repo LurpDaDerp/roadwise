@@ -29,7 +29,7 @@ extension DriveDetector {
       // Beside the speed evidence: slow traffic, and the car link (a paired car or CarPlay current).
       let slowStep = DetectPolicy.slowTrafficStep(slowState, d)
       slowState = slowStep.state
-      let link = DetectPolicy.linkStep(linkState, d, linked: CarLink.shared.linked, veto: veto, carFresh: carFresh())
+      let link = DetectPolicy.linkStep(linkState, d, linked: CarLink.shared.linked, carPlay: DetectPolicy.carPlayOn(CarLink.shared.current), carFresh: carFresh())
       linkState = link.state
       if slowStep.confirmed {
         confirm(kind, from: slowState.runStartTs)
@@ -69,6 +69,7 @@ extension DriveDetector {
     vetoState = DetectPolicy.noteVeto(vetoState, at: a.at, onFoot: a.walking || a.cycling, automotive: a.automotive, confident: a.confident)
     if phase == "candidate" {
       slowState = DetectPolicy.slowTrafficReport(slowState, at: a.at, automotive: a.automotive, stationary: a.stationary, onFoot: a.walking || a.cycling, confident: a.confident)
+      linkState = DetectPolicy.linkReport(linkState, automotive: a.automotive, onFoot: a.walking || a.cycling, confident: a.confident)
     }
     if a.walking {
       if a.confident && walkSince == nil { walkSince = a.at }

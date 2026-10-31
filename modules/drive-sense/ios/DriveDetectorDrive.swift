@@ -128,7 +128,8 @@ extension DriveDetector {
     journal.appendRow(driveId, line)
     capture.emitRow(line, ts: Int64(d.ts))
     lastRowTs = d.ts
-    CarLink.shared.countRow()
+    // Only live rows count toward the car link's tally: a replayed row is from before the confirmation.
+    if evaluate { CarLink.shared.countRow() }
     if DetectPolicy.trusted(d) { lastFix = (lat: d.lat, lng: d.lng) }
     endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow: automotiveNow())
     if let n = steps { endClock = DetectPolicy.endOnSteps(endClock, ts: d.ts, steps: n) }

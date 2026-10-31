@@ -16,6 +16,7 @@ import {
   confirmStep,
   continuesFrom,
   LINK_START,
+  linkReport,
   linkStep,
   SLOW_TRAFFIC_START,
   slowTrafficCarMs,
@@ -116,9 +117,12 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     }
     case 'link': {
       let s = LINK_START;
+      const reports = [...v.reports].sort((a, b) => a.at - b.at);
+      let k = 0;
       for (let i = 0; i < v.rows.length; i++) {
         const r = v.rows[i]!;
-        const st = linkStep(s, r, v.link[i] === true, v.veto[i] === true, v.car[i] === true);
+        while (k < reports.length && reports[k]!.at <= r.ts) s = linkReport(s, reports[k++]!);
+        const st = linkStep(s, r, v.link[i] === true, v.carPlay[i] === true, v.car[i] === true);
         s = st.state;
         if (st.confirmed) return { confirmedAt: r.ts, runStartTs: s.runStartTs };
       }

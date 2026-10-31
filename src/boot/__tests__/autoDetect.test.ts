@@ -370,8 +370,14 @@ describe('the car link (readCarLink, pairCar, forgetCar, notMyCar, onCarLink)', 
     setAutoDetectRuntime(null);
     const errors: string[] = [];
     const detect = createFakeDriveDetect();
-    Object.assign(detect, { carLinkState: async () => Promise.reject(new Error('DriveDetect.carLinkState: not in this native build')) });
     setAutoDetectRuntime({ db, detect, uid: async () => 'user-1', onError: (_e, ctx) => void errors.push(ctx) });
+    // an older native build: null, quietly
+    Object.defineProperty(detect, 'carLinkAvailable', { value: false, configurable: true });
+    expect(await readCarLink()).toBeNull();
+    expect(errors).toEqual([]);
+    // one that has it but fails: null, reported
+    Object.defineProperty(detect, 'carLinkAvailable', { value: true, configurable: true });
+    Object.assign(detect, { carLinkState: async () => Promise.reject(new Error('busy')) });
     expect(await readCarLink()).toBeNull();
     expect(errors).toEqual(['carLink']);
   });

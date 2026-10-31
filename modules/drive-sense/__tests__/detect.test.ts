@@ -141,6 +141,7 @@ describe('with the native module', () => {
   });
 
   test('the car link: a native build without it rejects by name; a bad uid never crosses; the state is validated', async () => {
+    expect(DriveDetect.carLinkAvailable).toBe(false);
     await expect(DriveDetect.carLinkState()).rejects.toThrow('DriveDetect.carLinkState: not in this native build');
     await expect(DriveDetect.pairCar('')).rejects.toThrow('DriveDetect.pairCar: invalid arguments');
     await expect(DriveDetect.forgetCar('x'.repeat(257))).rejects.toThrow('invalid arguments');

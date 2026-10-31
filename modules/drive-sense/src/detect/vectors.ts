@@ -105,14 +105,19 @@ export type DetectVector =
       steps: SlowStep[];
       expected: { confirmedAt: number | null; runStartTs: number | null; traced: number | null; carMs: number };
     }
-  /** The car link start: `link[i]` a paired car or CarPlay current at row i, `veto[i]` and `car[i]` as for 'confirm'. */
+  /**
+   * The car link start: `link[i]` a paired car or CarPlay current at row i, `carPlay[i]` CarPlay
+   * among them, `car[i]` fresh car motion; `reports` (live, each taken in before the row of its
+   * second) set and lift the on-foot mark.
+   */
   | {
       name: string;
       kind: 'link';
       rows: DetectRow[];
       link: boolean[];
-      veto: boolean[];
+      carPlay: boolean[];
       car: boolean[];
+      reports: SlowReport[];
       expected: { confirmedAt: number | null; runStartTs: number | null };
     }
   /** The link's match over the route's outputs, and "most of the drive" for an output current `withRows` of `rows`. */
@@ -296,8 +301,14 @@ const carPark = vrows(0, 600, 10, (s) => {
   return { northM: p <= 300 ? p : 600 - p };
 });
 
-/** The link flags per row (`link` on by default), with `veto` and `car` as for 'confirm'. */
-const linkRows = (rows: DetectRow[], o: { link?: Flag; veto?: Flag; car?: Flag } = {}) => ({ rows, link: flags(rows, o.link ?? true), veto: flags(rows, o.veto), car: flags(rows, o.car) });
+/** The link flags per row (`link` on by default; `carPlay` and `car` off), and the live reports. */
+const linkRows = (rows: DetectRow[], o: { link?: Flag; carPlay?: Flag; car?: Flag; reports?: SlowReport[] } = {}) => ({
+  rows,
+  link: flags(rows, o.link ?? true),
+  carPlay: flags(rows, o.carPlay),
+  car: flags(rows, o.car),
+  reports: o.reports ?? [],
+});
 
 export const DETECT_VECTORS: readonly DetectVector[] = [
   // ——— confirmation ———
@@ -538,15 +549,15 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   },
   { name: 'start: no confirmation, no start', kind: 'start', trigger: 'auto', ...confirmRows(vrows(0, 60, 12)), automotiveSince: 0, lastEnd: null, expected: { confirmedAt: null, start: null } },
 
-  // ——— slow traffic: 90 s of car motion, an 800 m path 400 m from where it began, 8 mph on average, never on foot ———
+  // ——— slow traffic: 90 s of car motion from reports 30 s apart, 80 % automotive coverage, an 800 m path 400 m from where it began, 8 mph on average, never on foot ———
   {
     name: 'slow: a 10 mph car with car motion confirms once its path passes 800 m, and starts at the kerb',
     kind: 'slow',
-    steps: slowSteps(kerb10, [carAt(31)]),
+    steps: slowSteps(kerb10, [carAt(31), carAt(91)]),
     expected: { confirmedAt: at(209), runStartTs: at(31), traced: 30, carMs: 178_000 },
   },
   {
-    name: 'slow: stop and go at 12 mph (car motion only while rolling) confirms on the 8th roll and starts where the car first moved',
+    name: 'slow: stop and go at 12 mph (car motion only while rolling, the car standing at each light) confirms on the 8th roll and starts where the car first moved',
     kind: 'slow',
     steps: slowStopAndGo(12),
     expected: { confirmedAt: at(229), runStartTs: at(10), traced: 9, carMs: 149_000 },
@@ -560,8 +571,26 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: 5 min with nothing over 3 mph forgets the path and the car motion; the next 800 m start after the stop',
     kind: 'slow',
-    steps: slowSteps([...northRows(0, 99, 10), ...vrows(100, 399, 0, { northM: 99 * M10 }), ...northRows(400, 700, 10, 100 * M10)], [carAt(0), carAt(100, { stationary: true }), carAt(400)]),
+    steps: slowSteps([...northRows(0, 99, 10), ...vrows(100, 399, 0, { northM: 99 * M10 }), ...northRows(400, 700, 10, 100 * M10)], [carAt(0), carAt(100, { stationary: true }), carAt(400), carAt(450)]),
     expected: { confirmedAt: at(578), runStartTs: at(400), traced: 399, carMs: 178_000 },
+  },
+  {
+    name: 'slow: one misread car report on a 10 mph bike ride never confirms (no second report 30 s later)',
+    kind: 'slow',
+    steps: slowSteps(northRows(0, 900, 10), [carAt(60)]),
+    expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 840_000 },
+  },
+  {
+    name: 'slow: an e-scooter at 12 mph with sparse car reports (a fifth of the ride) never confirms',
+    kind: 'slow',
+    steps: slowSteps(northRows(0, 900, 12), [carAt(0), carAt(60, { automotive: false }), carAt(300), carAt(360, { automotive: false }), carAt(600), carAt(660, { automotive: false })]),
+    expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 180_000 },
+  },
+  {
+    name: 'slow: a 500 m GPS jump adds only 1.5 times the step plus 5 m to the path',
+    kind: 'slow',
+    steps: slowSteps([...vrows(0, 30, 0), ...northRows(31, 99, 10, M10), ...northRows(100, 400, 10, 70 * M10 + 500)], [carAt(31), carAt(91)]),
+    expected: { confirmedAt: at(208), runStartTs: at(31), traced: 30, carMs: 177_000 },
   },
   { name: 'slow: a walk at 3 mph with no car motion never confirms', kind: 'slow', steps: slowSteps(northRows(0, 1200, 3)), expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 } },
   {
@@ -573,20 +602,20 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: a bike at 12 mph with a cycling report never confirms, whatever car motion the phone misreads',
     kind: 'slow',
-    steps: slowSteps(northRows(0, 900, 12), [carAt(0), footAt(60), carAt(120)]),
+    steps: slowSteps(northRows(0, 900, 12), [carAt(0), footAt(60), carAt(120), carAt(200)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 840_000 },
   },
   { name: 'slow: a bike at 12 mph with no car motion never confirms', kind: 'slow', steps: slowSteps(northRows(0, 900, 12)), expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 } },
   {
     name: 'slow: a walk to the car since the candidate opened stops the slow path for good',
     kind: 'slow',
-    steps: slowSteps(kerb10, [footAt(5), carAt(31)]),
+    steps: slowSteps(kerb10, [footAt(5), carAt(31), carAt(91)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 369_000 },
   },
   {
     name: 'slow: a car-park loop never 400 m from where it began never confirms, however long its path',
     kind: 'slow',
-    steps: slowSteps(carPark, [carAt(0)]),
+    steps: slowSteps(carPark, [carAt(0), carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 600_000 },
   },
   {
@@ -598,19 +627,19 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: a 6 mph crawl (under the 8 mph average) never confirms',
     kind: 'slow',
-    steps: slowSteps(northRows(0, 600, 6), [carAt(0)]),
+    steps: slowSteps(northRows(0, 600, 6), [carAt(0), carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 600_000 },
   },
   {
     name: 'slow: low-confidence car motion earns no car time',
     kind: 'slow',
-    steps: slowSteps(kerb10, [carAt(31, { confident: false })]),
+    steps: slowSteps(kerb10, [carAt(31, { confident: false }), carAt(91, { confident: false })]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 },
   },
   {
     name: 'slow: a parked car\'s GPS wander adds no path',
     kind: 'slow',
-    steps: slowSteps(vrows(0, 600, 0, (s) => ({ northM: (s * 37) % 25 })), [carAt(0)]),
+    steps: slowSteps(vrows(0, 600, 0, (s) => ({ northM: (s * 37) % 25 })), [carAt(0), carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 600_000 },
   },
 
@@ -622,9 +651,32 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     expected: { confirmedAt: at(12), runStartTs: at(11) },
   },
   { name: 'link: 4 mph is not enough', kind: 'link', ...linkRows(vrows(0, 60, 4), { car: true }), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'link: without car motion 12 mph is not enough (headphones on a bike)', kind: 'link', ...linkRows(vrows(0, 60, 12)), expected: { confirmedAt: null, runStartTs: null } },
-  { name: 'link: without car motion, at 16 mph two rows confirm', kind: 'link', ...linkRows(vrows(0, 60, 16)), expected: { confirmedAt: at(1), runStartTs: at(0) } },
-  { name: 'link: an on-foot veto holds it (headphones on a ride or a walk)', kind: 'link', ...linkRows(vrows(0, 60, 16), { veto: true, car: true }), expected: { confirmedAt: null, runStartTs: null } },
+  {
+    name: 'link: a paired Bluetooth output without car motion never confirms, even at 30 mph (headphones on a bike)',
+    kind: 'link',
+    ...linkRows(vrows(0, 60, 30)),
+    expected: { confirmedAt: null, runStartTs: null },
+  },
+  { name: 'link: CarPlay without car motion: 12 mph is not enough', kind: 'link', ...linkRows(vrows(0, 60, 12), { carPlay: true }), expected: { confirmedAt: null, runStartTs: null } },
+  { name: 'link: CarPlay without car motion, at 16 mph two rows confirm', kind: 'link', ...linkRows(vrows(0, 60, 16), { carPlay: true }), expected: { confirmedAt: at(1), runStartTs: at(0) } },
+  {
+    name: 'link: a confident walk or ride report marks the candidate on foot, still 2 min on',
+    kind: 'link',
+    ...linkRows(vrows(0, 120, 8), { car: true, carPlay: true, reports: [footAt(0)] }),
+    expected: { confirmedAt: null, runStartTs: null },
+  },
+  {
+    name: 'link: a later confident car report lifts the on-foot mark',
+    kind: 'link',
+    ...linkRows(vrows(0, 30, 8), { car: true, reports: [footAt(0), carAt(10)] }),
+    expected: { confirmedAt: at(11), runStartTs: at(10) },
+  },
+  {
+    name: 'link: a low-confidence car report lifts nothing',
+    kind: 'link',
+    ...linkRows(vrows(0, 60, 8), { car: true, reports: [footAt(0), carAt(10, { confident: false })] }),
+    expected: { confirmedAt: null, runStartTs: null },
+  },
   { name: 'link: with no paired car or CarPlay current it never confirms', kind: 'link', ...linkRows(vrows(0, 60, 20), { link: false, car: true }), expected: { confirmedAt: null, runStartTs: null } },
   { name: 'link: a row with no fix breaks the pair', kind: 'link', ...linkRows([vrow(0, 6), vrow(1, null), vrow(2, 6), vrow(3, 6)], { car: true }), expected: { confirmedAt: at(3), runStartTs: at(2) } },
   { name: 'link: two rows 3 s apart are not in a row', kind: 'link', ...linkRows([vrow(0, 6), vrow(3, 6), vrow(4, 6)], { car: true }), expected: { confirmedAt: at(4), runStartTs: at(3) } },
@@ -639,7 +691,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     kind: 'car',
     current: [
       { uid: '00:11:22:33:44:55-tacl', type: 'bluetoothA2DP' },
-      { uid: 'AA:BB:CC:DD:EE:FF-tacl', type: 'bluetoothLE' },
+      { uid: 'AA:BB:CC:DD:EE:FF-tacl', type: 'bluetoothHFP' },
     ],
     paired: ['AA:BB:CC:DD:EE:FF-tacl'],
     withRows: 61,

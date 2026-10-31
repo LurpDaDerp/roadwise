@@ -10,29 +10,38 @@ import Foundation
 struct SlowTrafficState: Equatable {
   var carMs: Double = 0
   var carSince: Double?
+  /// The automotive coverage (a car standing at a light too) since the first trusted row over 3 mph.
+  var vehMs: Double = 0
+  var vehSince: Double?
+  var firstCarAt: Double?
+  var lastCarAt: Double?
   var onFoot = false
   var firstLat: Double?
   var firstLng: Double?
   var lastTs: Double?
   var lastLat: Double = 0
   var lastLng: Double = 0
+  var lastMps: Double = 0
   var pathM: Double = 0
   var sumMps: Double = 0
   var movingRows = 0
+  var moveStartTs: Double?
   var runStartTs: Double?
   var lastMoveTs: Double?
 }
 
-/// The car link start in progress (policy.ts `LinkState`): the run of link rows, its start, the last one's time.
+/// The car link start in progress (policy.ts `LinkState`): the run of link rows, its start, the last
+/// one's time, and the candidate's on-foot mark (lifted only by a later confident automotive report).
 struct LinkState: Equatable {
   var run = 0
   var runStartTs: Double?
   var prevTs: Double?
+  var onFoot = false
 }
 
 /// One Bluetooth or CarPlay output of the audio route: its uid (what a pairing matches; a renamed car
-/// keeps it), its name as the phone shows it now, and its port ("bluetoothA2DP", "bluetoothHFP",
-/// "bluetoothLE" or "carAudio", which is CarPlay).
+/// keeps it), its name as the phone shows it now, and its port ("bluetoothA2DP", "bluetoothHFP" or
+/// "carAudio", which is CarPlay; Bluetooth LE outputs are hearing aids and never read).
 struct CarOutput: Codable, Equatable {
   var uid: String
   var name: String
@@ -116,43 +125,66 @@ extension DetectPolicy {
     return s.carMs + (now - since)
   }
 
-  /// policy.ts `slowTrafficHeld`: some car motion (the candidate then waits 5 min, not 3).
-  static func slowTrafficHeld(_ s: SlowTrafficState, _ now: Double) -> Bool { slowTrafficCarMs(s, now) > 0 }
+  /// policy.ts `slowTrafficVehMs`: the automotive coverage banked since the first trusted row over
+  /// 3 mph plus the standing automotive report's stretch since then.
+  static func slowTrafficVehMs(_ s: SlowTrafficState, _ now: Double) -> Double {
+    guard let m = s.moveStartTs, let v = s.vehSince else { return s.vehMs }
+    let from = max(v, m)
+    return now > from ? s.vehMs + (now - from) : s.vehMs
+  }
 
-  /// policy.ts `slowTrafficReport`: the standing car motion is banked; a confident automotive report
-  /// that is not stationary starts a new stretch; a confident on-foot report marks it for good.
+  /// policy.ts `slowTrafficHeld`: some car motion and not on foot (the candidate then waits 5 min, not 3).
+  static func slowTrafficHeld(_ s: SlowTrafficState, _ now: Double) -> Bool { !s.onFoot && slowTrafficCarMs(s, now) > 0 }
+
+  /// policy.ts `slowTrafficReport`: the standing car motion and automotive coverage are banked; a
+  /// confident automotive report starts a coverage stretch and, when not stationary, a car motion one,
+  /// and dates the first and last automotive report; a confident on-foot report marks it for good.
   static func slowTrafficReport(_ s: SlowTrafficState, at: Double, automotive: Bool, stationary: Bool, onFoot: Bool, confident: Bool) -> SlowTrafficState {
     var n = s
     if let since = s.carSince, at > since { n.carMs = s.carMs + (at - since) }
     n.carSince = confident && automotive && !stationary ? at : nil
+    let veh = confident && automotive
+    n.vehMs = slowTrafficVehMs(s, at)
+    n.vehSince = veh ? at : nil
+    if veh {
+      n.firstCarAt = s.firstCarAt ?? at
+      n.lastCarAt = at
+    }
     if confident && onFoot { n.onFoot = true }
     return n
   }
 
-  /// policy.ts `slowTrafficConfirmed`: never on foot; 90 s of car motion, an 800 m path, the last fix
-  /// 400 m in a straight line from the first, an 8 mph average over the trusted rows over 3 mph.
+  /// policy.ts `slowTrafficConfirmed`: never on foot; 90 s of car motion from automotive reports 30 s
+  /// or more apart, automotive coverage for 80 % of the time since the first row over 3 mph, an 800 m
+  /// path, the last fix 400 m in a straight line from the first, an 8 mph average.
   static func slowTrafficConfirmed(_ s: SlowTrafficState, _ now: Double) -> Bool {
     guard !s.onFoot, let fLat = s.firstLat, let fLng = s.firstLng, s.lastTs != nil, s.movingRows > 0 else { return false }
+    guard let c0 = s.firstCarAt, let c1 = s.lastCarAt, let m = s.moveStartTs else { return false }
     return slowTrafficCarMs(s, now) >= SLOW_CAR_MS &&
+      c1 - c0 >= SLOW_CAR_SPAN_MS &&
+      slowTrafficVehMs(s, now) >= SLOW_CAR_COVER_MIN * (now - m) &&
       s.pathM >= SLOW_PATH_M &&
       distanceM(fLat, fLng, s.lastLat, s.lastLng) >= SLOW_NET_M &&
       s.sumMps / Double(s.movingRows) >= SLOW_AVG_MPS
   }
 
   /// policy.ts `slowTrafficStep`, in its order: 5 min with no trusted row over 3 mph forgets all but
-  /// the on-foot mark (a standing car report starts again here); a trusted row over 3 mph adds the
-  /// step from the last trusted fix when that is at most 2 s older, and its speed to the average.
+  /// the on-foot mark (a standing car or automotive report starts again here); a trusted row over
+  /// 3 mph adds the step from the last trusted fix when that is at most 2 s older, never more than
+  /// 1.5 times what the faster of the two rows covers plus 5 m, and its speed to the average.
   static func slowTrafficStep(_ s: SlowTrafficState, _ r: DetectRow) -> (state: SlowTrafficState, confirmed: Bool) {
     var n = s
     if let m = s.lastMoveTs, r.ts - m >= AUTO_FORGET_MS {
       n = SlowTrafficState()
       n.onFoot = s.onFoot
       n.carSince = s.carSince == nil ? nil : r.ts
+      n.vehSince = s.vehSince == nil ? nil : r.ts
     }
     let ok = trusted(r)
     let moved = ok && r.speed > STOP_MPS
     if moved, let t = n.lastTs, r.ts - t > 0, r.ts - t <= AUTO_ROW_GAP_MAX_MS {
-      n.pathM += distanceM(n.lastLat, n.lastLng, r.lat, r.lng)
+      let cap = max(r.speed, n.lastMps) * (r.ts - t) * SLOW_STEP_SLACK / 1000 + SLOW_STEP_PAD_M
+      n.pathM += min(distanceM(n.lastLat, n.lastLng, r.lat, r.lng), cap)
     }
     if ok && n.firstLat == nil {
       n.firstLat = r.lat
@@ -162,11 +194,13 @@ extension DetectPolicy {
       n.lastTs = r.ts
       n.lastLat = r.lat
       n.lastLng = r.lng
+      n.lastMps = r.speed
     }
     if moved {
       n.sumMps += r.speed
       n.movingRows += 1
     }
+    if n.moveStartTs == nil && moved { n.moveStartTs = r.ts }
     if n.runStartTs == nil && ok && r.speed >= MOVE_MPS { n.runStartTs = r.ts }
     if moved { n.lastMoveTs = r.ts }
     return (n, slowTrafficConfirmed(n, r.ts))
@@ -179,18 +213,36 @@ extension DetectPolicy {
     current.contains { $0.type == "carAudio" || paired.contains($0.uid) }
   }
 
+  /// policy.ts `carPlayOn`: CarPlay is among the current outputs.
+  static func carPlayOn(_ current: [CarOutput]) -> Bool {
+    current.contains { $0.type == "carAudio" }
+  }
+
   /// policy.ts `carMostOfDrive`: current for more than half the rows of a drive of 2 min or more.
   static func carMostOfDrive(_ withRows: Int, _ rows: Int) -> Bool {
     rows >= CAR_DRIVE_MIN_ROWS && Double(withRows) > Double(rows) * CAR_DRIVE_SHARE_MIN
   }
 
-  /// policy.ts `linkStep`: with the link up, a trusted row at 5 mph or more, not vetoed, with fresh car
-  /// motion or at 15 mph or more, extends the run when within 2 s of the last, else begins one; any
-  /// other row ends it. Two in a row confirm.
-  static func linkStep(_ s: LinkState, _ r: DetectRow, linked: Bool, veto: Bool, carFresh: Bool) -> (state: LinkState, confirmed: Bool) {
-    let ok = linked && !veto && trusted(r) && r.speed >= LINK_MIN_MPS && (carFresh || r.speed >= LINK_NO_CAR_MPS)
-    guard ok else { return (LinkState(), false) }
-    var n = LinkState(run: 1, runStartTs: r.ts, prevTs: r.ts)
+  /// policy.ts `linkReport`: a confident on-foot report sets the mark, a later confident automotive
+  /// one lifts it; anything else changes nothing.
+  static func linkReport(_ s: LinkState, automotive: Bool, onFoot: Bool, confident: Bool) -> LinkState {
+    guard confident else { return s }
+    var n = s
+    if onFoot {
+      n.onFoot = true
+    } else if automotive {
+      n.onFoot = false
+    }
+    return n
+  }
+
+  /// policy.ts `linkStep`: with the link up and not on foot, a trusted row at 5 mph or more with fresh
+  /// car motion (with CarPlay current, at 15 mph or more without it too) extends the run when within
+  /// 2 s of the last, else begins one; any other row ends it (the mark stays). Two in a row confirm.
+  static func linkStep(_ s: LinkState, _ r: DetectRow, linked: Bool, carPlay: Bool, carFresh: Bool) -> (state: LinkState, confirmed: Bool) {
+    let ok = linked && !s.onFoot && trusted(r) && r.speed >= LINK_MIN_MPS && (carFresh || (carPlay && r.speed >= LINK_NO_CAR_MPS))
+    guard ok else { return (LinkState(run: 0, runStartTs: nil, prevTs: nil, onFoot: s.onFoot), false) }
+    var n = LinkState(run: 1, runStartTs: r.ts, prevTs: r.ts, onFoot: s.onFoot)
     if s.run > 0, let p = s.prevTs, r.ts - p > 0, r.ts - p <= AUTO_ROW_GAP_MAX_MS {
       n.run = s.run + 1
       n.runStartTs = s.runStartTs ?? r.ts

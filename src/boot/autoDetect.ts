@@ -261,7 +261,8 @@ export interface AutoDetectStatus {
 
 async function carCall(ctx: string, run: (detect: DriveDetectApi) => Promise<CarLinkState>): Promise<CarLinkState | null> {
   const detect = detector();
-  if (detect === null) return null;
+  // An older native build has no car link: nothing to read and nothing to report.
+  if (detect === null || detect.carLinkAvailable === false) return null;
   try {
     return await run(detect);
   } catch (e) {
@@ -281,7 +282,7 @@ export const notMyCar = (uid: string): Promise<CarLinkState | null> => carCall('
 /** Every change of the car link while subscribed (the route, a pairing, a drive's outputs). Returns the unsubscribe. */
 export function onCarLink(fn: (s: CarLinkState) => void): () => void {
   const detect = detector();
-  if (detect === null) return () => {};
+  if (detect === null || detect.carLinkAvailable === false) return () => {};
   const sub = detect.addListener('carLink', fn);
   return () => sub.remove();
 }

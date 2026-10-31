@@ -179,8 +179,9 @@ export interface JournaledDrive {
 }
 
 /** An audio-route port the car link reads (AVAudioSession's names; `carAudio` is CarPlay). */
-export type CarPortType = 'bluetoothA2DP' | 'bluetoothHFP' | 'bluetoothLE' | 'carAudio';
-export const CAR_PORT_TYPES: readonly CarPortType[] = ['bluetoothA2DP', 'bluetoothHFP', 'bluetoothLE', 'carAudio'];
+/** Bluetooth LE outputs are never read: on iPhone an LE audio output is a hearing aid, never a car. */
+export type CarPortType = 'bluetoothA2DP' | 'bluetoothHFP' | 'carAudio';
+export const CAR_PORT_TYPES: readonly CarPortType[] = ['bluetoothA2DP', 'bluetoothHFP', 'carAudio'];
 
 /** One Bluetooth or CarPlay output of the audio route: matched on `uid` (a renamed car keeps it); `name` is the phone's name for it now. */
 export interface CarOutput {
@@ -251,6 +252,8 @@ export interface DetectSubscription {
 export interface DriveDetectApi {
   /** False on Android, Jest, Expo Go and web: every method but `wipe` and `appForeground` then rejects and every listener is inert. */
   readonly available: boolean;
+  /** The native build has the car link (`carLinkState`); false on Android, Jest, web and older iOS builds. */
+  readonly carLinkAvailable?: boolean;
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
   getState(): Promise<DetectState>;

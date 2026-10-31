@@ -5,7 +5,6 @@ const KIND: Record<CarPortType, string> = {
   carAudio: 'CarPlay',
   bluetoothA2DP: 'Bluetooth',
   bluetoothHFP: 'Bluetooth',
-  bluetoothLE: 'Bluetooth',
 };
 
 export const carCopy = {
@@ -27,7 +26,7 @@ export const carCopy = {
     already: (name: string) => `${name} is paired.`,
     paired: 'Paired',
     use: 'Use this car',
-    headphones: 'This looks like headphones, not a car.',
+    headphones: 'This looks like headphones or a hearing aid, not a car, so it can’t be used.',
     full: 'You can pair up to 3 cars. Forget one to add another.',
     cars: 'Your cars',
     connected: 'Connected',

@@ -56,7 +56,27 @@ afterEach(() => clearQueryClients());
 
 describe('the rules', () => {
   it('reads headphones and earbuds as headphones, a car as a car', () => {
-    for (const n of ["Sam's AirPods Pro", 'Beats Studio', 'Galaxy Buds2 Pro', 'WH-1000XM5', 'Bose QuietComfort 45', 'JBL Earbuds', 'Jabra headset']) expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: true });
+    for (const n of [
+      "Sam's AirPods Pro",
+      'Beats Studio',
+      'Galaxy Buds2 Pro',
+      'Pixel Buds',
+      'WH-1000XM5',
+      'Sony WF-C700N',
+      'Bose QC Earbuds',
+      'Bose NC 700',
+      'JBL Tune 510BT',
+      'Jabra Elite 4',
+      'Sennheiser Momentum 4',
+      'Nothing Ear (2)',
+      'Phonak Audeo',
+      'Oticon More',
+      'ReSound OMNIA',
+      'Signia Pure',
+      'Starkey Genesis',
+      'My hearing aids',
+    ])
+      expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: true });
     for (const n of ['Civic', 'Toyota RAV4', 'CarPlay', 'MY VW', 'Uconnect']) expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: false });
   });
 
@@ -75,6 +95,8 @@ describe('the rules', () => {
     expect(carSuggestion({ ...base, drives: [drive([carplay], 1)] })?.uid).toBe(carplay.uid);
     expect(carSuggestion({ ...base, drives: [drive([civic], 1), drive([civic], 2)], notMine: [civic.uid] })).toBeNull();
     expect(carSuggestion({ ...base, drives: [drive([pods], 1), drive([pods], 2)] })).toBeNull();
+    // CarPlay is a car whatever its name
+    expect(carSuggestion({ ...base, drives: [drive([{ ...carplay, name: 'Bose CarPlay' }], 1)] })?.uid).toBe(carplay.uid);
     const three = [1, 2, 3].map((i) => ({ uid: `u${i}`, name: `Car ${i}`, type: 'bluetoothA2DP' as const, pairedAt: i }));
     expect(carSuggestion({ ...base, cars: three, drives: [drive([civic], 1), drive([civic], 2)] })).toBeNull();
     expect(carRowLine({ ...base, cars: three.slice(0, 2) })).toBe('Car 1, Car 2');
@@ -118,7 +140,7 @@ describe('the pairing screen', () => {
     expect(mockDetect.carLink.cars).toEqual([]);
   });
 
-  it('warns about headphones but still lets them be used; with several outputs each can be chosen', async () => {
+  it('refuses headphones or a hearing aid (Use this car greyed out); with several outputs each can be chosen', async () => {
     mockDetect.setCarRoute([pods, civic]);
     const w = await appWorld();
     await w.render(<CarScreen />);
@@ -128,9 +150,11 @@ describe('the pairing screen', () => {
     await tap('car-output-1');
     await waitFor(() => expect(screen.getByTestId('car-ask')).toHaveTextContent('Connected to Civic. Use this car?'));
     expect(screen.queryByTestId('car-headphones')).toBeNull();
-    await tap('car-output-0');
     await tap('car-use');
-    await waitFor(() => expect(mockDetect.carLink.cars.map((c) => c.uid)).toEqual([pods.uid]));
+    await waitFor(() => expect(mockDetect.carLink.cars.map((c) => c.uid)).toEqual([civic.uid]));
+    await tap('car-output-0');
+    await waitFor(() => expect(screen.getByTestId('car-use')).toBeDisabled());
+    expect(mockDetect.carLink.cars.map((c) => c.uid)).toEqual([civic.uid]);
   });
 
   it('follows the route live, says when nothing is connected, and stops at 3 cars', async () => {

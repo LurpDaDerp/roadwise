@@ -211,6 +211,7 @@ const isCount = (v: unknown, min: number, max: number): v is number => typeof v 
 
 export const DriveDetect: DriveDetectApi = {
   available: native !== null && native !== undefined,
+  carLinkAvailable: native !== null && native !== undefined && typeof native.carLinkState === 'function',
   setArmed: (armed, ownerId) =>
     call('setArmed', [armed, ownerId], typeof armed === 'boolean' && typeof ownerId === 'string' && OWNER_ID.test(ownerId), detectStateSchema),
   getState: () => call('getState', [], true, detectStateSchema),

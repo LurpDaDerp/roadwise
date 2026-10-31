@@ -273,6 +273,9 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     get available() {
       return available;
     },
+    get carLinkAvailable() {
+      return available;
+    },
     setArmed(armed, ownerId) {
       calls.push(`setArmed:${String(armed)}`);
       if (!available) return absent('setArmed');
