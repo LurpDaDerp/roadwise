@@ -6,7 +6,7 @@
 import { useCallback, useState } from 'react';
 import { Pressable, View, type ViewStyle } from 'react-native';
 
-import { Avatar, Button, Card, EmptyState, Pill, Skeleton, Text, tokens, useTheme } from '@/ui';
+import { Avatar, Card, EmptyState, Pill, Skeleton, Text, tokens, useTheme } from '@/ui';
 
 import { leaguesCopy } from './copy';
 
@@ -77,10 +77,6 @@ export function BoardNote({ children, testID }: { children: string; testID?: str
 /** A quiet line when a background refresh failed but the last board is still on screen. */
 export function RefreshFailedNote() {
   return <BoardNote testID="refresh-failed">{copy.refreshFailed}</BoardNote>;
-}
-
-export function RetryButton({ onPress }: { onPress: () => void }) {
-  return <Button label={copy.loadFailed.retry} variant="secondary" size="sm" onPress={onPress} />;
 }
 
 // ---------------------------------------------------------------------------

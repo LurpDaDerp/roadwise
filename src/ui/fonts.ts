@@ -8,7 +8,7 @@ import { Platform } from 'react-native';
 /**
  * Barlow Semi Condensed was drawn from the lettering on California highway signs, so it is a road
  * face before it is a sports face: heavy numerals that read at a glance, narrow enough that a
- * four-digit points total still fits a tile at 2× Dynamic Type. It carries numbers, headlines and
+ * four-digit number still fits a tile at 2× Dynamic Type. It carries numbers, headlines and
  * labels; reading text and controls stay on the platform face (SF Pro / Roboto).
  *
  * Only the four weights in use are imported (per-weight subpaths), so Metro bundles four files.

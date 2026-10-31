@@ -154,15 +154,6 @@ export function spokenEventDuration(seconds: number): string {
   return r === 0 ? part(m, 'minute') : `${part(m, 'minute')} ${part(r, 'second')}`;
 }
 
-const TIER_RANK: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
-
-/** The worse of two tiers (null = none). */
-export function worseTier(a: Tier | null, b: Tier | null): Tier | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return TIER_RANK[b] > TIER_RANK[a] ? b : a;
-}
-
 // ── History weeks ───────────────────────────────────────────────────────────────────────
 
 const DAY_MS = 86_400_000;

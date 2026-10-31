@@ -109,7 +109,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 /**
  * The process's network adapter over `expo-network`, created once: a second call returns the
  * same one, so the launch and anything later share one native listener. It also becomes the
- * adapter `useOnline` reads. Rejects when the native module is missing (a build from before P1)
+ * adapter `getSharedOnline` reads. Rejects when the native module is missing (a build from before P1)
  * or the first read fails or takes longer than `timeoutMs`; the caller falls back to "never on
  * Wi-Fi", and a later call tries again.
  */
@@ -135,27 +135,17 @@ export function createExpoNet(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The shared adapter, for screens (`useOnline`)
+// The shared adapter, for screens (`getSharedOnline`)
 // ---------------------------------------------------------------------------------------------
 
 let shared: NetAdapter | null = null;
-let detachShared: (() => void) | null = null;
-const onlineListeners = new Set<() => void>();
-
-const notifyOnline = (): void => {
-  for (const listener of [...onlineListeners]) listener();
-};
 
 /**
  * Make `adapter` the one screens read (`createExpoNet` does this itself). `null` detaches it, and
  * screens fall back to "assume online".
  */
 export function setSharedNet(adapter: NetAdapter | null): void {
-  detachShared?.();
-  detachShared = null;
   shared = adapter;
-  if (adapter) detachShared = adapter.subscribe(notifyOnline);
-  notifyOnline();
 }
 
 /**
@@ -165,13 +155,6 @@ export function setSharedNet(adapter: NetAdapter | null): void {
  */
 export function getSharedOnline(): boolean {
   return shared?.isOnline() ?? true;
-}
-
-export function subscribeSharedOnline(listener: () => void): () => void {
-  onlineListeners.add(listener);
-  return () => {
-    onlineListeners.delete(listener);
-  };
 }
 
 /** Tests only: forget the created adapter and the shared one. */

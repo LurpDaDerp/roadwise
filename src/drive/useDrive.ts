@@ -1,6 +1,6 @@
 // The hooks screens read the drive through (modes plan §3.9).
 import type { EventType, Tier } from '@scoring';
-import { useCallback, useContext, useMemo } from 'react';
+import { useContext, useMemo } from 'react';
 
 import type { EventShake } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
@@ -149,13 +149,6 @@ export function useShownSpeed(): ShownSpeed {
   return useDrive(selectShown);
 }
 
-const selectHeading = (s: DriveState): number | null => s.courseDeg ?? null;
-
-/** The compass's heading alone (`DriveLive.courseDeg`): degrees clockwise from true north, or null. */
-export function useHeading(): number | null {
-  return useDrive(selectHeading);
-}
-
 /** The compass's bearing from where the car went (`EngineSnapshot.bearingDeg`), and where it came from. */
 export interface DriveBearing {
   /** Degrees clockwise from true north, [0, 360), held while stopped; null before the drive's first and with no drive. */
@@ -186,10 +179,4 @@ export function useDriveLive(): DriveLive {
     [waitingSince, waitingPhase, waitingDeadlineAt]
   );
   return { ...live, lastAlert, waiting };
-}
-
-/** A stable callback to start a drive, for Home's button. */
-export function useStartDrive(): () => Promise<StartResult> {
-  const host = useDriveHost();
-  return useCallback(() => host.start(), [host]);
 }

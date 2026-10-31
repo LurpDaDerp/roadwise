@@ -25,9 +25,3 @@ export function useDashcamSelector<T>(select: (s: DashcamState | null) => T): T 
   }, [runtime, select]);
   return useSyncExternalStore(subscribe, read, read);
 }
-
-const whole = (s: DashcamState | null) => s;
-
-export function useDashcamState(): DashcamState | null {
-  return useDashcamSelector(whole);
-}

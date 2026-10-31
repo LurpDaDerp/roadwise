@@ -2,7 +2,5 @@
 import type { EngineStatus } from '@/core/engine/engine.types';
 
 export const isBusyStatus = (status: EngineStatus): boolean => status !== 'idle';
-export const isIdleStatus = (status: EngineStatus): boolean => status === 'idle';
 /** A drive is open (recording). */
 export const tripRecords = (status: EngineStatus): boolean => status === 'recording';
-export const isDrivingStatus = tripRecords;

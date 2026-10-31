@@ -111,7 +111,6 @@ export function summary(
       units: 'mi',
       state: null,
       heatmap_visibility: 'only_me',
-      league_eligible: true,
       onboarded_at: '2026-09-01T00:00:00Z',
       share_rating: true,
       share_categories: false,

@@ -150,12 +150,5 @@ export function rowEligible(row: FeatureRow, ctx: DetectorContext): boolean {
   return !inWarmup(row, ctx) && !gnssPoor(row);
 }
 
-/** A phone that is mounted and still: a steady gravity vector and no orientation change. */
-export const MOUNT_GRAVITY_MIN = 0.9;
-export const MOUNT_ORIENTATION_MAX_RAD = 0.1;
-export function mountedStable(row: FeatureRow): boolean {
-  return row.gravityStability >= MOUNT_GRAVITY_MIN && row.orientationDelta <= MOUNT_ORIENTATION_MAX_RAD;
-}
-
 export const round1 = (v: number): number => Math.round(v * 10) / 10;
 export const round2 = (v: number): number => Math.round(v * 100) / 100;

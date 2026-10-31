@@ -5,8 +5,11 @@ import type { Database } from './types';
 
 type Tables = Database['public']['Tables'];
 
-/** `flagged` is moderation state: the server never shows it to its owner. */
-export type Profile = Omit<Tables['profiles']['Row'], 'flagged'>;
+/**
+ * `flagged` is moderation state: the server never shows it to its owner. `league_eligible` is a
+ * leftover of the retired leagues that the server keeps only for older builds: this build never reads it.
+ */
+export type Profile = Omit<Tables['profiles']['Row'], 'flagged' | 'league_eligible'>;
 export type Consent = Tables['consents']['Row'];
 
 export type HeatmapVisibility = 'only_me' | 'friends';
@@ -34,12 +37,13 @@ export interface ConsentInsert {
 }
 
 /**
- * Every `profiles` column the owner may read (migrations 0001 and 0025 grant them by name).
+ * Every `profiles` column the owner may read (migrations 0001 and 0025 grant them by name), less
+ * `league_eligible`, which nothing in this build reads.
  * `select('*')` would also name `flagged`, and Postgres then refuses the whole read: nobody could
  * sign in.
  */
 export const PROFILE_COLUMNS =
-  'id, username, units, state, heatmap_visibility, league_eligible, onboarded_at, created_at, updated_at, share_rating, share_categories, share_achievements, share_stats';
+  'id, username, units, state, heatmap_visibility, onboarded_at, created_at, updated_at, share_rating, share_categories, share_achievements, share_stats';
 
 /** The owner's own row (RLS: owner-read). */
 export async function fetchProfile(userId: string): Promise<Profile> {

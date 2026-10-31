@@ -22,7 +22,10 @@ test("reads the owner's profile by the columns the server grants, never `*` (it 
   expect(PROFILE_COLUMNS).not.toMatch(/\*|flagged/);
 });
 
-test('asks for exactly the columns the migrations grant to the owner, less those later migrations drop', () => {
+// Granted for older builds only: this build no longer reads it.
+const UNREAD = new Set(['league_eligible']);
+
+test('asks for exactly the columns the migrations grant to the owner, less those later migrations drop and those it no longer reads', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
   const fs = require('node:fs') as { readFileSync: (f: string, e: string) => string; readdirSync: (d: string) => string[] };
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
@@ -33,7 +36,8 @@ test('asks for exactly the columns the migrations grant to the owner, less those
   const names = (list: string) => list.split(',').map((c) => c.trim());
   const granted = new Set(all.flatMap((sql) => [...sql.matchAll(/grant select \(([^)]*)\)\s+on public\.profiles to authenticated/g)].flatMap((m) => names(m[1] ?? ''))));
   const dropped = new Set(all.flatMap((sql) => [...sql.matchAll(/alter table public\.profiles drop column (\w+)/g)].map((m) => m[1])));
-  expect(names(PROFILE_COLUMNS).sort()).toEqual([...granted].filter((c) => !dropped.has(c)).sort());
+  expect(names(PROFILE_COLUMNS).sort()).toEqual([...granted].filter((c) => !dropped.has(c) && !UNREAD.has(c)).sort());
+  expect(names(PROFILE_COLUMNS)).not.toContain('league_eligible');
   expect(names(PROFILE_COLUMNS)).toEqual(expect.arrayContaining(['share_rating', 'share_categories', 'share_achievements', 'share_stats']));
 });
 

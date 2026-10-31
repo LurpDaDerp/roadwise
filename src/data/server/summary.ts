@@ -20,7 +20,6 @@ export interface MySummary {
     units: 'mi' | 'km';
     state: string | null;
     heatmap_visibility: HeatmapVisibility;
-    league_eligible: boolean;
     onboarded_at: string | null;
     /** Friends see the Safety Rating (on unless turned off). */
     share_rating: boolean;

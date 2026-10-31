@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { endSession, flushBeforeSignOut, type AppRuntime } from '@/boot/bootstrap';
 import { hasDriverData, readDeviceOwner, wipeForSignOut } from '@/boot/device';
+import { AppCrashed } from '@/boot/AppCrashed';
 import { BootstrapFailed } from '@/boot/BootstrapFailed';
 import { runtimeController } from '@/boot/controller';
 import { watchDeviceOwner } from '@/boot/ownerWatch';
@@ -26,6 +27,7 @@ import { DriveProvider } from '@/drive/DriveProvider';
 import { AuthGate } from '@/features/auth/AuthGate';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost } from '@/features/notifications';
+import { withCrashReporting } from '@/lib/crashReport';
 import { syncNotificationPrefs } from '@/features/settings/notifications/sync';
 import { ThemeProvider } from '@/ui';
 import { appearance, useAppearance, type AppearanceChoice } from '@/ui/appearance';
@@ -36,8 +38,9 @@ import { SkyChrome } from '@/ui/sky/SkyChrome';
 import { useSkyMood } from '@/ui/sky/useSkyMood';
 import { FONT_WAIT_MS, shouldRender, useAppFonts } from '@/ui/fonts';
 
-// Hold the splash until the licence faces are in memory: the first frame of RoadWise has to be
-// printed in B612, not in the platform sans it would otherwise fall back to for one flash.
+// Hold the splash until the app's faces (Barlow Semi Condensed, src/ui/fonts.ts) are in memory: the
+// first frame of RoadWise has to be printed in them, not in the platform sans it would otherwise
+// fall back to for one flash.
 void SplashScreen.preventAutoHideAsync().catch(() => {
   // The splash is already hidden (a fast reload). Nothing to hold.
 });
@@ -47,6 +50,13 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
 void appearance.load();
 
 const controller = runtimeController;
+
+/**
+ * A screen that throws while drawing shows a calm "Something went wrong" with Try again instead of
+ * a blank app, and the error goes to the crash sink (`src/lib/crashReport.ts`). The driving screen
+ * has its own (`app/drive/_layout.tsx`).
+ */
+export { AppCrashed as ErrorBoundary };
 
 /**
  * The theme every tree of the root wears, from the phone's Appearance choice: the sky (Adaptive),
@@ -112,7 +122,7 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
   );
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const { loaded, error } = useAppFonts();
   const { choice, loaded: appearanceLoaded } = useAppearance();
   const [timedOut, setTimedOut] = useState(false);
@@ -315,3 +325,6 @@ export default function RootLayout() {
     </RootTheme>
   );
 }
+
+// Inside EAS Observe's root in a release build (it times the first render); unchanged elsewhere.
+export default withCrashReporting(RootLayout);

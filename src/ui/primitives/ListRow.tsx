@@ -30,10 +30,9 @@ export type ListRowProps = {
 
 /**
  * A row: optional leading node (Avatar, icon), title and subtitle, optional trailing
- * node (points, a Pill) or a chevron when it navigates. Group rows in one Card with Divider
- * between them. Built from `Pressable` rather than `@expo/ui`'s `ListItem`:
- * that one is a SwiftUI/Compose host view, so under Jest nothing it renders is queryable or
- * pressable, and its prop shape has no `accessory` or plain `subtitle` to map onto.
+ * node (a value, a Pill) or a chevron when it navigates. Group rows in one Card with Divider
+ * between them. Built from `Pressable` and plain views, so everything it renders is queryable
+ * and pressable under Jest.
  */
 export function ListRow({
   title,
