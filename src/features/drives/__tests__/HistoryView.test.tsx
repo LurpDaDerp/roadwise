@@ -133,7 +133,7 @@ test('with the drives of a kind all past 183 days (archived), its empty list say
   expect(screen.getByText('Go to Home')).toBeOnTheScreen();
   await draw(<HistoryView {...props({ drives: [], archived, filter: 'clean' })} />);
   expect(within(screen.getByTestId('history-empty-clean')).getByText('No clean drives in the last 6 months')).toBeOnTheScreen();
-  expect(screen.getByText('A drive with zero events counts as clean. Your next one could be it.')).toBeOnTheScreen();
+  expect(screen.getByText('Drives with no events count as clean and show up here.')).toBeOnTheScreen();
   // No archived "Wasn't driving" drive: that filter's title is unchanged.
   await draw(<HistoryView {...props({ drives: [], archived, filter: 'passenger' })} />);
   expect(within(screen.getByTestId('history-empty-passenger')).getByText('No passenger drives')).toBeOnTheScreen();

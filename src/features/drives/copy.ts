@@ -47,7 +47,7 @@ export const recapCopy = {
     title: "Wasn't driving?",
     body: "Use this if someone else was behind the wheel. This drive won't count toward your Safety Rating.",
     left: (left: number | null) => (left === null ? 'You can do this 2 times a month.' : `You can do this 2 times a month. You have ${left} left.`),
-    error: "That didn't go through. It works within a day of the drive.",
+    error: "That didn't go through. You can only mark a drive within a day of it.",
     confirm: "Yes, I wasn't driving",
     cancel: 'Cancel',
   },

@@ -31,7 +31,7 @@ const ARCHIVED_TITLES: Record<HistoryFilter, string> = {
 };
 
 const EMPTY: Record<Filter, { title: string; body: string }> = {
-  clean: { title: 'No clean drives yet', body: 'A drive with zero events counts as clean. Your next one could be it.' },
+  clean: { title: 'No clean drives yet', body: 'Drives with no events count as clean and show up here.' },
   passenger: { title: 'No passenger drives', body: "Drives you mark as “Wasn't driving” show up here." },
 };
 
