@@ -98,7 +98,7 @@ test('one row with the exact line and Allow, plus "2 more · See all", which ope
 
 test('a row that can only be fixed in Settings says Open Settings; one row alone has no "more" line', async () => {
   await draw(fakeBoard(read({ platform: 'ios', motion: 'denied' })));
-  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Motion & Fitness is off. Drives won’t start themselves.');
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Motion & Fitness is off. Drives won\'t start on their own.');
   expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
   expect(screen.queryByTestId('home-permissions-more')).toBeNull();
 });
@@ -106,7 +106,7 @@ test('a row that can only be fixed in Settings says Open Settings; one row alone
 test('with Automatic drives switched off, no Location Always or Background App Refresh row; Motion still shows', async () => {
   const autoOnly = read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' });
   await draw(fakeBoard(autoOnly));
-  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Set Location to Always so drives start themselves.');
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Set Location to Always so drives start on their own.');
   await draw(fakeBoard(autoOnly), { autoDisabled: true });
   expect(screen.queryByTestId('home-permissions')).toBeNull();
   await draw(fakeBoard(read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', motion: 'denied' })), { autoDisabled: true });
@@ -206,7 +206,7 @@ test('the row is one button with its line and action, no hint; the dismiss actio
   await draw(board);
   const row = screen.getByTestId('home-permission-motion');
   expect(row.props.accessibilityRole).toBe('button');
-  expect(row.props.accessibilityLabel).toBe('Motion & Fitness is off. Drives won’t start themselves. Open Settings.');
+  expect(row.props.accessibilityLabel).toBe('Motion & Fitness is off. Drives won\'t start on their own. Open Settings.');
   expect(row.props.accessibilityHint).toBeUndefined();
   expect(row.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: "Don't remind me again" }]);
   expect(LONG_PRESS_MS).toBe(500);
@@ -289,5 +289,5 @@ test('Background App Refresh and Bluetooth rows never offer Allow', async () => 
 test('an iPhone kept at While Using shows the Location Always line on Home', async () => {
   await draw(fakeBoard(read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' })));
   expect(screen.getByTestId('home-permission-locationAlways')).toBeOnTheScreen();
-  expect(screen.getByText('Set Location to Always so drives start themselves.')).toBeOnTheScreen();
+  expect(screen.getByText('Set Location to Always so drives start on their own.')).toBeOnTheScreen();
 });

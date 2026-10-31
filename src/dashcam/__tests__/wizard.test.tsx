@@ -183,7 +183,7 @@ describe('the steps', () => {
     expect(screen.getByTestId('wizard-confirm-title')).toHaveTextContent('Pair DashPal-C4D5?');
     expect(screen.getByTestId('wizard-confirm-title').props.accessibilityLabel).toBe(`Step 1 of ${STEP_COUNT}. Pair DashPal-C4D5?`);
     expect(screen.getByTestId('wizard-confirm-title').props.accessibilityRole).toBe('header');
-    expect(screen.getByTestId('wizard-confirm-body')).toHaveTextContent('Check that this is the DashPal in your car. Its light flashes quickly while it’s ready to pair.');
+    expect(screen.getByTestId('wizard-confirm-body')).toHaveTextContent('Make sure this is the DashPal in your car. Its light flashes quickly when it’s ready to pair.');
     expect(screen.getByTestId('wizard-confirm-note')).toHaveTextContent(wiz.confirm.note);
     expect(screen.queryByTestId('wizard-confirm-replaces')).toBeNull();
     expect(stepText()).toBe(`Step 1 of ${STEP_COUNT}`);
@@ -222,7 +222,7 @@ describe('the steps', () => {
   });
 
   it.each([
-    [{ kind: 'press_button', name: 'DashPal-C4D5', until: 1 }, 'Press the DashPal’s button 5 times.'],
+    [{ kind: 'press_button', name: 'DashPal-C4D5', until: 1 }, 'Press DashPal’s button 5 times.'],
     [{ kind: 'waiting_busy', name: 'DashPal-C4D5', until: 1 }, 'Another phone is setting up this DashPal. Waiting…'],
   ] as const)('%o says “%s” on screen 1', async (phase, text) => {
     const s = await open();
@@ -359,7 +359,7 @@ describe('the steps', () => {
     await s.to({ kind: 'done', paired: PAIRED, phones: 1, notAllYours: false, aimedElsewhere: false });
     expect(screen.getByTestId('wizard-done-check', HIDDEN)).toBeOnTheScreen();
     expect(screen.getByTestId('wizard-done-title')).toHaveTextContent('DashPal is ready');
-    expect(screen.getByTestId('wizard-done-body')).toHaveTextContent('DashPal-C4D5 connects by itself whenever it’s on and nearby.');
+    expect(screen.getByTestId('wizard-done-body')).toHaveTextContent('DashPal-C4D5 connects on its own whenever it’s on and nearby.');
     expect(screen.queryByTestId('wizard-done-phones')).toBeNull();
     expect(screen.queryByTestId('wizard-done-not-all-yours')).toBeNull();
     expect(screen.queryByTestId('wizard-cancel')).toBeNull();

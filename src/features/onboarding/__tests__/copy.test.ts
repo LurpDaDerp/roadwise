@@ -43,9 +43,9 @@ describe('onboarding copy', () => {
   it('tells an iPhone passenger to open the drive screen from the Drive in progress strip, then tap Not driving?', () => {
     const row = onboardingCopy.how.rows.ios[1]!;
     expect(row.title).toBe('Just riding along?');
-    expect(row.body).toBe('Open the drive screen from the “Drive in progress” strip in RoadWise, then tap “Not driving?” so that trip won’t count.');
+    expect(row.body).toBe(`Open the drive screen from the "Drive in progress" strip in RoadWise, then tap "Not driving?" so that trip won't count.`);
     expect(row.body).not.toMatch(/^Open RoadWise/);
-    expect(onboardingCopy.how.rows.android[1]!.body).toBe('Tap “Not driving?” on the drive screen so that trip won’t count.');
+    expect(onboardingCopy.how.rows.android[1]!.body).toBe(`Tap "Not driving?" on the drive screen so that trip won't count.`);
   });
 
   it('words how drives start for each phone: on their own on an iPhone, from Start drive on Android', () => {
@@ -61,18 +61,18 @@ describe('onboarding copy', () => {
       expect(rows[3]).toEqual({
         icon: 'phone-portrait-outline',
         title: 'Phone down',
-        body: 'Picking up your phone while you drive counts against your score. RoadWise feels it by motion and never sees your screen, apps or messages.',
+        body: 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps or messages.',
       });
     }
-    expect(onboardingCopy.motion.phone).toBe('Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.');
+    expect(onboardingCopy.motion.phone).toBe('RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.');
   });
 
   it('says what motion access is for on each phone, and that speed, braking and phone pickups need none', () => {
     expect(onboardingCopy.motion.body.ios).toBe(
-      'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed, braking and phone pickups are measured either way.'
+      'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.'
     );
     expect(onboardingCopy.motion.body.android).toBe(
-      'Lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.'
+      'This lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.'
     );
     expect(onboardingCopy.motion.denied.android).toBe(
       'Physical activity is off. Drives still record, and one you forget to end stops after 5 min parked. You can turn it on in Settings.'
@@ -81,9 +81,9 @@ describe('onboarding copy', () => {
   });
 
   it('says why each permission is asked, in one line where it is asked', () => {
-    expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice. Choose “Allow While Using App”, then “Change to Always Allow”.');
-    expect(onboardingCopy.location.android.body).toBe('RoadWise uses precise location on drives you start, and to check local weather.');
-    expect(onboardingCopy.location.ios.approximate).toBe('Location is set to approximate, so drives can’t record. Turn on Precise Location in Settings.');
+    expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
+    expect(onboardingCopy.location.android.body).toBe('RoadWise uses precise location to record the drives you start and to check the local weather.');
+    expect(onboardingCopy.location.ios.approximate).toBe('Location is set to approximate, so drives can\'t record. Turn on Precise Location in Settings.');
     expect(onboardingCopy.notifications.body).toBe('Get a recap after each drive, your Sunday summary, and a heads-up when a friend adds you.');
   });
 });

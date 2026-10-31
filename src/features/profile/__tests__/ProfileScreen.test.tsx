@@ -210,7 +210,7 @@ describe('the heat map row opens who can see it', () => {
     // it names the Analytics card by its own title
     expect(profileCopy.heatmap.intro).toContain(analyticsCopy.map.title);
     expect(screen.getByTestId('heatmap-privacy')).toHaveTextContent(profileCopy.heatmap.privacy);
-    expect(screen.getByTestId('heatmap-visibility-hint')).toHaveTextContent('Only me is the default. Friends see it on your profile.');
+    expect(screen.getByTestId('heatmap-visibility-hint')).toHaveTextContent('It starts as Only me. Choose Friends and they’ll see it on your profile.');
     expect(screen.queryByTestId('heatmap-map')).toBeNull();
     expect(screen.queryByTestId('heatmap-empty')).toBeNull();
     await tap('heatmap-zones');

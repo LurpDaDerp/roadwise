@@ -5,7 +5,7 @@ export const notificationSettingsCopy = {
   kinds: {
     weekly_recap: {
       title: 'Weekly recap',
-      on: 'Sunday evening: your week in review.',
+      on: 'Your week in review, every Sunday evening.',
       off: 'No Sunday recap.',
     },
     social: {
@@ -27,7 +27,7 @@ export const notificationSettingsCopy = {
   },
   os: {
     denied: "RoadWise notifications are off in your phone's settings, so none of these will arrive.",
-    openSettings: 'Open settings',
+    openSettings: 'Open Settings',
     undetermined: "RoadWise hasn't asked to send notifications on this phone yet.",
     allow: 'Allow',
   },

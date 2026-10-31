@@ -220,10 +220,10 @@ describe('an offline cold start (rev1: I11)', () => {
   });
 });
 
-test('announces "RoadWise loading" while it holds the frame', async () => {
+test('announces "Loading RoadWise" while it holds the frame', async () => {
   const spy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
   mockWorld.update = null;
   await launch();
-  expect(spy).toHaveBeenCalledWith('RoadWise loading');
+  expect(spy).toHaveBeenCalledWith('Loading RoadWise');
   spy.mockRestore();
 });

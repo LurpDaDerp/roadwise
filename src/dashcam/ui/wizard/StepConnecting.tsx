@@ -39,7 +39,7 @@ function words(v: ConnectingView): { title: string; body: string | null } {
 /**
  * Screen 1 after the Pair tap: a spinner while the phone connects and pairs ("Connecting to
  * DashPal-XXXX…", other phones held off meanwhile), then a check mark with "Connected" and a success
- * haptic. Set up again's "Press the DashPal's button 5 times.", the wait for another phone's setup
+ * haptic. Set up again's "Press DashPal's button 5 times.", the wait for another phone's setup
  * and "Finishing…" (with "Reconnecting…" under it while a lost link reconnects) show here too. Each
  * change is said to a screen reader.
  */

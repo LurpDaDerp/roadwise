@@ -6,7 +6,7 @@ jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
 
 describe('friendlyError', () => {
   it.each([
-    ['too many requests', '42501', 'Slow down a little, then try again in a minute.'],
+    ['too many requests', '42501', "That's a lot of tries. Wait a minute, then try again."],
     ['username is taken', '23505', 'Someone already has that username. Try another.'],
     ['not friends', 'P0001', "You're not friends anymore."],
     ['you have reached the friend limit', '42501', "You've hit the 200-friend limit. Remove someone to add someone new."],

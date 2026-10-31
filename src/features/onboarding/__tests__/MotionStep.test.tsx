@@ -62,14 +62,14 @@ test.each(['ios', 'android'] as const)('%s: under what motion access is for, the
   const adapter = fakeAdapter(snap({ platform, motion: 'undetermined' }));
   await renderStep(platform, adapter);
   expect(await screen.findByText(copy.body[platform])).toBeOnTheScreen();
-  expect(screen.getByTestId('motion-phone')).toHaveTextContent('Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.');
+  expect(screen.getByTestId('motion-phone')).toHaveTextContent('RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.');
 });
 
 test('unavailable: the briefed line, no claim about when the phone will ask, and Continue moves on', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', motion: 'unavailable' }), { motion: 'unavailable' });
   const { onNext } = await renderStep('android', adapter);
   await press(await screen.findByTestId('motion-allow'));
-  expect(await screen.findByText('Your phone didn’t let us ask here. You can turn it on in Settings.')).toBeOnTheScreen();
+  expect(await screen.findByText('Your phone didn\'t let RoadWise ask here. You can turn it on in Settings.')).toBeOnTheScreen();
   expect(copy.unavailable).not.toMatch(/later|next|when/i);
   expect(screen.getByTestId('motion-settings')).toBeOnTheScreen();
   await press(screen.getByTestId('motion-continue'));

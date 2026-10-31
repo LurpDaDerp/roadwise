@@ -11,10 +11,10 @@ import { t } from '@/i18n';
 import { Banner, Button, Screen, Skeleton, Text } from '@/ui';
 
 export const launchCopy = {
-  loading: 'RoadWise loading',
+  loading: 'Loading RoadWise',
   failed: "We couldn't load your profile",
   // True whatever the cause: there is no cached profile, and one read has to succeed first.
-  failedBody: 'RoadWise needs to read your profile once before it can open offline.',
+  failedBody: 'RoadWise needs to load your profile once before it can work offline.',
 } as const;
 
 /** How long the held frame waits for a profile before it offers the retry. */

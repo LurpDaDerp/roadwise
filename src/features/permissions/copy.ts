@@ -29,21 +29,21 @@ export const permissionsCopy = {
   actionError: "That didn't work. Try again.",
   summary: {
     ok: 'Everything RoadWise needs is on',
-    attention: 'A couple of things could be better',
+    attention: 'A few things need a look',
     broken: "RoadWise can't record drives right now",
   },
   /** The note under the list. */
   about: {
-    ios: 'With Location set to Always, RoadWise notices drives and records them even when it’s closed. Your location is never sold.',
+    ios: "With Location set to Always, RoadWise notices drives and records them even when it's closed. Your location is never sold.",
     android: 'A drive uses location only while it records. Start each drive from Home.',
   },
   /** The second note: how phone pickups are noticed, which needs no permission. */
-  phone: 'On a drive, RoadWise feels when your phone is picked up, from motion alone. It never sees your screen, apps or messages.',
+  phone: 'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.',
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
   /** A Settings row's detail for Location Always or Background App Refresh while the Automatic drives switch is off. */
-  autoOff: 'Only needed for automatic drives, which are switched off.',
+  autoOff: 'Only needed for automatic drives, and those are turned off.',
   showOnHome: 'Show on Home',
   home: {
     allow: 'Allow',
@@ -123,18 +123,18 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
     case 'precise':
       return "Precise Location is off. Drives can't record.";
     case 'locationAlways':
-      return 'Set Location to Always so drives start themselves.';
+      return 'Set Location to Always so drives start on their own.';
     case 'motion':
-      if (ios) return state.reason === 'notYet' ? 'Allow Motion & Fitness so RoadWise can spot drives.' : 'Motion & Fitness is off. Drives won’t start themselves.';
+      if (ios) return state.reason === 'notYet' ? 'Allow Motion & Fitness so RoadWise can spot drives.' : "Motion & Fitness is off. Drives won't start on their own.";
       return state.reason === 'notYet' ? `Allow ${motionName(c)} so walking away ends a drive.` : `${motionName(c)} is off. Walking away won't end a drive.`;
     case 'backgroundRefresh':
       return 'Turn on Background App Refresh to catch every drive.';
     case 'notifications':
-      return state.reason === 'notYet' ? 'Allow Notifications to get your drive recaps.' : 'Notifications are off. You’ll miss your drive recaps.';
+      return state.reason === 'notYet' ? 'Allow Notifications to get your drive recaps.' : "Notifications are off. You'll miss your drive recaps.";
     case 'bluetooth':
       return nearbyDevices(c) ? "Nearby devices isn't allowed. DashPal can't connect." : "Bluetooth isn't allowed. DashPal can't connect.";
     case 'camera':
-      return "The camera isn't allowed. QR codes can't be scanned.";
+      return "Camera access is off, so you can't scan QR codes.";
   }
 }
 
@@ -155,25 +155,25 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
       return on ? 'Speed and distance are measured accurately.' : 'Approximate location is too rough to record a drive.';
     case 'locationAlways':
       if (state.kind === 'idle') return 'Allow Location first.';
-      return on ? 'RoadWise can notice your drives and record them with the app closed.' : 'Drives won’t start on their own. You can still start them from Home.';
+      return on ? 'RoadWise can notice your drives and record them with the app closed.' : "Drives won't start on their own. You can still start them from Home.";
     case 'motion': {
       if (ios) {
         if (on) return 'RoadWise can tell driving from walking, so drives start and end on time.';
         return state.kind === 'missing' && state.reason === 'denied'
-          ? 'Drives won’t start on their own. Also check Privacy & Security › Motion & Fitness.'
-          : 'Without it, drives won’t start on their own.';
+          ? "Drives won't start on their own. Also check Privacy & Security › Motion & Fitness."
+          : "Without it, drives won't start on their own.";
       }
-      return on ? 'A forgotten drive stops when you walk away.' : `Without it, a forgotten drive ends after ${IDLE_MIN} min.`;
+      return on ? 'If you forget to end a drive, it ends when you walk away.' : `Without it, a drive you forget to end stops after ${IDLE_MIN} min.`;
     }
     case 'backgroundRefresh':
-      return on ? 'iOS can wake RoadWise when a drive starts.' : 'iOS can’t wake RoadWise, so drives won’t start on their own.';
+      return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
     case 'notifications':
-      return on ? 'Drive recaps, your weekly recap and friend requests can reach you.' : 'You won’t get drive recaps, your weekly recap or friend requests.';
+      return on ? 'Drive recaps, your weekly recap and friend requests can reach you.' : "You won't get drive recaps, your weekly recap or friend requests.";
     case 'bluetooth':
       if (state.kind === 'idle') return nearbyDevices(c) || ios ? 'Used only with a paired DashPal.' : 'Uses Location on this phone.';
       return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so it plays its alerts itself.";
     case 'camera':
-      if (state.kind === 'idle') return 'Asked when you scan a QR code.';
+      if (state.kind === 'idle') return 'RoadWise asks when you scan a QR code.';
       return on ? 'You can scan friend QR codes.' : "QR codes can't be scanned. Add friends by username.";
   }
 }

@@ -90,7 +90,7 @@ it('iOS lists Location Always and Background App Refresh with the note about Alw
   // On both phones, the note on phone pickups.
   expect(
     within(screen.getByTestId('permissions-phone-note')).getByText(
-      'On a drive, RoadWise feels when your phone is picked up, from motion alone. It never sees your screen, apps or messages.'
+      'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.'
     )
   ).toBeOnTheScreen();
 });
@@ -99,7 +99,7 @@ it('with Automatic drives switched off, Location Always and Background App Refre
   const ios = () => fakeAdapter(snap({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied' }));
   mockAuto = { state: 'off', missing: ['locationAlways', 'backgroundRefresh'] };
   await open(ios());
-  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A couple of things could be better');
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A few things need a look');
   expect(screen.getByTestId('permission-locationAlways-status')).toHaveTextContent('Needs a look');
   clearQueryClients();
   mockAuto = { state: 'disabled' };
@@ -107,7 +107,7 @@ it('with Automatic drives switched off, Location Always and Background App Refre
   expect(screen.getByTestId('permissions-summary')).toHaveTextContent('Everything RoadWise needs is on');
   for (const id of ['locationAlways', 'backgroundRefresh']) {
     expect(screen.getByTestId(`permission-${id}-status`)).toHaveTextContent('Not in use');
-    expect(screen.getByTestId(`permission-${id}-detail`)).toHaveTextContent('Only needed for automatic drives, which are switched off.');
+    expect(screen.getByTestId(`permission-${id}-detail`)).toHaveTextContent('Only needed for automatic drives, and those are turned off.');
   }
   // The driver can still grant it.
   expect(screen.getByTestId('permission-locationAlways-fix')).toHaveTextContent('Allow Always');
@@ -169,7 +169,7 @@ it('the summary: ok with Not in use and Can\'t check rows; broken with Location 
   expect(screen.getByTestId('permissions-summary')).toHaveTextContent("RoadWise can't record drives right now");
   clearQueryClients();
   await open(fakeAdapter(snap({ notifications: 'denied', notificationsCanAskAgain: false })));
-  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A couple of things could be better');
+  expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A few things need a look');
 });
 
 it('a fix that fails says so', async () => {

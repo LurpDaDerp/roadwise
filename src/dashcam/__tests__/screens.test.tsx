@@ -550,12 +550,12 @@ describe('Home: the card of a DashPal ready to pair', () => {
     expect(screen.queryByTestId('home-dashpal-pair')).toBeNull();
   });
 
-  it('this phone’s DashPal that no longer knows it: “Set up DashPal-C4D5 again?” · “It no longer knows this phone.”, opening the setup sheet’s Set up again', async () => {
+  it('this phone’s DashPal that no longer knows it: “Set up DashPal-C4D5 again?” · “It doesn’t recognize this phone anymore.”, opening the setup sheet’s Set up again', async () => {
     const n = nearby([{ id: PAIRED.peripheralId, name: null, rssi: -60, adv: 'open' }], { link: { lifecycle: 'needs_repair', paired: PAIRED, repairCause: 'unknown_phone' } });
     const w = await appWorld();
     await w.render(<HomeDashpal deps={n.deps} />);
     expect(await screen.findByTestId('home-dashpal-pair-title')).toHaveTextContent('Set up DashPal-C4D5 again?');
-    expect(screen.getByTestId('home-dashpal-pair-subtitle')).toHaveTextContent('It no longer knows this phone.');
+    expect(screen.getByTestId('home-dashpal-pair-subtitle')).toHaveTextContent('It doesn’t recognize this phone anymore.');
     await tap('home-dashpal-pair-open');
     expect(n.flow.starts).toEqual([{ again: true }]);
     expect(screen.getByTestId('wizard-sheet')).toBeOnTheScreen();

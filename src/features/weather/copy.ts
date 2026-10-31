@@ -71,14 +71,14 @@ export function weatherLine(a: DangerAlert, units: Units): string {
     case 'freezing_drizzle':
       return `Drizzle is freezing on the road. ${ICE}`;
     case 'black_ice':
-      return 'Wet roads below freezing. Watch bridges and shade.';
+      return 'Wet roads below freezing. Watch bridges and shady spots.';
     case 'hail':
-      return 'Storm with hail nearby. Pull over somewhere safe.';
+      return 'A hailstorm is nearby. Pull over somewhere safe.';
     case 'high_wind':
     case 'strong_wind':
       return a.gustMph === null ? `Strong, steady wind. ${HANDS}` : `${gusts(a.gustMph, units)}. ${HANDS}`;
     case 'heavy_snow':
-      return 'Snow is piling up fast. Slow down, leave more room.';
+      return 'Snow is piling up fast. Slow down and leave more room.';
     case 'snow_on_road':
       return `Fresh snow on the road. ${ICE}`;
     case 'freezing_fog':
@@ -91,9 +91,9 @@ export function weatherLine(a: DangerAlert, units: Units): string {
     case 'heavy_rain':
       return 'Water on the road. Slow down to avoid hydroplaning.';
     case 'standing_water':
-      return 'Water pooling on the road. Slow down, avoid puddles.';
+      return 'Water is pooling on the road. Slow down, avoid puddles.';
     case 'rain_at_night':
-      return 'Rain in the dark hides the lines. Slow down, leave room.';
+      return 'Rain at night hides the lane lines. Slow down, leave room.';
   }
 }
 

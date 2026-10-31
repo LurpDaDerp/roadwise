@@ -347,7 +347,7 @@ describe('the states and Next', () => {
   it.each([
     ['moving', 'Stop the car to aim DashPal.', true],
     ['drive', 'Finish your drive first.', false],
-    ['budget', 'Aiming time is used up for now. Press DashPal’s button 5 times to aim it again.', false],
+    ['budget', 'You’ve used up the aiming time for now. Press DashPal’s button 5 times to aim it again.', false],
     ['busy', 'DashPal’s camera is busy. Try again in a moment.', true],
     ['camera', 'DashPal’s camera isn’t ready. Try again in a moment.', true],
     ['memory', 'DashPal’s camera isn’t ready. Try again in a moment.', true],

@@ -7,7 +7,7 @@
 import { RpcError } from '@/data/server/rpc';
 
 const KNOWN: readonly (readonly [string, string])[] = [
-  ['too many requests', 'Slow down a little, then try again in a minute.'],
+  ['too many requests', "That's a lot of tries. Wait a minute, then try again."],
   ['profile not found', "We couldn't find that driver."],
   ['you have reached the friend limit', "You've hit the 200-friend limit. Remove someone to add someone new."],
   ['that user has reached the friend limit', "They've hit the friend limit, so you can't add them right now."],

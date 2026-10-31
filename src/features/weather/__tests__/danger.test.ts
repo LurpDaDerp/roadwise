@@ -269,11 +269,11 @@ describe('the words', () => {
   test('the new dangers read plainly', () => {
     expect([weatherTitle(alert('rain_at_night')), weatherLine(alert('rain_at_night'), 'mi')]).toEqual([
       'Rain at night',
-      'Rain in the dark hides the lines. Slow down, leave room.',
+      'Rain at night hides the lane lines. Slow down, leave room.',
     ]);
     expect([weatherTitle(alert('standing_water')), weatherLine(alert('standing_water'), 'km')]).toEqual([
       'Standing water',
-      'Water pooling on the road. Slow down, avoid puddles.',
+      'Water is pooling on the road. Slow down, avoid puddles.',
     ]);
     expect([weatherTitle(alert('snow_on_road')), weatherLine(alert('snow_on_road'), 'mi')]).toEqual([
       'Snowy roads',

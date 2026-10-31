@@ -77,11 +77,11 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
 
 test('Phone use: felt from motion alone, never the screen; every number from the scoring rules; the same for both kinds of drive', () => {
   expect(section(true, 'phone')).toEqual([
-    'RoadWise feels for your phone being picked up while you drive, from its motion alone. It never sees your screen, your apps or your messages.',
+    'RoadWise notices when you pick up your phone while driving, from the phone’s motion alone. It never sees your screen, your apps or your messages.',
     `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
     `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
     `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at 60 mph as at 30), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
-    'With the drive screen open, you hear a tone and see “Phone down”. With RoadWise in the background, it’s recorded quietly and still counts.',
+    'With the drive screen open, you hear a tone and see “Phone down”. With RoadWise in the background, there’s no sound, but it’s still recorded and counts.',
   ]);
   expect(section(false, 'phone')).toEqual(section(true, 'phone'));
   expect(rules(true, N).find((s) => s.id === 'phone')).toMatchObject({ title: 'Phone use', icon: 'phone-portrait-outline' });

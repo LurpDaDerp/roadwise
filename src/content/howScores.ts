@@ -119,13 +119,13 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'speedometer-outline',
     lines: [
       'Every drive gets a score from 0 to 100 for braking, starts, turns, speed and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
-      'Each one is judged against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
+      'Each one is measured against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
       'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
       'Every event counts, and a more serious one counts more: a harder brake, start or turn, a longer or faster stretch over the limit, a longer pickup or one at a higher speed. Each is weighed against the whole drive, so one event marks a long drive down less than a short one.',
       autoDrives
         ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
         : `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`,
-      'The score’s colour and icon show how a drive went for its length: a short perfect drive stays humble, a long smooth one earns the top.',
+      'The score’s color and icon also weigh the drive’s length, so a short perfect drive stays modest while a long smooth drive earns the top.',
     ],
   },
   {
@@ -143,11 +143,11 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Phone use',
     icon: 'phone-portrait-outline',
     lines: [
-      'RoadWise feels for your phone being picked up while you drive, from its motion alone. It never sees your screen, your apps or your messages.',
+      'RoadWise notices when you pick up your phone while driving, from the phone’s motion alone. It never sees your screen, your apps or your messages.',
       `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
       `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
       `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
-      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, it’s recorded quietly and still counts.`,
+      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, there’s no sound, but it’s still recorded and counts.`,
     ],
   },
   {
@@ -191,9 +191,9 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'DashPal dashcam',
     icon: 'videocam-outline',
     lines: [
-      'With a DashPal, eyes off the road and drowsiness count toward Attention, only on the miles it watched.',
+      'With a DashPal, eyes off the road and drowsiness count toward Attention, but only on the miles it watched.',
       `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.`,
-      'DashPal may alarm at lower speeds, even stopped. Those alarms don’t count.',
+      'DashPal may sound an alarm at lower speeds, even when you’re stopped. Those alarms don’t count.',
       'Without a DashPal, Attention is left out and your rating comes from the rest.',
     ],
   },

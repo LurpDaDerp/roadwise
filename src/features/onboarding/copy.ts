@@ -9,8 +9,8 @@ import type { StepId } from './flow';
 const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
 /** How phone pickups are noticed, and what RoadWise never sees: the How it works row and the Motion step. */
-const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise feels it by motion and never sees your screen, apps or messages.';
-const PHONE_PRIVACY = 'Pickups are felt from motion alone. RoadWise never sees your screen, apps or messages.';
+const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps or messages.';
+const PHONE_PRIVACY = 'RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.';
 
 /**
  * Every string the onboarding stepper prints, in one table. Voice: second person, plain words.
@@ -34,7 +34,7 @@ export const onboardingCopy = {
   } satisfies Record<StepId, string>,
   username: {
     title: 'Pick a username',
-    body: 'This is what friends see. No real names, ever.',
+    body: 'This is the name friends see, so leave your real name out of it.',
     label: 'Username',
     placeholder: 'swift_fox',
     rules: '3 to 20 letters, numbers or underscores.',
@@ -58,15 +58,15 @@ export const onboardingCopy = {
     },
     rows: {
       ios: [
-        { icon: 'car-sport-outline', title: 'It notices your drives', body: 'Once you’re on the road, RoadWise starts recording by itself.' },
-        { icon: 'person-outline', title: 'Just riding along?', body: `Open the drive screen from the “${hudCopy.banner.title}” strip in RoadWise, then tap “${hudCopy.notDriving}” so that trip won’t count.` },
+        { icon: 'car-sport-outline', title: 'It notices your drives', body: "Once you're on the road, RoadWise starts recording by itself." },
+        { icon: 'person-outline', title: 'Just riding along?', body: `Open the drive screen from the "${hudCopy.banner.title}" strip in RoadWise, then tap "${hudCopy.notDriving}" so that trip won't count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
         { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
       ],
       android: [
         { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive on Home before you pull out. RoadWise records until you park.' },
-        { icon: 'person-outline', title: 'Not you driving?', body: `Tap “${hudCopy.notDriving}” on the drive screen so that trip won’t count.` },
+        { icon: 'person-outline', title: 'Not you driving?', body: `Tap "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
         { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
         { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
         { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
@@ -83,37 +83,37 @@ export const onboardingCopy = {
     ios: {
       title: 'Let RoadWise notice your drives',
       body: 'RoadWise uses your location to notice when you start driving and to record the drive, even when the app is closed. It also checks the local weather.',
-      steps: 'Your iPhone asks twice. Choose “Allow While Using App”, then “Change to Always Allow”.',
-      promise: 'Your drives stay in your RoadWise account · Never sold',
+      steps: 'Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".',
+      promise: 'Your drives stay in your RoadWise account and are never sold',
       allow: 'Allow location',
       notNow: 'Not now',
       continue: 'Continue',
       openSettings: 'Open Settings',
-      always: 'You’re all set. RoadWise will notice your drives.',
-      whileUsing: 'Location is on only while RoadWise is open, so drives won’t start on their own. Start them from Home, or set Location to Always in Settings.',
-      denied: 'Location is off, so RoadWise can’t record drives. You can turn it on later in Settings.',
-      approximate: 'Location is set to approximate, so drives can’t record. Turn on Precise Location in Settings.',
-      failed: 'Your phone didn’t answer. Try again.',
+      always: "You're all set. RoadWise will notice your drives.",
+      whileUsing: "Location is on only while RoadWise is open, so drives won't start on their own. Start them from Home, or set Location to Always in Settings.",
+      denied: "Location is off, so RoadWise can't record drives. You can turn it on later in Settings.",
+      approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
+      failed: "Your phone didn't answer. Try again.",
     },
     android: {
       title: 'Measure your drives',
-      body: 'RoadWise uses precise location on drives you start, and to check local weather.',
-      promise: 'Drives you start and local weather · Never sold',
+      body: 'RoadWise uses precise location to record the drives you start and to check the local weather.',
+      promise: 'Only for drives you start and local weather. Never sold.',
       allow: 'Allow location',
       notNow: 'Not now',
       continue: 'Continue',
       openSettings: 'Open Settings',
       allowed: 'Location is allowed.',
-      denied: 'Location is off, so RoadWise can’t record drives. You can finish setting up and turn it on later in Settings.',
-      approximate: 'Location is set to approximate, so drives can’t record. Turn on Precise Location in Settings.',
-      failed: 'Your phone didn’t answer. Try again.',
+      denied: "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
+      approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
+      failed: "Your phone didn't answer. Try again.",
     },
   },
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
     body: {
-      ios: 'Motion & Fitness tells driving from walking, so your drives start and end at the right moment. Speed, braking and phone pickups are measured either way.',
-      android: 'Lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.',
+      ios: 'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.',
+      android: 'This lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.',
     },
     /** Under the body: phone pickups are felt, never seen. */
     phone: PHONE_PRIVACY,
@@ -123,12 +123,12 @@ export const onboardingCopy = {
     openSettings: 'Open Settings',
     allowed: 'Motion access is allowed.',
     denied: {
-      ios: 'Motion & Fitness is off, so drives won’t start on their own. Start them from Home, or turn it on in Settings.',
+      ios: "Motion & Fitness is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.",
       android: `Physical activity is off. Drives still record, and one you forget to end stops after ${IDLE_MIN} min parked. You can turn it on in Settings.`,
     },
-    unavailable: 'Your phone didn’t let us ask here. You can turn it on in Settings.',
-    cantCheck: 'We couldn’t check motion access on this phone.',
-    failed: 'Your phone didn’t answer. Try again.',
+    unavailable: "Your phone didn't let RoadWise ask here. You can turn it on in Settings.",
+    cantCheck: "RoadWise couldn't check motion access on this phone.",
+    failed: "Your phone didn't answer. Try again.",
   },
   /** The examples are the app's own recap and the server's push copy (`supabase/functions/_shared/push_copy.ts`). */
   notifications: {
@@ -145,8 +145,8 @@ export const onboardingCopy = {
     continue: 'Continue',
     openSettings: 'Open Settings',
     allowed: 'Notifications are allowed.',
-    quiet: 'Notifications are delivered quietly.',
+    quiet: 'Notifications will arrive quietly.',
     denied: 'Notifications are off. You can turn them on later in Settings.',
-    failed: 'Your phone didn’t answer. Try again.',
+    failed: "Your phone didn't answer. Try again.",
   },
 } as const;

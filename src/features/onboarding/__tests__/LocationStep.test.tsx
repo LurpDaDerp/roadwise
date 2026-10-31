@@ -53,7 +53,7 @@ test('iPhone: the primer says why and that the phone asks twice, and nothing is 
   await renderStep('ios', adapter);
   expect(await screen.findByText(ios.body)).toBeOnTheScreen();
   expect(screen.getByText(ios.title)).toBeOnTheScreen();
-  expect(screen.getByTestId('location-twice')).toHaveTextContent('Your iPhone asks twice. Choose “Allow While Using App”, then “Change to Always Allow”.');
+  expect(screen.getByTestId('location-twice')).toHaveTextContent('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
   expect(requests(adapter)).toEqual([]);
 });
 
@@ -61,7 +61,7 @@ test('Android: the primer speaks of the drives you start, with no talk of asking
   const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }));
   await renderStep('android', adapter);
   expect(await screen.findByText(android.body)).toBeOnTheScreen();
-  expect(android.body).toBe('RoadWise uses precise location on drives you start, and to check local weather.');
+  expect(android.body).toBe('RoadWise uses precise location to record the drives you start and to check the local weather.');
   expect(screen.queryByTestId('location-twice')).toBeNull();
 });
 
@@ -161,7 +161,7 @@ test('approximate location: said plainly, never asked for Always, with Settings,
   const { onNext } = await renderStep('ios', adapter);
   await press(await screen.findByTestId('location-allow'));
   expect(await screen.findByText(ios.approximate)).toBeOnTheScreen();
-  expect(ios.approximate).toBe('Location is set to approximate, so drives can’t record. Turn on Precise Location in Settings.');
+  expect(ios.approximate).toBe('Location is set to approximate, so drives can\'t record. Turn on Precise Location in Settings.');
   expect(requests(adapter)).toEqual(['requestLocationForeground']);
   expect(onNext).not.toHaveBeenCalled();
   await press(screen.getByTestId('location-settings'));

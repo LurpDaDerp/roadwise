@@ -38,9 +38,9 @@ export const profileCopy = {
 
   heatmap: {
     title: 'Heat map',
-    intro: 'See All trips in Analytics for the roads you drive most.',
+    intro: 'To see the roads you drive most, open All trips in Analytics.',
     visibility: 'Who can see it',
-    visibilityHint: 'Only me is the default. Friends see it on your profile.',
+    visibilityHint: 'It starts as Only me. Choose Friends and they’ll see it on your profile.',
     zones: 'Privacy zones',
     zonesSubtitle: 'Hide routes near home or school',
     privacy: 'It never shows routes in your privacy zones or the first and last quarter mile of a drive.',
@@ -76,7 +76,7 @@ export const profileCopy = {
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',
     reportTitle: (u: string) => `Report ${u}`,
-    reportIntro: 'What’s wrong? Reports are private. They never learn who sent one.',
+    reportIntro: 'What’s wrong? Reports are private, so they’ll never know it was you.',
     reportReasons: {
       inappropriate_name: 'Inappropriate username',
       harassment: 'Harassment or bullying',
