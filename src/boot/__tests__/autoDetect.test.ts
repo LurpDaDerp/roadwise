@@ -7,7 +7,12 @@ import {
   autoDetectForeground,
   autoDetectOff,
   autoDetectSync,
+  forgetCar,
+  notMyCar,
+  onCarLink,
+  pairCar,
   readAutoDetectEnabled,
+  readCarLink,
   readAutoDetectStatus,
   setAutoDetectEnabled,
   setAutoDetectRuntime,
@@ -330,5 +335,44 @@ describe('RoadWise coming to the front (autoDetectForeground)', () => {
     Object.assign(detect, { appForeground: async () => Promise.reject(new Error('busy')) });
     expect(await autoDetectForeground()).toBe('on');
     expect(errors).toEqual(['autoDetectAppWake']);
+  });
+});
+
+describe('the car link (readCarLink, pairCar, forgetCar, notMyCar, onCarLink)', () => {
+  const civic = { uid: '00:11:22:33:44:55-tacl', name: 'Civic', type: 'bluetoothA2DP' as const };
+
+  test('reads, pairs, forgets and marks through the detector; every change reaches a subscriber', async () => {
+    const detect = rig();
+    detect.setCarRoute([civic]);
+    const heard: boolean[] = [];
+    const off = onCarLink((s) => heard.push(s.linked));
+    expect(await readCarLink()).toMatchObject({ current: [civic], cars: [], linked: false });
+    expect((await pairCar(civic.uid))?.linked).toBe(true);
+    expect((await forgetCar(civic.uid))?.cars).toEqual([]);
+    expect((await notMyCar(civic.uid))?.notMine).toEqual([civic.uid]);
+    off();
+    detect.setCarRoute([]);
+    expect(heard).toEqual([true, false, false]);
+  });
+
+  test('the device wipe takes the paired cars with the rest of native drive state', async () => {
+    const detect = rig({ onboarded: true });
+    detect.setCarRoute([civic]);
+    await pairCar(civic.uid);
+    await autoDetectOff({ wipe: true });
+    expect((await readCarLink())?.cars).toEqual([]);
+  });
+
+  test('Android, no runtime or a failing native build: null, never a rejection, the failure reported', async () => {
+    rig({ available: false });
+    expect(await readCarLink()).toBeNull();
+    expect(onCarLink(() => {})).toEqual(expect.any(Function));
+    setAutoDetectRuntime(null);
+    const errors: string[] = [];
+    const detect = createFakeDriveDetect();
+    Object.assign(detect, { carLinkState: async () => Promise.reject(new Error('DriveDetect.carLinkState: not in this native build')) });
+    setAutoDetectRuntime({ db, detect, uid: async () => 'user-1', onError: (_e, ctx) => void errors.push(ctx) });
+    expect(await readCarLink()).toBeNull();
+    expect(errors).toEqual(['carLink']);
   });
 });

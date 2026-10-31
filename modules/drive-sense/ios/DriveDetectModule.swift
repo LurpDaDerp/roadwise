@@ -10,7 +10,7 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
     Name("DriveDetect")
 
     // Keep this list identical to DRIVE_DETECT_EVENTS in src/detect/types.ts.
-    Events("detectState", "driveStarted", "driveEnded")
+    Events("detectState", "driveStarted", "driveEnded", "carLink")
 
     OnCreate {
       EventHub.detect.attach(self)
@@ -27,6 +27,8 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
     OnStopObserving("driveStarted") { EventHub.detect.stopObserving("driveStarted") }
     OnStartObserving("driveEnded") { EventHub.detect.startObserving("driveEnded") }
     OnStopObserving("driveEnded") { EventHub.detect.stopObserving("driveEnded") }
+    OnStartObserving("carLink") { EventHub.detect.startObserving("carLink") }
+    OnStopObserving("carLink") { EventHub.detect.stopObserving("carLink") }
 
     AsyncFunction("setArmed") { (armed: Bool, ownerId: String, promise: Promise) in
       promise.resolve(DriveDetector.shared.setArmed(armed, ownerId: ownerId))
@@ -102,6 +104,24 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
     AsyncFunction("appForeground") { (promise: Promise) in
       DriveDetector.shared.appForeground()
       promise.resolve(nil)
+    }.runOnQueue(.main)
+
+    // The car link (round 11): the audio route's Bluetooth and CarPlay outputs, read only; the
+    // paired cars live natively, so the detector reads them with no JS. Each answers the state.
+    AsyncFunction("carLinkState") { (promise: Promise) in
+      promise.resolve(CarLink.shared.state())
+    }.runOnQueue(.main)
+
+    AsyncFunction("pairCar") { (uid: String, promise: Promise) in
+      promise.resolve(CarLink.shared.pair(uid))
+    }.runOnQueue(.main)
+
+    AsyncFunction("forgetCar") { (uid: String, promise: Promise) in
+      promise.resolve(CarLink.shared.forget(uid))
+    }.runOnQueue(.main)
+
+    AsyncFunction("notMyCar") { (uid: String, promise: Promise) in
+      promise.resolve(CarLink.shared.notMine(uid))
     }.runOnQueue(.main)
   }
 

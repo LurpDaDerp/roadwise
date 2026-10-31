@@ -1,5 +1,5 @@
 // The drive detector's wakes (plan §3.1.1; native-ios §4.1): one location manager for
-// significant-location changes, the parked car's region ("roadwise.parked", 150 m, exit only, set
+// significant-location changes, the parked car's region ("roadwise.parked", 100 m, exit only, set
 // at the last end's place and replaced, never accumulated) and visits. Each can relaunch a
 // suspended or terminated RoadWise; none turns GPS on. Significant changes stay on during a drive
 // too, so iOS relaunches the app after a kill and the drive resumes from its journal. Main thread.

@@ -83,6 +83,8 @@ extension DriveDetector {
     save(r)
     buffer.clear()
     confirmState = ConfirmState()
+    slowState = SlowTrafficState()
+    linkState = LinkState()
     confirming = false
     walkSince = nil
     lingering = linger
@@ -92,6 +94,7 @@ extension DriveDetector {
     carStanding = false
     vehicleStanding = false
     lastCarMotionAt = max(lastCarMotionAt, carMotionAt)
+    CarLink.shared.refresh()
     capture.beginSensing()
     startClock()
     emitState(reason)
@@ -112,6 +115,8 @@ extension DriveDetector {
     save(r)
     buffer.clear()
     confirmState = ConfirmState()
+    slowState = SlowTrafficState()
+    linkState = LinkState()
     confirming = false
     capture.endSensing()
     stopClock()
@@ -140,7 +145,8 @@ extension DriveDetector {
     let kind = r.origin == "manual" ? "manual" : "auto"
     if kind == "auto" && vehicleStanding { lastVehicleTs = now }
     let due = DetectPolicy.candidateDue(kind, since: r.since, waitUntil: r.waitUntil, walkSince: walkSince, now: now,
-                                        lastVehicleTs: lingering ? nil : lastVehicleTs, hasEvidence: confirmState.evidence > 0)
+                                        lastVehicleTs: lingering ? nil : lastVehicleTs,
+                                        hasEvidence: confirmState.evidence > 0 || DetectPolicy.slowTrafficHeld(slowState, now))
     guard let cause = due else { return }
     endCandidate(reason: cause, rest: !lingering && (cause == "cap" || (cause == "timeout" && lastVehicleTs == nil)))
   }

@@ -53,7 +53,7 @@ describe('the decision table', () => {
 
   test('every rule has rows', () => {
     const kinds = new Set(DETECT_VECTORS.map((v) => v.kind));
-    expect([...kinds].sort()).toEqual(['candidate', 'confirm', 'end', 'motionGate', 'resume', 'resumeSeq', 'start', 'startsAfter', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'veto', 'wake'].sort());
+    expect([...kinds].sort()).toEqual(['candidate', 'car', 'confirm', 'end', 'link', 'motionGate', 'resume', 'resumeSeq', 'slow', 'start', 'startsAfter', 'status', 'summary', 'suppress', 'suppressResume', 'trace', 'veto', 'wake'].sort());
   });
 });
 

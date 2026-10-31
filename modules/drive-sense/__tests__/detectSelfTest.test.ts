@@ -56,6 +56,9 @@ describe('the detect self-test', () => {
       resume: (a) => ({ decision: a.decision === 'resume' ? 'orphan' : 'resume' }),
       resumeSeq: (a) => ({ lastSeq: (a.lastSeq as number) - 999 }),
       status: (a) => ({ ...a, missing: ['motion'] }),
+      slow: (a) => ({ ...a, carMs: (a.carMs as number) + 1000 }),
+      link: (a) => ({ ...a, confirmedAt: ((a.confirmedAt as number | null) ?? 0) + 1000 }),
+      car: (a) => ({ ...a, linked: !(a.linked as boolean) }),
     };
     for (const kind of Object.keys(drifted) as DetectVector['kind'][]) {
       const v = first(kind);

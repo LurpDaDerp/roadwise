@@ -82,6 +82,7 @@ describe('iOS drive-sense module (text)', () => {
       'DriveNotifier.swift',
       'DriveDetectModule.swift',
       'DriveDetectAppDelegate.swift',
+      'CarLink.swift',
     ]) {
       expect(swiftFiles).toContain(f);
     }
@@ -197,7 +198,8 @@ describe('iOS drive-sense module (text)', () => {
     only(/launchOptions/, ['DriveDetectAppDelegate.swift']);
     only(/UNUserNotificationCenter|UNMutableNotificationContent/, ['DriveNotifier.swift']);
     only(/FileHandle|createFile/, ['RowJournal.swift', 'RowJournalRead.swift']);
-    only(/UserDefaults/, ['CaptureController.swift', 'DetectStateRecord.swift', 'DriveDetectAccess.swift']);
+    only(/UserDefaults/, ['CaptureController.swift', 'DetectStateRecord.swift', 'DriveDetectAccess.swift', 'CarLink.swift']);
+    only(/AVAudioSession/, ['DriveSenseModule.swift', 'CarLink.swift']);
   });
 
   it('nothing of the retired phone-use and reminder code remains, and no relaunch reading', () => {
@@ -508,7 +510,8 @@ describe('iOS drive detector: the state machine (text)', () => {
     const tick = fn(d, 'func candidateTick(');
     expect(tick).toMatch(/guard !confirming else \{ return \}/);
     expect(tick).toMatch(/if kind == "auto" && vehicleStanding \{ lastVehicleTs = now \}/);
-    expect(tick).toMatch(/DetectPolicy\.candidateDue\(kind, since: r\.since, waitUntil: r\.waitUntil, walkSince: walkSince, now: now,\s*lastVehicleTs: lingering \? nil : lastVehicleTs, hasEvidence: confirmState\.evidence > 0\)/);
+    // evidence: the speed evidence, or slow-traffic car motion (the slow candidate waits 5 min, not 3)
+    expect(tick).toMatch(/DetectPolicy\.candidateDue\(kind, since: r\.since, waitUntil: r\.waitUntil, walkSince: walkSince, now: now,\s*lastVehicleTs: lingering \? nil : lastVehicleTs,\s*hasEvidence: confirmState\.evidence > 0 \|\| DetectPolicy\.slowTrafficHeld\(slowState, now\)\)/);
     expect(tick).toMatch(/endCandidate\(reason: cause, rest: !lingering && \(cause == "cap" \|\| \(cause == "timeout" && lastVehicleTs == nil\)\)\)/);
     const end = fn(d, 'func endCandidate(');
     expect(end).toMatch(/if rest \{ r\.candidateRestUntil = now \+ DetectPolicy\.CANDIDATE_REST_MS \}/);
@@ -601,7 +604,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     const d = detector();
     const confirm = fn(d, 'func confirm(');
     // a run that began before the oldest buffered row still confirms (traced from the first row)
-    expect(confirm).toMatch(/let h = confirmState\.runStartTs\.flatMap \{ buffer\.index\(ofTs: \$0\) \} \?\? 0\s*confirming = true/);
+    expect(confirm).toMatch(/func confirm\(_ kind: String, from runStart: Double\?\) \{\s*let h = runStart\.flatMap \{ buffer\.index\(ofTs: \$0\) \} \?\? 0\s*confirming = true/);
     expect(confirm).not.toMatch(/guard let runStart/);
     expect(confirm).toMatch(/guard kind == "auto", DetectPolicy\.traceStart\(rows, h\) == nil else \{\s*finish\(0\)/);
     expect(confirm).toMatch(/DetectPolicy\.startOf\(rows, h, kind, automotiveSince, lastEnd\)/);
@@ -736,7 +739,8 @@ describe('iOS drive detector: the state machine (text)', () => {
 });
 
 describe('iOS drive detector: wakes and the note (text)', () => {
-  it('the parked region: one, "roadwise.parked", 150 m, exit only; only it is ever touched', () => {
+  it('the parked region: one, "roadwise.parked", 100 m, exit only; only it is ever touched', () => {
+    expect(DETECT.PARKED_REGION_RADIUS_M).toBe(100);
     const w = code('WakeSources.swift');
     expect(w).toMatch(/static let regionId = "roadwise\.parked"/);
     expect(w).toMatch(/for r in manager\.monitoredRegions where r\.identifier == Self\.regionId \{\s*manager\.stopMonitoring\(for: r\)/);
@@ -823,12 +827,12 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
 
   it('each rule of policy.ts has its Swift function, and the self-test runs every row kind through them', () => {
     const policy = code('DetectPolicy.swift') + code('DetectStartPolicy.swift') + code('DetectEndPolicy.swift');
-    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq']) {
+    for (const fn of ['trusted', 'slow', 'moving', 'rolling', 'distanceM', 'autoHoldMs', 'autoStep', 'confirmStep', 'noteVeto', 'onFootVeto', 'traceStart', 'startOf', 'continuesFrom', 'summarize', 'motionGate', 'recentStarts', 'wakeGate', 'candidateDue', 'startsAfter', 'resumeDecision', 'statusOf', 'endClockAt', 'endOnRow', 'walkStanding', 'endDue', 'lingerAfterJsEnd', 'suppressionDue', 'suppressionResume', 'resumeSeq', 'slowTrafficCarMs', 'slowTrafficHeld', 'slowTrafficReport', 'slowTrafficConfirmed', 'slowTrafficStep', 'carLinked', 'carMostOfDrive', 'linkStep']) {
       expect({ fn, declared: new RegExp(`static func ${fn}\\(`).test(policy) }).toEqual({ fn, declared: true });
     }
     const st = code('DetectSelfTest.swift');
-    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'veto', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status']) expect(st).toContain(`case "${kind}":`);
-    for (const call of ['confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
+    for (const kind of ['confirm', 'trace', 'start', 'summary', 'motionGate', 'veto', 'wake', 'candidate', 'startsAfter', 'end', 'suppress', 'suppressResume', 'resume', 'resumeSeq', 'status', 'slow', 'link', 'car']) expect(st).toContain(`case "${kind}":`);
+    for (const call of ['slowTrafficReport(', 'slowTrafficStep(', 'slowTrafficCarMs(', 'linkStep(', 'carLinked(', 'carMostOfDrive(', 'confirmStep(', 'noteVeto(', 'onFootVeto(', 'traceStart(', 'startOf(', 'continuesFrom(', 'summarize(', 'motionGate(', 'wakeGate(', 'candidateDue(', 'startsAfter(', 'endClockAt(', 'endOnRow(', 'endDue(', 'suppressionDue(', 'suppressionResume(', 'resumeDecision(', 'resumeSeq(', 'statusOf(']) {
       expect({ call, used: st.includes(`DetectPolicy.${call}`) }).toEqual({ call, used: true });
     }
     // the trace-back loop is bounded and goes back over a stop the car rolled (5 mph) into; the
@@ -942,5 +946,79 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     const b = code('RowBuffer.swift');
     expect(b).toMatch(/init\(capacity: Int = DetectPolicy\.CANDIDATE_BUFFER_MAX_ROWS\)/);
     expect(b).toMatch(/if items\.count > capacity \{ items\.removeFirst\(items\.count - capacity\) \}/);
+  });
+});
+
+// Round 11: the slow-traffic path, the car link start and the car link itself.
+describe('iOS drive detector: slow traffic and the car link (text)', () => {
+  it('a candidate row runs the speed evidence, then slow traffic and the car link (auto only), each confirming from its own run start', () => {
+    const row = fn(detector(), 'func onRow(');
+    expect(row).toMatch(/if step\.confirmed \{\s*confirm\(kind, from: confirmState\.runStartTs\)\s*return\s*\}\s*guard kind == "auto" else \{ return \}/);
+    expect(row).toMatch(/let slowStep = DetectPolicy\.slowTrafficStep\(slowState, d\)\s*slowState = slowStep\.state/);
+    expect(row).toMatch(/let link = DetectPolicy\.linkStep\(linkState, d, linked: CarLink\.shared\.linked, veto: veto, carFresh: carFresh\(\)\)\s*linkState = link\.state/);
+    expect(row).toMatch(/if slowStep\.confirmed \{\s*confirm\(kind, from: slowState\.runStartTs\)\s*\} else if link\.confirmed \{\s*confirm\(kind, from: linkState\.runStartTs\)\s*\}/);
+    // every live report feeds the slow path's car motion and on-foot mark while a candidate watches
+    expect(fn(detector(), 'func onActivity(')).toMatch(/if phase == "candidate" \{\s*slowState = DetectPolicy\.slowTrafficReport\(slowState, at: a\.at, automotive: a\.automotive, stationary: a\.stationary, onFoot: a\.walking \|\| a\.cycling, confident: a\.confident\)/);
+    // each candidate, a Start-card drive and the wipe begin them empty
+    for (const f of ['func beginCandidate(', 'func endCandidate(', 'func beginManualDrive()', 'func wipe(done:']) {
+      const body = fn(detector(), f);
+      expect({ f, reset: body.includes('slowState = SlowTrafficState()') && body.includes('linkState = LinkState()') }).toEqual({ f, reset: true });
+    }
+  });
+
+  it('the car link only reads the route: no category, activation, preferred input, port override or CoreBluetooth anywhere', () => {
+    const all = allCode();
+    expect(all).not.toMatch(/setCategory|setActive\(|setPreferredInput|overrideOutputAudioPort|setMode\(|CoreBluetooth|CBCentralManager|CBPeripheral/);
+    const link = code('CarLink.swift');
+    expect(link).toMatch(/AVAudioSession\.sharedInstance\(\)\.currentRoute\.outputs\.compactMap/);
+    expect(link).toMatch(/forName: AVAudioSession\.routeChangeNotification, object: nil, queue: \.main/);
+    for (const port of ['bluetoothA2DP', 'bluetoothHFP', 'bluetoothLE', 'carAudio']) expect(link).toContain(`case .${port}: return "${port}"`);
+    expect(link).toMatch(/default: return nil/);
+    // the pairing persists in its own UserDefaults key, read again at every relaunch and first unlock
+    expect(link).toMatch(/static let key = "drivesense\.carLink"/);
+    expect(fn(detector(), 'func resumeAtLaunch()')).toMatch(/CarLink\.shared\.reload\(\)/);
+  });
+
+  it('the link: a paired uid or CarPlay; at most CARS_MAX cars; a renamed car keeps its uid and shows its new name', () => {
+    const link = code('CarLink.swift');
+    expect(code('DetectStartPolicy.swift')).toMatch(/current\.contains \{ \$0\.type == "carAudio" \|\| paired\.contains\(\$0\.uid\) \}/);
+    expect(fn(link, 'func pair(')).toMatch(/!rec\.cars\.contains\(where: \{ \$0\.uid == uid \}\), rec\.cars\.count < DetectPolicy\.CARS_MAX/);
+    expect(fn(link, 'func refresh(')).toMatch(/rec\.cars\[i\]\.name = o\.name/);
+    // a flap: the link back clears the "disconnected since"
+    expect(fn(link, 'func refresh(')).toMatch(/if linked \{\s*unlinkedSince = nil/);
+    expect(link).toMatch(/var goneSince: Double\? \{ driving && linkedThisDrive && !linked \? unlinkedSince : nil \}/);
+  });
+
+  it('drives teach it: each recorded row counts the outputs; a drive that reached driving speed keeps those current for most of it; "Not driving?" keeps none', () => {
+    const d = detector();
+    expect(fn(d, 'func record(')).toMatch(/CarLink\.shared\.countRow\(\)/);
+    expect(fn(d, 'func beginDrive(')).toMatch(/CarLink\.shared\.beginDrive\(\)/);
+    expect(fn(d, 'func resumeDrive(')).toMatch(/CarLink\.shared\.beginDrive\(\)/);
+    expect(fn(d, 'func commitEnd(')).toMatch(/CarLink\.shared\.endDrive\(driveId: driveId, endedAt: endedAt, drove: endClock\.lastDroveTs != nil\)/);
+    expect(fn(d, 'func notDriving()')).toMatch(/CarLink\.shared\.endDrive\(driveId: driveId, endedAt: now, drove: false\)/);
+    const end = fn(code('CarLink.swift'), 'func endDrive(');
+    expect(end).toMatch(/DetectPolicy\.carMostOfDrive\(\$0\.rows, total\)/);
+    expect(end).toMatch(/let keep = driving && drove && total >= DetectPolicy\.CAR_DRIVE_MIN_ROWS/);
+    expect(end).toMatch(/\.suffix\(DetectPolicy\.CAR_DRIVES_KEPT\)/);
+  });
+
+  it('the wipe empties the car link; JS hears every change live (never buffered); the JSON is CarLinkState', () => {
+    expect(fn(detector(), 'func wipe(done:')).toMatch(/save\(DetectStateRecord\(\)\)\s*CarLink\.shared\.wipe\(\)/);
+    const w = fn(code('CarLink.swift'), 'func wipe()');
+    expect(w).toMatch(/rec = CarLinkRecord\(\)\s*UserDefaults\.standard\.removeObject\(forKey: CarLinkRecord\.key\)/);
+    expect(code('DriveDetector.swift')).toMatch(/CarLink\.shared\.onChange = \{ \[weak self\] in self\?\.onCarLink\(\) \}/);
+    expect(fn(detector(), 'func onCarLink()')).toMatch(/EventHub\.detect\.emitLive\("carLink", CarLink\.shared\.json\(\)\)/);
+    const json = fn(code('CarLink.swift'), 'func json()');
+    for (const k of ['"current"', '"cars"', '"linked"', '"goneSince"', '"drives"', '"notMine"', '"uid"', '"name"', '"type"', '"pairedAt"', '"driveId"', '"endedAt"', '"outputs"']) expect(json).toContain(k);
+    const m = detectCode();
+    for (const [method, body] of [
+      ['carLinkState', 'CarLink.shared.state()'],
+      ['pairCar', 'CarLink.shared.pair(uid)'],
+      ['forgetCar', 'CarLink.shared.forget(uid)'],
+      ['notMyCar', 'CarLink.shared.notMine(uid)'],
+    ] as const) {
+      expect(m).toContain(`AsyncFunction("${method}")`);
+      expect(m).toContain(`promise.resolve(${body})`);
+    }
   });
 });

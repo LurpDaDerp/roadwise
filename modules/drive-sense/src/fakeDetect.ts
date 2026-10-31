@@ -12,10 +12,17 @@
 // - `relaunch()` resumes the live drive as native does after a kill or a power loss (a `gap`, seqs
 //   going on past it);
 // - the journal is ndjson text per drive, read back by `readJournal` exactly as native reads it;
-// - events nobody listens for are buffered and delivered when the first listener attaches.
+// - events nobody listens for are buffered and delivered when the first listener attaches (but
+//   `carLink`, live only, as native's);
+// - the car link: `setCarRoute()` is the audio route's Bluetooth and CarPlay outputs, `seeCarDrive()`
+//   a drive's outputs; pairing, forgetting and "Not my car" follow native's rules (3 cars, 3 drives).
 import { journalLine, listedEnd, parseJournalLine, readJournal } from './detect/journal';
-import { DETECT, continuesFrom, resumeSeq, statusOf, wakeGate, type WakeReason } from './detect/policy';
+import { DETECT, carLinked, continuesFrom, resumeSeq, statusOf, wakeGate, type WakeReason } from './detect/policy';
 import type {
+  CarDriveSeen,
+  CarLinkState,
+  CarOutput,
+  PairedCar,
   DetectPermissions,
   DetectReason,
   DetectState,
@@ -89,6 +96,13 @@ export interface FakeDetectControls {
   setJournalDropped(n: number): void;
   listenerCount(event: DriveDetectEvent): number;
   readonly snapshot: DetectState;
+  /** The audio route's Bluetooth and CarPlay outputs now (a route change: `carLink` to a listener). */
+  setCarRoute(outputs: readonly CarOutput[]): void;
+  /** A drive that reached driving speed ended with these outputs current for most of it (the newest 3 kept). */
+  seeCarDrive(outputs: readonly CarOutput[], driveId?: string): void;
+  /** The car link's "disconnected since" for the live drive (native's debounced signal), or null. */
+  setCarGoneSince(at: number | null): void;
+  readonly carLink: CarLinkState;
 }
 
 const PERMISSIONS: DetectPermissions = {
@@ -120,6 +134,11 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
   let suppressedUntil: number | null = null;
   let journalDropped = 0;
   const journal = new Map<string, string>();
+  let carRoute: CarOutput[] = [];
+  let cars: PairedCar[] = [];
+  let carDrives: CarDriveSeen[] = [];
+  let notMine: string[] = [];
+  let carGoneSince: number | null = null;
   const calls: string[] = [];
   const listeners = new Map<DriveDetectEvent, Set<(p: unknown) => void>>();
   let buffer: { event: DriveDetectEvent; payload: unknown }[] = [];
@@ -161,6 +180,29 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     else deliver(event, payload);
   }
   const announce = (reason: DetectReason) => emit('detectState', { ...snapshot(), reason });
+
+  function carLink(): CarLinkState {
+    // A paired car is matched on its uid; it shows its newest name.
+    cars = cars.map((c) => {
+      const now = carRoute.find((o) => o.uid === c.uid);
+      return now && now.name !== '' && now.name !== c.name ? { ...c, name: now.name } : c;
+    });
+    return {
+      current: carRoute.map((o) => ({ ...o })),
+      cars: cars.map((c) => ({ ...c })),
+      linked: carLinked(carRoute, cars.map((c) => c.uid)),
+      goneSince: carGoneSince,
+      drives: carDrives.map((d) => ({ ...d, outputs: d.outputs.map((o) => ({ ...o })) })),
+      notMine: [...notMine],
+    };
+  }
+  /** `carLink` is live only, as native's: nobody listening, nobody hears it. */
+  function carChanged() {
+    const set = listeners.get('carLink');
+    if (!set || set.size === 0) return;
+    const payload = carLink();
+    for (const fn of [...set]) fn(payload);
+  }
 
   function enter(next: DetectState['state']) {
     phase = next;
@@ -335,6 +377,10 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       lastEnd = null;
       suppressedUntil = null;
       journalDropped = 0;
+      cars = [];
+      carDrives = [];
+      notMine = [];
+      carGoneSince = null;
       enter('off');
       announce(waitingNow ? 'cancelled' : 'disarmed');
       return resolve(undefined);
@@ -344,6 +390,37 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       // Nothing to wake without the module (Android): a no-op that resolves, as the wrapper's.
       if (available && carMotion) api.wake('app');
       return resolve(undefined);
+    },
+    carLinkState() {
+      calls.push('carLinkState');
+      if (!available) return absent('carLinkState');
+      return resolve(carLink());
+    },
+    pairCar(uid) {
+      calls.push(`pairCar:${uid}`);
+      if (!available) return absent('pairCar');
+      let known = carRoute.find((o) => o.uid === uid);
+      for (const d of [...carDrives].reverse()) known ??= d.outputs.find((o) => o.uid === uid);
+      if (known && !cars.some((c) => c.uid === uid) && cars.length < DETECT.CARS_MAX) {
+        cars = [...cars, { ...known, pairedAt: now() }];
+        notMine = notMine.filter((u) => u !== uid);
+        carChanged();
+      }
+      return resolve(carLink());
+    },
+    forgetCar(uid) {
+      calls.push(`forgetCar:${uid}`);
+      if (!available) return absent('forgetCar');
+      cars = cars.filter((c) => c.uid !== uid);
+      carChanged();
+      return resolve(carLink());
+    },
+    notMyCar(uid) {
+      calls.push(`notMyCar:${uid}`);
+      if (!available) return absent('notMyCar');
+      if (!notMine.includes(uid)) notMine = [...notMine, uid].slice(-DETECT.CAR_NOT_MINE_MAX);
+      carChanged();
+      return resolve(carLink());
     },
     addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
       if (!available) return { remove() {} };
@@ -355,7 +432,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       }
       const first = set.size === 0;
       set.add(listener);
-      if (first) {
+      if (first && event !== 'carLink') {
         const pending = buffer.filter((b) => b.event === event);
         if (pending.length > 0) {
           buffer = buffer.filter((b) => b.event !== event);
@@ -485,6 +562,21 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     },
     get snapshot() {
       return snapshot();
+    },
+    setCarRoute(outputs) {
+      carRoute = outputs.map((o) => ({ ...o }));
+      carChanged();
+    },
+    seeCarDrive(outputs, driveId = newId()) {
+      carDrives = [...carDrives, { driveId, endedAt: now(), outputs: outputs.map((o) => ({ ...o })) }].slice(-DETECT.CAR_DRIVES_KEPT);
+      carChanged();
+    },
+    setCarGoneSince(at) {
+      carGoneSince = at;
+      carChanged();
+    },
+    get carLink() {
+      return carLink();
     },
   };
   return api;

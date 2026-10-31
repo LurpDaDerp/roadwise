@@ -10,9 +10,17 @@ import { z } from 'zod';
 import { MISMATCH_CAP, type Mismatch, type SelfTestDiff, type VectorDiff } from '../selfTest';
 import {
   candidateDue,
+  carLinked,
+  carMostOfDrive,
   CONFIRM_START,
   confirmStep,
   continuesFrom,
+  LINK_START,
+  linkStep,
+  SLOW_TRAFFIC_START,
+  slowTrafficCarMs,
+  slowTrafficReport,
+  slowTrafficStep,
   endClockAt,
   endDue,
   endOnRow,
@@ -84,6 +92,39 @@ export function runDetectRow(v: DetectRowInputs): DetectActual {
     }
     case 'trace':
       return { index: traceStart(v.rows, v.h) };
+    case 'slow': {
+      let s = SLOW_TRAFFIC_START;
+      const rows: DetectRow[] = [];
+      let last = 0;
+      for (const step of v.steps) {
+        if ('report' in step) {
+          s = slowTrafficReport(s, step.report);
+          last = step.report.at;
+          continue;
+        }
+        rows.push(step.row);
+        last = step.row.ts;
+        const st = slowTrafficStep(s, step.row);
+        s = st.state;
+        if (st.confirmed) {
+          const h = rows.findIndex((r) => r.ts === s.runStartTs);
+          return { confirmedAt: step.row.ts, runStartTs: s.runStartTs, traced: traceStart(rows, h < 0 ? 0 : h), carMs: slowTrafficCarMs(s, step.row.ts) };
+        }
+      }
+      return { confirmedAt: null, runStartTs: null, traced: null, carMs: slowTrafficCarMs(s, last) };
+    }
+    case 'link': {
+      let s = LINK_START;
+      for (let i = 0; i < v.rows.length; i++) {
+        const r = v.rows[i]!;
+        const st = linkStep(s, r, v.link[i] === true, v.veto[i] === true, v.car[i] === true);
+        s = st.state;
+        if (st.confirmed) return { confirmedAt: r.ts, runStartTs: s.runStartTs };
+      }
+      return { confirmedAt: null, runStartTs: null };
+    }
+    case 'car':
+      return { linked: carLinked(v.current, v.paired), most: carMostOfDrive(v.withRows, v.rows) };
     case 'start': {
       const hit = runConfirm({ trigger: v.trigger, rows: v.rows, car: v.car });
       if (hit === null) return { confirmedAt: null, start: null };
@@ -143,6 +184,9 @@ export function expectedActual(v: DetectVector): DetectActual {
     case 'start':
     case 'status':
     case 'suppressResume':
+    case 'slow':
+    case 'link':
+    case 'car':
       return { ...v.expected };
     case 'trace':
       return { index: v.expected.index };

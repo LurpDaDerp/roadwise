@@ -26,6 +26,28 @@ enum DetectSelfTest {
       return ["index": opt(DetectPolicy.traceStart(rows, Int(h)).map { Double($0) })]
     case "start":
       return start(v)
+    case "slow":
+      return slow(v)
+    case "link":
+      guard let rows = rowsOf(v["rows"]) else { return nil }
+      let link = flags(v["link"]), veto = flags(v["veto"]), car = flags(v["car"])
+      var s = LinkState()
+      for (i, r) in rows.enumerated() {
+        let st = DetectPolicy.linkStep(s, r, linked: i < link.count && link[i], veto: i < veto.count && veto[i], carFresh: i < car.count && car[i])
+        s = st.state
+        if st.confirmed { return ["confirmedAt": r.ts, "runStartTs": opt(s.runStartTs)] }
+      }
+      return ["confirmedAt": NSNull(), "runStartTs": NSNull()]
+    case "car":
+      guard let list = v["current"] as? [Any], let pairedList = v["paired"] as? [Any], let withRows = jsonNumber(v["withRows"]),
+            let rows = jsonNumber(v["rows"]) else { return nil }
+      let current = list.compactMap { raw -> CarOutput? in
+        guard let o = raw as? [String: Any], let uid = o["uid"] as? String, let type = o["type"] as? String else { return nil }
+        return CarOutput(uid: uid, name: "", type: type)
+      }
+      let paired = pairedList.compactMap { $0 as? String }
+      guard current.count == list.count, paired.count == pairedList.count else { return nil }
+      return ["linked": DetectPolicy.carLinked(current, paired: paired), "most": DetectPolicy.carMostOfDrive(Int(withRows), Int(rows))]
     case "summary":
       guard let list = v["activities"] as? [Any], let now = jsonNumber(v["now"]) else { return nil }
       let acts = list.compactMap { activityOf($0) }
@@ -111,6 +133,36 @@ enum DetectSelfTest {
       "continues": DetectPolicy.continuesFrom(lastEnd, s.startedAt, s.startLat, s.startLng),
     ]
     return ["confirmedAt": hit.confirmedAt, "start": start]
+  }
+
+  /// The slow-traffic path over rows and live reports in arrival order: where it confirmed, its run's
+  /// start, the trace-back from there over the rows so far, and the car motion banked by then.
+  private static func slow(_ v: [String: Any]) -> [String: Any]? {
+    guard let steps = v["steps"] as? [Any] else { return nil }
+    var s = SlowTrafficState()
+    var rows: [DetectRow] = []
+    var last: Double = 0
+    for raw in steps {
+      guard let step = raw as? [String: Any] else { return nil }
+      if let o = step["report"] as? [String: Any] {
+        guard let at = jsonNumber(o["at"]), let automotive = jsonBool(o["automotive"]), let stationary = jsonBool(o["stationary"]),
+              let onFoot = jsonBool(o["onFoot"]), let confident = jsonBool(o["confident"]) else { return nil }
+        s = DetectPolicy.slowTrafficReport(s, at: at, automotive: automotive, stationary: stationary, onFoot: onFoot, confident: confident)
+        last = at
+        continue
+      }
+      guard let r = rowOf(step["row"]) else { return nil }
+      rows.append(r)
+      last = r.ts
+      let st = DetectPolicy.slowTrafficStep(s, r)
+      s = st.state
+      if st.confirmed {
+        let h = rows.firstIndex { $0.ts == s.runStartTs } ?? 0
+        let traced = DetectPolicy.traceStart(rows, h).map { Double($0) }
+        return ["confirmedAt": r.ts, "runStartTs": opt(s.runStartTs), "traced": opt(traced), "carMs": DetectPolicy.slowTrafficCarMs(s, r.ts)]
+      }
+    }
+    return ["confirmedAt": NSNull(), "runStartTs": NSNull(), "traced": NSNull(), "carMs": DetectPolicy.slowTrafficCarMs(s, last)]
   }
 
   private static func end(_ v: [String: Any]) -> [String: Any]? {

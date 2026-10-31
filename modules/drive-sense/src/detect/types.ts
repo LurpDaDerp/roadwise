@@ -8,7 +8,7 @@ import type { DetectMissing, DetectPhase, DetectStatus, StartSource } from './po
 export type { DetectMissing, DetectPhase, DetectStatus, StartSource };
 
 /** Keep identical to `Events(...)` in `ios/DriveDetectModule.swift` (the native text test compares them). */
-export const DRIVE_DETECT_EVENTS = ['detectState', 'driveStarted', 'driveEnded'] as const;
+export const DRIVE_DETECT_EVENTS = ['detectState', 'driveStarted', 'driveEnded', 'carLink'] as const;
 
 /** One `AsyncFunction` each in `ios/DriveDetectModule.swift`. */
 export const DRIVE_DETECT_METHODS = [
@@ -24,6 +24,10 @@ export const DRIVE_DETECT_METHODS = [
   'discardDrive',
   'wipe',
   'appForeground',
+  'carLinkState',
+  'pairCar',
+  'forgetCar',
+  'notMyCar',
 ] as const;
 
 /** `discardDrive` on the live drive. Every other method never rejects. */
@@ -174,10 +178,52 @@ export interface JournaledDrive {
   ended: { endedAt: number; cause: EndCauseNative | 'js'; decidedAt: number } | null;
 }
 
+/** An audio-route port the car link reads (AVAudioSession's names; `carAudio` is CarPlay). */
+export type CarPortType = 'bluetoothA2DP' | 'bluetoothHFP' | 'bluetoothLE' | 'carAudio';
+export const CAR_PORT_TYPES: readonly CarPortType[] = ['bluetoothA2DP', 'bluetoothHFP', 'bluetoothLE', 'carAudio'];
+
+/** One Bluetooth or CarPlay output of the audio route: matched on `uid` (a renamed car keeps it); `name` is the phone's name for it now. */
+export interface CarOutput {
+  uid: string;
+  name: string;
+  type: CarPortType;
+}
+
+export interface PairedCar extends CarOutput {
+  pairedAt: number;
+}
+
+/** A drive that reached driving speed, and the outputs current for most of its rows (2 min or more). */
+export interface CarDriveSeen {
+  driveId: string;
+  endedAt: number;
+  outputs: CarOutput[];
+}
+
+/**
+ * The car link (round 11), all native: the route's Bluetooth and CarPlay outputs now (read only,
+ * never changed), the paired cars (at most 3, kept in UserDefaults so the detector reads them with
+ * no JS), whether a paired car or CarPlay is current, the outputs of the last 3 drives (oldest
+ * first) and the uids marked "Not my car". `goneSince`: the debounced "car disconnected since" of
+ * the live drive: when the link went away, continuously since, in a drive that had it; null while a
+ * paired car or CarPlay is current, outside a drive, or when the link was never up during it (a
+ * flap clears it).
+ */
+export interface CarLinkState {
+  current: CarOutput[];
+  cars: PairedCar[];
+  linked: boolean;
+  goneSince: number | null;
+  drives: CarDriveSeen[];
+  notMine: string[];
+}
+
 export type DriveDetectEvents = {
   detectState: DetectStateEvent;
   driveStarted: DriveStartedEvent;
   driveEnded: DriveEndedEvent;
+  /** The car link changed (the route, a pairing, a drive's outputs). Live only: never buffered for a late listener. */
+  carLink: CarLinkState;
 };
 
 export type DriveDetectEvent = keyof DriveDetectEvents;
@@ -244,6 +290,16 @@ export interface DriveDetectApi {
    * native module (or a native build without it), a no-op that resolves.
    */
   appForeground(): Promise<void>;
+  /** The car link now (the route read afresh). Rejects on Android, or in a native build without it. */
+  carLinkState(): Promise<CarLinkState>;
+  /**
+   * Pairs an output by uid: one current now, else one a recent drive saw; at most 3 cars, each once;
+   * it leaves "Not my car". Only from the driver's tap: never silently. Anything else changes nothing.
+   */
+  pairCar(uid: string): Promise<CarLinkState>;
+  forgetCar(uid: string): Promise<CarLinkState>;
+  /** Never suggested again (the newest 20 are kept). */
+  notMyCar(uid: string): Promise<CarLinkState>;
   /** A payload that fails validation is dropped (counted by `droppedDetectEvents`), never passed on. */
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription;
 }

@@ -110,6 +110,18 @@ enum DetectPolicy {
   static let VETO_FRESH_MS: Double = 30_000
   static let TRUSTED_HACC_M: Double = 30
   static let TRUSTED_SPEED_ACC_MPS: Double = 2
+  static let SLOW_CAR_MS: Double = 90_000
+  static let SLOW_PATH_M: Double = 800
+  static let SLOW_NET_M: Double = 400
+  static let SLOW_AVG_MPS: Double = 3.57632
+  static let LINK_MIN_MPS: Double = 2.2352
+  static let LINK_NO_CAR_MPS: Double = 6.7056
+  static let LINK_PACE_ROWS: Int = 2
+  static let CARS_MAX: Int = 3
+  static let CAR_DRIVES_KEPT: Int = 3
+  static let CAR_DRIVE_SHARE_MIN: Double = 0.5
+  static let CAR_DRIVE_MIN_ROWS: Int = 120
+  static let CAR_NOT_MINE_MAX: Int = 20
   static let STOP_MPS: Double = 1.34112
   static let MOVING_MPS: Double = 4.4704
   static let MOVE_MPS: Double = 2.2352
@@ -127,7 +139,7 @@ enum DetectPolicy {
   static let CANDIDATE_REST_MS: Double = 600_000
   static let CANDIDATES_PER_HOUR_MAX: Int = 6
   static let HOUR_MS: Double = 3_600_000
-  static let PARKED_REGION_RADIUS_M: Double = 150
+  static let PARKED_REGION_RADIUS_M: Double = 100
   static let SLC_STALE_MS: Double = 120_000
   static let VISIT_FRESH_MS: Double = 600_000
   static let WAKE_TASK_MAX_MS: Double = 25_000

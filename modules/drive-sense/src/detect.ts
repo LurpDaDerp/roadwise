@@ -12,7 +12,10 @@ import { z } from 'zod';
 
 import { DETECT } from './detect/policy';
 import {
+  CAR_PORT_TYPES,
   DETECT_REASONS,
+  type CarLinkState,
+  type CarPortType,
   DRIVE_DETECT_ERROR_CODES,
   type DetectState,
   type DetectSubscription,
@@ -123,6 +126,20 @@ export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
   z.strictObject({ ok: z.literal(false), reason: z.enum(['permission', 'busy', 'unavailable']) }),
 ]);
 
+/** A car output's uid: what a pairing matches (AVAudioSession's port uid). */
+const CAR_UID_MAX = 512;
+const carUid = z.string().min(1).max(CAR_UID_MAX);
+const carOutput = z.strictObject({ uid: carUid, name: z.string().max(256), type: z.enum(CAR_PORT_TYPES as [CarPortType, ...CarPortType[]]) });
+
+export const carLinkStateSchema: z.ZodType<CarLinkState> = z.strictObject({
+  current: z.array(carOutput).max(16),
+  cars: z.array(carOutput.extend({ pairedAt: epoch })).max(DETECT.CARS_MAX),
+  linked: z.boolean(),
+  goneSince: epoch.nullable(),
+  drives: z.array(z.strictObject({ driveId, endedAt: epoch, outputs: z.array(carOutput).max(16) })).max(DETECT.CAR_DRIVES_KEPT),
+  notMine: z.array(carUid).max(DETECT.CAR_NOT_MINE_MAX),
+});
+
 const alwaysAnswerSchema = z.enum(['always', 'whenInUse', 'denied']);
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
 
@@ -130,6 +147,7 @@ const EVENT_SCHEMAS: { [E in DriveDetectEvent]: z.ZodType<DriveDetectEvents[E]> 
   detectState: detectStateEventSchema,
   driveStarted: driveStartedSchema,
   driveEnded: driveEndedSchema,
+  carLink: carLinkStateSchema,
 };
 
 type NativeModule = { [K in DriveDetectMethod]: (...args: never[]) => Promise<unknown> } & {
@@ -164,7 +182,9 @@ const fail = (method: string, what: string): Error => new Error(`DriveDetect.${m
 async function call<T>(method: DriveDetectMethod, args: readonly unknown[], argsOk: boolean, result: z.ZodType<T>): Promise<T> {
   if (!argsOk) throw fail(method, `invalid arguments ${safeJson(args)}`);
   if (!native) throw fail(method, 'not available (Android, Jest, Expo Go or web)');
-  const fn = native[method] as (...a: readonly unknown[]) => Promise<unknown>;
+  const fn = native[method] as ((...a: readonly unknown[]) => Promise<unknown>) | undefined;
+  // A native build from before the method (the car link's, say) has nothing to call.
+  if (typeof fn !== 'function') throw fail(method, 'not in this native build');
   const raw = await fn(...args);
   const parsed = result.safeParse(raw);
   if (!parsed.success) throw fail(method, `invalid result ${safeJson(raw)}`);
@@ -172,6 +192,7 @@ async function call<T>(method: DriveDetectMethod, args: readonly unknown[], args
 }
 
 const isDriveId = (v: unknown): v is string => typeof v === 'string' && DRIVE_ID.test(v);
+const isCarUid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= CAR_UID_MAX;
 const isCount = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
 
 export const DriveDetect: DriveDetectApi = {
@@ -192,6 +213,10 @@ export const DriveDetect: DriveDetectApi = {
   wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
   // Nor a wake: nothing to wake there, nor in a native build from before the method.
   appForeground: () => (native && typeof native.appForeground === 'function' ? call('appForeground', [], true, voidResult) : Promise.resolve()),
+  carLinkState: () => call('carLinkState', [], true, carLinkStateSchema),
+  pairCar: (uid) => call('pairCar', [uid], isCarUid(uid), carLinkStateSchema),
+  forgetCar: (uid) => call('forgetCar', [uid], isCarUid(uid), carLinkStateSchema),
+  notMyCar: (uid) => call('notMyCar', [uid], isCarUid(uid), carLinkStateSchema),
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
     if (!native) return { remove() {} };
     const schema = EVENT_SCHEMAS[event] as z.ZodType<DriveDetectEvents[E]>;

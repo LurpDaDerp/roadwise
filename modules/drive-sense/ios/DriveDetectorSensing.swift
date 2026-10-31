@@ -21,7 +21,21 @@ extension DriveDetector {
       if kind == "auto" && DetectPolicy.moving(d) && !veto { lastVehicleTs = d.ts }
       let step = DetectPolicy.confirmStep(confirmState, d, kind, veto: veto, carFresh: kind == "auto" && carFresh())
       confirmState = step.state
-      if step.confirmed { confirm(kind) }
+      if step.confirmed {
+        confirm(kind, from: confirmState.runStartTs)
+        return
+      }
+      guard kind == "auto" else { return }
+      // Beside the speed evidence: slow traffic, and the car link (a paired car or CarPlay current).
+      let slowStep = DetectPolicy.slowTrafficStep(slowState, d)
+      slowState = slowStep.state
+      let link = DetectPolicy.linkStep(linkState, d, linked: CarLink.shared.linked, veto: veto, carFresh: carFresh())
+      linkState = link.state
+      if slowStep.confirmed {
+        confirm(kind, from: slowState.runStartTs)
+      } else if link.confirmed {
+        confirm(kind, from: linkState.runStartTs)
+      }
     case "recording", "ending":
       record(d, body)
       if rec?.waitUntil != nil { endWaitAtDrivingSpeed() }
@@ -53,6 +67,9 @@ extension DriveDetector {
     if vehicleStanding && phase == "candidate" { lastVehicleTs = a.at }
     latest = a
     vetoState = DetectPolicy.noteVeto(vetoState, at: a.at, onFoot: a.walking || a.cycling, automotive: a.automotive, confident: a.confident)
+    if phase == "candidate" {
+      slowState = DetectPolicy.slowTrafficReport(slowState, at: a.at, automotive: a.automotive, stationary: a.stationary, onFoot: a.walking || a.cycling, confident: a.confident)
+    }
     if a.walking {
       if a.confident && walkSince == nil { walkSince = a.at }
     } else {
@@ -65,6 +82,13 @@ extension DriveDetector {
   /// low-confidence, stationary or unknown report after it never lifts it.
   func vetoNow() -> Bool {
     DetectPolicy.onFootVeto(vetoState, DriveDetector.now())
+  }
+
+  /// The car link changed (the route, a pairing, a drive's outputs): JS hears it at once ("carLink",
+  /// never buffered). Round 11 E's car-link end hooks here: mid-drive, CarLink.shared.goneSince is
+  /// the debounced "car disconnected since" (nil again once the car is back).
+  func onCarLink() {
+    EventHub.detect.emitLive("carLink", CarLink.shared.json())
   }
 
   /// The standing report is moving car motion (a tunnel, a garage): a fix-less row holds the still clock.
@@ -95,6 +119,8 @@ extension DriveDetector {
   func tick() {
     guard let r = rec else { return }
     let now = DriveDetector.now()
+    // A route change missed while suspended is read here (the link, and the "disconnected since").
+    if r.state == "candidate" || isRecording { CarLink.shared.refresh() }
     switch r.state {
     case "candidate":
       candidateTick(r, now)
@@ -136,6 +162,7 @@ extension DriveDetector {
   /// the relaunch.
   func resumeAtLaunch() {
     if let stored = DetectStateRecord.load() { rec = stored }
+    CarLink.shared.reload()
     guard var r = rec else { return }
     // Already sensing in this process (a second call): nothing to resume.
     guard capture.sensing == .off else {
@@ -210,6 +237,7 @@ extension DriveDetector {
       ], close: false)
       // The still clock restarts at the last row journaled (a kill at a light does not end the drive).
       self.endClock = DetectPolicy.endClockAt(s.lastRowTs ?? now)
+      CarLink.shared.beginDrive()
       self.capture.beginSensing()
       self.capture.openCapture(startedAt: startedAt, mode: r.origin == "manual" ? "mounted" : "auto")
       self.startClock()

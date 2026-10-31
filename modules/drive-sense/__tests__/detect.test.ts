@@ -67,9 +67,26 @@ type Native = Record<string, jest.Mock> & { state: DetectState; listeners: Map<s
 const native = (jest.requireMock('expo-modules-core') as { __detect: Native }).__detect;
 
 describe('the contract lists', () => {
-  test('three events, twelve methods, one error code', () => {
-    expect([...DRIVE_DETECT_EVENTS]).toEqual(['detectState', 'driveStarted', 'driveEnded']);
-    expect([...DRIVE_DETECT_METHODS]).toEqual(['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'notDriving', 'listDrives', 'readRows', 'discardDrive', 'wipe', 'appForeground']);
+  test('four events, sixteen methods, one error code', () => {
+    expect([...DRIVE_DETECT_EVENTS]).toEqual(['detectState', 'driveStarted', 'driveEnded', 'carLink']);
+    expect([...DRIVE_DETECT_METHODS]).toEqual([
+      'setArmed',
+      'getState',
+      'requestAlways',
+      'startWaiting',
+      'extendWaiting',
+      'cancelWaiting',
+      'notDriving',
+      'listDrives',
+      'readRows',
+      'discardDrive',
+      'wipe',
+      'appForeground',
+      'carLinkState',
+      'pairCar',
+      'forgetCar',
+      'notMyCar',
+    ]);
     expect([...DRIVE_DETECT_ERROR_CODES]).toEqual(['E_BUSY']);
     for (const m of DRIVE_DETECT_METHODS) expect(typeof DriveDetect[m]).toBe('function');
   });
@@ -121,6 +138,21 @@ describe('with the native module', () => {
     }
     fn.mockResolvedValueOnce({ woke: true });
     await expect(DriveDetect.appForeground()).rejects.toThrow('DriveDetect.appForeground: invalid result');
+  });
+
+  test('the car link: a native build without it rejects by name; a bad uid never crosses; the state is validated', async () => {
+    await expect(DriveDetect.carLinkState()).rejects.toThrow('DriveDetect.carLinkState: not in this native build');
+    await expect(DriveDetect.pairCar('')).rejects.toThrow('DriveDetect.pairCar: invalid arguments');
+    await expect(DriveDetect.forgetCar('x'.repeat(513))).rejects.toThrow('invalid arguments');
+    const state = { current: [], cars: [], linked: false, goneSince: null, drives: [], notMine: [] };
+    Object.assign(native, { carLinkState: jest.fn(async () => state), notMyCar: jest.fn(async () => ({ ...state, linked: 'yes' })) });
+    try {
+      await expect(DriveDetect.carLinkState()).resolves.toEqual(state);
+      await expect(DriveDetect.notMyCar('uid-1')).rejects.toThrow('DriveDetect.notMyCar: invalid result');
+    } finally {
+      delete (native as Record<string, unknown>).carLinkState;
+      delete (native as Record<string, unknown>).notMyCar;
+    }
   });
 
   test('wipe rejects a malformed native result like every other method', async () => {

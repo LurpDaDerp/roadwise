@@ -5,12 +5,13 @@
 import Foundation
 
 extension DriveDetector {
-  /// The hold confirmed on the buffer's last row: the start traced back (an auto drive whose rows
-  /// begin moving reads the motion history for when the car set off), then the drive begins. A run
-  /// that began before the oldest buffered row traces from the first one (the motion history then
-  /// dates a drive whose rows begin moving).
-  func confirm(_ kind: String) {
-    let h = confirmState.runStartTs.flatMap { buffer.index(ofTs: $0) } ?? 0
+  /// A path confirmed on the buffer's last row (the speed evidence, slow traffic or the car link;
+  /// `runStart`: its run's first row): the start traced back (an auto drive whose rows begin moving
+  /// reads the motion history for when the car set off), then the drive begins. A run that began
+  /// before the oldest buffered row traces from the first one (the motion history then dates a
+  /// drive whose rows begin moving).
+  func confirm(_ kind: String, from runStart: Double?) {
+    let h = runStart.flatMap { buffer.index(ofTs: $0) } ?? 0
     confirming = true
     let rows = buffer.rows
     let lastEnd = rec?.lastEnd
@@ -42,6 +43,8 @@ extension DriveDetector {
     let now = DriveDetector.now()
     buffer.clear()
     confirmState = ConfirmState()
+    slowState = SlowTrafficState()
+    linkState = LinkState()
     confirming = false
     let start = TracedStart(index: 0, startedAt: now, startSource: "wake", startLat: nil, startLng: nil)
     beginDrive(start, kind: "manual", firstTs: now, waitUntil: now + DetectPolicy.WAIT_MAX_MS)
@@ -92,6 +95,7 @@ extension DriveDetector {
     lastRowTs = nil
     lastFix = nil
     endClock = DetectPolicy.endClockAt(now)
+    CarLink.shared.beginDrive()
     capture.openCapture(startedAt: start.startedAt, mode: kind == "auto" ? "auto" : "mounted")
     let kept = buffer.items.filter { $0.row.ts >= firstTs }
     buffer.clear()
@@ -121,6 +125,7 @@ extension DriveDetector {
     journal.appendRow(driveId, line)
     capture.emitRow(line, ts: Int64(d.ts))
     lastRowTs = d.ts
+    CarLink.shared.countRow()
     if DetectPolicy.trusted(d) { lastFix = (lat: d.lat, lng: d.lng) }
     endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow: automotiveNow())
     if walkSince != nil && DetectPolicy.walkStanding(endClock, walkSince) == nil { walkSince = nil }
@@ -157,6 +162,8 @@ extension DriveDetector {
     guard var r = rec, isRecording, let driveId = r.driveId else { return }
     let now = DriveDetector.now()
     let lingerAfter = linger && r.waitUntil == nil
+    // A drive that reached driving speed tells the car link which outputs it had (before the clock resets).
+    CarLink.shared.endDrive(driveId: driveId, endedAt: endedAt, drove: endClock.lastDroveTs != nil)
     let lastSeq = nextSeq - 1
     let rowTs = lastRowTs
     journal.appendMarker(driveId, [
@@ -199,6 +206,7 @@ extension DriveDetector {
     let now = DriveDetector.now()
     let lastSeq = nextSeq - 1
     let rowTs = lastRowTs
+    CarLink.shared.endDrive(driveId: driveId, endedAt: now, drove: false)
     journal.delete(driveId)
     r.state = "suppressed"
     r.since = now
@@ -240,6 +248,8 @@ extension DriveDetector {
     endWakeTask()
     buffer.clear()
     confirmState = ConfirmState()
+    slowState = SlowTrafficState()
+    linkState = LinkState()
     confirming = false
     nextSeq = 1
     lastRowTs = nil
@@ -249,6 +259,7 @@ extension DriveDetector {
     lastVehicleTs = nil
     lingering = false
     save(DetectStateRecord())
+    CarLink.shared.wipe()
     wakes.stop()
     journal.wipe(done: done)
     emitState(waiting ? "cancelled" : "disarmed")

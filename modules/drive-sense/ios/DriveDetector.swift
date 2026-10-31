@@ -22,6 +22,9 @@ final class DriveDetector {
   // Runtime only: nothing here outlives the process.
   var buffer = RowBuffer()
   var confirmState = ConfirmState()
+  /// The candidate's other two auto paths beside the speed evidence (round 11): slow traffic and the car link.
+  var slowState = SlowTrafficState()
+  var linkState = LinkState()
   var confirming = false
   var endClock = DetectPolicy.endClockAt(0)
   var nextSeq = 1
@@ -61,6 +64,7 @@ final class DriveDetector {
     capture.onRow = { [weak self] row, body in self?.onRow(row, body) }
     capture.onFix = { [weak self] fix in self?.onFix(fix) }
     ActivitySource.onLive = { [weak self] a in self?.onActivity(a) }
+    CarLink.shared.onChange = { [weak self] in self?.onCarLink() }
     DriveNotifier.install()
     // The first unlock after a reboot: the record becomes readable.
     unlockObserver = NotificationCenter.default.addObserver(

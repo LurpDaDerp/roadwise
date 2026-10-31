@@ -18,7 +18,7 @@
 //   (`DriveDetect.wipe()`: every journal, the last end, the parked spot and a rest), so nothing of
 //   one driver's reaches the next.
 // Android has no detector: every call is a no-op and `readAutoDetectStatus()` answers null.
-import type { DetectMissing, DetectState, DriveDetectApi } from '@drive-sense';
+import type { CarLinkState, DetectMissing, DetectState, DriveDetectApi } from '@drive-sense';
 
 import { createSettingsRepo, type Db } from '@/data/db';
 import { nativeDriveDetect } from '@/drive/source';
@@ -250,6 +250,40 @@ export interface AutoDetectStatus {
   status: DetectState['status'];
   missing: DetectMissing[];
   permissions: DetectState['permissions'];
+}
+
+// ——— The car link (iPhone; round 11) ———
+// All native (`DriveDetect`): the audio route's Bluetooth and CarPlay outputs, read only; the paired
+// cars (at most 3), the last 3 drives' outputs and "Not my car", kept natively so the detector reads
+// them with no JS. The device wipes take it all with the rest of native's drive state. Each call
+// answers the state, or null on Android, before the runtime, in a native build without it, or when
+// it fails (reported); none rejects.
+
+async function carCall(ctx: string, run: (detect: DriveDetectApi) => Promise<CarLinkState>): Promise<CarLinkState | null> {
+  const detect = detector();
+  if (detect === null) return null;
+  try {
+    return await run(detect);
+  } catch (e) {
+    report(e, ctx);
+    return null;
+  }
+}
+
+/** The car link now (the route read afresh). */
+export const readCarLink = (): Promise<CarLinkState | null> => carCall('carLink', (d) => d.carLinkState());
+/** Pairs an output (current now, or seen on a recent drive): only ever from the driver's tap. */
+export const pairCar = (uid: string): Promise<CarLinkState | null> => carCall('carLinkPair', (d) => d.pairCar(uid));
+export const forgetCar = (uid: string): Promise<CarLinkState | null> => carCall('carLinkForget', (d) => d.forgetCar(uid));
+/** "Not my car": never suggested again. */
+export const notMyCar = (uid: string): Promise<CarLinkState | null> => carCall('carLinkNotMine', (d) => d.notMyCar(uid));
+
+/** Every change of the car link while subscribed (the route, a pairing, a drive's outputs). Returns the unsubscribe. */
+export function onCarLink(fn: (s: CarLinkState) => void): () => void {
+  const detect = detector();
+  if (detect === null) return () => {};
+  const sub = detect.addListener('carLink', fn);
+  return () => sub.remove();
 }
 
 /** What Settings and Home say about automatic drives; null on Android or when it cannot be read. */
