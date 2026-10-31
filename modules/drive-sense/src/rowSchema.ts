@@ -109,6 +109,14 @@ const CALL_VALUES: ReadonlySet<unknown> = new Set(['ring', 'live']);
  */
 export const SEQ_ROW_KEY = 'seq';
 
+/**
+ * The fourth bridge-only key (iOS): `steps`, the pedometer's count since it started for this drive
+ * (a whole number, 0 and up; `FeatureRow.steps`). Split off and re-attached like `mock`; anything
+ * but a non-negative safe integer rejects the row. Android rows, rows before the first count and
+ * older rows have none.
+ */
+export const STEPS_ROW_KEY = 'steps';
+
 let unknownKeys = 0;
 /** Unknown row keys stripped since the last reset (diagnostics; C0 round 1, C0-m1). */
 export const unknownRowKeys = (): number => unknownKeys;
@@ -130,6 +138,7 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   let mock: boolean | undefined;
   let call: 'ring' | 'live' | undefined;
   let seq: number | undefined;
+  let steps: number | undefined;
   if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
     const entries = Object.entries(raw);
     const m = (raw as Record<string, unknown>)[MOCK_ROW_KEY];
@@ -148,9 +157,14 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
       if (typeof q !== 'number' || !Number.isSafeInteger(q) || q < 1) return null;
       seq = q;
     }
-    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY && k !== CALL_ROW_KEY && k !== SEQ_ROW_KEY);
+    const n = (raw as Record<string, unknown>)[STEPS_ROW_KEY];
+    if (STEPS_ROW_KEY in raw) {
+      if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) return null;
+      steps = n;
+    }
+    const extra = entries.filter(([k]) => !ROW_KEYS.has(k) && k !== MOCK_ROW_KEY && k !== CALL_ROW_KEY && k !== SEQ_ROW_KEY && k !== STEPS_ROW_KEY);
     if (extra.length > 0) unknownKeys += extra.length;
-    if (extra.length > 0 || mock !== undefined || call !== undefined || seq !== undefined) {
+    if (extra.length > 0 || mock !== undefined || call !== undefined || seq !== undefined || steps !== undefined) {
       input = Object.fromEntries(entries.filter(([k]) => ROW_KEYS.has(k)));
     }
   }
@@ -160,6 +174,7 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   if (mock !== undefined) row.mock = mock;
   if (call !== undefined) row.call = call;
   if (seq !== undefined) row.seq = seq;
+  if (steps !== undefined) row.steps = steps;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
     row[key] = roundTo(row[key], ROW_DECIMALS[key]);
   }

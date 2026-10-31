@@ -77,6 +77,7 @@ import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
 import { clearCancelMarker, readCancelMarker, writeCancelMarker } from './cancel';
 import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
+import { readParkingSpots } from './parkingSpots';
 import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, realScheduler, type Scheduler } from './ticks';
@@ -491,6 +492,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let replayBudget = MAX_JOURNAL_REPLAY_ROWS;
   /** The open drive's "Not driving?" budget, or null. */
   let budget: NotDrivingBudget | null = null;
+  /** The open drive's known parking spots (`parkingSpots.ts`), read as it opens. */
+  let parkingSpots: readonly { lat: number; lng: number }[] = [];
   let hudFocused = false;
   /** `hudVisible()` as last settled (the budget counts while it holds). */
   let visibleNow = false;
@@ -679,6 +682,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     onCancel,
     // A Start-card drive still waiting for driving speed: its wait ends it (`endWait`), never the still or walking end.
     holdEnds: () => waiting !== null,
+    parkingSpots: () => parkingSpots,
     onError: (e) => report(e, 'engine'),
   });
 
@@ -913,6 +917,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (opts.adopted) await deps.dashcam?.adopt(id).catch((e: unknown) => report(e, 'dashcam'));
     budget = persist ? await budgetFor(db, id, now()).catch(() => null) : null;
     budget ??= { clientTripId: id, spentMs: 0, expired: false, updatedAt: now() };
+    parkingSpots = persist ? await readParkingSpots(db, (e) => report(e, 'parkingSpots')) : [];
     persistedSpent = budget.spentMs;
     lastCountedRowTs = null;
     lastAccrualAt = now();

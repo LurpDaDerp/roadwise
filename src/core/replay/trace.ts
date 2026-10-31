@@ -59,6 +59,7 @@ export const featureRowSchema: z.ZodType<FeatureRow> = z.strictObject({
   appForeground: z.boolean(),
   mock: z.boolean().optional(),
   call: z.enum(['ring', 'live']).optional(),
+  steps: z.number().int().nonnegative().optional(),
   exempt: z.enum(['nav', 'restart']).optional(),
 });
 

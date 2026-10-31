@@ -15,13 +15,27 @@
 // - W2: a drive that has not reached driving speed is ended by such a report only once it is
 //   `ON_FOOT_DROP_MS` old (and is then not kept).
 // Without the permission no reports come and neither rule ever applies.
+//
+// Two more automatic ends read the phone's own senses (`machine.ts`):
+// - The step walk (iOS): `STEP_WALK_MIN` (15) steps or more within `STEP_WINDOW_MS` (20 s) on the
+//   rows' pedometer count (`FeatureRow.steps`), with no trusted fix over 3 mph in the last
+//   `STEP_CALM_MS` (15 s), is a walking end, cut at the last movement at or before the first of
+//   those steps. The W2 age applies as on a report.
+// - The known parking spot: stopped (no trusted fix over 3 mph) for `PARK_STOP_MS` (60 s), the last
+//   fix within `PARK_NEAR_M` (75 m) of where one of the last `PARK_SPOTS_MAX` (50) kept drives ended
+//   or of a saved place, and no confident in-a-vehicle report standing or arriving in those 60 s:
+//   the drive ends as a still end (`stopped`), cut at the stop. Only once the drive has reached
+//   driving speed, and never on a replayed row (no motion reports come with one).
+// While a Start-card drive still waits for driving speed neither applies.
 import type { MotionActivity } from '@drive-sense';
 import { WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
 
-import { MPS_PER_MPH } from '@/core/detectors/common';
+import { knownSpeed, MPS_PER_MPH, speedTrusted } from '@/core/detectors/common';
+import { haversineMeters } from '@/lib/geo';
 
 import type { TripSession } from './engine.types';
 import { END_CRAWL_MPS, WALK_BAND_MPH } from './session';
+import type { FeatureRow } from './types';
 
 /** What one report says: on foot, nothing either way (a low-confidence walk), or not on foot. */
 export type FootReading = 'onFoot' | 'unsure' | 'clear';
@@ -59,4 +73,89 @@ export const WALKER_PACE_MAX_MPS = WALK_BAND_MPH.max * MPS_PER_MPH;
 export function carStillDriving(last: TripSession['lastSpeed'], t: number): boolean {
   if (last === null || !(last.mps > END_CRAWL_MPS) || t - last.ts > WALK_STALE_FIX_MS) return false;
   return !(last.carried && last.mps <= WALKER_PACE_MAX_MPS);
+}
+
+// --- the step walk ------------------------------------------------------------------------------
+
+/** The step walk: this many steps or more on the rows' pedometer count… */
+export const STEP_WALK_MIN = 15;
+/** …within this long (row clock, between two rows' counts)… */
+export const STEP_WINDOW_MS = 20_000;
+/** …with no trusted fix over 3 mph in this long (the last 15 rows). */
+export const STEP_CALM_MS = 15_000;
+
+/** One row's pedometer count, at the row's own time. */
+export interface StepMark {
+  ts: number;
+  steps: number;
+}
+
+/** A row with a known, trusted GPS speed over 3 mph (`END_CRAWL_MPS`): the car may be moving. */
+export function fastRow(row: FeatureRow): boolean {
+  const s = knownSpeed(row);
+  return s !== null && s > END_CRAWL_MPS && speedTrusted(row);
+}
+
+/**
+ * The step log after `row`: its count added (a row without one changes nothing), the counts more
+ * than `STEP_WINDOW_MS` older than it dropped. A count lower than the last one is a pedometer that
+ * started again (a relaunch): the log starts again from it. Never mutates `log`.
+ */
+export function noteSteps(log: readonly StepMark[], row: Pick<FeatureRow, 'ts' | 'steps'>): StepMark[] {
+  const steps = row.steps;
+  if (steps === undefined || !Number.isSafeInteger(steps) || steps < 0) return log.slice();
+  const last = log[log.length - 1];
+  if (last !== undefined && steps < last.steps) return [{ ts: row.ts, steps }];
+  if (last !== undefined && row.ts <= last.ts) return log.slice();
+  return [...log.filter((m) => m.ts >= row.ts - STEP_WINDOW_MS), { ts: row.ts, steps }];
+}
+
+/**
+ * The step walk in `log` (`noteSteps`): `STEP_WALK_MIN` steps or more between its oldest count and
+ * its newest, all within `STEP_WINDOW_MS`. `since`: the last row still at the oldest count, the
+ * last moment before the first of those steps (the walking end's cut lands at or before it). Null
+ * with no such walk. Pure.
+ */
+export function stepWalk(log: readonly StepMark[]): { since: number } | null {
+  const first = log[0];
+  const last = log[log.length - 1];
+  if (first === undefined || last === undefined || last.steps - first.steps < STEP_WALK_MIN) return null;
+  let since = first.ts;
+  for (const m of log) {
+    if (m.steps !== first.steps) break;
+    since = m.ts;
+  }
+  return { since };
+}
+
+/** The car has had no trusted fix over 3 mph in the `STEP_CALM_MS` up to `t` (row clock); `lastFastAt` is the last such row's time. */
+export const calmFor = (lastFastAt: number | null, t: number, ms: number): boolean => lastFastAt === null || t - lastFastAt > ms;
+
+// --- the known parking spot -----------------------------------------------------------------------
+
+/** The known parking spot: stopped this long (no trusted fix over 3 mph)… */
+export const PARK_STOP_MS = 60_000;
+/** …within this far of a known spot… */
+export const PARK_NEAR_M = 75;
+/** …the ends of this many of the latest kept drives (and the saved places). */
+export const PARK_SPOTS_MAX = 50;
+
+export interface Spot {
+  lat: number;
+  lng: number;
+}
+
+/** What one report says of a car: in one (automotive at medium confidence or more), nothing either way (automotive at low), or not in one. */
+export type VehicleReading = 'vehicle' | 'unsure' | 'clear';
+
+export function vehicleReading(a: MotionActivity): VehicleReading {
+  if (a.exit === true) return 'clear';
+  if (a.type === 'automotive') return a.confidence === 'low' ? 'unsure' : 'vehicle';
+  return 'clear';
+}
+
+/** `here` is within `PARK_NEAR_M` of one of `spots`. */
+export function nearSpot(here: Spot, spots: readonly Spot[]): boolean {
+  for (const p of spots) if (haversineMeters(here, p) <= PARK_NEAR_M) return true;
+  return false;
 }

@@ -8,7 +8,9 @@
 // swipe-to-end, or native's own stop with its cause), by itself once the car has not moved for
 // `IDLE_END_S` (`session.autoEndAt`) or at `MAX_DRIVE_MS`, or when the driver walks away, 10 s
 // after a reported walk began (the report standing 3 s at least) with the car at 3 mph or slower,
-// or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2). Every end
+// or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2), or once the
+// pedometer counts a walk (`motion.ts` step walk), or after a minute stopped at a known parking
+// spot (`motion.ts`; the spots are the host's, `deps.parkingSpots`). Every end
 // but a prompt manual one closes the drive where the car last moved (`closeAtLastMovement`; a
 // walking end at or before the walk began): a manual end `MANUAL_CUT_AFTER_S` or more after the
 // idle clock's base is cut too, a sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
@@ -36,7 +38,22 @@ import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent
 import { nextBearing, NO_BEARING, type DisplayBearing } from './displayBearing';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
-import { carStillDriving, footReading, ON_FOOT_DROP_MS, WALK_END_MS, WALK_STAND_MIN_MS } from './motion';
+import {
+  calmFor,
+  carStillDriving,
+  fastRow,
+  footReading,
+  nearSpot,
+  noteSteps,
+  ON_FOOT_DROP_MS,
+  PARK_STOP_MS,
+  STEP_CALM_MS,
+  stepWalk,
+  vehicleReading,
+  WALK_END_MS,
+  WALK_STAND_MIN_MS,
+  type StepMark,
+} from './motion';
 import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
@@ -91,6 +108,17 @@ export function createEngine(deps: EngineDeps): Engine {
    * arrived, both on the row clock. Null when none, or once cleared or cancelled by driving.
    */
   let foot: { since: number; at: number } | null = null;
+  /** The drive's rows' pedometer counts within the step window (`motion.ts` `noteSteps`). */
+  let stepLog: StepMark[] = [];
+  /** The drive's last row with a trusted GPS speed over 3 mph (`motion.ts` `fastRow`), or null. */
+  let lastFastAt: number | null = null;
+  /**
+   * The latest confident in-a-vehicle report (`motion.ts` `vehicleReading`): whether it still
+   * stands (no report but a low-confidence automotive one since) and when it arrived (the row clock
+   * while recording, the host's clock before). Kept across drives: the classifier's reports come
+   * only when they change, and the one that stands may have come before the drive.
+   */
+  let vehicle: { standing: boolean; at: number } | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** The latest event the halo shakes on, or null. */
@@ -184,6 +212,8 @@ export function createEngine(deps: EngineDeps): Engine {
     shown = null;
     shownLimit = NO_DISPLAY_LIMIT;
     foot = null;
+    stepLog = [];
+    lastFastAt = null;
     prefetchedAtM = null;
     lastAlert = null;
     lastShake = null;
@@ -307,12 +337,16 @@ export function createEngine(deps: EngineDeps): Engine {
       }
     }
     appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform });
+    if (fastRow(row)) lastFastAt = row.ts;
+    stepLog = noteSteps(stepLog, row);
     // A replayed row is where the car was, not where it is going: the tiles ahead are asked for from
     // the first live row (the drive's distance so far does not count against it).
     if (!replaying) maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;
     if (await checkFoot(row.ts + ROW_MS)) return;
+    if (await checkSteps(row.ts + ROW_MS)) return;
+    if (await checkParked(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -378,13 +412,56 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * An activity report; `ts` is the host's clock, used only before the drive's first row. Only while
-   * recording. Every time is on the row clock: the end of the latest row.
+   * The step walk at `t` (row clock): the pedometer counted a walk (`stepWalk`) and the car has had
+   * no trusted fix over 3 mph in the last `STEP_CALM_MS`. A drive that never reached driving speed
+   * only once it is `ON_FOOT_DROP_MS` old (W2). A walking end, cut at the last movement at or before
+   * the first of the steps. True when it ended the drive.
+   */
+  async function checkSteps(t: number): Promise<boolean> {
+    if (status !== 'recording' || held()) return false;
+    const s = session as TripSession;
+    const walk = stepWalk(stepLog);
+    if (walk === null || !calmFor(lastFastAt, t, STEP_CALM_MS)) return false;
+    if (s.droveAt === null && t - s.startedAt < ON_FOOT_DROP_MS) return false;
+    await finalize((open) => closeAtLastMovement(open, 'walking', { notAfter: walk.since }));
+    return true;
+  }
+
+  /**
+   * The known parking spot at `t` (row clock): once the drive has reached driving speed, no trusted
+   * fix over 3 mph for `PARK_STOP_MS`, the last fix within `PARK_NEAR_M` of a spot the host gave
+   * (`deps.parkingSpots`), and no confident in-a-vehicle report standing or arriving in that
+   * minute. A still end (`stopped`), cut at the last movement. Never on a replayed row: the motion
+   * reports that guard it never come with one. True when it ended the drive.
+   */
+  async function checkParked(t: number): Promise<boolean> {
+    if (status !== 'recording' || held() || replaying) return false;
+    const s = session as TripSession;
+    if (s.droveAt === null || s.lastFix === null || !calmFor(lastFastAt, t, PARK_STOP_MS)) return false;
+    if (vehicle !== null && (vehicle.standing || vehicle.at > t - PARK_STOP_MS)) return false;
+    const spots = deps.parkingSpots?.() ?? [];
+    if (spots.length === 0 || !nearSpot(s.lastFix, spots)) return false;
+    await finalize((open) => closeAtLastMovement(open, 'stopped'));
+    return true;
+  }
+
+  /** What a report says of a car, kept whatever the state (`vehicle`): `t` is when it arrived. */
+  function noteVehicle(a: MotionActivity, t: number): void {
+    const reading = vehicleReading(a);
+    if (reading === 'vehicle') vehicle = { standing: true, at: t };
+    else if (reading === 'clear' && vehicle !== null && vehicle.standing) vehicle = { standing: false, at: vehicle.at };
+  }
+
+  /**
+   * An activity report; `ts` is the host's clock, used only before the drive's first row. Every
+   * time is on the row clock: the end of the latest row. The walking end only while recording; what
+   * it says of a car (`noteVehicle`) whatever the state.
    */
   async function onMotion(a: MotionActivity, ts: number): Promise<void> {
+    const t = status === 'recording' && seen !== null ? seen.row.ts + ROW_MS : ts;
+    noteVehicle(a, t);
     if (status !== 'recording') return;
     const s = session as TripSession;
-    const t = seen === null ? ts : seen.row.ts + ROW_MS;
     const reading = footReading(a);
     if (reading === 'clear') foot = null;
     else if (reading === 'onFoot' && foot === null) {
@@ -471,6 +548,8 @@ export function createEngine(deps: EngineDeps): Engine {
   async function start(e: Extract<EngineEvent, { type: 'start' }>): Promise<void> {
     if (status !== 'idle') return;
     foot = null;
+    stepLog = [];
+    lastFastAt = null;
     const made = deps.createDetectors();
     session = createSession({
       clientTripId: e.clientTripId ?? deps.newId(),
@@ -501,6 +580,9 @@ export function createEngine(deps: EngineDeps): Engine {
     };
     suite = trip.detectors;
     foot = null;
+    stepLog = [];
+    // How long the car has stood is not known from the rebuilt session: as if it moved at its last row.
+    lastFastAt = trip.session.lastRowTs;
     setStatus('recording');
   }
 
@@ -545,7 +627,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status === 'recording') await release();
         return;
       case 'tick':
-        if (status === 'recording' && !(await endIfDue(e.ts))) await checkFoot(e.ts);
+        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts))) await checkParked(e.ts);
         return;
     }
   }

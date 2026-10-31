@@ -338,6 +338,12 @@ export interface EngineDeps {
    * the 12 h cap ends the drive. Default: never held.
    */
   holdEnds?(): boolean;
+  /**
+   * The known parking spots for the open drive (the ends of the latest kept drives and the saved
+   * places; the host reads them as the drive opens): a minute stopped within 75 m of one ends it
+   * (`motion.ts`). Default: none.
+   */
+  parkingSpots?(): readonly { lat: number; lng: number }[];
   /** Failures that must not stop the engine (a finalizer that threw, a subscriber that threw). */
   onError?(err: unknown): void;
 }
@@ -370,8 +376,9 @@ export type EngineEvent =
    */
   | { type: 'row'; row: FeatureRow; replay?: boolean; unseen?: boolean }
   /**
-   * An OS motion-activity report (`parseActivity`), for the walking end (`motion.ts`). `ts`: the
-   * host's clock at arrival, used only before the drive's first row.
+   * An OS motion-activity report (`parseActivity`), for the walking end and the parking spot's
+   * in-a-vehicle guard (`motion.ts`). `ts`: the host's clock at arrival, used only before the
+   * drive's first row (and while idle, for the guard).
    */
   | { type: 'motion'; activity: MotionActivity; ts: number }
   /**

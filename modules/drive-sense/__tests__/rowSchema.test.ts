@@ -229,6 +229,21 @@ describe('the journal seq', () => {
   });
 });
 
+// round 11 E1 (iOS): `steps`, the pedometer's count for the drive, rides on the row payload.
+describe('the step count', () => {
+  test('a whole number from 0 survives beside seq, mock and call; absent when native did not send it; never counted as unknown', () => {
+    resetUnknownRowKeys();
+    expect(parseRow({ ...good, steps: 0 })).toEqual({ ...good, steps: 0 });
+    expect(parseRow({ ...good, steps: 1234, seq: 7, mock: false, call: 'ring' })).toEqual({ ...good, steps: 1234, seq: 7, mock: false, call: 'ring' });
+    expect(parseRow(good)).not.toHaveProperty('steps');
+    expect(unknownRowKeys()).toBe(0);
+  });
+
+  test('anything else rejects the row', () => {
+    for (const steps of [-1, 1.5, '1', null, true, Number.NaN, 2 ** 53, undefined]) expect({ steps, row: parseRow({ ...good, steps }) }).toEqual({ steps, row: null });
+  });
+});
+
 describe('parseSpeed', () => {
   const good = { ts: 1_700_000_000_123, speed: 13.4, speedAcc: 0.6, hAcc: 4.5, ageMs: 240 };
 
