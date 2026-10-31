@@ -76,7 +76,7 @@ export function StatsCard({ stats, window, onAllStats }: { stats: readonly HomeS
           </View>
         ))}
         <Text variant="footnote" tone="subtle">
-          {window === '7d' ? 'Compared with your average week in the last 30 days.' : 'No drives in 7 days, so these show your last 30.'}
+          {window === '7d' ? 'Compared with your average week in the last 30 days.' : 'No drives in the last 7 days, so these cover the last 30.'}
         </Text>
       </Card>
     </View>

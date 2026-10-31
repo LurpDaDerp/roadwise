@@ -72,7 +72,7 @@ export const settingsCopy = {
     },
     heatmap: 'Heat map',
     privacyFooter:
-      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise feels when your phone is picked up on a drive, and never sees your screen, apps or messages.',
+      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise can tell when you pick up your phone on a drive, but it never sees your screen, apps or messages.',
     you: 'You',
     units: 'Units',
     appearance: {
@@ -87,7 +87,7 @@ export const settingsCopy = {
       },
       footer: 'Saved on this phone only.',
     },
-    notifications: { title: 'Notifications', subtitle: 'Weekly recap, friends' },
+    notifications: { title: 'Notifications', subtitle: 'Weekly recap and friends' },
     saveError: "That didn't save. Check your connection and try again.",
   },
 
@@ -96,7 +96,7 @@ export const settingsCopy = {
     voice: {
       title: 'Voice alerts',
       on: 'Alerts say a short phrase, like “Hard brake”, after the tone.',
-      off: 'Alerts play a tone only. Nothing is spoken.',
+      off: 'Alerts play a tone with no voice.',
     },
     tonesStay: 'Warning tones play either way.',
     test: {
@@ -112,7 +112,7 @@ export const settingsCopy = {
   zones: {
     title: 'Privacy zones',
     intro:
-      'Routes inside a zone are hidden on your maps, share cards and heat map. Good for home or school.',
+      'Routes inside a zone are hidden on your maps, share cards and heat map. Handy around home or school.',
     local: 'Zones stay on this phone. They’re never uploaded.',
     trim: 'The first and last quarter mile of every drive is always hidden too.',
     add: 'Add a zone',
@@ -160,7 +160,7 @@ export const settingsCopy = {
     locationFailed: "Couldn't get your location. Try again.",
     problems: {
       name_empty: 'Give the zone a name.',
-      name_long: 'Keep the name to 20 characters.',
+      name_long: 'Keep the name to 20 characters or fewer.',
       radius: 'Pick a size between 200 and 800 m.',
       center: 'Set the center first.',
       too_many: 'You can set up to 6 zones.',
@@ -175,7 +175,7 @@ export const settingsCopy = {
     signingOut: 'Signing out',
     export: {
       title: 'Export my data',
-      body: 'A copy of your data, in one file.',
+      body: 'Get a copy of your data in one file.',
       action: 'Export my data',
       working: 'Preparing your data',
       failed: "Couldn't export your data. Check your connection and try again.",
@@ -198,7 +198,7 @@ export const settingsCopy = {
       'Your profile, username and drives',
       'Your Safety Rating, weekly goals and achievements',
       'Your friends and blocked list',
-      'Your notification settings and devices on our servers',
+      'Your notification settings and the devices saved on our servers',
     ],
     exportFirst: 'Want a copy first? Export your data before you delete.',
     exportAction: 'Export my data first',

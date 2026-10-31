@@ -86,7 +86,7 @@ describe('the full Home', () => {
     expect(screen.getByTestId('rating-value')).toHaveTextContent('—');
     expect(screen.getByText('No rating yet')).toBeOnTheScreen();
     expect(screen.getByText('4 of 10 mi to your rating')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Distance toward a Safety Rating')).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 40 });
+    expect(screen.getByLabelText('Progress toward your Safety Rating')).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 40 });
     await press(screen.getByRole('button', { name: 'No rating yet. 4 of 10 miles to your rating' }));
     expect(p.onAnalytics).toHaveBeenCalled();
   });

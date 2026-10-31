@@ -77,7 +77,7 @@ export function RatingBlock({ progress, onPress }: { progress: Progress; onPress
         size={RING}
         strokeWidth={STROKE}
         tone="accent"
-        accessibilityLabel={ranked ? homeCopy.rating.label : 'Distance toward a Safety Rating'}
+        accessibilityLabel={ranked ? homeCopy.rating.label : 'Progress toward your Safety Rating'}
       >
         <Text
           variant="hero"
@@ -170,7 +170,7 @@ export function HomeHeader({
       <View style={{ gap: t.space.md }} testID="home-header-error">
         <Text variant="headline">{"Couldn't load your rating"}</Text>
         <Text variant="subhead" tone="muted">
-          Your drives still record. Check your connection and try again.
+          RoadWise still records your drives. Check your connection and try again.
         </Text>
         <Button label="Try again" variant="secondary" size="sm" onPress={onRetry} style={{ alignSelf: 'flex-start' }} />
       </View>
