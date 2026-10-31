@@ -103,7 +103,7 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
 select is((select array[e ->> 'format_version', (e ? 'clan')::text, ((e -> 'trips' -> 0) ? 'merged_into')::text, ((e -> 'progress') ? 'last_end_at')::text] from ex),
-  array['6', 'false', 'false', 'false'], 'the export is format 6: no clan key, no merged_into on a drive, no end point in progress');
+  array['7', 'false', 'false', 'false'], 'the export (format 7 since 0034) has no clan key, no merged_into on a drive, no end point in progress');
 select is((select e -> 'reports_made' -> 0 ->> 'target_kind' from ex), 'user', 'its reports name users');
 reset role;
 insert into public.notification_prefs (user_id, social) values ('00000000-0000-0000-0000-000000000002', false);

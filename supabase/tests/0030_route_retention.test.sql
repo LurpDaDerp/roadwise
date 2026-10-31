@@ -167,7 +167,7 @@ reset role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
-select is((select e -> 'format_version' from ex), '6'::jsonb, 'the export is format 6');
+select is((select e -> 'format_version' from ex), '7'::jsonb, 'the export is format 7');
 select is((select e -> 'route_pool' from ex), '["A_OLD"]'::jsonb, 'with the driver''s pooled lines');
 select is((select position('B_OLD' in e::text) from ex), 0, 'and nothing of another driver''s');
 reset role;

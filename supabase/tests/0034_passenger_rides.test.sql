@@ -5,7 +5,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(37);
+select plan(39);
 
 -- ava (1) rides; fay (2) is her friend; sam (3) is a stranger
 insert into auth.users (id, email) values
@@ -143,6 +143,19 @@ select pg_temp.as_user(2);
 select throws_ok($$ select public.get_passenger_rides('00000000-0000-0000-0000-000000000001') $$, 'P0002', 'profile not found', 'nor a friend across a block');
 select set_config('request.jwt.claims', '{"role":"authenticated"}', true);
 select throws_ok($$ select public.get_passenger_rides() $$, '42501', 'get_passenger_rides requires an authenticated user', 'a JWT without sub is refused');
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- the export (format 7) lists every ride, last month's too
+-- ---------------------------------------------------------------------------
+create temporary table rides_n as
+  select count(*)::int as n from private.passenger_rides where user_id = '00000000-0000-0000-0000-000000000001';
+grant select on rides_n to service_role;
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
+select is((select e -> 'format_version' from ex), '7'::jsonb, 'the export is format 7');
+select is((select jsonb_array_length(e -> 'passenger_rides') from ex), (select n from rides_n), 'with every passenger ride: its trip, day and kind');
 reset role;
 
 select * from finish();

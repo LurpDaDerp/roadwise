@@ -286,7 +286,7 @@ reset role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is((select array[e ->> 'format_version', ((e -> 'trips' -> 0) ? 'points_net')::text, ((e -> 'trips' -> 0) ? 'origin')::text] from (select public.export_account('00000000-0000-0000-0000-000000000001') as e) x),
-  array['6', 'false', 'true'], 'the export is format 6: drives with how they started, without points');
+  array['7', 'false', 'true'], 'the export is format 7: drives with how they started, without points');
 reset role;
 
 select * from finish();

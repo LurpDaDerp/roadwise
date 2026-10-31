@@ -23,7 +23,10 @@
 --     month in the rider's own time zone (private.user_tz). Anyone else (or a block either way) is
 --     "profile not found". Friends always see it: it is not behind a sharing setting.
 --
--- New objects only, besides not_driving_left (same signature; CREATE OR REPLACE keeps its ACL).
+--   * export_account: 0032's body with a passenger_rides section; format_version 7.
+--
+-- New objects only, besides not_driving_left and export_account (same signatures; CREATE OR REPLACE
+-- keeps their ACLs).
 -- Deploy: this migration alone; no edge function changes.
 
 -- ---------------------------------------------------------------------------
@@ -209,6 +212,60 @@ begin
   end if;
   return jsonb_build_object('this_month', private.passenger_rides_this_month(v_other));
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- the export: 0032's export_account (format 6) with the passenger rides; format 7
+-- ---------------------------------------------------------------------------
+create or replace function public.export_account(p_user uuid)
+ returns jsonb
+ language plpgsql
+ stable security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_account jsonb;
+begin
+  perform public.require_service_role('export_account');
+  if p_user is null then
+    raise exception 'user is required' using errcode = 'invalid_parameter_value';
+  end if;
+  select jsonb_build_object('user_id', u.id, 'email', u.email, 'created_at', u.created_at) into v_account from auth.users u where u.id = p_user;
+  if v_account is null then
+    raise exception 'no such account' using errcode = 'no_data_found';
+  end if;
+  return jsonb_build_object(
+    'format', 'roadwise-export',
+    'format_version', 7,
+    'exported_at', now(),
+    'about', jsonb_build_object('excluded', jsonb_build_array(
+      'device push tokens and push delivery receipts', 'rate-limit counters')),
+    'account', v_account,
+    'profile', (select to_jsonb(p) - 'flagged' from public.profiles p where p.id = p_user),
+    'consents', coalesce((select jsonb_agg(to_jsonb(c) order by c.created_at) from public.consents c where c.user_id = p_user), '[]'::jsonb),
+    'devices', coalesce((select jsonb_agg(jsonb_build_object('device_id', d.device_id, 'platform', d.platform, 'last_seen_at', d.last_seen_at, 'created_at', d.created_at) order by d.created_at)
+      from public.devices d where d.user_id = p_user), '[]'::jsonb),
+    'progress', (select to_jsonb(g) from public.progress g where g.user_id = p_user),
+    'trips', coalesce((select jsonb_agg(to_jsonb(t) order by t.started_at, t.id) from public.trips t where t.user_id = p_user), '[]'::jsonb),
+    'trip_events', coalesce((select jsonb_agg(to_jsonb(e) order by e.started_at, e.client_event_id) from public.trip_events e where e.user_id = p_user), '[]'::jsonb),
+    'event_disputes', coalesce((select jsonb_agg(to_jsonb(d) order by d.created_at) from public.event_disputes d where d.user_id = p_user), '[]'::jsonb),
+    -- passenger rides: the drive's id, its local day and which claim it was (0034)
+    'passenger_rides', coalesce((select jsonb_agg(jsonb_build_object('client_trip_id', r.client_trip_id, 'local_day', r.local_day, 'kind', r.kind) order by r.local_day, r.client_trip_id)
+      from private.passenger_rides r where r.user_id = p_user), '[]'::jsonb),
+    -- the routes of drives past the 183 days: lines only, in random order
+    'route_pool', coalesce((select jsonb_agg(r.polyline order by r.id) from public.route_pool r where r.user_id = p_user), '[]'::jsonb),
+    'achievements', coalesce((select jsonb_agg(to_jsonb(a) order by a.unlocked_at) from public.user_achievements a where a.user_id = p_user), '[]'::jsonb),
+    'weekly_challenges', coalesce((select jsonb_agg(to_jsonb(w) order by w.league_week, w.slot) from public.weekly_challenges w where w.user_id = p_user), '[]'::jsonb),
+    'friends', jsonb_build_object(
+      'count', private.friend_count(p_user),
+      'outgoing_requests', (select count(*) from public.friend_requests r where r.from_id = p_user),
+      'incoming_requests', (select count(*) from public.friend_requests r where r.to_id = p_user),
+      'blocked_count', (select count(*) from public.blocks b where b.blocker_id = p_user)),
+    'reports_made', coalesce((select jsonb_agg(jsonb_build_object('target_kind', r.target_kind, 'reason', r.reason, 'note', r.note, 'created_at', r.created_at) order by r.created_at)
+      from public.reports r where r.reporter_id = p_user), '[]'::jsonb),
+    'notification_prefs', (select to_jsonb(n) from public.notification_prefs n where n.user_id = p_user),
+    'inbox', coalesce((select jsonb_agg(jsonb_build_object('kind', i.kind, 'payload', i.payload - 'from_user_id', 'created_at', i.created_at) order by i.created_at)
+      from public.inbox i where i.user_id = p_user), '[]'::jsonb));
+end $function$;
 
 -- ---------------------------------------------------------------------------
 -- grants
