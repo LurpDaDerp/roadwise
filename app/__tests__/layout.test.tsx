@@ -146,7 +146,9 @@ jest.mock('@/features/notifications', () => ({ NotificationsHost: () => null }))
 jest.mock('@/data/devices/DeviceHost', () => ({ DeviceHost: () => null }));
 
 // eslint-disable-next-line import/first -- after the mocks it depends on
-import RootLayout from '../_layout';
+import RootLayout, { ErrorBoundary } from '../_layout';
+// eslint-disable-next-line import/first -- after the mocks
+import { AppCrashed } from '@/boot/AppCrashed';
 // eslint-disable-next-line import/first -- after the mocks
 import { displayLook } from '@/drive/displayLook';
 // eslint-disable-next-line import/first -- after the mocks
@@ -494,4 +496,8 @@ describe('sign-out and sign-in reach the drive host (final review I3; final-fix 
     });
     expect(host.signedInAgain).toHaveBeenCalledTimes(1);
   });
+});
+
+test('the root layout exports AppCrashed as its ErrorBoundary, so a screen that throws never leaves a blank app', () => {
+  expect(ErrorBoundary).toBe(AppCrashed);
 });

@@ -15,6 +15,7 @@ import { AppRegistry, Platform } from 'react-native';
 
 import type { Db } from '@/data/db';
 import type { DriveHost } from '@/drive/host';
+import { reportError } from '@/lib/crashReport';
 
 import type { AppRuntime } from './bootstrap';
 import { ensureRuntime } from './controller';
@@ -41,8 +42,10 @@ export interface DriveHeadlessTaskDeps {
   attachNotifier?: AttachNotifier;
 }
 
+/** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
 function warn(error: unknown): void {
   if (__DEV__) console.warn('[headless]', error);
+  reportError(error, 'headless');
 }
 
 async function bounded(promise: Promise<unknown>, ms: number, report: (error: unknown) => void): Promise<void> {

@@ -66,6 +66,16 @@ export const hudCopy = {
     eyes_off: 'Eyes up',
     drowsy: 'Take a break',
   } satisfies Record<EventType, string>,
+  /**
+   * The driving screen's error boundary: the screen threw while drawing. Three words and two while
+   * moving; the spoken label says the drive itself is untouched.
+   */
+  crashed: {
+    title: 'Something went wrong',
+    retry: 'Try again',
+    spoken: "The driving screen hit a problem. If you're on a drive, it's still recording.",
+    retryHint: 'Reloads the driving screen.',
+  },
   /** The strip on other screens while a drive records, or while a Start drive swipe waits. */
   banner: {
     title: 'Drive in progress',

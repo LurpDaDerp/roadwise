@@ -21,6 +21,8 @@
  */
 import { AppState } from 'react-native';
 
+import { reportError } from '@/lib/crashReport';
+
 import {
   bootstrapApp,
   startForegroundJobs,
@@ -83,8 +85,10 @@ interface Generation {
   unlisten: (() => void) | null;
 }
 
+/** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
 function warn(error: unknown, context: string): void {
   if (__DEV__) console.warn(`[runtime] ${context}:`, error);
+  reportError(error, `runtime: ${context}`);
 }
 
 const toError = (reason: unknown): Error =>

@@ -45,6 +45,7 @@ import type { StoredDrive } from '@/features/drive/summaryNotifier';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
+import { reportError } from '@/lib/crashReport';
 import { deviceZone } from '@/lib/deviceZone';
 
 import type { DriveDetectApi } from '@drive-sense';
@@ -187,8 +188,10 @@ export interface AppRuntime {
   stop(opts?: { endOpenTrip?: boolean }): Promise<void>;
 }
 
+/** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
 function warn(error: unknown, context: string): void {
   if (__DEV__) console.warn(`[bootstrap] ${context}:`, error);
+  reportError(error, `bootstrap: ${context}`);
 }
 
 /** The whole launch, with a deadline around it: a hang is reported as a failure at the stage reached. */
