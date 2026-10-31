@@ -72,7 +72,14 @@ jest.mock('expo-modules-core', () => {
     dashpalLinkRunning: jest.fn(() => true),
     addListener: jest.fn(() => ({ remove })),
   };
-  const control = { present: true, native, state, remove };
+  // `detect`: the DriveDetect module as stopCapture's "auto" check sees it (null: none, as in Jest).
+  const control: { present: boolean; native: typeof native; state: typeof state; remove: typeof remove; detect: Record<string, unknown> | null } = {
+    present: true,
+    native,
+    state,
+    remove,
+    detect: null,
+  };
   return {
     ...actual,
     __driveSense: control,
@@ -81,7 +88,9 @@ jest.mock('expo-modules-core', () => {
         ? control.present
           ? native
           : null
-        : actual.requireOptionalNativeModule(name),
+        : name === 'DriveDetect' && control.detect !== null
+          ? control.detect
+          : actual.requireOptionalNativeModule(name),
   };
 });
 
@@ -90,6 +99,7 @@ type Control = {
   native: Record<string, jest.Mock>;
   state: () => Record<string, unknown>;
   remove: jest.Mock;
+  detect: Record<string, unknown> | null;
 };
 const control = (jest.requireMock('expo-modules-core') as { __driveSense: Control }).__driveSense;
 const mockNative = control.native;
@@ -197,14 +207,31 @@ describe('every method goes to native with its arguments', () => {
     await DriveSense.stopCapture({ drivingEndedAt: 1_760_000_000_000, drivingAtEnd: true });
     await DriveSense.stopCapture({ drivingEndedAt: null, drivingAtEnd: false });
     await DriveSense.stopCapture(undefined);
-    await DriveSense.stopCapture({ drivingEndedAt: 1_760_000_000_000, drivingAtEnd: false, automatic: true });
-    await DriveSense.stopCapture({ drivingEndedAt: null, drivingAtEnd: false, automatic: true });
     expect(mockNative.stopCapture!.mock.calls).toEqual([
       ['at', 1_760_000_000_000, true],
       ['dropped', 0, false],
       ['now', 0, false],
+    ]);
+  });
+
+  test('an automatic end goes as "auto" only to a native build with the car link (DriveDetect.carLinkState); an older one gets "at"', async () => {
+    const automatic = { drivingEndedAt: 1_760_000_000_000, drivingAtEnd: false, automatic: true };
+    try {
+      control.detect = { carLinkState: jest.fn() };
+      await DriveSense.stopCapture(automatic);
+      await DriveSense.stopCapture({ ...automatic, drivingEndedAt: null });
+      control.detect = { getState: jest.fn() };
+      await DriveSense.stopCapture(automatic);
+      control.detect = null;
+      await DriveSense.stopCapture(automatic);
+    } finally {
+      control.detect = null;
+    }
+    expect(mockNative.stopCapture!.mock.calls).toEqual([
       ['auto', 1_760_000_000_000, false],
       ['dropped', 0, false],
+      ['at', 1_760_000_000_000, false],
+      ['at', 1_760_000_000_000, false],
     ]);
   });
 

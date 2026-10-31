@@ -62,8 +62,9 @@ public final class DriveSenseModule: Module, DriveSenseEventSink {
       }
     }.runOnQueue(.main)
 
-    // The drive's end from JS (README §2): kind "now" (nothing known), "dropped" (not kept) or "at"
-    // (its driving ended at endedAt, the cut). A recording drive's end is journaled with cause "js".
+    // The drive's end from JS (README §2): kind "now" (nothing known), "dropped" (not kept), "at"
+    // (its driving ended at endedAt, the cut) or "auto" (the same, ended by a JS automatic rule: the
+    // linger watches on). A recording drive's end is journaled with cause "js".
     AsyncFunction("stopCapture") { (kind: String, endedAt: Double, drivingAtEnd: Bool, promise: Promise) in
       DriveDetector.shared.stopCapture(end: CaptureEnd.of(kind, endedAt, drivingAtEnd))
       promise.resolve(nil)

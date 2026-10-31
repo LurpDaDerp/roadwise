@@ -115,12 +115,12 @@ export function createEngine(deps: EngineDeps): Engine {
   /** The drive's last row with a trusted GPS speed over 3 mph (`motion.ts` `fastRow`), or null. */
   let lastFastAt: number | null = null;
   /**
-   * The latest confident in-a-vehicle report (`motion.ts` `vehicleReading`): whether it still
-   * stands (no report but a low-confidence automotive one since) and when it arrived (the row clock
-   * while recording, the host's clock before). Kept across drives: the classifier's reports come
-   * only when they change, and the one that stands may have come before the drive.
+   * When the latest confident report not in a vehicle and the latest confident in-a-vehicle report
+   * arrived (`motion.ts` `vehicleReading`; the row clock while recording, the host's clock before),
+   * or null: the parking spot's evidence.
    */
-  let vehicle: { standing: boolean; at: number } | null = null;
+  let lastClearAt: number | null = null;
+  let lastVehicleAt: number | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** The latest event the halo shakes on, or null. */
@@ -433,15 +433,18 @@ export function createEngine(deps: EngineDeps): Engine {
   /**
    * The known parking spot at `t` (row clock): once the drive has reached driving speed, no trusted
    * fix over 3 mph for `PARK_STOP_MS`, the last fix within `PARK_NEAR_M` of a spot the host gave
-   * (`deps.parkingSpots`), and no confident in-a-vehicle report standing or arriving in that
-   * minute. A still end (`stopped`), cut at the last movement. Never on a replayed row: the motion
+   * (`deps.parkingSpots`), and positive evidence the car is parked: a confident report not in a
+   * vehicle arrived since the stop began, with no confident in-a-vehicle report after it. With no
+   * such report the rule never applies (the 5-min still end remains). A still end (`stopped`), cut at the last movement. Never on a replayed row: the motion
    * reports that guard it never come with one. True when it ended the drive.
    */
   async function checkParked(t: number): Promise<boolean> {
     if (status !== 'recording' || held() || replaying) return false;
     const s = session as TripSession;
     if (s.droveAt === null || s.lastFix === null || !calmFor(lastFastAt, t, PARK_STOP_MS)) return false;
-    if (vehicle !== null && (vehicle.standing || vehicle.at > t - PARK_STOP_MS)) return false;
+    // The stop began at the end of the last fast row (never null here: driving rows are fast).
+    const stopAt = (lastFastAt ?? s.startedAt) + ROW_MS;
+    if (lastClearAt === null || lastClearAt < stopAt || (lastVehicleAt !== null && lastVehicleAt >= lastClearAt)) return false;
     const spots = deps.parkingSpots?.() ?? [];
     if (spots.length === 0 || !nearSpot(s.lastFix, spots)) return false;
     await finalize((open) => closeAtLastMovement(open, 'stopped'));
@@ -461,11 +464,11 @@ export function createEngine(deps: EngineDeps): Engine {
     return true;
   }
 
-  /** What a report says of a car, kept whatever the state (`vehicle`): `t` is when it arrived. */
+  /** What a report says of a car, kept whatever the state (`lastClearAt`, `lastVehicleAt`): `t` is when it arrived. */
   function noteVehicle(a: MotionActivity, t: number): void {
     const reading = vehicleReading(a);
-    if (reading === 'vehicle') vehicle = { standing: true, at: t };
-    else if (reading === 'clear' && vehicle !== null && vehicle.standing) vehicle = { standing: false, at: vehicle.at };
+    if (reading === 'vehicle') lastVehicleAt = t;
+    else if (reading === 'clear') lastClearAt = t;
   }
 
   /**

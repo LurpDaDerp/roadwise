@@ -23,8 +23,11 @@
 //   those steps. The W2 age applies as on a report.
 // - The known parking spot: stopped (no trusted fix over 3 mph) for `PARK_STOP_MS` (60 s), the last
 //   fix within `PARK_NEAR_M` (75 m) of where one of the last `PARK_SPOTS_MAX` (50) kept drives ended
-//   or of a saved place, and no confident in-a-vehicle report standing or arriving in those 60 s:
-//   the drive ends as a still end (`stopped`), cut at the stop. Only once the drive has reached
+//   or of a saved place, and positive evidence the car is parked: a confident report that is not
+//   in a vehicle (still, walking, running, cycling or unknown) arrived since the stop began, with no
+//   confident in-a-vehicle report after it. No such report (motion not granted, none yet) and the
+//   rule never applies: the 5-min still end remains. The drive ends as a still end (`stopped`), cut
+//   at the stop. Only once the drive has reached
 //   driving speed, and never on a replayed row (no motion reports come with one).
 // - The car link (iOS): the paired car or CarPlay gone `CAR_GONE_MS` (15 s) continuously during a
 //   drive that had it (native's debounced "gone since", the host's `deps.carGoneSince`), with no
@@ -164,13 +167,16 @@ export interface Spot {
   lng: number;
 }
 
-/** What one report says of a car: in one (automotive at medium confidence or more), nothing either way (automotive at low), or not in one. */
+/**
+ * What one report says of a car: in one (automotive at medium confidence or more, a car standing at
+ * a light included), not in one (any other type at medium or more: still, walking, running,
+ * cycling, unknown), or nothing either way (low confidence, or an Android EXIT).
+ */
 export type VehicleReading = 'vehicle' | 'unsure' | 'clear';
 
 export function vehicleReading(a: MotionActivity): VehicleReading {
-  if (a.exit === true) return 'clear';
-  if (a.type === 'automotive') return a.confidence === 'low' ? 'unsure' : 'vehicle';
-  return 'clear';
+  if (a.exit === true || a.confidence === 'low') return 'unsure';
+  return a.type === 'automotive' ? 'vehicle' : 'clear';
 }
 
 /** `here` is within `PARK_NEAR_M` of one of `spots`. */

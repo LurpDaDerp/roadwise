@@ -174,88 +174,123 @@ describe('the known parking spot', () => {
   const spots = [PARKED];
   /** Stopped where the drive ended for `n` rows. */
   const stopped = (n: number) => ({ n, mps: 0 });
+  /** A report arriving after `n` rows have been fed (the row clock is then the `n`th row's end). */
+  const report = (h: H, a: MotionActivity) => h.engine.dispatch({ type: 'motion', activity: a, ts: T0 });
+  /** The drive, then stopped, with a confident still report arriving 5 s into the stop (T0 + 65 s). */
+  async function parkedWithStill(h: H, n: number): Promise<FeatureRow[]> {
+    const rows = path(T0, DRIVE, stopped(n));
+    await feed(h, rows.slice(0, 65));
+    await report(h, act('stationary', T0 + 64_000));
+    return rows;
+  }
 
-  test('a minute stopped within 75 m of a spot: a still end cut at the stop', async () => {
+  test('a minute stopped within 75 m of a spot, a confident still report since the stop: a still end cut at the stop', async () => {
     const h = await started({ parkingSpots: () => spots });
-    const rows = path(T0, DRIVE, stopped(90));
+    const rows = await parkedWithStill(h, 90);
     // The last fast row is at T0 + 59 s: 60 still rows after it (to T0 + 119 s) end it.
-    await feed(h, rows.slice(0, 119));
+    await feed(h, rows.slice(65, 119));
     expect(status(h)).toBe('recording');
     await feed(h, rows.slice(119, 120));
     expect(status(h)).toBe('idle');
     expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', cut: true, endedAt: DRIVE_END });
   });
 
+  test('no reports at all: no parking end (the 5-min still end remains)', async () => {
+    const h = await started({ parkingSpots: () => spots });
+    await feed(h, path(T0, DRIVE, stopped(200)));
+    expect(status(h)).toBe('recording');
+  });
+
+  test('a car standing at a light near a past end (confident automotive, stationary included): no end', async () => {
+    const h = await started({ parkingSpots: () => spots });
+    const rows = path(T0, DRIVE, stopped(200));
+    await feed(h, rows.slice(0, 65));
+    await report(h, act('automotive', T0 + 64_000));
+    await feed(h, rows.slice(65));
+    expect(status(h)).toBe('recording');
+  });
+
+  test('an in-a-vehicle report after the still one holds it until another still report', async () => {
+    const h = await started({ parkingSpots: () => spots });
+    const rows = await parkedWithStill(h, 200);
+    await feed(h, rows.slice(65, 100));
+    await report(h, act('automotive', T0 + 99_000, 'medium'));
+    await feed(h, rows.slice(100, 150));
+    expect(status(h)).toBe('recording');
+    await report(h, act('walking', T0 + 149_000));
+    // The walking report (T0 + 150 s) is also a walk: the walking end may come first; either way the drive ends cut at the stop.
+    await feed(h, rows.slice(150, 151));
+    expect(h.finalized[0]).toMatchObject({ cut: true, endedAt: DRIVE_END });
+  });
+
+  test('a still report from before the stop, or a low-confidence one, is no evidence', async () => {
+    const before = harness({ parkingSpots: () => spots });
+    await before.engine.dispatch({ type: 'motion', activity: act('stationary', T0 - 30_000), ts: T0 - 30_000 });
+    await before.engine.dispatch({ type: 'start', ts: T0, origin: 'auto', continues: false });
+    await feed(before, path(T0, DRIVE, stopped(120)));
+    expect(status(before)).toBe('recording');
+    const low = await started({ parkingSpots: () => spots });
+    const rows = path(T0, DRIVE, stopped(120));
+    await feed(low, rows.slice(0, 65));
+    await report(low, act('stationary', T0 + 64_000, 'low'));
+    await feed(low, rows.slice(65));
+    expect(status(low)).toBe('recording');
+  });
+
   test('a spot 70 m off counts, 80 m off does not', async () => {
     const off = (m: number) => [{ lat: PARKED.lat, lng: PARKED.lng + m / M_PER_DEG_LNG }];
     const near = await started({ parkingSpots: () => off(70) });
-    await feed(near, path(T0, DRIVE, stopped(61)));
+    const rows = await parkedWithStill(near, 61);
+    await feed(near, rows.slice(65));
     expect(status(near)).toBe('idle');
     const far = await started({ parkingSpots: () => off(80) });
-    await feed(far, path(T0, DRIVE, stopped(120)));
+    const farRows = await parkedWithStill(far, 120);
+    await feed(far, farRows.slice(65));
     expect(status(far)).toBe('recording');
   });
 
   test('no spots, nothing', async () => {
     const h = await started();
-    await feed(h, path(T0, DRIVE, stopped(120)));
-    expect(status(h)).toBe('recording');
-  });
-
-  test('a standing confident in-a-vehicle report holds it until another report clears it, then a minute from its arrival', async () => {
-    const h = await started({ parkingSpots: () => spots });
-    const rows = path(T0, DRIVE, stopped(200));
-    await feed(h, rows.slice(0, 90));
-    // Arrives after the row at T0 + 89 s: the row clock T0 + 90 s.
-    await h.engine.dispatch({ type: 'motion', activity: act('automotive', T0 + 89_000), ts: T0 });
-    await feed(h, rows.slice(90, 140));
-    expect(status(h)).toBe('recording');
-    // A low-confidence one leaves it standing.
-    await h.engine.dispatch({ type: 'motion', activity: act('automotive', T0 + 139_000, 'low'), ts: T0 });
-    await feed(h, rows.slice(140, 145));
-    expect(status(h)).toBe('recording');
-    await h.engine.dispatch({ type: 'motion', activity: act('stationary', T0 + 144_000), ts: T0 });
-    // Cleared at T0 + 145 s; the automotive report arrived at T0 + 90 s, so the end waits for the row ending at T0 + 150 s.
-    await feed(h, rows.slice(145, 149));
-    expect(status(h)).toBe('recording');
-    await feed(h, rows.slice(149, 150));
-    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END });
-  });
-
-  test('a confident in-a-vehicle report from before the drive still stands', async () => {
-    const h = harness({ parkingSpots: () => spots });
-    await h.engine.dispatch({ type: 'motion', activity: act('automotive', T0 - 30_000), ts: T0 - 30_000 });
-    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'auto', continues: false });
-    await feed(h, path(T0, DRIVE, stopped(120)));
+    const rows = await parkedWithStill(h, 120);
+    await feed(h, rows.slice(65));
     expect(status(h)).toBe('recording');
   });
 
   test('never on replayed rows, while a Start-card drive waits, or before driving speed', async () => {
     const replayed = await started({ parkingSpots: () => spots });
-    await feed(replayed, path(T0, DRIVE, stopped(120)), true);
+    const rows = path(T0, DRIVE, stopped(120));
+    await feed(replayed, rows.slice(0, 65), true);
+    await report(replayed, act('stationary', T0 + 64_000));
+    await feed(replayed, rows.slice(65), true);
     expect(status(replayed)).toBe('recording');
     const held = await started({ parkingSpots: () => spots, holdEnds: () => true });
-    await feed(held, path(T0, DRIVE, stopped(120)));
+    const heldRows = await parkedWithStill(held, 120);
+    await feed(held, heldRows.slice(65));
     expect(status(held)).toBe('recording');
     const slow = await started({ parkingSpots: () => [{ lat: LAT, lng: LNG + (40 * mph(7)) / M_PER_DEG_LNG }] });
-    await feed(slow, path(T0, { n: 40, mps: mph(7) }, stopped(120)));
+    const slowRows = path(T0, { n: 40, mps: mph(7) }, stopped(120));
+    await feed(slow, slowRows.slice(0, 45));
+    await report(slow, act('stationary', T0 + 44_000));
+    await feed(slow, slowRows.slice(45));
     expect(status(slow)).toBe('recording');
   });
 
   test('a tick ends it too', async () => {
     const h = await started({ parkingSpots: () => spots });
-    await feed(h, path(T0, DRIVE, stopped(30)));
+    await parkedWithStill(h, 30);
     await h.engine.dispatch({ type: 'tick', ts: T0 + 121_000 });
     expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END });
   });
 });
 
 describe('vehicleReading', () => {
-  test('automotive at medium or more is a vehicle, at low unsure, anything else or an exit clear', () => {
+  test('automotive at medium or more is a vehicle, any other type at medium or more clear, low confidence or an exit unsure', () => {
     expect(vehicleReading(act('automotive', T0, 'medium'))).toBe('vehicle');
-    expect(vehicleReading(act('automotive', T0, 'low'))).toBe('unsure');
     expect(vehicleReading(act('stationary', T0))).toBe('clear');
-    expect(vehicleReading({ ...act('automotive', T0), exit: true })).toBe('clear');
+    expect(vehicleReading(act('unknown', T0, 'medium'))).toBe('clear');
+    expect(vehicleReading(act('automotive', T0, 'low'))).toBe('unsure');
+    expect(vehicleReading(act('stationary', T0, 'low'))).toBe('unsure');
+    expect(vehicleReading({ ...act('automotive', T0), exit: true })).toBe('unsure');
   });
 });
 

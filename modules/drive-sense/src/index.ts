@@ -233,15 +233,26 @@ const MARK_LOCK_PROOF_MAX_MS = 60_000;
 const isPackageName = (v: unknown): v is string => typeof v === 'string' && v.length <= 255 && PACKAGE_NAME.test(v) && isNavAppPackage(v);
 
 /**
+ * The native build reads `stopCapture`'s "auto" kind: it came in the same build as the car link,
+ * so a build whose DriveDetect module has `carLinkState` takes it. An older build (or none) reads
+ * any kind it does not know as "now" (its cut lost), so it gets "at" instead.
+ */
+function nativeTakesAutoEnd(): boolean {
+  const detect = requireOptionalNativeModule<Record<string, unknown>>('DriveDetect');
+  return detect !== null && detect !== undefined && typeof detect.carLinkState === 'function';
+}
+
+/**
  * `stopCapture`'s native arguments (kind, endedAt, drivingAtEnd): "now" with nothing known,
  * "dropped" for a drive not kept, "at" with its driving end, "auto" the same for one a JS
- * automatic end rule ended (`automatic`). Only a valid `end` is ever sent.
+ * automatic end rule ended (`automatic`) where the native build reads it (`nativeTakesAutoEnd`),
+ * "at" where it does not. Only a valid `end` is ever sent.
  */
 function captureEndArgs(end: CaptureEnd | undefined): [string, number, boolean] {
   if (end === undefined || end === null || typeof end !== 'object') return ['now', 0, false];
   const atEnd = end.drivingAtEnd === true;
   if (end.drivingEndedAt === null) return ['dropped', 0, atEnd];
-  return [end.automatic === true ? 'auto' : 'at', end.drivingEndedAt, atEnd];
+  return [end.automatic === true && nativeTakesAutoEnd() ? 'auto' : 'at', end.drivingEndedAt, atEnd];
 }
 
 const voidResult = z.union([z.undefined(), z.null()]).transform(() => undefined);
