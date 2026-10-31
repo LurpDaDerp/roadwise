@@ -100,11 +100,9 @@ export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive;
             tally.map((x) => (
               <View key={x.type} style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }} testID={`${testID ?? 'row'}-event-${x.type}`}>
                 <EventIcon type={x.type} size={14} color={t.colors.textMuted} />
-                {x.n > 1 ? (
-                  <Text variant="footnote" tone="muted">
-                    {x.n}
-                  </Text>
-                ) : null}
+                <Text variant="footnote" tone="muted">
+                  {x.n}
+                </Text>
               </View>
             ))
           )}
