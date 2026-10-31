@@ -389,10 +389,35 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Every function shares one import map, supabase/functions/deno.json (bare npm specifiers like
+# @supabase/supabase-js and zod, plus the scoring copy's extensionless imports). The CLI only finds a
+# deno.json inside a function's own folder by itself, so each function names the shared one here.
+[functions.account-delete]
+import_map = "./functions/deno.json"
+
+[functions.account-export]
+import_map = "./functions/deno.json"
+
+[functions.app-attest]
+import_map = "./functions/deno.json"
+
+[functions.finalize-trip]
+import_map = "./functions/deno.json"
+
+[functions.live-activity-start]
+import_map = "./functions/deno.json"
+
 # push-sender is called by pg_cron (private.dispatch_push, 0005_push), not by a user: it authenticates the
 # signed X-Sweep-Signature header itself, so the gateway JWT check is off for it alone.
 [functions.push-sender]
 verify_jwt = false
+import_map = "./functions/deno.json"
+
+[functions.speed-limits]
+import_map = "./functions/deno.json"
+
+[functions.trip-actions]
+import_map = "./functions/deno.json"
 
 [analytics]
 enabled = true
