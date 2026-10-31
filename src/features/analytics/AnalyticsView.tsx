@@ -68,7 +68,7 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
   const [spotSheet, setSpotSheet] = useState<{ id: string | null; open: boolean }>({ id: null, open: false });
   const openSpot = (id: string) => setSpotSheet({ id, open: true });
   const closeSpot = () => setSpotSheet((s) => ({ ...s, open: false }));
-  // A spot that leaves the list (cleared, or inside a new privacy zone) closes its sheet.
+  // A spot that leaves the list (cleared, or gone in a recompute) closes its sheet.
   const spot = spots?.active.find((s) => s.id === spotSheet.id) ?? null;
   const first = data.loading && data.drives.length === 0;
   return (

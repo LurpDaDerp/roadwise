@@ -13,7 +13,7 @@ export interface SpotDrive {
   clientTripId: string;
   /** Epoch ms. */
   startedAt: number;
-  /** The privacy-trimmed route's visible runs, travel order, each at least 2 points. */
+  /** The route's runs as the driver's own views draw it (the whole route where the phone holds it), travel order, each at least 2 points. */
   runs: readonly (readonly LatLng[])[];
 }
 

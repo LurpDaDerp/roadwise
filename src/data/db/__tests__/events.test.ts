@@ -35,6 +35,8 @@ test('insert applies the defaults; listByTrip is oldest first', async () => {
     duration_s: 0,
     lat: null,
     lng: null,
+    lat_full: null,
+    lng_full: null,
     measured_json: null,
     status: 'active',
     dispute_status: 'none',

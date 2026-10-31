@@ -119,16 +119,19 @@ export async function readDriveCount(db: Db): Promise<number> {
 }
 
 /**
- * The trimmed routes of the drives started at or after `sinceMs`, newest first; all time (null)
- * adds the route pool's lines after them (they carry no date, so a window never holds them).
+ * The routes of the drives started at or after `sinceMs`, newest first, each as the driver's own
+ * views draw it (the whole route where the phone holds it, else the trimmed one, as `toLocalDrive`);
+ * all time (null) adds the route pool's lines after them (they carry no date, so a window never
+ * holds them).
  */
 export async function readRoutePolylines(db: Db, sinceMs: number | null): Promise<string[]> {
   const since = sinceMs === null ? '' : 'AND t.started_at >= ?';
   const { rows } = await db.execute(
-    `SELECT t.polyline FROM trips t WHERE t.status != 'recording' AND t.polyline IS NOT NULL AND t.polyline != '' ${since} ${NEWEST_FIRST}`,
+    `SELECT COALESCE(t.route_full, t.polyline) AS line FROM trips t
+     WHERE t.status != 'recording' AND COALESCE(t.route_full, t.polyline) IS NOT NULL AND COALESCE(t.route_full, t.polyline) != '' ${since} ${NEWEST_FIRST}`,
     sinceMs === null ? [] : [sinceMs]
   );
-  const lines = rows.map((row) => asTextOrNull(row, 'polyline') ?? '');
+  const lines = rows.map((row) => asTextOrNull(row, 'line') ?? '');
   return sinceMs === null ? [...lines, ...(await readRoutePool(db))] : lines;
 }
 
@@ -171,7 +174,7 @@ export function useDriveCount(): UseQueryResult<number> {
   return useQuery({ queryKey: queryKeys.driveCount(), queryFn: () => readDriveCount(db) });
 }
 
-/** The trimmed polylines of the user's own drives (the heat map); all time adds the route pool. */
+/** The routes of the user's own drives as their own views draw them; all time adds the route pool. */
 export function useRoutePolylines(sinceMs: number | null): UseQueryResult<string[]> {
   const { db } = useDataSource();
   return useQuery({ queryKey: queryKeys.routes(sinceMs), queryFn: () => readRoutePolylines(db, sinceMs) });

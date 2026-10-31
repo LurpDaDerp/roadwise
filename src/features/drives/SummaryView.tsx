@@ -14,7 +14,7 @@ import { meritWash } from './merit';
 import { MeritFacts } from './MeritFacts';
 import type { LocalDrive, LocalDriveEvent } from './model';
 import { NotDrivingSheet, ReportSheet } from './ReportSheet';
-import { decodeRoute } from './route';
+import { decodeRoute, leadIn } from './route';
 import { RouteMap } from './RouteMap';
 import { ShareSheet } from './ShareCard';
 import {
@@ -89,6 +89,8 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
   const tier = useMemo(() => meritOf(drive, events), [drive, events]);
   const rows = useMemo(() => eventRows(events, units), [events, units]);
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
+  // From where the drive began (the parked spot of a start found in the motion history) to its first fix.
+  const lead = useMemo(() => leadIn(drive.start, runs), [drive.start, runs]);
   const score = state.kind === 'score' ? state.value : null;
   const selected = events.find((e) => e.id === selectedId) ?? null;
   const reportEvent = events.find((e) => e.id === reporting) ?? null;
@@ -126,7 +128,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
         </View>
 
         {/* 2. Route map */}
-        <RouteMap runs={runs} events={rows.map((r) => r.event)} highlighted={selected} />
+        <RouteMap runs={runs} lead={lead} events={rows.map((r) => r.event)} highlighted={selected} />
 
         {/* 3. The score card: the hero (or the drive's state) with Share beside it, then the events */}
         <Card testID="summary-score-card">
@@ -244,7 +246,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
         }}
       />
       <NotDrivingSheet visible={confirmNotDriving} left={notDrivingLeft} onClose={() => setConfirmNotDriving(false)} onConfirm={onNotDriving} />
-      <ShareSheet visible={sharing} onClose={() => setSharing(false)} data={{ runs, miles: drive.miles, durationS: drive.durationS, score, tier: score === null ? null : tier, units }} />
+      <ShareSheet visible={sharing} onClose={() => setSharing(false)} data={{ runs, lead, miles: drive.miles, durationS: drive.durationS, score, tier: score === null ? null : tier, units }} />
     </View>
   );
 }

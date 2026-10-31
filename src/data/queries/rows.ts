@@ -9,6 +9,7 @@ import { asNumberOrNull } from '@/data/db/row';
 import { toTripRow } from '@/data/db/trips';
 import type { DriveOrigin, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
+import type { LatLng } from '@/lib/geo';
 
 export type DriveStatus = TripStatus;
 
@@ -43,7 +44,11 @@ export interface LocalDrive {
   nightMiles: number;
   fromLabel: string | null;
   toLabel: string | null;
-  /** Already privacy-trimmed. */
+  /**
+   * The route the driver's own views draw: the whole route on a drive this phone recorded
+   * (`route_full`), else the trimmed one it uploaded (a drive restored from the server, or one
+   * recorded before the whole route was kept). Never what friends see: theirs is the server's.
+   */
   polyline: string | null;
   status: DriveStatus;
   /** No active event other than DashPal's; null until classified, and on an unscored drive. */
@@ -67,6 +72,12 @@ export interface LocalDrive {
   notDrivingExpired: boolean;
   /** Where the start came from; null on an older or restored drive. */
   startSource: StartSource | null;
+  /**
+   * Where the drive began (the parked spot of a start found in the motion history, else its first
+   * fix), on a drive that holds its whole route: the recap's map and the share card draw a dashed
+   * lead-in from it to the route (`leadIn`). Absent otherwise.
+   */
+  start?: LatLng;
   /**
    * The drive's chances to slip: counted while it recorded, or estimated (`exposureEstimated`).
    * `phoneS` (seconds at driving speed watched for phone use) is 0 on a drive recorded before phone
@@ -102,6 +113,7 @@ export interface LocalDriveEvent {
   tier: Tier;
   startedAt: number;
   durationS: number;
+  /** Where it happened: the exact place on a drive this phone recorded, else the uploaded one (null inside a trimmed end or a zone). */
   lat: number | null;
   lng: number | null;
   disputeStatus: 'none' | 'pending' | 'accepted' | 'rejected';
@@ -213,7 +225,7 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive
     nightMiles: row.night_miles,
     fromLabel: row.from_label,
     toLabel: row.to_label,
-    polyline: row.polyline,
+    polyline: row.route_full ?? row.polyline,
     status: row.status,
     clean: row.clean === null ? null : row.clean === 1,
     counts: parseCounts(row.counts_json),
@@ -227,7 +239,8 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive
     startSource: row.start_source,
     exposure,
     exposureEstimated: estimated,
-    // Present only on an archived drive, and on one whose upload has failed.
+    // Present only with the whole route; on an archived drive; on one whose upload has failed.
+    ...(row.route_full !== null && row.start_lat !== null && row.start_lng !== null ? { start: { lat: row.start_lat, lng: row.start_lng } } : {}),
     ...(row.archived_at !== null ? { archived: true } : {}),
     ...(row.upload_failed === 1 ? { uploadFailed: true } : {}),
   };
@@ -265,14 +278,15 @@ function parseMeasured(json: string | null, type: EventType): LocalDriveEvent['m
 }
 
 export function toLocalDriveEvent(row: EventRow): LocalDriveEvent {
+  const exact = row.lat_full !== null && row.lng_full !== null;
   return {
     id: row.id,
     type: row.type,
     tier: row.tier,
     startedAt: row.started_at,
     durationS: row.duration_s,
-    lat: row.lat,
-    lng: row.lng,
+    lat: exact ? row.lat_full : row.lat,
+    lng: exact ? row.lng_full : row.lng,
     disputeStatus: row.dispute_status,
     disputeMessage: row.dispute_message,
     removed: row.status === 'removed',

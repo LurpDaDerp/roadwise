@@ -12,6 +12,8 @@ const row = (over: Partial<EventRow> = {}): EventRow => ({
   duration_s: 40,
   lat: null,
   lng: null,
+  lat_full: null,
+  lng_full: null,
   measured_json: '{"speedMph":52,"limitMph":40,"overMphS":180.5,"mounted":false,"maxSpeedMph":60}',
   status: 'active',
   dispute_status: 'none',
@@ -63,6 +65,7 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   moving_s: null,
   phone_s: 0,
   archived_at: null,
+  route_full: null,
   ...over,
 });
 
@@ -145,4 +148,21 @@ test('a local drive carries how it started, its "Not driving?" verdict, start so
   expect(d).not.toHaveProperty('pointsNet');
   expect(d).not.toHaveProperty('estimate');
   expect(toLocalDrive(trip())).toMatchObject({ origin: 'manual', notDrivingExpired: false, startSource: null, exposureEstimated: true });
+});
+
+test("the driver's own views read the whole route and the exact event places where the phone holds them, else the uploaded ones", () => {
+  // Recorded on this phone: the whole route, and where the drive began for the dashed lead-in.
+  const recorded = toLocalDrive(trip({ polyline: 'trimmed', route_full: 'whole', start_lat: 47.61, start_lng: -122.34 }));
+  expect(recorded.polyline).toBe('whole');
+  expect(recorded.start).toEqual({ lat: 47.61, lng: -122.34 });
+  // Restored from the server (or recorded before the whole route was kept): the trimmed route, no lead-in.
+  const restored = toLocalDrive(trip({ polyline: 'trimmed', start_lat: 47.61, start_lng: -122.34 }));
+  expect(restored.polyline).toBe('trimmed');
+  expect(restored).not.toHaveProperty('start');
+  expect(toLocalDrive(trip({ route_full: 'whole' }))).not.toHaveProperty('start');
+  // An event the trim hid has its exact place on the phone; one it showed keeps the uploaded place.
+  expect(toLocalDriveEvent(row({ lat_full: 47.6101, lng_full: -122.3402 }))).toMatchObject({ lat: 47.6101, lng: -122.3402 });
+  expect(toLocalDriveEvent(row({ lat: 47.62, lng: -122.35 }))).toMatchObject({ lat: 47.62, lng: -122.35 });
+  // Half an exact place is no place: the uploaded one stands.
+  expect(toLocalDriveEvent(row({ lat_full: 47.6101 }))).toMatchObject({ lat: null, lng: null });
 });

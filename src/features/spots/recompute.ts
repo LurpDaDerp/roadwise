@@ -5,13 +5,14 @@
  * - **When.** After any data change (2 s after the last one), on a return to the app with a
  *   recompute pending, and once a day; only with the app in front and no drive recording or
  *   finalizing. The first foreground after this build computes from the existing history.
- * - **How.** Read the inputs, decode the routes 25 at a time with a yield between, detect (a spot
- *   inside a privacy zone is left out before the ranking, so it never takes one of the 5), then
- *   replace the table whole in one transaction that writes nothing if a wipe got there first.
- *   A drive that starts mid-run, or a wipe, abandons the run with the recompute still pending.
- *   Inputs (and zones) the same as the last run's, before any of its time limits passed
+ * - **How.** Read the inputs (each drive's whole route and its events' exact places where the
+ *   phone holds them: the trimmed ends and the privacy zones shape only what leaves the phone, so
+ *   a spot forms anywhere the driver drove), decode the routes 25 at a time with a yield between,
+ *   detect, then replace the table whole in one transaction that writes nothing if a wipe got
+ *   there first. A drive that starts mid-run, or a wipe, abandons the run with the recompute
+ *   still pending. Inputs the same as the last run's, before any of its time limits passed
  *   (`spotsStableUntil`), would give the same table: that run is skipped (a sync that changed
- *   nothing). A change of zones asks for a run (`requestSpotRecompute`).
+ *   nothing). A change of zones asks for a run (`requestSpotRecompute`), which names the spots.
  * - **Names.** Then up to 5 active spots without a place name get one from the phone's reverse
  *   geocoder, one at a time 1.2 s apart, never inside a privacy zone; a failed one is retried after
  *   a day.
@@ -29,14 +30,14 @@ import {
   RECOMPUTE_DAILY_MS,
   RECOMPUTE_DEBOUNCE_MS,
 } from '@/core/spots/constants';
-import { parseZones, PRIVACY_ZONES_KEY, zoneAt, type PrivacyZone } from '@/core/engine/privacy';
+import { parseZones, PRIVACY_ZONES_KEY, zoneAt } from '@/core/engine/privacy';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createSpotsRepo } from '@/data/db/spots';
 import type { NewProblemSpot } from '@/data/db/types';
 import { emitDataChanged, onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike } from '@/data/foreground';
-import { hiddenByZone, readSpotInputs, type SpotInputs } from '@/data/queries/spots';
+import { readSpotInputs, type SpotInputs } from '@/data/queries/spots';
 import { decodeRoute } from '@/features/drives/route';
 import { encodePolyline } from '@/lib/polyline';
 
@@ -91,11 +92,11 @@ export function toSpotRow(s: DetectedSpot): NewProblemSpot {
 const later = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * What a run reads, as one string: the zones, each drive by id, start and route (a stored route is
- * written once: its length and tail stand for it) and every field of each event.
+ * What a run reads, as one string: each drive by id, start and route (a stored route is written
+ * once: its length and tail stand for it) and every field of each event.
  */
-function inputsKey(inputs: SpotInputs, zones: readonly PrivacyZone[]): string {
-  const parts = [JSON.stringify(zones)];
+function inputsKey(inputs: SpotInputs): string {
+  const parts: string[] = [];
   for (const d of inputs.drives) parts.push(`${d.clientTripId}|${d.startedAt}|${d.polyline.length}|${d.polyline.slice(-16)}`);
   for (const e of inputs.events) parts.push(`${e.id}|${e.clientTripId}|${e.type}|${e.startedAt}|${e.durationS}|${e.lat}|${e.lng}|${e.speedMph}|${e.limitMph}`);
   return parts.join('\n');
@@ -104,7 +105,7 @@ function inputsKey(inputs: SpotInputs, zones: readonly PrivacyZone[]): string {
 /** The running jobs, told when the privacy zones change. */
 const zoneListeners = new Set<() => void>();
 
-/** The privacy zones changed: the spots are recomputed (a zoned spot gives up its rank). */
+/** The privacy zones changed: the spots are looked at again (no place name is looked up inside a zone). */
 export function requestSpotRecompute(): void {
   for (const fn of [...zoneListeners]) fn();
 }
@@ -177,8 +178,7 @@ export function startSpotJobs(deps: SpotJobDeps): SpotJobs {
     const round = asked;
     const now = deps.now();
     const inputs = await readSpotInputs(deps.db, now);
-    const zones = parseZones(await settings.get<unknown>(PRIVACY_ZONES_KEY));
-    const key = inputsKey(inputs, zones);
+    const key = inputsKey(inputs);
     if (last !== null && last.key === key && now <= last.until) {
       // The table already holds what this run would write.
       if (asked === round) pending = false;
@@ -198,7 +198,7 @@ export function startSpotJobs(deps: SpotJobDeps): SpotJobs {
       pending = true;
       return;
     }
-    const rows = detectSpots(drives, inputs.events, now, (spot) => hiddenByZone(spot, zones)).map(toSpotRow);
+    const rows = detectSpots(drives, inputs.events, now).map(toSpotRow);
     const guard = [...new Set(rows.map((r) => r.last_hit_trip))];
     const ok = await repo.replaceAll(rows, { computedAt: now, drives: inputs.drives.length }, guard);
     if (!ok || gen !== generation) {

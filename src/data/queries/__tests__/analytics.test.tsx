@@ -66,7 +66,7 @@ test('the event reader keeps exactly the scored drives the drive reader keeps', 
 test('toDriveEvent passes the measured block (with overMphS) and the status, nothing about points or phone use', () => {
   const base = {
     id: 'x', client_trip_id: 'y', type: 'speeding' as const, tier: 'moderate' as const, started_at: 1, duration_s: 20,
-    lat: null, lng: null, measured_json: '{"overMphS":33.5,"mounted":true}', status: 'removed' as const,
+    lat: null, lng: null, lat_full: null, lng_full: null, measured_json: '{"overMphS":33.5,"mounted":true}', status: 'removed' as const,
     dispute_status: 'accepted' as const, dispute_reason: 'hazard', dispute_message: null,
   };
   expect(toDriveEvent(base)).toEqual({ id: 'x', type: 'speeding', tier: 'moderate', startedAt: 1, durationS: 20, status: 'removed', measured: { overMphS: 33.5 } });

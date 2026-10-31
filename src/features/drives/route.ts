@@ -1,11 +1,13 @@
 /**
- * Route geometry for the drive screens: decoding the (already privacy-trimmed) polyline, the cheap
- * SVG sketch used for history thumbnails and the share card, and the marks on the summary map
- * (a pin per event and the stretch of route it covered, a dot when too short to see). Pure.
+ * Route geometry for the drive screens: decoding the stored route (the whole route on a drive this
+ * phone recorded, else the trimmed one, `LocalDrive.polyline`), the dashed lead-in from where the
+ * drive began, the cheap SVG sketch used for history thumbnails and the share card, and the marks
+ * on the summary map (a pin per event and the stretch of route it covered, a dot when too short to
+ * see). Pure.
  */
 import type { EventType, Tier } from '@scoring';
 
-import type { LatLng } from '@/lib/geo';
+import { haversineMeters, type LatLng } from '@/lib/geo';
 import { decodeRuns } from '@/lib/polyline';
 import { cumulative, project, slice } from '@/lib/runs';
 
@@ -15,9 +17,9 @@ import type { LocalDriveEvent } from './model';
 export type Runs = readonly (readonly LatLng[])[];
 
 /**
- * The visible runs of a stored route (space-joined encoded polylines, `@/lib/polyline`). Each run
- * is one stretch between privacy cuts; a renderer must never draw from one run to the next. A
- * malformed route draws nothing.
+ * The runs of a stored route (space-joined encoded polylines, `@/lib/polyline`). The whole route
+ * is one run; a trimmed one has a run per stretch between privacy cuts, and a renderer must never
+ * draw from one run to the next. A malformed route draws nothing.
  */
 export function decodeRoute(polyline: string | null): LatLng[][] {
   if (!polyline) return [];
@@ -33,6 +35,24 @@ export function decodeRoute(polyline: string | null): LatLng[][] {
 /** Every point of every run, for framing and bounds only — never for drawing. */
 export const allPoints = (runs: Runs): LatLng[] => runs.flat();
 
+/** A start this far or more from the route's first point gets a dashed lead-in to it, in metres. */
+export const LEAD_IN_MIN_M = 30;
+
+/** The dashed lead-in: from where the drive began to the route's first point. */
+export type Lead = readonly [LatLng, LatLng];
+
+/**
+ * The lead-in from `start` (`LocalDrive.start`: the parked spot of a start found in the motion
+ * history, else the first fix) to the first point of the route, when it is `LEAD_IN_MIN_M` or more
+ * away: the recap's map and the share card draw it dashed, so the route reaches where the drive
+ * began. Null without a start or a route, or when the route already starts there.
+ */
+export function leadIn(start: LatLng | null | undefined, runs: Runs): Lead | null {
+  const first = runs.find((r) => r.length >= 2)?.[0];
+  if (!start || !first || !Number.isFinite(start.lat) || !Number.isFinite(start.lng)) return null;
+  return haversineMeters(start, first) >= LEAD_IN_MIN_M ? [start, first] : null;
+}
+
 /** Keeps at most `max` points, evenly spaced, always the first and last. */
 export function thin(points: readonly LatLng[], max: number): LatLng[] {
   if (points.length <= max) return [...points];
@@ -40,19 +60,25 @@ export function thin(points: readonly LatLng[], max: number): LatLng[] {
   return Array.from({ length: max }, (_, i) => points[Math.round(i * step)]!);
 }
 
+/** The route's SVG path and, with a lead-in, the lead-in's own (drawn dashed). */
+export interface Sketch {
+  route: string;
+  lead: string | null;
+}
+
 /**
- * An SVG path that fits the route inside a `w` × `h` box (with `pad` on every side), keeping its
- * shape: longitude is scaled by cos(latitude) so a route doesn't stretch sideways. Every run is its
- * own `M…L…` subpath, so the pen lifts between runs and no line crosses a hidden gap. Null when
- * there is nothing to draw.
+ * The SVG paths that fit the route (and its `lead`-in, when given) inside a `w` × `h` box (with
+ * `pad` on every side), keeping its shape: longitude is scaled by cos(latitude) so a route doesn't
+ * stretch sideways. Every run is its own `M…L…` subpath, so the pen lifts between runs and no line
+ * crosses a hidden gap. Null when there is no route to draw.
  */
-export function sketchPath(runs: Runs, w: number, h: number, pad = 4, max = 120): string | null {
+export function sketchPaths(runs: Runs, w: number, h: number, pad = 4, max = 120, lead: Lead | null = null): Sketch | null {
   const drawn = runs.filter((r) => r.length >= 2);
   const total = drawn.reduce((n, r) => n + r.length, 0);
   if (total < 2) return null;
   // Share the point budget across runs by size, at least the two ends each.
   const thinned = drawn.map((r) => thin(r, Math.max(2, Math.round((max * r.length) / total))));
-  const all = thinned.flat();
+  const all = [...thinned.flat(), ...(lead ?? [])];
   const k = Math.cos((all[0]!.lat * Math.PI) / 180);
   const xs = all.map((p) => p.lng * k);
   const ys = all.map((p) => -p.lat);
@@ -65,18 +91,20 @@ export function sketchPath(runs: Runs, w: number, h: number, pad = 4, max = 120)
   const scale = Math.min((w - pad * 2) / (spanX || span), (h - pad * 2) / (spanY || span));
   const offX = (w - spanX * scale) / 2;
   const offY = (h - spanY * scale) / 2;
+  const at = (i: number) => `${(offX + (xs[i]! - minX) * scale).toFixed(1)} ${(offY + (ys[i]! - minY) * scale).toFixed(1)}`;
   const parts: string[] = [];
   let i = 0;
   for (const run of thinned) {
     run.forEach((_, j) => {
-      const x = offX + (xs[i]! - minX) * scale;
-      const y = offY + (ys[i]! - minY) * scale;
-      parts.push(`${j === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`);
+      parts.push(`${j === 0 ? 'M' : 'L'}${at(i)}`);
       i += 1;
     });
   }
-  return parts.join(' ');
+  return { route: parts.join(' '), lead: lead ? `M${at(i)} L${at(i + 1)}` : null };
 }
+
+/** The route alone as one SVG path (`sketchPaths` without a lead-in). */
+export const sketchPath = (runs: Runs, w: number, h: number, pad = 4, max = 120): string | null => sketchPaths(runs, w, h, pad, max)?.route ?? null;
 
 // ── Summary map marks ───────────────────────────────────────────────────────────────────
 
@@ -111,8 +139,8 @@ const TIER_ORDER: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
  * Every counted event with a location, as a pin and the stretch of route it covered: from the
  * point on the route nearest where it began, along the road for its duration at its measured
  * speed (else ≈ 30 mph). A stretch never leaves its visible run; one that would run past the end
- * of its run ends there and starts earlier instead. Events inside a privacy zone have no location
- * and stay off the map, as do removed ones. Ordered minor → severe, the order they are drawn in,
+ * of its run ends there and starts earlier instead. Events with no location (on a drive restored
+ * from the server, one inside a trimmed end or a privacy zone) stay off the map, as do removed ones. Ordered minor → severe, the order they are drawn in,
  * so the worst sits on top.
  */
 export function eventMarks(visible: Runs, events: readonly LocalDriveEvent[]): EventMark[] {

@@ -15,7 +15,8 @@
  * Version 6 marks the DashPal events that arrived while no drive was open. Versions 7 to 9 add a
  * column each. Version 10 is the round where points and phone use leave, drives start on their own,
  * scores are judged per opportunity and problem spots are kept. Version 13 keeps a drive's route
- * and places for 183 days only (`archive.ts`).
+ * and places for 183 days only (`archive.ts`). Version 14 keeps the whole route and the exact event
+ * places on the phone, for the driver's own views.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -422,4 +423,21 @@ export const SCHEMA_V13: readonly string[] = [
   `CREATE TABLE route_pool (
     polyline TEXT PRIMARY KEY NOT NULL
   ) WITHOUT ROWID`,
+];
+
+/**
+ * V14: the driver's own views draw the whole route; what friends see stays trimmed.
+ * - `trips.route_full`: the drive's whole route as this phone recorded it (every valid fix, the
+ *   ends and the privacy zones included), simplified, in `polyline`'s format. Local only: never
+ *   uploaded or restored. Null on a drive recorded before, one restored from the server, and an
+ *   archived one; its readers fall back to `polyline` (`toLocalDrive`).
+ * - `trip_events.lat_full` / `lng_full`: where an event happened (5 dp), set by the phone that
+ *   recorded it when the uploaded place (`lat`/`lng`) is null because the event lies in a trimmed
+ *   end, inside a privacy zone, or on a stretch the upload left off. Local only; null otherwise
+ *   and once the drive is archived.
+ */
+export const SCHEMA_V14: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN route_full TEXT',
+  'ALTER TABLE trip_events ADD COLUMN lat_full REAL',
+  'ALTER TABLE trip_events ADD COLUMN lng_full REAL',
 ];

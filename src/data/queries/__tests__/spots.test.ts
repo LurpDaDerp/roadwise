@@ -8,7 +8,7 @@ import type { NewProblemSpot } from '@/data/db/types';
 import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { invalidateAfterSync } from '@/data/queries/invalidate';
 import { queryKeys, QUERY_ROOTS } from '@/data/queries/keys';
-import { hiddenByZone, middleOf, readSpotInputs, readSpotsView, readWatchSpots, SPOT_READ } from '@/data/queries/spots';
+import { readSpotInputs, readSpotsView, readWatchSpots, SPOT_READ } from '@/data/queries/spots';
 import { encodePolyline } from '@/lib/polyline';
 
 
@@ -17,6 +17,8 @@ const DAY = 86_400_000;
 const M = 1 / 111_320;
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ROAD = encodePolyline([{ lat: 47.6, lng: -122.3 }, { lat: 47.61, lng: -122.3 }]);
+/** A drive's whole route, as the phone that recorded it keeps it: from the parked spot on. */
+const WHOLE = encodePolyline([{ lat: 47.595, lng: -122.3 }, { lat: 47.6, lng: -122.3 }, { lat: 47.615, lng: -122.3 }]);
 
 let db: Db;
 beforeEach(async () => {
@@ -57,7 +59,7 @@ describe('inputs', () => {
   beforeEach(async () => {
     await seedTrips(db, [
       { client_trip_id: uuid(1), started_at: T0 - DAY, tz: 'UTC', status: 'scored', polyline: ROAD },
-      { client_trip_id: uuid(2), started_at: T0 - 2 * DAY, tz: 'UTC', status: 'pending', polyline: ROAD },
+      { client_trip_id: uuid(2), started_at: T0 - 2 * DAY, tz: 'UTC', status: 'pending', polyline: ROAD, route_full: WHOLE },
       { client_trip_id: uuid(3), started_at: T0 - 3 * DAY, tz: 'UTC', status: 'not_driving', polyline: ROAD },
       { client_trip_id: uuid(4), started_at: T0 - 4 * DAY, tz: 'UTC', status: 'failed', polyline: ROAD },
       { client_trip_id: uuid(5), started_at: T0 - 5 * DAY, tz: 'UTC', status: 'recording', polyline: ROAD },
@@ -94,16 +96,19 @@ describe('inputs', () => {
       event(14, 2, { type: 'hard_accel', measured_json: 'not json' }),
       // a phone pickup is never a spot's
       event(15, 1, { type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":40}' }),
+      // hidden from the upload (a trimmed end or a zone) but placed exactly on the phone: a spot's like any other
+      event(16, 2, { lat: null, lng: null, lat_full: 47.5961, lng_full: -122.3 }),
     ]);
   });
 
-  test('only scored, long-enough drives of the last 120 days with a route, and their active, unreported (or turned down) events of the four kinds with a place (never a phone pickup)', async () => {
+  test('only scored, long-enough drives of the last 120 days with a route (the whole one where the phone holds it), and their active, unreported (or turned down) events of the four kinds with a place, exact where the phone holds it (never a phone pickup)', async () => {
     const inputs = await readSpotInputs(db, T0);
     expect(inputs.drives).toEqual([
       { clientTripId: uuid(1), startedAt: T0 - DAY, polyline: ROAD },
-      { clientTripId: uuid(2), startedAt: T0 - 2 * DAY, polyline: ROAD },
+      { clientTripId: uuid(2), startedAt: T0 - 2 * DAY, polyline: WHOLE },
     ]);
-    expect(inputs.events.map((e) => e.id).sort()).toEqual([uuid(101), uuid(102), uuid(111), uuid(114)].sort());
+    expect(inputs.events.map((e) => e.id).sort()).toEqual([uuid(101), uuid(102), uuid(111), uuid(114), uuid(116)].sort());
+    expect(inputs.events.find((e) => e.id === uuid(116))).toMatchObject({ clientTripId: uuid(2), lat: 47.5961, lng: -122.3 });
     expect(inputs.events.find((e) => e.id === uuid(101))).toEqual({
       id: uuid(101),
       clientTripId: uuid(1),
@@ -145,34 +150,21 @@ describe('view', () => {
     expect(await readSpotsView(db, T0)).toMatchObject({ computed: true, eligible: false });
   });
 
-  test('a privacy zone hides a spot whose pin or road middle is inside it: not shown, not counted as cleared, never watched for', async () => {
+  test("a privacy zone hides no spot: the spots are the driver's own, shown, counted and watched for wherever they are", async () => {
     await createSpotsRepo(db).replaceAll(
       [
         spot('pin', { lat: 47.7, lng: -122.3, segment: encodePolyline([{ lat: 47.7, lng: -122.3 }, { lat: 47.71, lng: -122.3 }]) }),
-        // pin outside, the middle of its road inside
-        spot('mid', { lat: 47.5, lng: -122.3, rank: 2, segment: encodePolyline([{ lat: 47.79, lng: -122.3 }, { lat: 47.81, lng: -122.3 }]) }),
-        spot('free', { lat: 47.6, rank: 3 }),
+        spot('free', { lat: 47.6, rank: 2 }),
         spot('cleared', { state: 'cleared', rank: 0, cleared_at: T0, lat: 47.7, lng: -122.3 }),
       ],
       { computedAt: T0, drives: 12 },
       []
     );
-    await createSettingsRepo(db).set('privacy.zones', [zone(47.7, -122.3, 300), zone(47.8, -122.3, 300)]);
+    await createSettingsRepo(db).set('privacy.zones', [zone(47.7, -122.3, 300)]);
     const view = await readSpotsView(db, T0);
-    expect(view.active.map((s) => s.id)).toEqual(['free']);
-    expect(view.clearedRecently).toBe(0);
-    expect(await readWatchSpots(db)).toEqual([{ id: 'free', kind: 'hard_brake', lat: 47.6, lng: -122.3, headingDeg: 0 }]);
-    // with no zones, all come back
-    await createSettingsRepo(db).set('privacy.zones', []);
-    expect((await readWatchSpots(db)).map((s) => s.id)).toEqual(['pin', 'mid', 'free']);
-  });
-
-  test('the middle of a road is half way along it; a zone check reads the pin and that middle', () => {
-    expect(middleOf([])).toBeNull();
-    expect(middleOf([{ lat: 1, lng: 2 }])).toEqual({ lat: 1, lng: 2 });
-    const mid = middleOf([{ lat: 0, lng: 0 }, { lat: 0.001, lng: 0 }, { lat: 0.003, lng: 0 }])!;
-    expect(mid.lat).toBeCloseTo(0.0015, 6);
-    expect(hiddenByZone({ pin: { lat: 0, lng: 0 }, segment: [] }, [])).toBe(false);
+    expect(view.active.map((s) => s.id)).toEqual(['pin', 'free']);
+    expect(view.clearedRecently).toBe(1);
+    expect((await readWatchSpots(db)).map((s) => s.id)).toEqual(['pin', 'free']);
   });
 });
 

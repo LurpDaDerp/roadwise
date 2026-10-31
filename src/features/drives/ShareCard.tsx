@@ -11,13 +11,15 @@ import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme, w
 
 import { MeritFacts } from './MeritFacts';
 import { meritCardStops } from './merit';
-import type { Runs } from './route';
+import type { Lead, Runs } from './route';
 import { RouteSketch } from './RouteSketch';
 import { mapOffered, ShareMapBackdrop, type Band, type Box, type MapStatus } from './ShareMap';
 
 export type ShareCardData = {
-  /** The route's visible runs, each drawn apart (`decodeRoute`). */
+  /** The route's runs, each drawn apart (`decodeRoute`): the whole route on a drive this phone recorded. */
   runs: Runs;
+  /** The dashed lead-in from where the drive began to the route (`leadIn`); absent or null for none. */
+  lead?: Lead | null;
   miles: number;
   durationS: number;
   /** The drive score out of 100 (the recap's); null when the drive has none, and the card says "—". */
@@ -67,7 +69,8 @@ function CardText({ children, style, testID }: { children: React.ReactNode; styl
 /**
  * The Strava-style image: the "RoadWise" wordmark in white, a dark gradient of the drive's merit
  * colour (`meritCardStops`: the merit tag's hue, deepened; a drive with no tier keeps the hour's sky,
- * the same scene as the app's hero cards), the (already privacy-trimmed) route in gold or, with "Show map" on, the map of its area,
+ * the same scene as the app's hero cards), the route in gold (with its dashed lead-in from where the
+ * drive began, when it has one) or, with "Show map" on, the map of its area,
  * then the drive's three facts as the recap's hero shows them (`MeritFacts`): the tier's icon beside
  * the score, then distance and time, in the tier's colour. Nothing else: no date, place, event
  * count, rating, badge or tier name, and never a speed.
@@ -97,6 +100,7 @@ export const ShareCard = forwardRef<
           <ShareMapBackdrop
             key={map.attempt}
             runs={data.runs}
+            lead={data.lead ?? null}
             width={W}
             height={H}
             box={MAP_BOX}
@@ -111,7 +115,7 @@ export const ShareCard = forwardRef<
           RoadWise
         </CardText>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          {map ? null : <RouteSketch runs={data.runs} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />}
+          {map ? null : <RouteSketch runs={data.runs} lead={data.lead ?? null} size={180} stroke={GOLD} strokeWidth={5} background="transparent" />}
         </View>
         <MeritFacts
           size="card"
@@ -238,13 +242,8 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
           </View>
         ) : null}
         <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }}>
-          Your route is trimmed at the ends and inside privacy zones. Speeds are never shown.
+          Speeds are never shown.
         </Text>
-        {map ? (
-          <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }} testID="share-map-note">
-            The map shows the area around your trimmed route.
-          </Text>
-        ) : null}
         {mapFailed ? <Banner tone="danger" message="Couldn't load the map. Turn off Show map or try again." testID="share-map-error" /> : null}
         {state === 'error' ? <Banner tone="danger" message="Couldn't share the image. Try again." /> : null}
         <Button label="Share image" icon="share-outline" onPress={share} loading={state === 'busy'} style={{ alignSelf: 'stretch' }} testID="share-image" />

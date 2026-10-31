@@ -13,7 +13,7 @@ const NOW = 1_800_000_000_000;
 
 let db: Db;
 
-/** A finished drive that ended `daysAgo` days before NOW, with a route, both ends and labels. */
+/** A finished drive that ended `daysAgo` days before NOW, with a route (trimmed and whole), both ends and labels. */
 const drive = (id: string, daysAgo: number, over: Partial<NewTrip> = {}): NewTrip => ({
   client_trip_id: id,
   started_at: NOW - daysAgo * DAY - 1_800_000,
@@ -24,6 +24,7 @@ const drive = (id: string, daysAgo: number, over: Partial<NewTrip> = {}): NewTri
   duration_s: 1800,
   clean: 1,
   polyline: `route-${id}`,
+  route_full: `whole-${id}`,
   from_label: 'Home',
   to_label: 'School',
   start_lat: 47.6,
@@ -61,6 +62,9 @@ beforeEach(async () => {
     { id: 'e2', client_trip_id: 'old-scored', type: 'eyes_off', tier: 'severe', started_at: NOW - 200 * DAY - 500_000, duration_s: 3, lat: 47.62, lng: -122.32 },
     { id: 'e3', client_trip_id: 'old-pending', type: 'hard_brake', tier: 'minor', started_at: NOW - 400 * DAY - 600_000, duration_s: 1, lat: 47.63, lng: -122.33 },
     { id: 'e4', client_trip_id: 'recent', type: 'hard_brake', tier: 'minor', started_at: NOW - 10 * DAY - 600_000, duration_s: 1, lat: 47.64, lng: -122.34 },
+    // Hidden from the upload (a trimmed end), placed exactly on the phone only.
+    { id: 'e5', client_trip_id: 'old-scored', type: 'hard_brake', tier: 'minor', started_at: NOW - 200 * DAY - 1_790_000, duration_s: 1, lat: null, lng: null, lat_full: 47.6001, lng_full: -122.3001 },
+    { id: 'e6', client_trip_id: 'recent', type: 'hard_brake', tier: 'minor', started_at: NOW - 10 * DAY - 1_790_000, duration_s: 1, lat: null, lng: null, lat_full: 47.6002, lng_full: -122.3002 },
   ]);
   await db.execute("INSERT INTO samples (client_trip_id, ts, row_json) VALUES ('old-failed', 1, '{}'), ('old-pending', 1, '{}')");
   // The refused upload of the failed drive holds its route; the pending drive's upload is still owed.
@@ -80,17 +84,21 @@ test('a settled drive past the 183 days loses its route, ends, labels and event 
   const trips = createTripsRepo(db);
   for (const id of ['old-scored', 'old-unscored', 'old-passenger', 'old-failed']) {
     expect(await trips.get(id)).toMatchObject({
-      polyline: null, from_label: null, to_label: null, start_lat: null, start_lng: null, end_lat: null, end_lng: null, archived_at: NOW, miles: 12, duration_s: 1800,
+      polyline: null, route_full: null, from_label: null, to_label: null, start_lat: null, start_lng: null, end_lat: null, end_lng: null, archived_at: NOW, miles: 12, duration_s: 1800,
     });
   }
   expect(await trips.get('old-scored')).toMatchObject({ status: 'scored', clean: 1 });
-  // Only a scored drive's route is drawn on the All trips map, so only it is pooled.
+  // Only a scored drive's route is drawn on the All trips map, so only it is pooled: its trimmed line, never the whole one.
   expect(await createRoutePoolRepo(db).list()).toEqual(['route-old-scored']);
   const events = await createEventsRepo(db).listByTrip('old-scored');
-  expect(events.map((e) => [e.id, e.type, e.tier, e.lat, e.lng, e.measured_json])).toEqual([
-    ['e1', 'speeding', 'minor', null, null, '{"speedMph":41,"limitMph":35,"overMphS":9}'],
-    ['e2', 'eyes_off', 'severe', null, null, null],
+  expect(events.map((e) => [e.id, e.type, e.tier, e.lat, e.lng, e.lat_full, e.lng_full, e.measured_json])).toEqual([
+    ['e5', 'hard_brake', 'minor', null, null, null, null, null],
+    ['e1', 'speeding', 'minor', null, null, null, null, '{"speedMph":41,"limitMph":35,"overMphS":9}'],
+    ['e2', 'eyes_off', 'severe', null, null, null, null, null],
   ]);
+  // A recent drive keeps its whole route and its exact places.
+  expect(await trips.get('recent')).toMatchObject({ polyline: 'route-recent', route_full: 'whole-recent', archived_at: null });
+  expect(await createEventsRepo(db).get('e6')).toMatchObject({ lat: null, lng: null, lat_full: 47.6002, lng_full: -122.3002 });
   expect((await db.execute("SELECT client_trip_id FROM samples")).rows).toEqual([{ client_trip_id: 'old-pending' }]);
   expect((await db.execute('SELECT idempotency_key FROM sync_queue')).rows).toEqual([{ idempotency_key: 'finalize:old-pending' }]);
 });

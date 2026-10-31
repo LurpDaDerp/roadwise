@@ -126,6 +126,7 @@ test('row bridges: counts from events, filters on a drive view', () => {
     status: 'failed', clean: null, counts_json: 'not json', reason: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null,
     created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, origin: 'manual', not_driving_expired: 0, finalized_at: null,
     start_source: null, last_seq: null, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0, archived_at: null,
+    route_full: null,
   };
   const d = toLocalDrive(row);
   expect(d).toMatchObject({ fromLabel: 'Home', result: null, counts: expect.objectContaining({ speeding: 0 }) });

@@ -2,9 +2,11 @@
  * The 183-day rule (the server's twin is `private.route_retention()` in migration 0030): a drive
  * that ended more than `RETENTION_DAYS` ago keeps every number the stats read (miles, time, counts,
  * the clean flag, the counters) but loses where it went. Archiving one, in one transaction:
- * - a scored drive's route goes into `route_pool` (a line with no drive and no date), so the All
- *   trips map still draws it; any other drive's route is dropped (no map draws it);
- * - the route, the start and end points, the from/to labels and every event's place are cleared;
+ * - a scored drive's trimmed route (`polyline`, what friends see) goes into `route_pool` (a line
+ *   with no drive and no date), so the All trips map still draws it; any other drive's route is
+ *   dropped (no map draws it);
+ * - the route (trimmed and whole), the start and end points, the from/to labels and every event's
+ *   place (uploaded and exact) are cleared;
  * - any samples left go, and so does a finalize upload the server refused for good (its payload
  *   holds the route and the places);
  * - `archived_at` is stamped: the drive leaves every list and its recap reads as not found.
@@ -74,7 +76,11 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
        ORDER BY random()`,
     [cutoff]
   );
-  await on.execute(`UPDATE trip_events SET lat = NULL, lng = NULL WHERE client_trip_id IN (${due}) AND (lat IS NOT NULL OR lng IS NOT NULL)`, [cutoff]);
+  await on.execute(
+    `UPDATE trip_events SET lat = NULL, lng = NULL, lat_full = NULL, lng_full = NULL WHERE client_trip_id IN (${due})
+       AND (lat IS NOT NULL OR lng IS NOT NULL OR lat_full IS NOT NULL OR lng_full IS NOT NULL)`,
+    [cutoff]
+  );
   await on.execute(`DELETE FROM samples WHERE client_trip_id IN (${due})`, [cutoff]);
   // A refusal on a missing function is sent again (`reopenRetryable`), so it is never deleted here
   // (and its drive is not due while it is there).
@@ -85,7 +91,7 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
     [REFUSED_NEVER, FUNCTION_MISSING, cutoff]
   );
   const { changes } = await on.execute(
-    `UPDATE trips SET polyline = NULL, start_lat = NULL, start_lng = NULL, end_lat = NULL, end_lng = NULL,
+    `UPDATE trips SET polyline = NULL, route_full = NULL, start_lat = NULL, start_lng = NULL, end_lat = NULL, end_lng = NULL,
        from_label = NULL, to_label = NULL, archived_at = ?, updated_at = ?
      WHERE ${DUE}`,
     [now, now, cutoff]

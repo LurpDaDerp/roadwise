@@ -16,7 +16,7 @@ import {
   weekStart,
 } from '../format';
 import { eventTally } from '../DriveRow';
-import { awayFrom, eventMarks, fittedSpan, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sameZoom, sketchPath, tipAnchor } from '../route';
+import { awayFrom, eventMarks, fittedSpan, leadIn, LEAD_IN_MIN_M, markShape, metersPerPixel, MIN_MARK_PX, regionFor, sameZoom, sketchPath, sketchPaths, tipAnchor } from '../route';
 import { homeStats, trendFor } from '../stats';
 import {
   availableReasons,
@@ -118,6 +118,37 @@ describe('route', () => {
     expect(d).toMatch(/L[\d.]+ [\d.]+ M[\d.]+ [\d.]+/);
     // A run too short to draw is skipped, not joined to the next.
     expect(sketchPath([first, [ROUTE[15]!], second], 56, 56, 4)!.match(/M/g)).toHaveLength(2);
+  });
+
+  test('a start 30 m or more before the route gets a dashed lead-in to its first point; a nearer one, none', () => {
+    const first = ROUTE[0]!;
+    // ~50 m south of the first fix (the parked spot of a start found in the motion history).
+    const parked = { lat: first.lat - 50 / 111_320, lng: first.lng };
+    expect(LEAD_IN_MIN_M).toBe(30);
+    expect(leadIn(parked, [ROUTE])).toEqual([parked, first]);
+    expect(leadIn({ lat: first.lat - 20 / 111_320, lng: first.lng }, [ROUTE])).toBeNull();
+    // It runs to the first point of the first run that draws, never into a one-point stub.
+    expect(leadIn(parked, [[ROUTE[5]!], ROUTE])).toEqual([parked, first]);
+    expect(leadIn(parked, [])).toBeNull();
+    expect(leadIn(undefined, [ROUTE])).toBeNull();
+    expect(leadIn(null, [ROUTE])).toBeNull();
+  });
+
+  test('the sketch frames the lead-in with the route and draws it as its own path from the start to the route', () => {
+    const first = ROUTE[0]!;
+    const parked = { lat: first.lat - 0.01, lng: first.lng };
+    const plain = sketchPaths([ROUTE], 56, 56, 4)!;
+    expect(plain.lead).toBeNull();
+    expect(plain.route).toBe(sketchPath([ROUTE], 56, 56, 4));
+    const s = sketchPaths([ROUTE], 56, 56, 4, 120, [parked, first])!;
+    const nums = [...s.route.match(/[\d.]+/g)!, ...s.lead!.match(/[\d.]+/g)!].map(Number);
+    expect(Math.min(...nums)).toBeGreaterThanOrEqual(3.9);
+    expect(Math.max(...nums)).toBeLessThanOrEqual(52.1);
+    // One straight segment, ending where the route's path begins.
+    expect(s.lead).toMatch(/^M[\d.]+ [\d.]+ L[\d.]+ [\d.]+$/);
+    expect(s.lead!.split(' L')[1]).toBe(s.route.match(/^M([\d.]+ [\d.]+)/)![1]);
+    // The start sits below the route (south is down).
+    expect(Number(s.lead!.match(/^M[\d.]+ ([\d.]+)/)![1])).toBeGreaterThan(Number(s.route.match(/^M[\d.]+ ([\d.]+)/)![1]));
   });
 
   test('each event marks the stretch it covered: from where it began, for its duration along the road', () => {

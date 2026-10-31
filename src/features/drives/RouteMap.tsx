@@ -24,6 +24,7 @@ import {
   sameZoom,
   tipAnchor,
   type EventMark,
+  type Lead,
   type Region,
   type Runs,
 } from './route';
@@ -69,6 +70,9 @@ const PAPER = tokens.color.light.surface;
  */
 export const RING_INK = '#2F7BEA';
 const ROUTE_WIDTH = 5;
+/** The dashed lead-in from where the drive began to the route: thinner than the route, 4 pt dashes 6 pt apart. */
+const LEAD_WIDTH = 3;
+export const LEAD_DASH = [4, 6];
 const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
 /** How long Recenter takes to bring the map back to the view it opened on. */
 export const RECENTER_MS = 300;
@@ -188,16 +192,22 @@ export function highlightCaption(e: LocalDriveEvent): string {
  * close button or a tap elsewhere on the map shuts it. A ring circles the event tapped in the
  * breakdown. Pinch, double-tap and drag zoom and pan the map freely (no rotating or tilting); once
  * it is off the view it opened on, which frames the whole route, a Recenter button in its corner
- * brings that view back. The route comes as its
- * visible runs and each is drawn apart: no line joins one run to the next across a privacy cut.
+ * brings that view back. The route comes as its runs (the whole route is one; a trimmed one,
+ * restored from the server, has one per stretch between privacy cuts) and each is drawn apart: no
+ * line joins one run to the next across a cut. With a `lead`-in (`leadIn`: the drive began 30 m or
+ * more before its first fix), a dashed line in the route's green runs from where it began to the
+ * route, framed with it.
  */
 export function RouteMap({
   runs: visible,
+  lead = null,
   events,
   highlighted,
   testID = 'route-map',
 }: {
   runs: Runs;
+  /** The dashed lead-in from where the drive began (`leadIn`), or null. */
+  lead?: Lead | null;
   events: readonly LocalDriveEvent[];
   highlighted: LocalDriveEvent | null;
   testID?: string;
@@ -207,7 +217,8 @@ export function RouteMap({
   const [side, setSide] = useState(0);
   const points = useMemo(() => allPoints(visible), [visible]);
   const marks = useMemo(() => eventMarks(visible, events), [visible, events]);
-  const region = useMemo(() => regionFor(points), [points]);
+  // The view frames the lead-in too, so the dashed line from where the drive began shows whole.
+  const region = useMemo(() => regionFor(lead && points.length >= 2 ? [...points, lead[0]] : points), [points, lead]);
   /** Where the map was last left, with the fitted region it belongs to (a new route starts over). */
   const [view, setView] = useState<{ base: Region; at: Region } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -247,7 +258,7 @@ export function RouteMap({
   } else if (maps === null || region === null) {
     body = (
       <View style={[square, { alignItems: 'center', justifyContent: 'center' }]} testID="map-unavailable" onLayout={onLayout} accessible {...summary}>
-        <View {...hidden}>{side > 32 ? <RouteSketch runs={visible} size={side - 32} strokeWidth={4} background="transparent" /> : null}</View>
+        <View {...hidden}>{side > 32 ? <RouteSketch runs={visible} lead={lead} size={side - 32} strokeWidth={4} background="transparent" /> : null}</View>
       </View>
     );
   } else {
@@ -285,6 +296,18 @@ export function RouteMap({
           showsPointsOfInterests={false}
           showsCompass={false}
         >
+          {lead ? (
+            <Polyline
+              key="lead-in"
+              testID="route-lead-in"
+              coordinates={coords(lead)}
+              strokeWidth={LEAD_WIDTH}
+              strokeColor={clean}
+              lineDashPattern={LEAD_DASH}
+              lineCap="round"
+              zIndex={0}
+            />
+          ) : null}
           {visible.map((run, i) =>
             run.length >= 2 ? (
               <Polyline key={`run-${i}`} coordinates={coords(run)} strokeWidth={ROUTE_WIDTH} strokeColor={clean} lineCap="round" lineJoin="round" zIndex={0} />

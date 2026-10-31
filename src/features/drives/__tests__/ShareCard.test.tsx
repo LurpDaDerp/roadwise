@@ -9,7 +9,7 @@ import { draw, press, ROUTE } from '../__fixtures__/drives';
 import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
-import { bandAlpha, MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
+import { bandAlpha, leadPath, MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
 import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -93,7 +93,7 @@ test('on: the snapshot of the route area is the backdrop, the route is drawn ove
   expect(screen.getByTestId('share-map-view', H)).toHaveProp('userInterfaceStyle', 'dark');
   expect(screen.getByTestId('share-map-view', H)).toHaveProp('showsPointsOfInterests', false);
   expect(screen.getByTestId('share-map-view', H)).toHaveProp('scrollEnabled', false);
-  expect(screen.getByTestId('share-map-note')).toHaveTextContent('The map shows the area around your trimmed route.');
+  expect(screen.queryByTestId('share-map-note')).toBeNull();
   await mapLoads();
   // The snapshot renders the card's own region at the card's size.
   const frame = shareFrame([ROUTE], 320, 400, MAP_BOX)!;
@@ -211,6 +211,39 @@ test('the route is framed inside the box and lands on it through the same projec
   // Two runs stay two subpaths; no route frames nothing.
   expect(routePath([ROUTE.slice(0, 10), ROUTE.slice(20)], b, 320, 400)!.match(/M/g)).toHaveLength(2);
   expect(shareFrame([[ROUTE[0]!]], 320, 400, box)).toBeNull();
+});
+
+test('a lead-in is framed with the route inside the box and ends where the route begins', () => {
+  const parked = { lat: ROUTE[0]!.lat - 0.02, lng: ROUTE[0]!.lng - 0.01 };
+  const lead = [parked, ROUTE[0]!] as const;
+  const b = shareFrame([ROUTE], 320, 400, MAP_BOX, lead)!;
+  const d = leadPath(lead, b, 320, 400);
+  const [x0, y0, x1, y1] = d.match(/^M(-?[\d.]+) (-?[\d.]+) L(-?[\d.]+) (-?[\d.]+)$/)!.slice(1).map(Number);
+  for (const [x, y] of [[x0, y0], [x1, y1]] as const) {
+    expect(x).toBeGreaterThanOrEqual(MAP_BOX.left - 0.1);
+    expect(x).toBeLessThanOrEqual(MAP_BOX.right + 0.1);
+    expect(y).toBeGreaterThanOrEqual(MAP_BOX.top - 0.1);
+    expect(y).toBeLessThanOrEqual(MAP_BOX.bottom + 0.1);
+  }
+  expect(routePath([ROUTE], b, 320, 400)!.startsWith(`M${x1!.toFixed(1)} ${y1!.toFixed(1)}`)).toBe(true);
+  // Without one, the frame is the route's alone.
+  expect(shareFrame([ROUTE], 320, 400, MAP_BOX, null)).toEqual(shareFrame([ROUTE], 320, 400, MAP_BOX));
+});
+
+test('the card draws the dashed lead-in on the sketch and on the map; the note under it speaks only of speeds', async () => {
+  const lead = [{ lat: ROUTE[0]!.lat - 0.02, lng: ROUTE[0]!.lng }, ROUTE[0]!] as const;
+  await draw(sheet(true, { ...data, lead }));
+  expect(screen.getByTestId('route-sketch-lead', H)).toBeOnTheScreen();
+  expect(screen.getByText('Speeds are never shown.')).toBeOnTheScreen();
+  expect(screen.queryByText(/trimmed/)).toBeNull();
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+  await mapLoads();
+  expect(screen.getByTestId('share-map-lead', H)).toBeOnTheScreen();
+});
+
+test('no lead-in: none is drawn', async () => {
+  await draw(sheet());
+  expect(screen.queryByTestId('route-sketch-lead', H)).toBeNull();
 });
 
 test('the sky fades the map out over long eased stretches: solid behind the wordmark and the facts, soft around the route', async () => {

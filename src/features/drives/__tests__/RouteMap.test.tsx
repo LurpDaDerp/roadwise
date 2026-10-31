@@ -99,6 +99,28 @@ test('a route in two visible runs is two polylines, not one line across the priv
   expect(screen.getAllByTestId('polyline', H)).toHaveLength(2);
 });
 
+test('a lead-in from where the drive began is a thin dashed line in the route green, framed with the route', async () => {
+  const parked = { lat: ROUTE[0]!.lat - 0.05, lng: ROUTE[0]!.lng };
+  await draw(<RouteMap runs={[ROUTE]} lead={[parked, ROUTE[0]!]} events={[]} highlighted={null} />);
+  const lead = screen.getByTestId('route-lead-in', H);
+  expect(lead).toHaveProp('lineDashPattern', [4, 6]);
+  expect(lead).toHaveProp('strokeWidth', 3);
+  expect(lead).toHaveProp('accessibilityHint', tokens.color.light.signal.clean.fill);
+  expect(lead).toHaveProp('coordinates', [
+    { latitude: parked.lat, longitude: parked.lng },
+    { latitude: ROUTE[0]!.lat, longitude: ROUTE[0]!.lng },
+  ]);
+  // The route itself is still one solid line, and the opening view reaches down to the start.
+  expect(screen.getAllByTestId('polyline', H)).toHaveLength(1);
+  const region = screen.getByTestId('map-view', H).props.initialRegion as { latitude: number; latitudeDelta: number };
+  expect(region.latitude - region.latitudeDelta / 2).toBeLessThan(parked.lat);
+});
+
+test('no lead-in: no dashed line', async () => {
+  await draw(<RouteMap runs={[ROUTE]} events={[]} highlighted={null} />);
+  expect(screen.queryByTestId('route-lead-in', H)).toBeNull();
+});
+
 test('no route: a plain note instead of an empty map', async () => {
   await draw(<RouteMap runs={[]} events={[]} highlighted={null} />);
   expect(screen.getByTestId('no-route')).toBeOnTheScreen();

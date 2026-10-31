@@ -17,7 +17,7 @@ import {
   normaliseZone,
   sanitizeEvent,
 } from '@/core/engine/finalize';
-import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
+import { PRIVACY_ZONES_KEY, roundCoord5 } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession, noteWarmup } from '@/core/engine/session';
 import { createDetectors } from '@/core/detectors';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -193,6 +193,51 @@ test('a drive through a mid-route privacy zone uploads both visible runs, so the
   expect(payload.miles).toBeLessThanOrEqual(visibleMiles * 1.25 + 4);
   expect(payload.miles).toBeGreaterThan(Math.max(...runs.map((run) => run.slice(1).reduce((s, p, i) => s + haversineMeters(run[i]!, p), 0))) / 1609.344 * 1.25 + 4);
   expect(result.trip.polyline).toBe(payload.polyline);
+});
+
+test('the phone keeps the whole route and the exact place of every event the trim hides; the upload carries neither', async () => {
+  // 1200 rows x 15 m due east from START, a zone at the 9 km mark; a brake 10 s in (150 m: inside the
+  // trimmed start), a speeding inside the zone and a hard corner in the open.
+  const corner = { id: uuid(3), type: 'hard_corner', tier: 'minor', startedAt: T0 + 300_000, durationS: 2, measured: { peakG: 0.4, speedMph: 30 } } as const;
+  const session = closedSession(1200, [brakeEvent(T0 + 10_000), corner, speedingEvent(T0 + 600_000)]);
+  const mid = session.track[600]!;
+  await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 's', name: 'School', lat: mid.lat, lng: mid.lng, radiusM: 300 }]);
+  const result = await finalizeTrip(session, deps());
+  const payload = result.payload!;
+  const first = session.track[0]!;
+  const last = session.track[session.track.length - 1]!;
+
+  // The whole route: one run from the first fix to the last, through the zone (a straight road simplifies to its ends).
+  const whole = decodeRuns(result.trip.route_full);
+  expect(whole).toHaveLength(1);
+  expect(whole[0]![0]).toEqual({ lat: roundCoord5(first.lat), lng: roundCoord5(first.lng) });
+  expect(whole[0]![whole[0]!.length - 1]).toEqual({ lat: roundCoord5(last.lat), lng: roundCoord5(last.lng) });
+  // The stored polyline is still the trimmed upload's, cut around the zone.
+  expect(result.trip.polyline).toBe(payload.polyline);
+  expect(decodeRuns(payload.polyline).length).toBeGreaterThanOrEqual(2);
+
+  // The upload is as it always was: its keys, its events' keys, and nothing of the phone's own copy.
+  expect(Object.keys(payload).sort()).toEqual(
+    ['v', 'clientTripId', 'startedAt', 'endedAt', 'tz', 'localDay', 'miles', 'nightMiles', 'durationS', 'start', 'end', 'polyline', 'integrity', 'events', 'appVersion', 'origin', 'notDrivingExpired', 'exposure'].sort()
+  );
+  for (const e of payload.events) expect(Object.keys(e).sort()).toEqual(['id', 'type', 'tier', 'startedAt', 'durationS', 'lat', 'lng', 'measured'].sort());
+  expect(JSON.stringify(payload)).not.toMatch(/route_full|lat_full|lng_full/);
+  expect(await findFinalize(db, session.clientTripId)).toEqual(payload);
+
+  const sent = new Map(payload.events.map((e) => [e.id, e]));
+  const stored = new Map(result.events.map((e) => [e.id, e]));
+  // Hidden from the upload (the trimmed start, the zone): the phone alone keeps where they happened.
+  for (const [id, at] of [
+    [uuid(2), session.track[10]!],
+    [uuid(1), session.track[600]!],
+  ] as const) {
+    expect([sent.get(id)!.lat, sent.get(id)!.lng]).toEqual([null, null]);
+    expect(stored.get(id)).toMatchObject({ lat: null, lng: null, lat_full: roundCoord5(at.lat), lng_full: roundCoord5(at.lng) });
+  }
+  // Shown on the upload: the place is the uploaded one, and no second copy is kept.
+  const open = session.track[300]!;
+  expect([sent.get(uuid(3))!.lat, sent.get(uuid(3))!.lng]).toEqual([roundCoord5(open.lat), roundCoord5(open.lng)]);
+  expect(stored.get(uuid(3))).toMatchObject({ lat: roundCoord5(open.lat), lng: roundCoord5(open.lng), lat_full: null, lng_full: null });
 });
 
 test('a short drive is stored too short (pending, reason kept, no clean flag) and still uploaded; mock rows mark the integrity', async () => {

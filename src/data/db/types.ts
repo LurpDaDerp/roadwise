@@ -58,6 +58,7 @@ export interface TripRow {
   start_lng: number | null;
   end_lat: number | null;
   end_lng: number | null;
+  /** The route as uploaded: trimmed at both ends and inside the privacy zones (what friends see). */
   polyline: string | null;
   from_label: string | null;
   to_label: string | null;
@@ -101,6 +102,11 @@ export interface TripRow {
   phone_s: number;
   /** When the drive was archived (183 days after it ended: no route or places, in no list); null until then. */
   archived_at: number | null;
+  /**
+   * The whole route as this phone recorded it, in `polyline`'s format: local only, never uploaded.
+   * Null on a drive recorded before it was kept, one restored from the server, and an archived one.
+   */
+  route_full: string | null;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &
@@ -115,8 +121,12 @@ export interface EventRow {
   tier: Tier;
   started_at: number;
   duration_s: number;
+  /** The place as uploaded: null in a trimmed end, inside a privacy zone, or with no fix. */
   lat: number | null;
   lng: number | null;
+  /** Local only: the exact place, set when the uploaded one is null and this phone recorded the drive. */
+  lat_full: number | null;
+  lng_full: number | null;
   measured_json: string | null;
   status: EventStatus;
   dispute_status: DisputeStatus;

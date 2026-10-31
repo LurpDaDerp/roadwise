@@ -88,8 +88,9 @@ export interface AnalyticsData {
   /** Some scored drive is archived (past 183 days): an empty Drives list says "in the last 6 months". */
   archivedDrives: boolean;
   /**
-   * Every scored drive's route, all time, one line per privacy run (no "Wasn't driving" trips): the
-   * routes the drives hold, then the route pool's (the archived drives').
+   * Every scored drive's route, all time, one line per run (no "Wasn't driving" trips): the routes
+   * the drives hold (the whole route where the phone recorded it, else the trimmed one), then the
+   * route pool's (the archived drives' trimmed lines).
    */
   routes: MapPoint[][];
   /** Where the trip map opens (`fitRegion`); null with no routes. */

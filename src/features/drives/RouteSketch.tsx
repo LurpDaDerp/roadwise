@@ -4,15 +4,17 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import { useTheme } from '@/ui';
 
-import { sketchPath, type Runs } from './route';
+import { sketchPaths, type Lead, type Runs } from './route';
 
 /**
- * A static drawing of the route: one SVG path (a subpath per visible run, so the pen lifts across
- * a privacy cut), no map tiles. Cheap enough for every history row and used again on the share
- * card. Decorative — the row around it says where the drive went.
+ * A static drawing of the route: one SVG path (a subpath per run, so the pen lifts across a
+ * privacy cut on a trimmed route), no map tiles, a dot where it starts; with a `lead`-in, a dashed
+ * line from where the drive began to the route, and the dot there. Cheap enough for every history
+ * row and used again on the share card. Decorative — the row around it says where the drive went.
  */
 export function RouteSketch({
   runs,
+  lead = null,
   size = 56,
   stroke,
   strokeWidth = 3,
@@ -20,6 +22,8 @@ export function RouteSketch({
   testID,
 }: {
   runs: Runs;
+  /** The dashed lead-in (`leadIn`); none on a history row. */
+  lead?: Lead | null;
   size?: number;
   stroke?: string;
   strokeWidth?: number;
@@ -28,9 +32,9 @@ export function RouteSketch({
   testID?: string;
 }) {
   const t = useTheme();
-  const d = useMemo(() => sketchPath(runs, size, size, strokeWidth + 3), [runs, size, strokeWidth]);
+  const sketch = useMemo(() => sketchPaths(runs, size, size, strokeWidth + 3, 120, lead), [runs, size, strokeWidth, lead]);
   const ink = stroke ?? t.colors.accent;
-  const start = d ? d.match(/^M([\d.]+) ([\d.]+)/) : null;
+  const start = sketch ? (sketch.lead ?? sketch.route).match(/^M([\d.]+) ([\d.]+)/) : null;
 
   return (
     <View
@@ -48,9 +52,12 @@ export function RouteSketch({
         overflow: 'hidden',
       }}
     >
-      {d ? (
+      {sketch ? (
         <Svg width={size} height={size}>
-          <Path d={d} stroke={ink} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          {sketch.lead ? (
+            <Path d={sketch.lead} stroke={ink} strokeWidth={strokeWidth * 0.6} strokeDasharray={[strokeWidth, strokeWidth * 1.4]} strokeLinecap="round" fill="none" testID="route-sketch-lead" />
+          ) : null}
+          <Path d={sketch.route} stroke={ink} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" fill="none" />
           {start ? <Circle cx={Number(start[1])} cy={Number(start[2])} r={strokeWidth} fill={ink} /> : null}
         </Svg>
       ) : (

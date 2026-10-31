@@ -40,8 +40,6 @@ export {
   toLocalDriveEvent,
 } from '@/data/queries/rows';
 export {
-  hiddenByZone,
-  middleOf,
   readSpotInputs,
   readSpotsView,
   readWatchSpots,

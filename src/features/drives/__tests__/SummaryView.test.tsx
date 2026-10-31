@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react-native';
+import { fireEvent, screen, within } from '@testing-library/react-native';
 import { driveMerit } from '@scoring';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
@@ -6,7 +6,7 @@ import { contrastRatio, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
 import { opaque, over } from '@/ui/sky/color';
 import { plainBundle } from '@/ui/sky/palette';
 
-import { DAY, draw, drive, event, HOUR, NOW, press } from '../__fixtures__/drives';
+import { DAY, draw, drive, event, HOUR, NOW, press, ROUTE } from '../__fixtures__/drives';
 import { meritInk, meritWash } from '../merit';
 import { SummaryView, type SummaryViewProps } from '../SummaryView';
 
@@ -66,6 +66,30 @@ test('top to bottom: time and distance, the route map, then the hero with Share 
   expect(within(trip).getByText(/^Mon, Oct 5 · /)).toBeOnTheScreen();
   expect(trip).toHaveProp('accessibilityLabel', expect.stringMatching(/^24 minutes, 12\.0 miles\. Mon, Oct 5, /));
   expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
+});
+
+describe('the lead-in from where the drive began', () => {
+  const H = { includeHiddenElements: true } as const;
+  const parked = { lat: ROUTE[0]!.lat - 0.002, lng: ROUTE[0]!.lng };
+  // No maps module under jest: the map's place shows the sketch once laid out, lead-in and all.
+  const laidOut = async () => {
+    await fireEvent(screen.getByTestId('map-unavailable', H), 'layout', { nativeEvent: { layout: { width: 340, height: 340 } } });
+  };
+
+  test('a drive that began 30 m or more before its route draws it dashed', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ start: parked }) })} />);
+    await laidOut();
+    expect(screen.getByTestId('route-sketch-lead', H)).toBeOnTheScreen();
+  });
+
+  test.each([
+    ['began at its first point', { start: ROUTE[0]! }],
+    ['has no start (restored, or recorded before the whole route was kept)', {}],
+  ])('a drive that %s draws none', async (_name, over) => {
+    await draw(<SummaryView {...props({ drive: drive(over) })} />);
+    await laidOut();
+    expect(screen.queryByTestId('route-sketch-lead', H)).toBeNull();
+  });
 });
 
 describe('the hero mirrors the share card', () => {

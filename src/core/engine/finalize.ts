@@ -1,8 +1,10 @@
 // The finalize pipeline (modes plan §3.5, §3.11; phone plan P5): the closed session the engine hands
-// over becomes a stored drive with a privacy-trimmed route, from/to labels, its opportunity counters
-// and one queued upload.
+// over becomes a stored drive with a privacy-trimmed route for the upload, the whole route for the
+// phone, from/to labels, its opportunity counters and one queued upload.
 //
-//   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it;
+//   1. the route is trimmed (zones + first/last 0.25 mi) and the events located on it; the whole
+//      route (`fullRoute`) and the exact place of every event the trim hides are kept on the phone
+//      only (`trips.route_full`, `trip_events.lat_full`/`lng_full`), never in the payload;
 //   2. the v5 payload is built and validated against the upload contract (how the drive started,
 //      whether its "Not driving?" ran out, its exposure with the phone seconds, its phone pickups);
 //   3. the drive is classified (`classifyDrive`: scored, or too short; the events that break clean);
@@ -51,6 +53,7 @@ import { dayKey } from '@/lib/time';
 
 import type { TripSession } from './engine.types';
 import { closeExposure } from './exposure';
+import { fullRoute, placeOnTrack } from './fullRoute';
 import { expoGeocoder, labelFor, startPoint, type Geocoder } from './labels';
 import { parseZones, PRIVACY_ZONES_KEY, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
@@ -254,7 +257,8 @@ export function exposureOf(session: Pick<TripSession, 'exposure' | 'movingRows'>
   return boundExposure(closeExposure(session.exposure, session.movingRows), durationS, miles);
 }
 
-const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
+/** The event's local row: its uploaded place, and its exact one (local only) where the trim hides it. */
+const toNewEvent = (e: PayloadEvent, clientTripId: string, exact: { lat: number; lng: number } | null): NewEvent => ({
   id: e.id,
   client_trip_id: clientTripId,
   type: e.type,
@@ -263,6 +267,8 @@ const toNewEvent = (e: PayloadEvent, clientTripId: string): NewEvent => ({
   duration_s: e.durationS,
   lat: e.lat,
   lng: e.lng,
+  lat_full: exact?.lat ?? null,
+  lng_full: exact?.lng ?? null,
   measured_json: JSON.stringify(e.measured),
   status: 'active',
   dispute_status: 'none',
@@ -400,8 +406,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // 1. The route and the events on it.
   const zones = await (deps.zones ?? (() => readZones(db)))();
   const route = trimRoute(session.track, zones, MAX_POLYLINE_BYTES, await (deps.trimSeed ?? deviceTrimSeed)(id));
-  // Every visible run, space-joined: the server sums them and the maps draw them apart.
+  // Every visible run, space-joined: the server sums them and friends' maps draw them apart.
   const polyline = route.runs.join(RUN_SEPARATOR);
+  // The whole route, for the driver's own views only.
+  const routeFull = fullRoute(session.track);
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
   const from = startPoint(session);
   const [fromLabel, toLabel] = await Promise.all([labelFor(from, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
@@ -411,19 +419,19 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const cleaned = [...phoneEvents, ...fromDashcam]
     .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1))
     .slice(0, MAX_EVENTS);
-  const payloadEvents: PayloadEvent[] = cleaned.map((e) => {
-    const at = route.locate(e.startedAt);
-    return {
-      id: e.id,
-      type: e.type,
-      tier: e.tier,
-      startedAt: e.startedAt,
-      durationS: e.durationS,
-      lat: at?.lat ?? null,
-      lng: at?.lng ?? null,
-      measured: e.measured,
-    };
-  });
+  const located = cleaned.map((e) => ({ e, at: route.locate(e.startedAt) }));
+  const payloadEvents: PayloadEvent[] = located.map(({ e, at }) => ({
+    id: e.id,
+    type: e.type,
+    tier: e.tier,
+    startedAt: e.startedAt,
+    durationS: e.durationS,
+    lat: at?.lat ?? null,
+    lng: at?.lng ?? null,
+    measured: e.measured,
+  }));
+  // Where the trim hides an event, the phone keeps its exact place (never uploaded).
+  const exactAt = located.map(({ e, at }) => (at === null ? placeOnTrack(session.track, e.startedAt) : null));
 
   // 2. The metrics and the payload.
   const miles = milesOf(session);
@@ -484,6 +492,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     end_lat: end?.lat ?? null,
     end_lng: end?.lng ?? null,
     polyline: polyline === '' ? null : polyline,
+    route_full: routeFull === '' ? null : routeFull,
     from_label: fromLabel,
     to_label: toLabel,
     max_speed_mph: maxSpeedMph,
@@ -510,7 +519,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const written = await db.transaction(async (tx) => {
     await events.removeByTrip(id, tx);
     const eventRows = await events.insertMany(
-      payloadEvents.map((e) => toNewEvent(e, id)),
+      payloadEvents.map((e, i) => toNewEvent(e, id, exactAt[i] ?? null)),
       tx
     );
     const trip = await trips.update(

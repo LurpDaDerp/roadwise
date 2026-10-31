@@ -2,14 +2,13 @@
  * The reads for problem spots: the Analytics card and sheet (`useSpots`), the driving screen's
  * watcher (`readWatchSpots`) and the recompute job's inputs (`readSpotInputs`).
  *
- * Privacy zones apply at read time: a spot whose pin, or the middle of its coloured road, lies inside
- * a current zone is hidden everywhere (not shown, not counted as cleared, never watched for), so a
- * zone added today hides it at once with no recompute.
+ * Spots are the driver's own and never leave the phone, so they read each drive as the driver's
+ * own views draw it: the whole route and the exact event places where the phone holds them. The
+ * trimmed ends and the privacy zones, which shape only what leaves the phone, hide no spot.
  */
 import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import type { SpotEvent, SpotKind, WatchSpot } from '@/core/spots/types';
-import { parseZones, PRIVACY_ZONES_KEY, zoneAt, type PrivacyZone } from '@/core/engine/privacy';
 import type { Db } from '@/data/db/driver';
 import { asNumber, asText } from '@/data/db/row';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -18,7 +17,7 @@ import type { ProblemSpotRow } from '@/data/db/types';
 import { readScoredDrives, SCORED_TRIP } from '@/data/queries/analytics';
 import { useDataSource } from '@/data/queries/context';
 import { queryKeys } from '@/data/queries/keys';
-import { haversineMeters, type LatLng } from '@/lib/geo';
+import type { LatLng } from '@/lib/geo';
 import { decodePolyline } from '@/lib/polyline';
 
 const DAY_MS = 86_400_000;
@@ -71,13 +70,16 @@ export interface SpotsView {
   computed: boolean;
   /** Enough scored drives in the window for the card (`SPOT_READ.minDrivesForCard`). */
   eligible: boolean;
-  /** Active spots in rank order, zone-filtered. */
+  /** Active spots in rank order. */
   active: ProblemSpot[];
-  /** Spots cleared in the last `SPOT_READ.clearedShownDays` days, zone-filtered. */
+  /** Spots cleared in the last `SPOT_READ.clearedShownDays` days. */
   clearedRecently: number;
 }
 
-/** What the recompute job reads: the scored drives of the window with a route, and their qualifying events. */
+/**
+ * What the recompute job reads: the scored drives of the window with a route (the whole route where
+ * the phone holds it), and their qualifying events (at their exact places where the phone holds them).
+ */
 export interface SpotInputs {
   drives: { clientTripId: string; startedAt: number; polyline: string }[];
   events: SpotEvent[];
@@ -114,52 +116,15 @@ export function toProblemSpot(row: ProblemSpotRow): ProblemSpot {
   };
 }
 
-/** The point half way along a line, by distance; null for an empty one. */
-export function middleOf(points: readonly LatLng[]): LatLng | null {
-  if (points.length === 0) return null;
-  const legs: number[] = [];
-  let total = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    const m = haversineMeters(points[i - 1] as LatLng, points[i] as LatLng);
-    legs.push(m);
-    total += m;
-  }
-  let left = total / 2;
-  for (let i = 0; i < legs.length; i += 1) {
-    const m = legs[i] as number;
-    if (left <= m) {
-      const a = points[i] as LatLng;
-      const b = points[i + 1] as LatLng;
-      const t = m === 0 ? 0 : left / m;
-      return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
-    }
-    left -= m;
-  }
-  return points[points.length - 1] as LatLng;
-}
-
-/** Hidden by a privacy zone: its pin or the middle of its road is inside one. */
-export function hiddenByZone(spot: Pick<ProblemSpot, 'pin' | 'segment'>, zones: readonly PrivacyZone[]): boolean {
-  if (zones.length === 0) return false;
-  if (zoneAt(spot.pin, zones) !== null) return true;
-  const mid = middleOf(spot.segment);
-  return mid !== null && zoneAt(mid, zones) !== null;
-}
-
-async function readZoneList(db: Db): Promise<PrivacyZone[]> {
-  return parseZones(await createSettingsRepo(db).get<unknown>(PRIVACY_ZONES_KEY));
-}
-
-/** Every spot the zones leave visible, active first by rank, then cleared. */
-async function visibleSpots(db: Db): Promise<ProblemSpot[]> {
-  const [rows, zones] = await Promise.all([createSpotsRepo(db).list(), readZoneList(db)]);
-  return rows.map(toProblemSpot).filter((s) => !hiddenByZone(s, zones));
+/** Every spot, active first by rank, then cleared. */
+async function allSpots(db: Db): Promise<ProblemSpot[]> {
+  return (await createSpotsRepo(db).list()).map(toProblemSpot);
 }
 
 /** The Analytics card's view of the spots at `now`. */
 export async function readSpotsView(db: Db, now: number): Promise<SpotsView> {
   const meta = parseSpotsMeta(await createSettingsRepo(db).get<unknown>(SPOTS_META_KEY));
-  const spots = await visibleSpots(db);
+  const spots = await allSpots(db);
   const since = now - SPOT_READ.clearedShownDays * DAY_MS;
   return {
     computed: meta !== null,
@@ -169,9 +134,9 @@ export async function readSpotsView(db: Db, now: number): Promise<SpotsView> {
   };
 }
 
-/** The active spots the driving screen watches for, zone-filtered. */
+/** The active spots the driving screen watches for. */
 export async function readWatchSpots(db: Db): Promise<WatchSpot[]> {
-  return (await visibleSpots(db))
+  return (await allSpots(db))
     .filter((s) => s.state === 'active')
     .map((s) => ({ id: s.id, kind: s.kind, lat: s.pin.lat, lng: s.pin.lng, headingDeg: s.headingDeg }));
 }
@@ -184,7 +149,8 @@ const finiteOrNull = (v: unknown): number | null => (typeof v === 'number' && Nu
  * The recompute job's inputs at `now`: the newest 400 scored drives started in the last 120 days
  * that have a route, and the newest 3 000 events of theirs (`SPOT_READ`)
  * that can make a spot: active, not reported (or reported and turned down), one of the four kinds,
- * with a place. "Wasn't driving", recording, too-short and unscored drives are out.
+ * with a place (the exact one where the phone holds it, as `toLocalDriveEvent` reads it). "Wasn't
+ * driving", recording, too-short and unscored drives are out.
  */
 export async function readSpotInputs(db: Db, now: number): Promise<SpotInputs> {
   const since = now - SPOT_READ.windowDays * DAY_MS;
@@ -194,11 +160,13 @@ export async function readSpotInputs(db: Db, now: number): Promise<SpotInputs> {
     .map((d) => ({ clientTripId: d.clientTripId, startedAt: d.startedAt, polyline: d.polyline as string }));
   const kept = new Set(drives.map((d) => d.clientTripId));
   const { rows } = await db.execute(
-    `SELECT e.id, e.client_trip_id, e.type, e.started_at, e.duration_s, e.lat, e.lng, e.measured_json
+    `SELECT e.id, e.client_trip_id, e.type, e.started_at, e.duration_s, e.measured_json,
+            CASE WHEN e.lat_full IS NOT NULL AND e.lng_full IS NOT NULL THEN e.lat_full ELSE e.lat END AS lat,
+            CASE WHEN e.lat_full IS NOT NULL AND e.lng_full IS NOT NULL THEN e.lng_full ELSE e.lng END AS lng
        FROM trip_events e JOIN trips t ON t.client_trip_id = e.client_trip_id
       WHERE e.status = 'active' AND e.dispute_status IN ('none', 'rejected')
         AND e.type IN ('speeding', 'hard_brake', 'hard_corner', 'hard_accel')
-        AND e.lat IS NOT NULL AND e.lng IS NOT NULL
+        AND ((e.lat_full IS NOT NULL AND e.lng_full IS NOT NULL) OR (e.lat IS NOT NULL AND e.lng IS NOT NULL))
         AND ${SCORED_TRIP} AND t.started_at >= ?
       ORDER BY e.started_at DESC, e.id DESC
       LIMIT ?`,

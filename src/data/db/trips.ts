@@ -68,6 +68,7 @@ const COLUMNS = [
   'moving_s',
   'phone_s',
   'archived_at',
+  'route_full',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -128,6 +129,7 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     moving_s: asNumberOrNull(row, 'moving_s'),
     phone_s: asNumberOrNull(row, 'phone_s') ?? 0,
     archived_at: asNumberOrNull(row, 'archived_at'),
+    route_full: asTextOrNull(row, 'route_full'),
   };
 }
 

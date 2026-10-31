@@ -18,6 +18,8 @@ const COLUMNS = [
   'dispute_status',
   'dispute_reason',
   'dispute_message',
+  'lat_full',
+  'lng_full',
 ] as const;
 
 /** An event's id is its identity, and its `client_trip_id` never changes after insert. */
@@ -33,6 +35,8 @@ export function toEventRow(row: Record<string, unknown>): EventRow {
     duration_s: asNumber(row, 'duration_s'),
     lat: asNumberOrNull(row, 'lat'),
     lng: asNumberOrNull(row, 'lng'),
+    lat_full: asNumberOrNull(row, 'lat_full'),
+    lng_full: asNumberOrNull(row, 'lng_full'),
     measured_json: asTextOrNull(row, 'measured_json'),
     status: asEnum(row, 'status', ['active', 'removed'] as const),
     dispute_status: asEnum(row, 'dispute_status', DISPUTE_STATUSES),

@@ -15,6 +15,7 @@ import {
   SCHEMA_V10,
   SCHEMA_V11,
   SCHEMA_V12,
+  SCHEMA_V13,
   SCHEMA_VERSION_TABLE,
 } from '@/data/db/schema';
 
@@ -54,11 +55,11 @@ test('creates every v3, v5 and v10 table and index, and nothing of v2', async ()
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (13)', async () => {
+test('records the schema version it reached (14)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(13);
+  expect(CURRENT_SCHEMA_VERSION).toBe(14);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 13 }]);
+  expect(rows).toEqual([{ version: 14 }]);
 });
 
 test('is idempotent', async () => {
@@ -67,7 +68,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 13 }]);
+  expect(rows).toEqual([{ version: 14 }]);
 });
 
 test('the trips table carries the current columns (phone time among them) and none of the points or screen-switch ones', async () => {
@@ -77,12 +78,13 @@ test('the trips table carries the current columns (phone time among them) and no
     expect(cols).toContain(c);
   }
   for (const c of ['role', 'score', 'dms_on', 'dms_face_seen', 'points_net', 'estimate', 'breakdown_json', 'safe_miles']) expect(cols).not.toContain(c);
-  expect(cols.slice(-16)).toEqual([
+  expect(cols.slice(-17)).toEqual([
     'continues', 'end_cause', 'watched_miles', 'origin', 'not_driving_expired', 'continuations', 'finalized_at', 'start_source', 'last_seq',
-    'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s', 'phone_s', 'archived_at',
+    'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s', 'phone_s', 'archived_at', 'route_full',
   ]);
   const events = await columns(db, 'trip_events');
   for (const c of ['type', 'tier', 'measured_json', 'dispute_status']) expect(events).toContain(c);
+  expect(events.slice(-2)).toEqual(['lat_full', 'lng_full']);
   for (const c of ['units', 'stopped_in_traffic', 'penalty']) expect(events).not.toContain(c);
 });
 
@@ -368,7 +370,7 @@ test('a v12 database steps up to v13: every drive stays as it was, not archived,
 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
-  expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(before.map((r) => ({ ...r, archived_at: null })));
+  expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(before.map((r) => ({ ...r, archived_at: null, route_full: null })));
   expect((await db.execute('SELECT lat, lng FROM trip_events')).rows).toEqual([{ lat: 47.6, lng: -122.3 }]);
   expect(await columns(db, 'route_pool')).toEqual(['polyline']);
   // No rowid: the pool is kept in the lines' order, never the order they were added.
@@ -378,6 +380,30 @@ test('a v12 database steps up to v13: every drive stays as it was, not archived,
   // A line is held once.
   expect((await db.execute("INSERT OR IGNORE INTO route_pool (polyline) VALUES ('_p~iF~ps|U')")).changes).toBe(1);
   expect((await db.execute("INSERT OR IGNORE INTO route_pool (polyline) VALUES ('_p~iF~ps|U')")).changes).toBe(0);
+  expect(await names(db, 'table')).toEqual([...TABLES].sort());
+});
+
+test('a v13 database steps up to v14: every drive and event stays as it was, with no whole route and no exact places (they fall back to the uploaded ones)', async () => {
+  for (const statement of [
+    ...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8, ...SCHEMA_V9, ...SCHEMA_V10, ...SCHEMA_V11, ...SCHEMA_V12,
+    ...SCHEMA_V13,
+  ]) {
+    await db.execute(statement);
+  }
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (13)');
+  await db.execute(
+    `INSERT INTO trips (client_trip_id, started_at, ended_at, tz, status, miles, polyline, start_lat, start_lng, created_at, updated_at)
+     VALUES ('t1', 1, 600001, 'UTC', 'scored', 7.5, '_p~iF~ps|U', 47.6, -122.3, 1, 1)`
+  );
+  await db.execute("INSERT INTO trip_events (id, client_trip_id, type, tier, started_at, lat, lng) VALUES ('e1', 't1', 'speeding', 'minor', 1, 47.6, -122.3), ('e2', 't1', 'hard_brake', 'minor', 2, NULL, NULL)");
+  const trips = (await db.execute('SELECT * FROM trips')).rows;
+  const events = (await db.execute('SELECT * FROM trip_events ORDER BY id')).rows;
+
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
+
+  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, route_full: null })));
+  expect((await db.execute('SELECT * FROM trip_events ORDER BY id')).rows).toEqual(events.map((r) => ({ ...r, lat_full: null, lng_full: null })));
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
 });
 
