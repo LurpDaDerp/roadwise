@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { View } from 'react-native';
@@ -5,12 +6,13 @@ import { View } from 'react-native';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { readZones } from '@/features/settings/privacyZones';
-import { LinkRow, RowIcon, Section, TopBar } from '@/features/settings/parts';
+import { LinkRow, RowIcon, Section, SwitchRow, TopBar } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { Button, ListRow, Screen, Text, useTheme } from '@/ui';
 
 import { placesCopy } from './copy';
-import { FIXED_KINDS, FIXED_NAME, MAX_CUSTOM_PLACES, type SavedPlace } from './model';
+import { PROMPT_QUERY, readPromptOn } from './drivePrompt';
+import { FIXED_KINDS, FIXED_NAME, MAX_CUSTOM_PLACES, PROMPT_OFF_KEY, type SavedPlace } from './model';
 import { placeIcon, PlaceSheet, type PlaceSheetDeps, type PlaceTarget } from './PlaceSheet';
 import { usePlaces } from './usePlaces';
 
@@ -41,18 +43,23 @@ export function PlacesScreen({ deps = {} }: { deps?: PlaceSheetDeps }) {
   const th = useTheme();
   const router = useRouter();
   const db = useDb();
+  const client = useQueryClient();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const { places, save, remove } = usePlaces();
   const [target, setTarget] = useState<PlaceTarget | null>(null);
   const [hidden, setHidden] = useState(0);
+  const [ask, setAsk] = useState<boolean | null>(null);
 
-  // How many places are hidden, read on every focus so a zone turned on a screen deeper shows on the way back.
+  // How many places are hidden, read on every focus so a zone turned on a screen deeper shows on
+  // the way back; and whether recaps ask to save a likely place (Don't remind me turns it off).
   useFocusEffect(
     useCallback(() => {
       let live = true;
-      void readZones(settings)
-        .then((z) => {
-          if (live) setHidden(z.filter((zone) => zone.placeId !== undefined && (places ?? []).some((p) => p.id === zone.placeId)).length);
+      void Promise.all([readZones(settings), readPromptOn(settings)])
+        .then(([z, on]) => {
+          if (!live) return;
+          setHidden(z.filter((zone) => zone.placeId !== undefined && (places ?? []).some((p) => p.id === zone.placeId)).length);
+          setAsk(on);
         })
         .catch(() => {});
       return () => {
@@ -60,6 +67,13 @@ export function PlacesScreen({ deps = {} }: { deps?: PlaceSheetDeps }) {
       };
     }, [settings, places])
   );
+
+  const flipAsk = (on: boolean) => {
+    setAsk(on);
+    void (on ? settings.remove(PROMPT_OFF_KEY) : settings.set(PROMPT_OFF_KEY, true))
+      .catch(() => {})
+      .finally(() => void client.invalidateQueries({ queryKey: PROMPT_QUERY }));
+  };
 
   const list = places ?? [];
   const custom = list.filter((p) => p.kind === 'custom');
@@ -89,6 +103,9 @@ export function PlacesScreen({ deps = {} }: { deps?: PlaceSheetDeps }) {
 
       <Section>
         <LinkRow icon="eye-off-outline" title={copy.zonesRow.title} subtitle={copy.zonesRow.subtitle(hidden)} onPress={() => router.push(SETTINGS_HREFS.privacyZones)} testID="places-zones" />
+        {ask !== null ? (
+          <SwitchRow icon="sparkles-outline" title={copy.askAfterDrives.title} subtitle={copy.askAfterDrives.subtitle} value={ask} onValueChange={flipAsk} testID="places-ask" />
+        ) : null}
       </Section>
 
       <View style={{ gap: th.space.sm }}>

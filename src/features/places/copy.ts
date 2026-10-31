@@ -63,6 +63,23 @@ export const placesCopy = {
     } satisfies Record<PlaceProblem, string>,
   },
 
+  /** The recap's small "Save as …?" card under the map. */
+  prompt: {
+    title: (kind: 'home' | 'work' | 'school') => `Save as ${kind === 'home' ? 'Home' : kind === 'work' ? 'Work' : 'School'}?`,
+    why: { nights: 'Most nights end here', weekdays: 'You’re here most weekdays', name: 'Looks like a school' } as const,
+    whyWork: 'Looks like a workplace',
+    inZone: (zone: string) => `In your “${zone}” zone`,
+    unnamed: 'Saved from a drive',
+    yes: 'Yes',
+    no: 'No',
+    never: 'Don’t remind me',
+    saved: (name: string) => `Saved as ${name}. Change it in Settings › Places.`,
+    failed: "Couldn't save that. Try again.",
+  },
+
+  /** Places' switch for the recap card. */
+  askAfterDrives: { title: 'Suggest after drives', subtitle: 'Asks to save a likely home, work or school' },
+
   card: {
     title: 'Add your places',
     body: 'Save home, work or school in a few taps, and keep them private.',

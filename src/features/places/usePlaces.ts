@@ -72,6 +72,7 @@ export function usePlaces() {
       client.setQueryData(PLACES_QUERY, places);
       void client.invalidateQueries({ queryKey: PLACES_CARD_QUERY });
       void client.invalidateQueries({ queryKey: ['places', 'suggestions'] });
+      void client.invalidateQueries({ queryKey: ['places', 'prompt'] });
     },
     [client]
   );

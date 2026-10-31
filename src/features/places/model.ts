@@ -10,6 +10,10 @@ export const PLACES_KEY = 'places.saved';
 export const PLACES_CARD_DISMISSED_KEY = 'places.cardDismissed';
 /** Addresses already looked up for learned places (`learned.ts`). */
 export const PLACE_NAMES_KEY = 'places.names';
+/** The recap's "Save as …?" card was turned off (Don't remind me, or the switch in Places). */
+export const PROMPT_OFF_KEY = 'places.promptOff';
+/** The points the driver said No to on that card (they're never asked about again). */
+export const PROMPT_DECLINED_KEY = 'places.promptDeclined';
 
 export type PlaceKind = 'home' | 'work' | 'school' | 'custom';
 export const FIXED_KINDS = ['home', 'work', 'school'] as const satisfies readonly PlaceKind[];

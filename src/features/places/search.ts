@@ -143,8 +143,15 @@ type GeoAddress = {
   country?: string | null;
 };
 
+/** An address as two lines, and the place's own name when the geocoder gave one ("Lincoln High School"). */
+export interface AddressLines {
+  title: string;
+  subtitle: string;
+  poi?: string;
+}
+
 /** The phone geocoder's address as two lines; null when it says nothing usable. */
-export function linesFromGeo(a: GeoAddress | undefined | null): { title: string; subtitle: string } | null {
+export function linesFromGeo(a: GeoAddress | undefined | null): AddressLines | null {
   if (!a) return null;
   const number = text(a.streetNumber);
   const street = text(a.street);
@@ -154,11 +161,13 @@ export function linesFromGeo(a: GeoAddress | undefined | null): { title: string;
   if (title === '') return null;
   const country = text(a.isoCountryCode).toUpperCase();
   const area = join(text(a.city) || text(a.district) || text(a.subregion), [text(a.region), text(a.postalCode)].filter((s) => s !== '').join(' '));
-  return { title, subtitle: country && country !== 'US' ? join(area, text(a.country)) : area };
+  // A name that isn't the street address (nor starts like one) is the place's own.
+  const poi = name !== '' && name !== title && name !== street && !/^\d/.test(name) ? name : undefined;
+  return { title, subtitle: country && country !== 'US' ? join(area, text(a.country)) : area, ...(poi ? { poi } : {}) };
 }
 
 /** The address at a point from the phone's reverse geocoder; null on any failure. Never throws. */
-export async function addressAt(point: LatLng): Promise<{ title: string; subtitle: string } | null> {
+export async function addressAt(point: LatLng): Promise<AddressLines | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
     const Location = require('expo-location') as typeof import('expo-location');

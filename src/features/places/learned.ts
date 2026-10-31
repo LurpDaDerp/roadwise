@@ -8,7 +8,7 @@
  * inside a privacy zone is never looked up on its own: it shows as that zone until the driver
  * picks it.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { learnPlaces, suggestionsFor, type LearnedPlace, type PlaceSlot, type TripEnds } from '@/core/places/learn';
 import type { Db } from '@/data/db/driver';
@@ -19,7 +19,7 @@ import { readZones, type PrivacyZone } from '@/features/settings/privacyZones';
 import { haversineMeters, type LatLng } from '@/lib/geo';
 
 import { PLACE_NAMES_KEY } from './model';
-import { addressAt } from './search';
+import { addressAt, type AddressLines } from './search';
 
 const DAY_MS = 86_400_000;
 /** The phone keeps a drive's start and end this long. */
@@ -55,6 +55,7 @@ interface NameEntry {
   lng: number;
   title: string;
   subtitle: string;
+  poi?: string;
 }
 
 async function readNames(settings: Pick<SettingsRepo, 'get'>): Promise<NameEntry[]> {
@@ -86,7 +87,7 @@ export async function nameSuggestions(
   settings: Pick<SettingsRepo, 'get' | 'set'>,
   places: readonly LearnedPlace[],
   zones: readonly PrivacyZone[],
-  lookup: (p: LatLng) => Promise<{ title: string; subtitle: string } | null> = addressAt
+  lookup: (p: LatLng) => Promise<AddressLines | null> = addressAt
 ): Promise<Suggestion[]> {
   const names = await readNames(settings);
   const fresh: NameEntry[] = [];
@@ -110,20 +111,40 @@ export async function nameSuggestions(
   return out;
 }
 
+/**
+ * The address at `point`: remembered within 60 m, else looked up through `lookup` and remembered.
+ * Null when the phone can't name it. The caller keeps privacy zones out.
+ */
+export async function rememberedAddress(settings: Pick<SettingsRepo, 'get' | 'set'>, point: LatLng, lookup: (p: LatLng) => Promise<AddressLines | null> = addressAt): Promise<AddressLines | null> {
+  const names = await readNames(settings);
+  const known = names.find((n) => haversineMeters(n, point) <= NAME_NEAR_M);
+  if (known) return { title: known.title, subtitle: known.subtitle, ...(known.poi ? { poi: known.poi } : {}) };
+  const found = await lookup(point);
+  if (found) await settings.set(PLACE_NAMES_KEY, [{ lat: Math.round(point.lat * 1e5) / 1e5, lng: Math.round(point.lng * 1e5) / 1e5, ...found }, ...names].slice(0, MAX_NAMES)).catch(() => {});
+  return found;
+}
+
 export const LEARNED_QUERY = ['places', 'learned'] as const;
+const LEARNED_STALE_MS = 5 * 60_000;
+
+const learnedQuery = (db: Db, now: () => number) => ({
+  queryKey: LEARNED_QUERY,
+  queryFn: async () => {
+    const t = now();
+    return learnPlaces(await readTripEnds(db, t), t);
+  },
+  staleTime: LEARNED_STALE_MS,
+});
+
+/** The learned places from the query cache, worked out when older than five minutes. */
+export function fetchLearned(client: QueryClient, db: Db, now: () => number): Promise<LearnedPlace[]> {
+  return client.fetchQuery(learnedQuery(db, now));
+}
 
 /** The learned places, worked out once per field opening (cached five minutes). */
 export function useLearnedPlaces(enabled = true) {
   const { db, now } = useDataSource();
-  return useQuery({
-    queryKey: LEARNED_QUERY,
-    queryFn: async () => {
-      const t = now();
-      return learnPlaces(await readTripEnds(db, t), t);
-    },
-    staleTime: 5 * 60_000,
-    enabled,
-  });
+  return useQuery({ ...learnedQuery(db, now), enabled });
 }
 
 /**
