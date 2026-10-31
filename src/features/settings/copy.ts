@@ -122,7 +122,7 @@ export const settingsCopy = {
       title: 'Your places',
       hidden: (radiusM: number) => `Hidden · ${radiusM} m radius`,
       shown: 'Not hidden',
-      footer: 'Turn a place on to make it a zone, centered on its address. Tap a hidden place to change its size.',
+      footer: 'Turn on a place to hide it in a zone centered on its address. Tap a hidden place to change the zone’s size.',
       add: { title: 'Add your places', subtitle: 'Home, work, school and more' },
       others: 'Other zones',
       full: 'You already have 6 zones. Delete one to hide this place.',

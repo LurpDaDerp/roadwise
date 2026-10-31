@@ -16,7 +16,7 @@ export const placesCopy = {
   kindLabel: { home: 'Home', work: 'Work', school: 'School', custom: 'Place' } satisfies Record<PlaceKind, string>,
   zonesRow: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Keep a place private' : `${n} ${n === 1 ? 'place' : 'places'} hidden`) },
   local: 'Places stay on this phone. They’re never uploaded.',
-  searchNote: 'Address search is by Photon, using OpenStreetMap. Only what you type is sent.',
+  searchNote: 'Photon runs address search, using OpenStreetMap. Only what you type is sent.',
   saveError: "Couldn't save your places. Try again.",
 
   sheet: {
@@ -53,11 +53,11 @@ export const placesCopy = {
     changeAddress: 'Change address',
     remove: 'Remove',
     removeTitle: (name: string) => `Remove ${name}?`,
-    removeBody: 'If this place has a privacy zone, the zone stays. You can delete it in Privacy zones.',
+    removeBody: 'Its privacy zone, if it has one, stays. You can delete the zone in Privacy zones.',
     cancel: 'Cancel',
     problems: {
       name_empty: 'Give the place a name.',
-      name_long: `Keep the name to ${PLACE_NAME_MAX} characters.`,
+      name_long: `Keep the name to ${PLACE_NAME_MAX} characters or fewer.`,
       point: 'Pick an address first.',
       too_many: `You can save up to ${MAX_CUSTOM_PLACES} other places.`,
     } satisfies Record<PlaceProblem, string>,
@@ -78,7 +78,7 @@ export const placesCopy = {
   },
 
   /** Places' switch for the recap card. */
-  askAfterDrives: { title: 'Suggest after drives', subtitle: 'Asks to save a likely home, work or school' },
+  askAfterDrives: { title: 'Suggest after drives', subtitle: 'Offers to save a likely home, work or school' },
 
   card: {
     title: 'Add your places',
