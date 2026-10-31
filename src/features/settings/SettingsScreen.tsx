@@ -9,6 +9,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
+import { CarSettingRow } from '@/features/carLink/CarSettingRow';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { usePlaces } from '@/features/places/usePlaces';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
@@ -231,6 +232,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
         {auto.visible && auto.needsFix ? (
           <LinkRow icon="shield-checkmark-outline" title={copy.autoDrives.fix} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-auto-drives-fix" />
         ) : null}
+        {auto.visible ? <CarSettingRow /> : null}
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <NavAppSettingRow db={db} />
