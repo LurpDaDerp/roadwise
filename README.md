@@ -1,13 +1,13 @@
 # RoadWise
 
-Reward-based safe-driving app for new drivers. React Native / Expo (development client), Supabase backend.
+A free safe-driving app for teen drivers: it detects drives automatically, scores each one and keeps a Safety Rating. React Native / Expo (development client), Supabase backend.
 
 ## Develop
 
     npm install
     npx expo start --dev-client
 
-Camera coaching and background drive capture need a development build (`npx eas-cli@24.7.0 build --profile development`); they do not run in Expo Go.
+Background drive capture needs a development build (`npx eas-cli@24.7.0 build --profile development`); it does not run in Expo Go.
 
 ## Development builds
 
@@ -41,42 +41,27 @@ example) can never reach a newer binary.
 
 ## Verify
 
-    npm test                 # Jest — the app, the engine, the scoring package
+    npm test                 # Jest: the app, the engine, the scoring package
     npm run typecheck        # tsc over the app, scripts/ and packages/scoring
     npm run lint             # eslint
-    npx supabase start       # local stack (Docker)
-    npx supabase db reset    # migrations + seed
-    npx supabase test db     # pgTAP over the schema, the policies and the writers
-    npm run functions:test   # deno test — the edge functions
-    npm run functions:check  # deno lint + deno check
-    npm run e2e:trip         # the end-to-end trip golden (below)
+    npm run lock:check       # the lockfile passes npm ci on npm 10, as on EAS Build
+    npm run functions:check  # deno lint + deno check over the edge functions
+    npm run functions:test   # deno test: the edge functions' unit tests
+    npm run db:start         # local Supabase stack (Docker)
+    npm run db:test          # supabase db reset (migrations + seed), then pgTAP over the schema, the policies and the writers
 
-### The end-to-end trip golden
+The edge-function integration test (`supabase/functions/finalize-trip/integration.test.ts`) skips
+itself under `functions:test`; with the local stack running, run it as its header shows:
 
-`npm run e2e:trip` drives recorded trips through every piece at once and asserts the authoritative
-numbers at each step: replay a committed trace through the M1 detectors, finalize it over a real
-SQLite, upload the gzip trace, POST the payload to `finalize-trip` (the one the finalizer returned,
-asserted byte-equal to the one it put on the sync queue), read the stored rows back, then dispute an
-event, change a role and delete a still-scored trip through `trip-actions` — checking how each one
-moves the day aggregates, not merely that a row is still there.
+    FUNCTIONS_IT_DB_URL=postgresql://postgres:postgres@127.0.0.1:54622/postgres deno test -A --config supabase/functions/deno.json supabase/functions/finalize-trip/integration.test.ts
 
-Three things keep it honest. The device's provisional score and the server's authoritative score
-must agree exactly (`provisionalMismatch: false`). The dispute's recomputed score is checked against
-what `packages/scoring` predicts without the disputed event, computed before the request goes out
-rather than written down. And a final negative control posts a payload declaring a score it did not
-earn, proving the server returns and stores its own number — without it, a `finalize-trip` that
-simply echoed the device back would pass every other check. Each section also declares how many
-checks it must record, and the run ends by asserting it recorded exactly that many, so a block that
-does not run is a failure rather than a shorter green run.
+## CI
 
-It needs the local stack running (`npx supabase start`); it starts `npx supabase functions serve`
-itself if nothing is answering, or pass `--external-serve` to use one you already have. Every key is
-read from `npx supabase status -o json` at run time and the run refuses to start unless the stack is
-on 127.0.0.1 or localhost — no secret is ever written down and no hosted project can be reached.
-Each run uses a fresh user and cleans up after itself. `--user <uuid>` pins the subject instead —
-which first **deletes** that user's trips, day rows, baselines and rate limits, so the dispute
-allowance and the aggregates are this run's alone. `--keep` leaves the trips in place for
-inspection, and `--self-check` runs only the script's own pure-helper checks and needs no stack.
+`.github/workflows/ci.yml` runs on every push to `V2` and `main` and on pull requests, in three
+parallel jobs: **app** (`npm ci` on Node 22 / npm 10, then typecheck, lint, Jest, lock:check),
+**functions** (`functions:check` and `functions:test` on Deno 2.9.6) and **db** (a local Supabase
+stack on CLI 2.121.0 with Postgres and Auth only, `db reset`, `test db`, then the integration test).
+It needs no secrets and never reaches the hosted project.
 
 ## Layout
 

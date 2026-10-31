@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [V2, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: App (typecheck, lint, jest, lockfile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # One sky test reads the device's own clock as US time (it passes in Los Angeles and New
+      # York, not in UTC); the suite runs in the zone it is written and run in.
+      TZ: America/Los_Angeles
+    steps:
+      - uses: actions/checkout@v4
+      # Node 22 bundles npm 10, the npm EAS Build runs npm ci with.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --ci --maxWorkers=2
+      - run: npm run lock:check
+
+  functions:
+    name: Edge functions (deno lint, check, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      # Unit tests only: they run with no permissions, so the integration test skips itself here
+      # (the db job runs it against a local stack).
+      - run: npm run functions:check
+      - run: npm run functions:test
+
+  db:
+    name: Database (migrations, pgTAP, function integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.121.0
+      # Postgres and Auth only: the migrations, the pgTAP suite and the integration test need
+      # nothing else. No secret is needed: every env() in config.toml is unset here.
+      - run: supabase start -x realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      # npm run db:test
+      - run: supabase db reset
+      - run: supabase test db
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      - name: finalize-trip + trip-actions integration test
+        env:
+          FUNCTIONS_IT_DB_URL: postgresql://postgres:postgres@127.0.0.1:54622/postgres
+        run: deno test -A --config supabase/functions/deno.json supabase/functions/finalize-trip/integration.test.ts
