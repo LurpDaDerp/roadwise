@@ -56,7 +56,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     expect(seed.buildHistory(now).map((d) => d.payload)).toEqual(drives.map((d) => d.payload));
   });
 
-  it('uploads what a phone would: v5, no integrity refusal, oldest first, before now, never a merge', () => {
+  it('uploads what a phone would: v5, no integrity refusal, oldest first, before now, each apart from the one before', () => {
     for (const d of drives) {
       expect(seed.uploadProblem(d.payload)).toBeNull();
       expect(d.payload.v).toBe(5);
@@ -66,7 +66,7 @@ describe.each(NOWS)('the demo history as of %i', (now) => {
     const starts = drives.map((d) => d.payload.startedAt);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
     for (const d of drives) for (const v of [d.payload.miles, d.payload.nightMiles]) expect(Math.round(v * 100) / 100).toBe(v);
-    // drive_context still names a merge for a drive started within 300 s and 150 m of the one before, which the seed refuses
+    // no drive starts within 300 s and 150 m of the one before: the history keeps every drive apart
     for (let i = 1; i < drives.length; i += 1) {
       const prev = drives[i - 1]!.payload;
       const next = drives[i]!.payload;

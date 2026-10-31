@@ -171,11 +171,11 @@ select throws_ok($$ update public.trips set phone_s = moving_s + 1 where client_
 select throws_ok($$ update public.trips set phone_s = -1 where client_trip_id = 'e0000000-0000-4000-8000-000000000001' $$,
   '23514', null, 'and never negative');
 
--- the merge sums phone time (within the union's moving time); the merged-away upload keeps its own
+-- an envelope naming mergeInto (the finalize-trip before 0032 sends null) is its own drive all the same
 select pg_temp.drive('00000000-0000-0000-0000-000000000005', 'e0000000-0000-4000-8000-000000000008', now() - interval '30 minutes', 600, 4, '[]', pg_temp.exp(5, 5, 5, 300, 500, 400),
   jsonb_build_object('mergeInto', (pg_temp.t('e0000000-0000-4000-8000-000000000001')).id));
-select is(array[(select row(moving_s, phone_s)::text from pg_temp.t('e0000000-0000-4000-8000-000000000001')), (select row(moving_s, phone_s, merged_into is not null)::text from pg_temp.t('e0000000-0000-4000-8000-000000000008'))],
-  array[row(1700, 1600)::text, row(500, 400, true)::text], 'a merge sums phone time into the drive it joins; the merged-away row keeps its own 400 s');
+select is(array[(select row(moving_s, phone_s)::text from pg_temp.t('e0000000-0000-4000-8000-000000000001')), (select row(moving_s, phone_s, scored)::text from pg_temp.t('e0000000-0000-4000-8000-000000000008'))],
+  array[row(1200, 1200)::text, row(500, 400, true)::text], 'mergeInto is ignored: the drive named keeps its own time; the upload is its own scored drive with its 400 s');
 
 -- ---------------------------------------------------------------------------
 -- a pickup is checked (fay): moderate or severe, whole seconds 1..the drive, a start inside it

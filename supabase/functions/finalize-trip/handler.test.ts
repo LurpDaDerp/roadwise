@@ -22,7 +22,7 @@ import { buildStoredDrive, clampMeasured, dashcamOf, handleFinalizeTrip, MAX_UPL
 
 const quiet = { warn: () => {}, error: () => {} };
 const freshContext = { version: 23, phoneUse: true, existing: null, merge: null };
-/** What `drive_context` still answers for an upload 2 min and 100 m after the drive before: read by nothing. */
+/** What `drive_context` answered before 0032 for an upload 2 min and 100 m after the drive before: read by nothing. */
 const JOINABLE = {
   tripId: '99999999-9999-4999-8999-999999999999',
   clientTripId: TRIP_2,
@@ -58,9 +58,9 @@ const post = (body: unknown, token = 'good', init: RequestInit = {}) =>
 const envelopeOf = (h: ReturnType<typeof harness>): ApplyDriveEnvelope => h.fake.calls.find((c) => c.fn === 'applyDrive')!.args as ApplyDriveEnvelope;
 
 /** Every key the envelope may hold: nothing of points, streaks, levels, loops or safe miles. */
-const ENVELOPE_KEYS = ['dashcam', 'events', 'mergeInto', 'payload', 'reason', 'scored', 'scoringVersion', 'user'];
+const ENVELOPE_KEYS = ['dashcam', 'events', 'payload', 'reason', 'scored', 'scoringVersion', 'user'];
 const PAYLOAD_KEYS = [
-  'appVersion', 'clientTripId', 'dashcam', 'durationS', 'end', 'endedAt', 'exposure', 'localDay', 'miles', 'nightMiles',
+  'appVersion', 'clientTripId', 'dashcam', 'durationS', 'endedAt', 'exposure', 'localDay', 'miles', 'nightMiles',
   'notDrivingExpired', 'origin', 'polyline', 'startedAt', 'tz',
 ];
 
@@ -79,13 +79,13 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
-  assertEquals([e.user, e.mergeInto, e.scored, e.reason, e.scoringVersion], [USER, null, true, null, 10]);
+  assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 10]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // the uploaded event goes in active whatever the device said, with its position and measurements
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
   // nor its end point: apply_drive never keeps where a drive ended
-  assertEquals([e.payload.localDay, e.payload.end], ['2026-10-05', null]);
+  assertEquals([e.payload.localDay, 'end' in e.payload], ['2026-10-05', false]);
   assertEquals(JSON.stringify(h.fake.calls).match(/40\.7128|40\.7306/), null);
   assertEquals(JSON.stringify(e).match(/"(net|breakdown|streak|safeMiles|isLoop|loopRepeat|safeMilesEarlierToday)"/), null);
   assertEquals(res.headers.get('x-replayed'), null);
@@ -212,13 +212,13 @@ Deno.test('a replay returns the stored answer from the context and applies nothi
   assertEquals(h.fake.calls.map((c) => c.fn), ['driveContext']);
 });
 
-Deno.test('every upload is stored as its own drive: one 2 min and 100 m after the drive before keeps mergeInto null, its own events, seconds and length', async () => {
+Deno.test('every upload is stored as its own drive: one 2 min and 100 m after the drive before (on a database before 0032 too) keeps its own events, seconds and length', async () => {
   const h = harness({ context: joinable });
   const res = await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [...payload().events, pickup()] })), h.deps);
   assertEquals(res.status, 200);
   assertEquals((await res.json()).mergedInto, null);
   const e = envelopeOf(h);
-  assertEquals(e.mergeInto, null);
+  assertEquals('mergeInto' in e, false);
   assertEquals(e.events.map((x) => [x.id, x.status]), [[EVENT, 'active'], [PICKUP, 'active']]);
   assertEquals(e.dashcam, { deviceId: null, movingS: 0, coveredS: 0, synced: false, on: false });
   assertEquals([e.payload.miles, e.payload.clientTripId, e.payload.exposure?.slowdowns], [12, TRIP_2, 18]);
@@ -226,7 +226,7 @@ Deno.test('every upload is stored as its own drive: one 2 min and 100 m after th
   // short on its own is too short, whatever the drive before it held
   const short = harness({ context: joinable });
   await handleFinalizeTrip(post(payload({ clientTripId: TRIP_2, events: [], exposure: undefined, miles: 0.2, durationS: 60, endedAt: STARTED_AT + 60_000 })), short.deps);
-  assertEquals([envelopeOf(short).scored, envelopeOf(short).reason, envelopeOf(short).mergeInto], [false, 'too_short', null]);
+  assertEquals([envelopeOf(short).scored, envelopeOf(short).reason], [false, 'too_short']);
   // the DashPal seconds are the upload's own
   assertEquals(dashcamOf(payload({ dashcam: { deviceId: DASHCAM, movingS: 100, coveredS: 90, synced: true } })), { deviceId: DASHCAM, movingS: 100, coveredS: 90, synced: true, on: true });
 });
@@ -296,7 +296,7 @@ Deno.test('integrity: a mock location is stored unscored as spoofed, on its own;
   const res = await handleFinalizeTrip(post(payload({ integrity: { mockLocation: true, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 50 } })), h.deps);
   assertEquals(res.status, 200);
   const e = envelopeOf(h);
-  assertEquals([e.scored, e.reason, e.mergeInto, e.events.length], [false, 'spoofed', null, 1]);
+  assertEquals([e.scored, e.reason, e.events.length], [false, 'spoofed', 1]);
   const h2 = harness();
   await handleFinalizeTrip(post(payload({ miles: 300, integrity: { mockLocation: false, motionMismatch: false, validGnssPct: 100, maxSpeedMph: 70 } })), h2.deps);
   assertEquals([envelopeOf(h2).scored, envelopeOf(h2).reason], [false, 'implausible']);

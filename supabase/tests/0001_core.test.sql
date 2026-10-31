@@ -1,9 +1,9 @@
 -- 0001_core: posture (RLS everywhere, default deny, definer catch-all, private schema), the
--- account RPCs, username rules and the profanity filter, device claims, the rate limiter.
+-- account RPCs, username rules and the profanity filter, devices, the rate limiter.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(103);
+select plan(98);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -53,9 +53,6 @@ select is((select count(*)::int from information_schema.column_privileges c wher
   'progress grants select on its 6 client columns (user_id, safety_rating, ranked, rating_updated_at, created_at, updated_at)');
 select is((select array_agg(distinct g.privilege_type::text) from information_schema.role_table_grants g where g.grantee = 'authenticated' and g.table_schema = 'public'),
   array['SELECT'], 'and every one of them is select only');
-select is((select array_agg(c.column_name::text order by c.column_name::text) from information_schema.column_privileges c
-    where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'progress' and c.column_name like 'last_end%'), null,
-  'progress.last_end_* are not readable even by the owner');
 select is((select count(*)::int from information_schema.role_table_grants g where g.grantee in ('anon', 'authenticated') and g.table_schema = 'public' and g.table_name = 'devices'), 0,
   'devices has no client grant at all');
 select policies_are('public', 'profiles', array['profiles_select_own']::name[], 'profiles has exactly its select policy');
@@ -65,7 +62,6 @@ select policies_are('public', 'app_config', array['app_config_public']::name[], 
 select is((select count(*)::int from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and p.polcmd <> 'r'), 0, 'no policy in public allows a client write');
 select hasnt_index('public', 'progress', 'progress_global_board_idx', 'the global board index is gone with the board');
-select has_index('public', 'device_league_claims', 'device_league_claims_user_idx', 'device claims indexed by user (cascade)');
 select has_index('public', 'profiles', 'profiles_username_text_idx', 'the username prefix search has its text_pattern_ops index');
 select has_index('public', 'trips', 'trips_started_brin', 'trips has a time-leading BRIN index');
 
@@ -101,7 +97,6 @@ set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 select is((select count(*)::int from public.profiles), 1, 'A sees only own profile');
 select is((select count(*)::int from public.progress), 1, 'A sees only own progress');
-select throws_ok($$ select last_end_lat from public.progress $$, '42501', null, 'A cannot read progress.last_end_lat');
 select throws_ok($$ update public.profiles set units = 'km' where id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write profiles directly');
 select throws_ok($$ select flagged from public.profiles $$, '42501', null, 'A cannot read own flagged');
 select throws_ok($$ update public.progress set safety_rating = 99 where user_id = '00000000-0000-0000-0000-000000000001' $$, '42501', null, 'A cannot write progress directly');
@@ -135,42 +130,40 @@ select is((select row(units, state, heatmap_visibility)::text from public.profil
 select lives_ok($$ select public.update_profile(p_state := '') $$, 'an empty state clears it');
 select is((select state from public.profiles where id = '00000000-0000-0000-0000-000000000001'), null, 'state cleared');
 
--- devices and league claims
+-- devices (0032: no install claims; the answer carries league_eligible as stored, never written)
 select throws_ok($$ select public.register_device('short', 'ios') $$, '22023', 'device_id must be 8 to 128 characters', 'a short device id is refused');
 select throws_ok($$ select public.register_device('device-aaaaaaaa', 'web') $$, '22023', 'platform must be ios or android', 'an unknown platform is refused');
 select throws_ok($$ select public.register_device('device-aaaaaaaa', 'ios', 'not-a-token') $$, '22023', 'invalid push token', 'a malformed push token is refused');
-select is(public.register_device('device-aaaaaaaa', 'ios', 'ExponentPushToken[abcdefgh12345]'), '{"league_eligible": true}'::jsonb, 'the first account on a device claims it');
-select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), true, 'and is league-eligible');
+select is(public.register_device('device-aaaaaaaa', 'ios', 'ExponentPushToken[abcdefgh12345]'), '{"league_eligible": false}'::jsonb, 'a device registers; the answer carries the stored league_eligible');
+select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'and register_device never writes it');
 
--- B on the same device: registered, but not eligible
+-- B on the same device
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
-select is(public.register_device('device-aaaaaaaa', 'ios', 'ExponentPushToken[abcdefgh12345]'), '{"league_eligible": false}'::jsonb, 'a second account on the same device earns no claim');
-select is(public.register_device('device-bbbbbbbb', 'android'), '{"league_eligible": true}'::jsonb, 'but its own device makes it eligible');
+select is(public.register_device('device-aaaaaaaa', 'ios', 'ExponentPushToken[abcdefgh12345]'), '{"league_eligible": false}'::jsonb, 'a second account registers the same device');
+select is(public.register_device('device-bbbbbbbb', 'android'), '{"league_eligible": false}'::jsonb, 'and its own device');
 select is((select count(*)::int from public.profiles where username = 'ava_1'), 0, 'B cannot see A profile');
 select is(public.check_username('ava_1'), '{"available": false, "reason": "taken"}'::jsonb, 'A username is taken for B');
 select is(public.check_username('AVA_1'), '{"available": false, "reason": "taken"}'::jsonb, 'in any case');
 select throws_ok($$ select public.claim_username('ava_1') $$, '23505', 'username is taken', 'B cannot claim it');
 
--- device hardening: 10 new ids a day, 10 rows kept, 3 claims, a moved token earns no claim, a stale claim is released
-select is((select bool_and((public.register_device('device-new-' || lpad(i::text, 6, '0'), 'ios') ->> 'league_eligible')::boolean) from generate_series(1, 8) i), true,
+-- device hardening: 10 new ids a day, 10 rows kept
+select is((select bool_and(public.register_device('device-new-' || lpad(i::text, 6, '0'), 'ios') is not null) from generate_series(1, 8) i), true,
   'B registers eight more new device ids');
 select throws_ok($$ select public.register_device('device-new-000009', 'ios') $$, '42501', 'too many requests', 'the 11th new id in a day is refused');
 select lives_ok($$ select public.register_device('device-bbbbbbbb', 'android', 'ExponentPushToken[bbbbtoken0001]') $$, 'a known id is not a new id (and takes a token)');
 reset role;
 select is((select count(*)::int from public.devices where user_id = '00000000-0000-0000-0000-000000000002'), 10, 'at most 10 device rows per account (the oldest seen went)');
-select is((select count(*)::int from public.device_league_claims where user_id = '00000000-0000-0000-0000-000000000002'), 3, 'at most 3 claims per account');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000003","role":"authenticated"}', true);
 select is(public.register_device('device-cccccccc', 'android', 'ExponentPushToken[bbbbtoken0001]'), '{"league_eligible": false}'::jsonb,
-  'C arrives with B''s push token: the install is claimed, so a new id string earns no claim');
-select is(public.register_device('device-dddddddd', 'android'), '{"league_eligible": true}'::jsonb, 'an unclaimed install still does');
+  'C arrives with B''s push token on a new id');
+select is(public.register_device('device-dddddddd', 'android'), '{"league_eligible": false}'::jsonb, 'and another install');
 reset role;
 update public.devices set last_seen_at = now() - interval '91 days' where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa';
-delete from public.device_league_claims where user_id = '00000000-0000-0000-0000-000000000003';
 set local role authenticated;
-select is(public.register_device('device-aaaaaaaa', 'ios'), '{"league_eligible": true}'::jsonb, 'A''s claim on a device unseen for 90 days is released to the next account');
+select is(public.register_device('device-aaaaaaaa', 'ios'), '{"league_eligible": false}'::jsonb, 'C registers a device A has not been seen on for 91 days');
 reset role;
-select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'and A, with no claim left, is no longer eligible');
+select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'and A''s league_eligible is left as stored');
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
 
@@ -194,7 +187,6 @@ reset role;
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa'), null,
   'a token registered by B is taken from A');
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000002' and device_id = 'device-aaaaaaaa'), 'ExponentPushToken[abcdefgh12345]', 'and held by B');
-select is((select array_agg(user_id order by device_id) from public.device_league_claims where device_id like 'device-_bbbbbbb' or device_id = 'device-aaaaaaaa'), array['00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002']::uuid[], 'one claim per device, first come (A''s was released above)');
 
 select is(private.take_rate_limit('00000000-0000-0000-0000-000000000001', 'probe', interval '1 minute', 1), true, 'a budget take passes');
 select is(private.take_rate_limit('00000000-0000-0000-0000-000000000001', 'probe', interval '1 minute', 1), false, 'and the next in the window is refused');

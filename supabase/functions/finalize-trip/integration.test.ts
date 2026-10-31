@@ -1,4 +1,4 @@
-// Integration: the real handlers against the local stack (migrations 0001–0029) over the real
+// Integration: the real handlers against the local stack (migrations 0001–0032) over the real
 // engine. Runs only when FUNCTIONS_IT_DB_URL is readable — `npm run functions:test` has no env
 // permission and skips it; run it with
 //
@@ -95,12 +95,12 @@ Deno.test({
       const r2 = await own.json();
       assertEquals([r2.mergedInto, r2.clientTripId, r2.eventIds], [null, TRIP_2, [EVENT_B]]);
       assert(r2.tripId !== r1.tripId);
-      const drives = await sql`select id, miles, n_hard_brake, duration_s, origin, not_driving_expired, merged_into from public.trips where user_id = ${user}::uuid order by started_at`;
+      const drives = await sql`select id, miles, n_hard_brake, duration_s, origin, not_driving_expired from public.trips where user_id = ${user}::uuid order by started_at`;
       assertEquals(
-        drives.map((t) => [t.id, Number(t.miles), t.n_hard_brake, t.duration_s, t.origin, t.not_driving_expired, t.merged_into]),
+        drives.map((t) => [t.id, Number(t.miles), t.n_hard_brake, t.duration_s, t.origin, t.not_driving_expired]),
         [
-          [r1.tripId, 12, 1, 1800, 'auto', false, null],
-          [r2.tripId, 3, 1, 1080, 'manual', true, null],
+          [r1.tripId, 12, 1, 1800, 'auto', false],
+          [r2.tripId, 3, 1, 1080, 'manual', true],
         ]
       );
 
@@ -184,8 +184,10 @@ Deno.test({
       assertEquals([r5.scored, r5.reason], [false, 'implausible']);
 
       // 9. no upload left a point behind: every one sent its start and end, none is kept
-      const [g] = await sql`select last_end_lat, last_end_lng, last_end_at from public.progress where user_id = ${user}::uuid`;
-      assertEquals([g.last_end_lat, g.last_end_lng, g.last_end_at !== null], [null, null, true]);
+      // (0032: progress has no column for one; the start and end points are 40.7128 and 40.7306)
+      const [g] = await sql`select to_jsonb(p)::text as progress, (select string_agg(to_jsonb(t)::text, ' ') from public.trips t where t.user_id = ${user}::uuid) as trips
+        from public.progress p where p.user_id = ${user}::uuid`;
+      assertEquals([g.progress.includes('last_end'), /40\.7128|40\.7306/.test(g.progress + g.trips)], [false, false]);
     } finally {
       await deleteTestUser(sql, user);
       await engine.close();

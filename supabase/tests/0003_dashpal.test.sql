@@ -1,6 +1,6 @@
 -- 0003_drives + 0023, DashPal: the stored seconds and the derived flag, eyes_off / drowsy counted
--- apart from n_events (never breaking `clean`), the envelope's DashPal invariants, a merge keeping
--- the union's seconds and the upload's own on the merged-away row, reports on a drive with DashPal
+-- apart from n_events (never breaking `clean`), the envelope's DashPal invariants, an upload right after another
+-- keeping its own seconds (0032: no drive is joined), reports on a drive with DashPal
 -- events, camera_wrong's type match and its own weekly quota, the "wasn't driving" flag counting
 -- DashPal events, and the client reads.
 create extension if not exists pgtap with schema extensions;
@@ -11,7 +11,7 @@ select plan(29);
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000003', 'c@example.com');
 update public.profiles set username = 'cam', onboarded_at = now() where id = '00000000-0000-0000-0000-000000000003';
 
--- every drive is anchored at 02:00 New York today so local days and the merge gap are deterministic
+-- every drive is anchored at 02:00 New York today so local days are deterministic
 create temporary table t as select (date_trunc('day', now() at time zone 'America/New_York') + interval '2 hours') at time zone 'America/New_York' as t0;
 create function pg_temp.t0() returns timestamptz language sql stable as $$ select t0 from t $$;
 grant select on t to authenticated;
@@ -85,21 +85,21 @@ select throws_ok($$ select pg_temp.dpdrive('d1000000-0000-4000-8000-0000000000f1
   '22023', 'event needs id, type, tier, startedAt and durationS', 'a DashPal event is severe only');
 
 -- ---------------------------------------------------------------------------
--- merge: the union's seconds on the target, the upload's own on the merged-away row
+-- every upload is its own drive (0032): one 2 min and 100 m after a DashPal drive keeps its own
+-- seconds, even with an envelope naming mergeInto (ignored); the drive before is untouched
 -- ---------------------------------------------------------------------------
-create temporary table c3 as select private.drive_context(pg_temp.c(), 'd1000000-0000-4000-8000-000000000003', pg_temp.t0() + interval '72 minutes',
-  (pg_temp.t0() at time zone 'America/New_York')::date, 47.6105, -122.3105) as c;
-select is((select c -> 'merge' -> 'dashcam' from c3), '{"deviceId": "a4c1380f2b7e", "movingS": 500, "coveredS": 450, "synced": true}'::jsonb,
-  'the merge target carries its stored DashPal seconds');
+select is(private.drive_context(pg_temp.c(), 'd1000000-0000-4000-8000-000000000003', pg_temp.t0() + interval '72 minutes',
+  (pg_temp.t0() at time zone 'America/New_York')::date, 47.6105, -122.3105), '{"version": 23, "phoneUse": true, "existing": null, "merge": null}'::jsonb,
+  'the context offers no drive to join');
 select pg_temp.dpdrive('d1000000-0000-4000-8000-000000000003', pg_temp.t0() + interval '72 minutes', 10, 3, '[]',
-  '{"deviceId": "a4c1380f2b7e", "movingS": 1100, "coveredS": 450, "synced": true, "on": false}',
+  '{"deviceId": "a4c1380f2b7e", "movingS": 600, "coveredS": 0, "synced": true, "on": false}',
   '{"deviceId": "a4c1380f2b7e", "movingS": 600, "coveredS": 0, "synced": true}',
-  (select (c -> 'merge' ->> 'tripId')::uuid from c3));
-select is((select row(dashcam_moving_s, dashcam_covered_s, dashcam_synced, dashcam_on, n_dashcam, clean)::text from public.trips where client_trip_id = 'd1000000-0000-4000-8000-000000000002'),
-  row(1100, 450, true, false, 1, true)::text, 'the target holds the union''s seconds and the flag derived from them (41 %: never an OR)');
-select is((select row(merged_into = pg_temp.trip('d1000000-0000-4000-8000-000000000002'), dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_on)::text
+  pg_temp.trip('d1000000-0000-4000-8000-000000000002'));
+select is((select row(scored, dashcam_device_id, dashcam_moving_s, dashcam_covered_s, dashcam_on)::text
     from public.trips where client_trip_id = 'd1000000-0000-4000-8000-000000000003'),
-  row(true, 'a4c1380f2b7e', 600, 0, false)::text, 'the merged-away row keeps the upload''s own seconds');
+  row(true, 'a4c1380f2b7e', 600, 0, false)::text, 'the upload is its own scored drive with its own seconds');
+select is((select row(dashcam_moving_s, dashcam_covered_s, dashcam_synced, dashcam_on, n_dashcam, clean)::text from public.trips where client_trip_id = 'd1000000-0000-4000-8000-000000000002'),
+  row(500, 450, true, true, 1, true)::text, 'the drive before keeps its seconds and flag');
 
 -- ---------------------------------------------------------------------------
 -- reports on a drive with DashPal events

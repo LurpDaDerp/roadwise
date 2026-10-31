@@ -172,7 +172,6 @@ function toEnvelope(userId, p, stored) {
   const { kept, dashcam, scored, reason } = stored;
   return {
     user: userId,
-    mergeInto: null,
     dashcam,
     payload: {
       clientTripId: p.clientTripId,
@@ -213,12 +212,12 @@ const contextCall = (userId, p) =>
   `private.drive_context(${uuidLiteral(userId)}, ${uuidLiteral(p.clientTripId)}, to_timestamp(${p.startedAt} / 1000.0), '${p.localDay}'::date, ` +
   `${p.start.lat}, ${p.start.lng}, to_timestamp(${p.endedAt} / 1000.0))`;
 
-/** One batch of drives as one statement: each must meet a server context of version 23 and phone use, nothing stored, no merge; then apply_drive stores it. */
+/** One batch of drives as one statement: each must meet a server context of version 23 and phone use, nothing stored; then apply_drive stores it. */
 function batchSql(userId, items) {
   const lines = items.map(({ payload, envelope }) =>
     [
       `  c := ${contextCall(userId, payload)};`,
-      `  if c -> 'version' <> '23'::jsonb or c -> 'phoneUse' <> 'true'::jsonb or c -> 'existing' <> 'null'::jsonb or c -> 'merge' <> 'null'::jsonb then`,
+      `  if c -> 'version' <> '23'::jsonb or c -> 'phoneUse' <> 'true'::jsonb or c -> 'existing' <> 'null'::jsonb then`,
       `    raise exception 'seed-julian: the server context for drive ${payload.clientTripId} is %, not a fresh drive', c;`,
       '  end if;',
       `  perform private.apply_drive(${jsonLiteral(envelope)});`,

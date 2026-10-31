@@ -29,8 +29,8 @@
  * `private.*` is not on the Data API, so the drives go through `supabase db query`: `--local` when
  * SUPABASE_URL is a local address, else `--linked` (the CLI's linked project, which must be the
  * project SUPABASE_URL names). The drives are sent in batches, each one checking that drive_context
- * answers version 23 with nothing stored and no merge (two demo drives never start within 5 min
- * and 150 m of each other).
+ * answers version 23 with nothing stored (two demo drives never start within 5 min and 150 m of
+ * each other).
  *
  * Env:
  *   SUPABASE_URL                the project URL (local: `supabase status`, API_URL)
@@ -251,8 +251,8 @@ function planTrips(now, rnd) {
         lateHome = rnd() < 0.2;
         add(day, lateHome ? intBetween(rnd, 19 * 60, 20 * 60 + 15) : intBetween(rnd, 17 * 60, 18 * 60 + 45), 'work', true);
       }
-      // No evening errand after a late commute home: drive_context still names the drive before as a
-      // merge for one started within 5 min and 150 m of its end, and the seed refuses such a drive.
+      // No evening errand after a late commute home: it would start within 5 min and 150 m of the drive
+      // before, and the history keeps every drive apart from the one before it.
       if (recent && !lastWeek && !lateHome && rnd() < 0.07) {
         const errand = pick(rnd, ERRANDS);
         add(day, intBetween(rnd, 19 * 60 + 30, 20 * 60 + 30), errand, false);
@@ -627,7 +627,6 @@ function toEnvelope(userId, p, stored) {
   const { kept, dashcam, scored, reason } = stored;
   return {
     user: userId,
-    mergeInto: null,
     dashcam,
     payload: {
       clientTripId: p.clientTripId,
@@ -811,13 +810,13 @@ const contextCall = (userId, p) =>
 
 /**
  * One batch of drives as one statement: for each, the server's context must be a fresh drive
- * (version 23, nothing stored, no merge), then apply_drive stores it.
+ * (version 23, nothing stored), then apply_drive stores it.
  */
 function batchSql(userId, items) {
   const lines = items.map(({ payload, envelope }) =>
     [
       `  c := ${contextCall(userId, payload)};`,
-      `  if c -> 'version' <> '23'::jsonb or c -> 'existing' <> 'null'::jsonb or c -> 'merge' <> 'null'::jsonb then`,
+      `  if c -> 'version' <> '23'::jsonb or c -> 'existing' <> 'null'::jsonb then`,
       `    raise exception 'seed-demo: the server context for drive ${payload.clientTripId} is %, not a fresh drive', c;`,
       '  end if;',
       `  perform private.apply_drive(${jsonLiteral(envelope)});`,

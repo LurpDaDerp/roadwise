@@ -100,64 +100,6 @@ export type Database = {
         }
         Relationships: []
       }
-      clan_members: {
-        Row: {
-          clan_id: string
-          joined_at: string
-          role: string
-          user_id: string
-        }
-        ComputedFields: never
-        Insert: {
-          clan_id: string
-          joined_at?: string
-          role?: string
-          user_id: string
-        }
-        Update: {
-          clan_id?: string
-          joined_at?: string
-          role?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "clan_members_clan_id_fkey"
-            columns: ["clan_id"]
-            isOneToOne: false
-            referencedRelation: "clans"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      clans: {
-        Row: {
-          banner: string
-          created_at: string
-          id: string
-          invite_code: string
-          name: string
-          updated_at: string
-        }
-        ComputedFields: never
-        Insert: {
-          banner: string
-          created_at?: string
-          id?: string
-          invite_code: string
-          name: string
-          updated_at?: string
-        }
-        Update: {
-          banner?: string
-          created_at?: string
-          id?: string
-          invite_code?: string
-          name?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
       consents: {
         Row: {
           created_at: string
@@ -180,25 +122,6 @@ export type Database = {
           kind?: string
           user_id?: string
           version?: string
-        }
-        Relationships: []
-      }
-      device_league_claims: {
-        Row: {
-          created_at: string
-          device_id: string
-          user_id: string
-        }
-        ComputedFields: never
-        Insert: {
-          created_at?: string
-          device_id: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          device_id?: string
-          user_id?: string
         }
         Relationships: []
       }
@@ -393,28 +316,6 @@ export type Database = {
         }
         Relationships: []
       }
-      job_leases: {
-        Row: {
-          expires_at: string
-          holder: string
-          name: string
-          updated_at: string
-        }
-        ComputedFields: never
-        Insert: {
-          expires_at: string
-          holder: string
-          name: string
-          updated_at?: string
-        }
-        Update: {
-          expires_at?: string
-          holder?: string
-          name?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
       limits_cache: {
         Row: {
           created_at: string
@@ -572,9 +473,6 @@ export type Database = {
       progress: {
         Row: {
           created_at: string
-          last_end_at: string | null
-          last_end_lat: number | null
-          last_end_lng: number | null
           miles_90d: number
           ranked: boolean
           rating_updated_at: string | null
@@ -586,9 +484,6 @@ export type Database = {
         ComputedFields: never
         Insert: {
           created_at?: string
-          last_end_at?: string | null
-          last_end_lat?: number | null
-          last_end_lng?: number | null
           miles_90d?: number
           ranked?: boolean
           rating_updated_at?: string | null
@@ -599,9 +494,6 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          last_end_at?: string | null
-          last_end_lat?: number | null
-          last_end_lng?: number | null
           miles_90d?: number
           ranked?: boolean
           rating_updated_at?: string | null
@@ -722,6 +614,25 @@ export type Database = {
         }
         Relationships: []
       }
+      route_pool: {
+        Row: {
+          id: string
+          polyline: string
+          user_id: string
+        }
+        ComputedFields: never
+        Insert: {
+          id?: string
+          polyline: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          polyline?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       trip_events: {
         Row: {
           client_event_id: string
@@ -785,6 +696,7 @@ export type Database = {
       trips: {
         Row: {
           app_version: string | null
+          archived_at: string | null
           clean: boolean
           client_trip_id: string
           created_at: string
@@ -799,7 +711,6 @@ export type Database = {
           league_week: string
           limit_s: number
           local_day: string
-          merged_into: string | null
           miles: number
           moving_s: number
           n_dashcam: number
@@ -830,6 +741,7 @@ export type Database = {
         ComputedFields: never
         Insert: {
           app_version?: string | null
+          archived_at?: string | null
           clean?: boolean
           client_trip_id: string
           created_at?: string
@@ -844,7 +756,6 @@ export type Database = {
           league_week: string
           limit_s: number
           local_day: string
-          merged_into?: string | null
           miles: number
           moving_s: number
           n_dashcam?: number
@@ -874,6 +785,7 @@ export type Database = {
         }
         Update: {
           app_version?: string | null
+          archived_at?: string | null
           clean?: boolean
           client_trip_id?: string
           created_at?: string
@@ -888,7 +800,6 @@ export type Database = {
           league_week?: string
           limit_s?: number
           local_day?: string
-          merged_into?: string | null
           miles?: number
           moving_s?: number
           n_dashcam?: number
@@ -916,15 +827,7 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "trips_merged_into_fkey"
-            columns: ["merged_into"]
-            isOneToOne: false
-            referencedRelation: "trips"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       user_achievements: {
         Row: {
@@ -997,10 +900,6 @@ export type Database = {
     }
     Functions: {
       accept_terms: { Args: { p_version: string }; Returns: undefined }
-      acquire_job_lease: {
-        Args: { p_holder: string; p_name: string; p_seconds: number }
-        Returns: boolean
-      }
       block_user: { Args: { p_user_id: string }; Returns: undefined }
       cancel_friend_request: { Args: { p_user_id: string }; Returns: undefined }
       check_username: { Args: { p: string }; Returns: Json }
@@ -1017,7 +916,6 @@ export type Database = {
         Args: { p_terms_version: string }
         Returns: undefined
       }
-      create_clan: { Args: { p_banner: string; p_name: string }; Returns: Json }
       export_account: { Args: { p_user: string }; Returns: Json }
       get_current_speed_limit: {
         Args: { p_heading: number; p_lat: number; p_lon: number }
@@ -1033,20 +931,20 @@ export type Database = {
       get_friends_board: { Args: Record<PropertyKey, never>; Returns: Json }
       get_heatmap: { Args: { p_user_id: string }; Returns: Json }
       get_member_stats: { Args: { p_user_id: string }; Returns: Json }
-      get_my_clan: { Args: Record<PropertyKey, never>; Returns: Json }
-      get_my_stat_sums: { Args: { p_since?: string }; Returns: Json }
       get_my_summary: { Args: Record<PropertyKey, never>; Returns: Json }
       get_notification_prefs: {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
       get_profile: { Args: { p_username: string }; Returns: Json }
-      join_clan: { Args: { p_code: string }; Returns: Json }
-      leave_clan: { Args: Record<PropertyKey, never>; Returns: undefined }
       list_blocked: { Args: Record<PropertyKey, never>; Returns: Json }
       list_friends: { Args: Record<PropertyKey, never>; Returns: Json }
       list_my_drives: {
         Args: { p_before?: string; p_limit?: number }
+        Returns: Json
+      }
+      list_my_route_pool: {
+        Args: { p_after?: string; p_limit?: number }
         Returns: Json
       }
       osm_claim_fill_cell: {
@@ -1064,7 +962,6 @@ export type Database = {
         Returns: boolean
       }
       osm_upsert_ways: { Args: { p_ways: Json }; Returns: number }
-      preview_clan: { Args: { p_code: string }; Returns: Json }
       purge_auth_audit: {
         Args: { p_email: string; p_user: string }
         Returns: number
@@ -1082,7 +979,6 @@ export type Database = {
       }
       record_push_outcomes: { Args: { p: Json }; Returns: number }
       record_push_receipts: { Args: { p: Json }; Returns: number }
-      regenerate_clan_code: { Args: Record<PropertyKey, never>; Returns: Json }
       register_device: {
         Args: {
           p_device_id: string
@@ -1093,16 +989,11 @@ export type Database = {
         Returns: Json
       }
       release_device: { Args: { p_device_id: string }; Returns: undefined }
-      release_job_lease: {
-        Args: { p_holder: string; p_name: string }
-        Returns: undefined
-      }
       release_live_activity_start: {
         Args: { p_client_trip_id: string; p_device_id: string; p_leg?: number }
         Returns: boolean
       }
       remove_friend: { Args: { p_user_id: string }; Returns: undefined }
-      remove_member: { Args: { p_user_id: string }; Returns: undefined }
       report_target: {
         Args: {
           p_kind: string
@@ -1119,10 +1010,6 @@ export type Database = {
       }
       search_users: { Args: { p_query: string }; Returns: Json }
       send_friend_request: { Args: { p_user_id: string }; Returns: Json }
-      set_member_role: {
-        Args: { p_role: string; p_user_id: string }
-        Returns: undefined
-      }
       set_notification_prefs: {
         Args: {
           p_leagues?: boolean
@@ -1156,12 +1043,7 @@ export type Database = {
         Args: { p_key: string; p_max: number; p_user: string; p_window: string }
         Returns: boolean
       }
-      transfer_leadership: { Args: { p_user_id: string }; Returns: undefined }
       unblock_user: { Args: { p_user_id: string }; Returns: undefined }
-      update_clan: {
-        Args: { p_banner?: string; p_name?: string }
-        Returns: undefined
-      }
       update_profile: {
         Args: {
           p_heatmap_visibility?: string
@@ -1219,8 +1101,7 @@ export type Tables<
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
   TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
@@ -1244,8 +1125,7 @@ export type TablesInsert<
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
   TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
@@ -1269,8 +1149,7 @@ export type TablesUpdate<
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
-    | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
+    keyof DefaultSchema["Enums"] | { schema: keyof DatabaseWithoutInternals },
   EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }

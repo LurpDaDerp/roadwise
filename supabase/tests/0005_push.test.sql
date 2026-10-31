@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(32);
+select plan(31);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -66,8 +66,6 @@ select is((select jsonb_array_length(public.push_receipts_due(100))), 1, 'after 
 select is(public.record_push_receipts(jsonb_build_object('receipts', jsonb_build_array(jsonb_build_object('delivery_id', (select id from public.push_deliveries), 'status', 'error', 'error', 'DeviceNotRegistered')))), 1, 'a receipt is recorded');
 select is((select push_token from public.devices where user_id = '00000000-0000-0000-0000-000000000002'), null, 'DeviceNotRegistered clears the device token');
 select is((select row(receipt_status, receipt_error)::text from public.push_deliveries), row('error', 'DeviceNotRegistered')::text, 'and the delivery keeps the receipt');
-select is(array[public.acquire_job_lease('push-sender', 'runner-1', 60), public.acquire_job_lease('push-sender', 'runner-2', 60), public.acquire_job_lease('push-sender', 'runner-1', 60)], array[true, false, true],
-  'a lease is held by one runner at a time, renewable by its holder');
 reset role;
 
 -- lease expiry on the sending state
@@ -84,10 +82,9 @@ select is(private.produce_weekly_recaps(), 0, 'no user with a drive this week: n
 
 -- grants
 select is((select bool_and(has_function_privilege('service_role', f, 'execute') and not has_function_privilege('authenticated', f, 'execute') and not has_function_privilege('anon', f, 'execute'))
-    from unnest(array['public.claim_push_batch(int, int)', 'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(int)', 'public.record_push_receipts(jsonb)',
-      'public.acquire_job_lease(text, text, int)', 'public.release_job_lease(text, text)']) f), true, 'the push writers execute for service_role only');
-select is((select count(*)::int from information_schema.role_table_grants g where g.grantee in ('anon', 'authenticated') and g.table_name in ('inbox', 'push_deliveries', 'job_leases')), 0,
-  'inbox, deliveries and leases have no client grants');
+    from unnest(array['public.claim_push_batch(int, int)', 'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(int)', 'public.record_push_receipts(jsonb)']) f), true, 'the push writers execute for service_role only');
+select is((select count(*)::int from information_schema.role_table_grants g where g.grantee in ('anon', 'authenticated') and g.table_name in ('inbox', 'push_deliveries')), 0,
+  'inbox and deliveries have no client grants');
 select is((select array_agg(jobname order by jobname) from cron.job), array['cron-log-purge', 'inbox-purge', 'purge-auth-audit', 'push-sender-sweep', 'rating-refresh', 'route-archive', 'weekly-recap'], 'the seven cron jobs are scheduled (no league close)');
 
 select * from finish();

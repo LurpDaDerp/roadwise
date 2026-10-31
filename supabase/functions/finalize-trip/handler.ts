@@ -9,8 +9,8 @@
 // idempotency) → the App Attest check → the daily upload budget → `drive_overlaps` → integrity → the
 // DashPal speed gate re-applied → `classifyDrive`'s length rule → `apply_drive` → the response,
 // stored for replays.
-// Every upload is stored as its own drive: the envelope's `mergeInto` is always null, so the
-// response's `mergedInto` is too. A drive that overlaps another stored drive of the user (by more
+// Every upload is stored as its own drive: the response's `mergedInto` is always null (every build
+// of the app requires the key). A drive that overlaps another stored drive of the user (by more
 // than a minute) is stored unscored as implausible: one person drives one car at a time.
 //
 // Where a drive started and ended (the upload's `start` and `end`, which an older build still sends)
@@ -200,7 +200,6 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
 
       const envelope: ApplyDriveEnvelope = {
         user: userId,
-        mergeInto: null,
         dashcam: s.dashcam,
         payload: {
           clientTripId: p.clientTripId,
@@ -211,7 +210,6 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           miles: p.miles,
           nightMiles: p.nightMiles,
           durationS: Math.round(p.durationS),
-          end: null,
           polyline: p.polyline,
           appVersion: p.appVersion,
           dashcam: p.dashcam ?? null,

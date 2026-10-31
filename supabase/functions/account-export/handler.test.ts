@@ -6,9 +6,9 @@ const UID = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const quiet = { warn: () => {}, error: () => {} };
 
-/** The database's document (format 5: the drives, and the routes past 183 days as undated lines). */
+/** The database's document (format 6: the drives, and the routes past 183 days as undated lines). */
 function doc(userId: string) {
-  return { format: 'roadwise-export', format_version: 5, account: { user_id: userId, email: 'a@example.com' }, trips: [], route_pool: ['_p~iF~ps|U'] };
+  return { format: 'roadwise-export', format_version: 6, account: { user_id: userId, email: 'a@example.com' }, trips: [], route_pool: ['_p~iF~ps|U'] };
 }
 
 function world(opts: { budget?: boolean; exported?: unknown; exportError?: unknown; authThrows?: boolean } = {}) {

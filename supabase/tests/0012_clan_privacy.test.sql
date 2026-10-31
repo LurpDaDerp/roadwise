@@ -1,13 +1,13 @@
--- 0012_clan_privacy: heat-map visibility is only_me or friends, and sharing a clan shows nobody
--- anything: not the heat map, not the stats, not the friends board, not the clan's name. The
--- clan RPCs are server-only; the clan rows stay.
+-- 0012_clan_privacy: heat-map visibility is only_me or friends, and a driver who is not a friend
+-- sees nothing private: not the heat map, not the stats, not the friends board. A profile still
+-- answers the LEGACY 'clan' key as null (clans are gone since 0032; an older build reads the key).
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(31);
+select plan(26);
 
--- ava (1) and ben (2) share a clan and are not friends; cat (3) is ava's friend; dan (4) is in
--- the clan too, with his map shared with friends
+-- ava (1) and ben (2) are not friends; cat (3) is ava's friend; dan (4) is no one's friend, with
+-- his map shared with friends
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
   ('00000000-0000-0000-0000-000000000002', 'b@example.com'),
@@ -22,11 +22,6 @@ insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_d
   select u, gen_random_uuid(), now() - interval '2 days', now() - interval '2 days' + interval '20 minutes', current_date, private.league_week(now()), 'America/New_York', 5, 0, 1200, true, 'poly-' || u, true,
     5, 5, 3, 600, 1000
   from unnest(array['00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004']::uuid[]) u;
-insert into public.clans (id, name, banner, invite_code) values ('e0000000-0000-4000-8000-000000000001', 'Owls', 'navy', 'ABCDEFGH');
-insert into public.clan_members (clan_id, user_id, role) values
-  ('e0000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000001', 'leader'),
-  ('e0000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000002', 'member'),
-  ('e0000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000004', 'member');
 insert into public.friendships (user_a, user_b) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000003');
 
 create function pg_temp.as_user(p int) returns void language sql as $$
@@ -53,19 +48,19 @@ select lives_ok($$ select public.update_profile(p_heatmap_visibility := 'only_me
 select is(public.get_my_summary() -> 'profile' ->> 'heatmap_visibility', 'only_me', 'and stored');
 
 -- ---------------------------------------------------------------------------
--- a clanmate who is not a friend sees nothing private
+-- a driver who is not a friend sees nothing private
 -- ---------------------------------------------------------------------------
-select is(public.get_profile('ben') -> 'clan', 'null'::jsonb, 'a profile never names the clan');
+select is(public.get_profile('ben') -> 'clan', 'null'::jsonb, 'a profile answers the LEGACY clan key as null');
 select is(public.get_profile('ava') -> 'clan', 'null'::jsonb, 'not even your own');
-select is(public.get_profile('ben') -> 'can_view_stats', 'false'::jsonb, 'a clanmate''s stats are closed');
+select is(public.get_profile('ben') -> 'can_view_stats', 'false'::jsonb, 'a non-friend''s stats are closed');
 select is(public.get_profile('ben') -> 'can_view_heatmap', 'false'::jsonb, 'and their heat map, even shared with friends');
-select throws_ok($$ select public.get_member_stats('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_member_stats refuses a clanmate');
-select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_heatmap refuses a clanmate');
+select throws_ok($$ select public.get_member_stats('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_member_stats refuses a non-friend');
+select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'get_heatmap refuses a non-friend');
 select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_friends_board()) x), array['ava', 'cat'],
-  'the friends board holds self and friends, no clanmates');
+  'the friends board holds self and friends only');
 select hasnt_function('public', 'get_friends_board', array['text'], 'the board takes no metric (it ranks by Safety Rating)');
 select pg_temp.as_user(4);
-select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'clanmates see each other''s map no more than strangers do');
+select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'nor does another non-friend see it');
 
 -- ---------------------------------------------------------------------------
 -- friends and self are unchanged
@@ -80,25 +75,6 @@ select is(public.get_profile('ava') -> 'can_view_heatmap', 'false'::jsonb, 'a fr
 select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000001') $$, 'P0002', 'profile not found', 'only_me is only me');
 select pg_temp.as_user(1);
 select is(public.get_heatmap('00000000-0000-0000-0000-000000000001'), '[]'::jsonb, 'your own map is always yours');
-
--- ---------------------------------------------------------------------------
--- clan RPCs are server-only, leave_clan too since 0029; the rows stay
--- ---------------------------------------------------------------------------
-reset role;
-select is(
-  (select array_agg(f order by f) from unnest(array['public.create_clan(text, text)', 'public.preview_clan(text)', 'public.join_clan(text)', 'public.get_my_clan()',
-      'public.set_member_role(uuid, text)', 'public.transfer_leadership(uuid)', 'public.remove_member(uuid)', 'public.regenerate_clan_code()', 'public.update_clan(text, text)',
-      'public.leave_clan()']) f
-    where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')),
-  null, 'no client role may call a clan RPC');
-set local role authenticated;
-select pg_temp.as_user(2);
-select throws_ok($$ select public.get_my_clan() $$, '42501', null, 'get_my_clan is refused to a member');
-select throws_ok($$ select public.preview_clan('ABCDEFGH') $$, '42501', null, 'preview_clan is refused');
-select throws_ok($$ select public.leave_clan() $$, '42501', null, 'leave_clan is refused too (0029)');
-reset role;
-select is((select array_agg(user_id order by user_id) from public.clan_members),
-  array['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000004']::uuid[], 'the clan keeps its rows');
 
 select * from finish();
 rollback;

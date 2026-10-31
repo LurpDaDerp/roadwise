@@ -11,7 +11,6 @@ insert into public.devices (user_id, device_id, platform, push_token) values
   ('00000000-0000-0000-0000-000000000001', 'device-aaaaaaaa', 'ios', 'ExponentPushToken[aaaaaaaaaaaa]'),
   ('00000000-0000-0000-0000-000000000002', 'device-aaaaaaaa', 'ios', 'ExponentPushToken[bbbbbbbbbbbb]'),
   ('00000000-0000-0000-0000-000000000001', 'device-cccccccc', 'android', 'ExponentPushToken[cccccccccccc]');
-insert into public.device_league_claims (device_id, user_id) values ('device-aaaaaaaa', '00000000-0000-0000-0000-000000000001');
 
 select is_definer('public', 'release_device', array['text']::name[], 'release_device is security definer');
 select is(array[has_function_privilege('anon', 'public.release_device(text)', 'execute'), has_function_privilege('authenticated', 'public.release_device(text)', 'execute')],
@@ -31,7 +30,7 @@ reset role;
 
 select is((select array_agg(coalesce(push_token, '-') order by user_id, device_id) from public.devices),
   array['-', 'ExponentPushToken[cccccccccccc]', 'ExponentPushToken[bbbbbbbbbbbb]'],
-  'only A''s token on that device is cleared: A''s other device and B''s row on the same device keep theirs; the claim stays');
+  'only A''s token on that device is cleared: A''s other device and B''s row on the same device keep theirs');
 
 select * from finish();
 rollback;

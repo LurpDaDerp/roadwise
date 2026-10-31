@@ -19,25 +19,23 @@ update public.profiles set username = 'usr' || right(id::text, 1), onboarded_at 
 
 -- a stored drive ending at p_ended (30 minutes long, 12 mi): client_trip_id = id
 create function pg_temp.trip(p_id uuid, p_user uuid, p_ended timestamptz, p_poly text, p_scored boolean default true,
-  p_not_driving boolean default false, p_reason text default null, p_merged uuid default null) returns void
+  p_not_driving boolean default false, p_reason text default null) returns void
 language sql as $$
   insert into public.trips (id, user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s,
-      polyline, scored, reason, not_driving, merged_into, clean, n_events, n_speeding, n_dashcam, origin,
+      polyline, scored, reason, not_driving, clean, n_events, n_speeding, n_dashcam, origin,
       slowdowns, speedups, turns, limit_s, moving_s)
     values (p_id, p_user, p_id, p_ended - interval '30 minutes', p_ended, (p_ended - interval '30 minutes')::date,
       private.league_week(p_ended - interval '30 minutes'), 'America/Los_Angeles', 12, 2, 1800,
-      p_poly, p_scored, p_reason, p_not_driving, p_merged, p_scored and not p_not_driving, 1, 1, 0, 'auto',
+      p_poly, p_scored, p_reason, p_not_driving, p_scored and not p_not_driving, 1, 1, 0, 'auto',
       20, 20, 10, 1200, 1500);
 $$;
 create function pg_temp.t(p_id uuid) returns public.trips language sql stable as $$ select * from public.trips where id = p_id $$;
 
 -- A: an old kept scored drive (a speeding event and a DashPal event, both with a place), an old
--- "Wasn't driving", an old unscored one, a leg merged into the first, one at 182 days and a recent one
+-- "Wasn't driving", an old unscored one, one at 182 days and a recent one
 select pg_temp.trip('a0000000-0000-4000-8000-0000000000a1', '00000000-0000-0000-0000-000000000001', now() - interval '200 days', 'A_OLD');
 select pg_temp.trip('a0000000-0000-4000-8000-0000000000a2', '00000000-0000-0000-0000-000000000001', now() - interval '190 days', 'A_NOT_DRIVING', true, true);
 select pg_temp.trip('a0000000-0000-4000-8000-0000000000a3', '00000000-0000-0000-0000-000000000001', now() - interval '195 days', 'A_SHORT', false, false, 'too_short');
-select pg_temp.trip('a0000000-0000-4000-8000-0000000000a6', '00000000-0000-0000-0000-000000000001', now() - interval '201 days', 'A_MERGED', false, false, null,
-  'a0000000-0000-4000-8000-0000000000a1');
 select pg_temp.trip('a0000000-0000-4000-8000-0000000000a5', '00000000-0000-0000-0000-000000000001', now() - interval '182 days', 'A_182');
 select pg_temp.trip('a0000000-0000-4000-8000-0000000000a4', '00000000-0000-0000-0000-000000000001', now() - interval '10 days', 'A_RECENT');
 -- B: an old scored drive and a recent one
@@ -102,11 +100,11 @@ create temporary table sums_before as select
   private.stat_sums('00000000-0000-0000-0000-000000000002', null) as b_all;
 
 select pg_temp.run_job();
-select is(pg_temp.archived_count(), 5, 'the five drives that ended more than 183 days ago are archived (A''s four, B''s one)');
+select is(pg_temp.archived_count(), 4, 'the four drives that ended more than 183 days ago are archived (A''s three, B''s one)');
 select is((select array_agg(t.polyline = '' and t.archived_at is not null order by t.id) from public.trips t
     where t.id in ('a0000000-0000-4000-8000-0000000000a1', 'a0000000-0000-4000-8000-0000000000a2', 'a0000000-0000-4000-8000-0000000000a3',
-                   'a0000000-0000-4000-8000-0000000000a6', 'b0000000-0000-4000-8000-0000000000b1')),
-  array[true, true, true, true, true], 'each has no route left and is stamped archived');
+                   'b0000000-0000-4000-8000-0000000000b1')),
+  array[true, true, true, true], 'each has no route left and is stamped archived');
 select is((select array[polyline, (archived_at is null)::text] from pg_temp.t('a0000000-0000-4000-8000-0000000000a5')), array['A_182', 'true'],
   'a drive that ended 182 days ago keeps its route');
 select is((select array[polyline, (archived_at is null)::text] from pg_temp.t('a0000000-0000-4000-8000-0000000000a4')), array['A_RECENT', 'true'],
@@ -119,7 +117,7 @@ select is((select array_agg(type || ':' || tier || ':' || measured::text order b
 select is((select array[lat, lng]::float8[] from public.trip_events where client_event_id = 'e0000000-0000-4000-8000-0000000000e3'),
   array[47.6001, -122.3002]::float8[], 'a recent drive''s event keeps its place');
 select is((select array_agg(polyline order by polyline) from public.route_pool where user_id = '00000000-0000-0000-0000-000000000001'), array['A_OLD'],
-  'A''s pool holds the kept scored drive''s route only (not "Wasn''t driving", unscored or merged away)');
+  'A''s pool holds the kept scored drive''s route only (not "Wasn''t driving" or unscored)');
 select is((select array_agg(polyline) from public.route_pool where user_id = '00000000-0000-0000-0000-000000000002'), array['B_OLD'], 'B''s pool is B''s own');
 select is((select array[private.stat_sums('00000000-0000-0000-0000-000000000001', null), private.stat_sums('00000000-0000-0000-0000-000000000001', now() - interval '365 days'),
       private.stat_sums('00000000-0000-0000-0000-000000000002', null)] from sums_before),
@@ -129,7 +127,7 @@ select is((select array_agg(limit_mph order by limit_mph) from public.map_feedba
 create temporary table pool_after_first as select id, user_id, ctid as at from public.route_pool
   where user_id in ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002');
 select pg_temp.run_job();
-select is(pg_temp.archived_count(), 5, 'a second run archives nothing more');
+select is(pg_temp.archived_count(), 4, 'a second run archives nothing more');
 select is((select array_agg(r.ctid = f.at order by r.polyline) from public.route_pool r join pool_after_first f on f.id = r.id), array[true, true],
   'and pools nothing twice: with nothing gained, no line is written again');
 
@@ -169,7 +167,7 @@ reset role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
-select is((select e -> 'format_version' from ex), '5'::jsonb, 'the export is format 5');
+select is((select e -> 'format_version' from ex), '6'::jsonb, 'the export is format 6');
 select is((select e -> 'route_pool' from ex), '["A_OLD"]'::jsonb, 'with the driver''s pooled lines');
 select is((select position('B_OLD' in e::text) from ex), 0, 'and nothing of another driver''s');
 reset role;

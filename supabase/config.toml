@@ -436,30 +436,21 @@ site_url = "https://roadwise.app"
 # Sign-in is Apple and Google only, both native (an id token handed to Auth), so no link ever has to
 # land anywhere.
 additional_redirect_urls = []
-minimum_password_length = 8
 
 # No email accounts: the email provider is off, so Auth refuses an email sign-up or a password
-# sign-in and sends no mail. Apple and Google sign-in are not affected.
+# sign-in and sends no mail. Apple and Google sign-in are not affected. (The password and email-code
+# settings above reach it too; with no email accounts they apply to nothing.)
 [remotes.production.auth.email]
 enable_signup = false
 enable_confirmations = false
-# Held at what the project already runs, so the push changes nothing else about email.
-max_frequency = "60s"
-otp_length = 8
 
-# What the hosted project already runs, so `supabase config push` changes sign-in only: these local
-# values (MFA off, a smaller pooler, no analytics buckets) must not reach it.
-[remotes.production.auth.mfa.totp]
-enroll_enabled = true
-verify_enabled = true
+# MFA (TOTP and phone) and storage analytics stay off, as above: the app has no MFA screen and keeps
+# nothing in Storage.
 
+# What the hosted project already runs: the local pooler is smaller and must not reach it.
 [remotes.production.db.pooler]
 default_pool_size = 15
 max_client_conn = 200
-
-[remotes.production.storage.analytics]
-enabled = true
-max_namespaces = 10
 
 # Native Sign in with Apple only (expo-apple-authentication + signInWithIdToken): the client id is
 # the App ID and no Services ID or secret is needed.

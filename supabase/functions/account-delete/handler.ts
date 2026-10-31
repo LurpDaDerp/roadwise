@@ -6,7 +6,7 @@
 //   2. The auth user is deleted (`auth.admin.deleteUser`, a hard delete). Every public table
 //      follows through ON DELETE CASCADE (0009's header and test): profile, progress, drives,
 //      achievements, weekly goals, friendships, blocks, reports, devices (with their push and
-//      Live Activity tokens), notifications; clan leadership is handed over by 0006's trigger.
+//      Live Activity tokens), notifications.
 //      There is no storage.
 //   3. GoTrue's own audit log is purged of the account (0009 `purge_auth_audit`): that table has no
 //      foreign key. The email is read before the delete, while the user still exists. A purge that

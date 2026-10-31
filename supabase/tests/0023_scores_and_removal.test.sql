@@ -3,13 +3,13 @@
 -- the digit (rate_score, speeding_weight, recency_weight, estimate_exposure, event_weight_of, and
 -- the stored scenarios A/B/C/E/F of scores.md §3.3 through apply_drive); a drive's counters are
 -- estimated when absent and held to what the drive allows; a drive dated in the future is moved back
--- to end now; the merge is 300 s and 150 m to the second and the metre; "Wasn't driving" and a report
+-- to end now; a drive right after another is its own (0032); "Wasn't driving" and a report
 -- move the week's goals; the summary and the profile keep their LEGACY literals; the board ranks by
 -- rating.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(72);
+select plan(70);
 -- the scores travel in jsonb: read them back exactly (the test runner's session prints 15 digits)
 set local extra_float_digits = 1;
 
@@ -33,7 +33,7 @@ select table_privs_are('public', 'trip_events', 'authenticated', '{}'::text[], '
 select table_privs_are('public', 'progress', 'anon', '{}'::text[], 'progress: nothing for anon');
 select is((select array_agg(c.column_name::text order by c.column_name::text) from information_schema.column_privileges c
     where c.grantee = 'authenticated' and c.table_schema = 'public' and c.table_name = 'progress' and c.privilege_type = 'SELECT'),
-  array['created_at', 'ranked', 'rating_updated_at', 'safety_rating', 'updated_at', 'user_id'], 'the owner reads only the rating columns of progress (miles_90d and last_end_* through RPCs only)');
+  array['created_at', 'ranked', 'rating_updated_at', 'safety_rating', 'updated_at', 'user_id'], 'the owner reads only the rating columns of progress (miles_90d through RPCs only)');
 select is((select array[has_function_privilege('authenticated', 'public.get_friends_board()', 'execute'), has_function_privilege('anon', 'public.get_friends_board()', 'execute')]),
   array[true, false], 'get_friends_board() is a client RPC for authenticated only');
 create function private.zz_probe_fn() returns int language sql as 'select 1';
@@ -224,19 +224,12 @@ select is((select row(ended_at = now(), ended_at - started_at, duration_s, leagu
   row(true, interval '30 minutes', 1800, true, true)::text, 'it ends now, keeps its length, and its day and week are read again');
 select is((select e.started_at - t.started_at from public.trip_events e join public.trips t on t.id = e.trip_id where e.client_event_id = 'f6000000-0000-4000-8000-000000000001'),
   interval '10 minutes', 'its events move with it');
-select is((select last_end_at = now() from public.progress where user_id = '00000000-0000-0000-0000-000000000004'), true, 'and the last end it leaves is now');
 -- ---------------------------------------------------------------------------
--- the merge: 300 s and 150 m, to the second and the metre
+-- no drive is joined (0032): a start 60 s after dan's latest end (the moved drive) is a fresh drive
 -- ---------------------------------------------------------------------------
--- dan's latest end is now (the moved drive); a start 1 m north is about 0.000009 degrees
-create function pg_temp.merge_at(p_secs int, p_metres double precision) returns jsonb language sql as $$
-  select private.drive_context('00000000-0000-0000-0000-000000000004', gen_random_uuid(), now() + make_interval(secs => p_secs), current_date,
-    47.61 + p_metres / 111195.0, -122.31, now() + make_interval(secs => p_secs + 60)) -> 'merge'
-$$;
-select is(array[pg_temp.merge_at(300, 149) ->> 'clientTripId', pg_temp.merge_at(301, 149) ->> 'clientTripId'],
-  array['f0000000-0000-4000-8000-000000000006', null], '300 s after the end merges, 301 s does not');
-select is(array[pg_temp.merge_at(60, 149) ->> 'clientTripId', pg_temp.merge_at(60, 151) ->> 'clientTripId'],
-  array['f0000000-0000-4000-8000-000000000006', null], '149 m from the end merges, 151 m does not');
+select is(private.drive_context('00000000-0000-0000-0000-000000000004', gen_random_uuid(), now() + interval '60 seconds', current_date,
+    47.61, -122.31, now() + interval '120 seconds'), '{"version": 23, "phoneUse": true, "existing": null, "merge": null}'::jsonb,
+  'a start 60 s after the last end is offered no drive to join');
 
 select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'f0000000-0000-4000-8000-000000000007', now() - interval '20 minutes', 1500, 4, '[]');
 select is((select abs(extract(epoch from ended_at - (now() + interval '5 minutes'))) < 0.01 from pg_temp.t('f0000000-0000-4000-8000-000000000007')), true, 'a clock up to 10 minutes ahead is taken as dated');
@@ -293,7 +286,7 @@ reset role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is((select array[e ->> 'format_version', ((e -> 'trips' -> 0) ? 'points_net')::text, ((e -> 'trips' -> 0) ? 'origin')::text] from (select public.export_account('00000000-0000-0000-0000-000000000001') as e) x),
-  array['5', 'false', 'true'], 'the export is format 5: drives with how they started, without points');
+  array['6', 'false', 'true'], 'the export is format 6: drives with how they started, without points');
 reset role;
 
 select * from finish();

@@ -1,10 +1,9 @@
--- 0006_social: search and profiles behind blocks, the friend flow and its cap, blocks, reports,
--- clans (names, codes, size, roles, hand-over, deletion; called as the owner since 0012), heat map
--- visibility, member stats.
+-- 0006_social: search and profiles behind blocks, the friend flow and its cap, blocks, reports
+-- (a user only, 0032), heat map visibility, member stats.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(87);
+select plan(48);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -111,83 +110,11 @@ select throws_ok($$ select public.unblock_user('00000000-0000-0000-0000-00000000
 select is(public.get_profile('cat') ->> 'relationship', 'none', 'cat is visible again, not a friend');
 
 -- reports: 10 a day, never self
-select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000001', 'other', '') $$, '22023', 'kind must be user or clan with a target id', 'self report refused');
+select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000001', 'other', '') $$, '22023', 'kind must be user with a target id', 'self report refused');
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'rude', '') $$, '22023', 'unknown report reason', 'unknown reason refused');
-select throws_ok($$ select public.report_target('clan', '00000000-0000-0000-0000-00000000dead', 'other', '') $$, 'P0002', 'clan not found', 'an unknown target is the usual refusal');
+select throws_ok($$ select public.report_target('clan', '00000000-0000-0000-0000-00000000dead', 'other', '') $$, '22023', 'kind must be user with a target id', 'a report names a user only (0032: clans are gone)');
 select is((select count(*)::int from generate_series(1, 10) i, lateral (select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', 'note ' || i)) r), 10, 'ten reports go through');
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', '') $$, '42501', 'too many requests', 'the eleventh in a day is refused');
-
--- ---------------------------------------------------------------------------
--- clans (dormant: since 0012 their RPCs are server-only, so this section calls them as the
--- database owner, still as each user through the JWT claims)
--- ---------------------------------------------------------------------------
-reset role;
-select throws_ok($$ select public.create_clan('Sh1t Crew', 'navy') $$, '22023', 'name must be 3 to 24 characters', 'a profane clan name is refused');
-select throws_ok($$ select public.create_clan('Night Owls', 'rainbow') $$, '22023', 'unknown banner', 'an unknown banner is refused');
-create temporary table clan as select public.create_clan('Night Owls', 'navy') as c;
-select matches((select c ->> 'invite_code' from clan), '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$', 'the invite code is 8 unambiguous characters');
-select throws_ok($$ select public.create_clan('Other', 'gold') $$, '42501', 'you are already in a clan', 'one clan per user');
-select pg_temp.as_user(2);
-select throws_ok($$ select public.create_clan('night owls', 'gold') $$, '23505', 'clan name is taken', 'names are unique case-insensitively');
-select throws_ok($$ select public.preview_clan('ZZZZZZZZ') $$, 'P0002', 'clan not found', 'an unknown code is not found');
-select is(public.preview_clan(lower((select c ->> 'invite_code' from clan))) - 'id', '{"full": false, "name": "Night Owls", "banner": "navy", "member_count": 1}'::jsonb, 'the preview (case-insensitive code)');
-select is(public.preview_clan((select c ->> 'invite_code' from clan)) ->> 'id', (select c ->> 'id' from clan), 'the preview names the clan id, so it can be reported');
-select is(public.join_clan((select c ->> 'invite_code' from clan)) ->> 'name', 'Night Owls', 'ben joins');
-select is(public.get_my_clan() -> 'clan' -> 'invite_code', 'null'::jsonb, 'a member does not see the invite code');
-select is(public.get_my_clan() -> 'goal', jsonb_build_object('week', (select week from wk), 'clean_miles', 0, 'target_clean_miles', 50), 'the weekly goal: max(50, 25 x members)');
-select throws_ok($$ select public.set_member_role('00000000-0000-0000-0000-000000000001', 'member') $$, '42501', 'only the leader can do that', 'a member cannot set roles');
-select throws_ok($$ select public.regenerate_clan_code() $$, '42501', 'only the leader or a co-leader can do that', 'nor regenerate the code');
-select pg_temp.as_user(4);
-select public.join_clan((select c ->> 'invite_code' from clan));
-select pg_temp.as_user(1);
-select lives_ok($$ select public.set_member_role('00000000-0000-0000-0000-000000000002', 'coleader') $$, 'the leader makes ben co-leader');
-select is((select array_agg(x ->> 'username' order by x ->> 'username') from jsonb_array_elements(public.get_my_clan() -> 'members') x), array['ava', 'ben', 'dan'], 'three members');
-select is(public.get_my_clan() -> 'goal' ->> 'target_clean_miles', '80', '25 x 3 = 75 rounds to 80');
-select is(public.get_my_clan() -> 'clan' ->> 'invite_code', (select c ->> 'invite_code' from clan), 'the leader sees the code');
-select throws_ok($$ select public.update_clan(p_name := 'A') $$, '22023', 'name must be 3 to 24 characters', 'a short name is refused');
-select lives_ok($$ select public.update_clan(p_name := 'Day Owls', p_banner := 'gold') $$, 'the leader renames and re-banners');
-select is((select row(c -> 'clan' ->> 'name', c -> 'clan' ->> 'banner')::text from public.get_my_clan() c), row('Day Owls', 'gold')::text, 'stored');
-select pg_temp.as_user(2);
-select isnt(public.regenerate_clan_code() ->> 'invite_code', (select c ->> 'invite_code' from clan), 'a co-leader regenerates the code');
-select throws_ok($$ select public.remove_member('00000000-0000-0000-0000-000000000001') $$, '42501', 'only the leader or a co-leader can do that', 'a co-leader cannot remove the leader');
-select throws_ok($$ select public.update_clan(p_banner := 'navy') $$, '42501', 'only the leader can do that', 'nor change the clan');
-select lives_ok($$ select public.remove_member('00000000-0000-0000-0000-000000000004') $$, 'but removes a member');
-select pg_temp.as_user(4);
-select is(public.get_my_clan(), null, 'dan is out');
-select throws_ok($$ select public.join_clan('ZZZZZZZZ') $$, 'P0002', 'clan not found', 'and cannot rejoin by a wrong code');
-select pg_temp.as_user(1);
-select lives_ok($$ select public.transfer_leadership('00000000-0000-0000-0000-000000000002') $$, 'ava hands leadership to ben');
-select is((select array_agg(role order by role) from public.clan_members), array['coleader', 'leader'], 'ava is co-leader, ben leader');
-select pg_temp.as_user(2);
-select lives_ok($$ select public.leave_clan() $$, 'the leader leaves');
-select is((select role from public.clan_members where user_id = '00000000-0000-0000-0000-000000000001'), 'leader', 'the longest-serving co-leader is promoted');
-select pg_temp.as_user(2);
-select throws_ok($$ select public.leave_clan() $$, 'P0002', 'you are not in a clan', 'leaving twice is an error');
-
--- a full clan: 29 more members then the 31st is refused; a blocked member keeps you out
-insert into public.clan_members (clan_id, user_id, role) select (select id from public.clans), u.id, 'member' from auth.users u where u.email like 'f%@example.com' limit 28;
-insert into public.blocks (blocker_id, blocked_id) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000004');
-create temporary table code as select invite_code from public.clans;
-select pg_temp.as_user(2);
-select lives_ok($$ select public.join_clan((select invite_code from code)) $$, 'the 30th member joins');
-select pg_temp.as_user(3);
-select throws_ok($$ select public.join_clan((select invite_code from code)) $$, '42501', 'this clan is full', 'the 31st is refused');
-delete from public.clan_members where user_id = '00000000-0000-0000-0000-000000000002';
-select pg_temp.as_user(4);
-select throws_ok($$ select public.join_clan((select invite_code from code)) $$, '42501', 'you cannot join this clan', 'a user blocked by a member cannot join');
-select pg_temp.as_user(1);
-select is((select count(*)::int from jsonb_array_elements(public.get_my_clan() -> 'members')), 29, 'the leader sees 29 members (none blocked among them)');
-
--- leader hand-over on account delete, then the empty clan goes
-delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
-select is((select count(*)::int from public.clan_members where role = 'leader'), 1, 'deleting the leader''s account promotes exactly one member');
-select is((select user_id from public.clan_members where role = 'leader'), (select user_id from public.clan_members order by joined_at, user_id limit 1), 'the longest-serving one');
-delete from public.clan_members;
-select is((select count(*)::int from public.clans), 0, 'an emptied clan is deleted');
-insert into public.clans (id, name, banner, invite_code) values ('e0000000-0000-4000-8000-000000000001', 'Solo', 'navy', 'ABCDEFGH');
-set constraints clan_leader_required immediate;
-select throws_ok($$ insert into public.clan_members (clan_id, user_id, role) values ('e0000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000002', 'member') $$,
-  '23514', 'a clan needs a leader', 'a clan cannot be left without a leader (deferred constraint, forced immediate here)');
 
 select * from finish();
 rollback;

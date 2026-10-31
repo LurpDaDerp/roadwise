@@ -1,4 +1,4 @@
-// The drive engine port: the `private.*` SQL functions of migrations 0023, 0026, 0029 and 0031, reached over a DIRECT
+// The drive engine port: the `private.*` SQL functions of migrations 0023, 0026, 0029, 0031 and 0032, reached over a DIRECT
 // Postgres connection — the `private` schema is not exposed by the Data API, so nothing but these
 // functions (and the service role) can call them. Every request runs inside ONE transaction:
 // `drive_context` locks the user's progress row and finds a replay, `app_attest_context` reads the
@@ -24,15 +24,14 @@ export type EngineDisputeReason = 'hazard' | 'wrong_limit' | 'camera_wrong' | 'm
  * makes an older database (or older function) fail loudly as a 500, never a 400; so is
  * `phoneUse: true` (0026): a database that cannot store a phone pickup would refuse one with a 400
  * the phone never retries, so this function refuses to run on it. The key is additive, so the
- * function before this one keeps working on a database with 0026. `merge` (the drive an upload
- * could be joined to) is always null, since no start point is passed, and read by nothing: every
- * upload is stored as its own drive.
+ * function before this one keeps working on a database with 0026. Every upload is stored as its own
+ * drive: the answer's `merge` (always null since 0032, and before it too as no start point is
+ * passed; a function before this one requires the key) is read by nothing, and the parse drops it.
  */
 export const DriveContextSchema = z.object({
   version: z.literal(23),
   phoneUse: z.literal(true),
   existing: z.record(z.string(), z.unknown()).nullable(),
-  merge: z.unknown(),
 });
 export type DriveContext = z.infer<typeof DriveContextSchema>;
 
@@ -81,8 +80,6 @@ export type EnvelopeEvent = Omit<PayloadEvent, 'zone' | 'status'> & { zone: 'sch
 /** The `private.apply_drive` envelope. */
 export interface ApplyDriveEnvelope {
   user: string;
-  /** Always null: every upload is stored as its own drive (apply_drive's join branch never runs). */
-  mergeInto: string | null;
   /** What the stored drive holds, derived from `payload.dashcam` (the upload's own, as sent). */
   dashcam: EnvelopeDashcam;
   payload: {
@@ -94,8 +91,6 @@ export interface ApplyDriveEnvelope {
     miles: number;
     nightMiles: number;
     durationS: number;
-    /** Always null: apply_drive would keep the end point for the old merge check. */
-    end: null;
     polyline: string;
     appVersion: string;
     dashcam: FinalizeTripPayloadV5['dashcam'] | null;
@@ -204,7 +199,7 @@ function txPort(tx: Tx): EngineTx {
         tx<{ r: boolean }[]>`select private.app_attest_advance(${userId}::uuid, ${keyId}::text, ${counter}::bigint) as r`
       ),
     async driveContext(a) {
-      // no start point: where a drive started is never passed on (only the old merge check read it)
+      // no start point: where a drive started is never passed on (the signature keeps the two arguments)
       const r = await call<unknown>('private.drive_context', () =>
         tx<{ r: unknown }[]>`select private.drive_context(${a.userId}::uuid, ${a.clientTripId}::uuid, to_timestamp(${a.startedAt}::double precision / 1000.0),
           ${a.localDay}::date, null::double precision, null::double precision,

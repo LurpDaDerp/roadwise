@@ -51,7 +51,7 @@ begin
       coalesce((select sum(private.attention_weight(e.type, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type in ('eyes_off', 'drowsy')), 0::float8) as att
     from public.trips t
-    where t.user_id = p_user and t.scored and not t.not_driving and t.merged_into is null
+    where t.user_id = p_user and t.scored and not t.not_driving
       and t.started_at > p_at - interval '2160 hours' and t.started_at <= p_at
     order by t.started_at, t.client_trip_id
   loop
@@ -99,7 +99,7 @@ begin
 end $$;
 
 -- 3,000 drives over the window (pairs share a start, so the drive order falls to client_trip_id), a
--- few unscored, "not driving" or merged away, every fifth one watched by DashPal
+-- few unscored or "not driving", every fifth one watched by DashPal
 create temporary table g as
   select i, md5('trip-' || i)::uuid as cid, now() - make_interval(secs => (i / 2) * 5180 + 30) as st,
     round((0.4 + (i % 37) * 0.73)::numeric, 2) as mi, 300 + (i % 50) * 60 as dur
@@ -112,8 +112,6 @@ insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_d
     case when g.i % 3 = 0 then floor(g.dur * 0.6 * (g.i % 4) * 0.25)::int else 0 end,
     case when g.i % 5 = 0 then floor(g.dur * 0.8)::int else 0 end, case when g.i % 5 = 0 then floor(g.dur * 0.56)::int else 0 end
   from g;
-update public.trips t set merged_into = (select x.id from public.trips x where x.client_trip_id = md5('trip-1')::uuid)
-  where t.client_trip_id in (select cid from g where i % 59 = 0);
 -- and some the window leaves out: older than 90 days, the edge itself, and ahead of now
 insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s,
     scored, slowdowns, speedups, turns, limit_s, moving_s)

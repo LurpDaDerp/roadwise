@@ -1,12 +1,11 @@
 -- 0029_privacy_and_bounds: no point where a drive ended is kept; drive_overlaps finds a drive that
 -- overlaps another of the same driver by more than a minute (never its own replay, never another
 -- driver's, judged where apply_drive will store it), and such an upload is stored unscored; at most 5
--- friend-request pushes a day for one recipient while every request is still recorded; leave_clan is
--- server-only.
+-- friend-request pushes a day for one recipient while every request is still recorded.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(36);
+select plan(33);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -46,21 +45,15 @@ create function pg_temp.t(p_client uuid) returns public.trips language sql stabl
 -- ---------------------------------------------------------------------------
 -- where a drive ended is not kept
 -- ---------------------------------------------------------------------------
--- (scripts/seed-demo.js stores the synthetic demo account's drives with an end point: not a person's)
-select is((select count(*)::int from public.progress g
-    where (g.last_end_lat is not null or g.last_end_lng is not null)
-      and g.user_id not in (select u.id from auth.users u where u.email = 'demo@roadwise.app')), 0,
-  'no progress row holds the point where a drive ended');
--- a drive an older finalize-trip sent with its end point keeps it, until the driver's next drive
+select hasnt_column('public', 'progress', 'last_end_lat', 'progress has no column for where a drive ended (0032)');
+-- a drive an older finalize-trip sent with its end point: the point is stored nowhere
 select pg_temp.drive('00000000-0000-0000-0000-000000000003', 'c0000000-0000-4000-8000-0000000000c1', now() - interval '2 days', 1200, 8, '{}'::jsonb,
   '{"end": {"lat": 47.6101, "lng": -122.3402}}'::jsonb);
-select is((select array[last_end_lat, last_end_lng]::float8[] from public.progress where user_id = '00000000-0000-0000-0000-000000000003'),
-  array[47.6101, -122.3402]::float8[], 'an older finalize-trip''s end point is the one 0029 clears');
-select pg_temp.drive('00000000-0000-0000-0000-000000000003', 'c0000000-0000-4000-8000-0000000000c2', now() - interval '1 day', 1200, 8);
-select is((select array[last_end_lat is null, last_end_lng is null, last_end_at is not null] from public.progress where user_id = '00000000-0000-0000-0000-000000000003'),
-  array[true, true, true], 'the next drive, uploaded with no end point, clears it; the time of its end stays');
+select is((select array[position('47.6101' in to_jsonb(t)::text), position('47.6101' in to_jsonb(g)::text)]
+    from public.trips t, public.progress g where t.client_trip_id = 'c0000000-0000-4000-8000-0000000000c1' and g.user_id = t.user_id),
+  array[0, 0], 'an older finalize-trip''s end point is in neither the drive nor progress');
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000a1', pg_temp.t0(), 1800, 12);
-select is((select array[scored, merged_into is null] from pg_temp.t('a0000000-0000-4000-8000-0000000000a1')), array[true, true], 'the first drive is stored scored');
+select is((pg_temp.t('a0000000-0000-4000-8000-0000000000a1')).scored, true, 'the first drive is stored scored');
 
 -- ---------------------------------------------------------------------------
 -- drive_overlaps: the first drive runs t0 .. t0 + 30 min
@@ -99,8 +92,8 @@ select is(private.drive_overlaps('00000000-0000-0000-0000-000000000001', gen_ran
 create temporary table before_overlap as select safety_rating, miles_90d from public.progress where user_id = '00000000-0000-0000-0000-000000000001';
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000a3', pg_temp.t0() + interval '10 minutes', 1800, 40,
   '{"scored": false, "reason": "implausible"}'::jsonb);
-select is((select array[(not scored)::text, reason, (merged_into is null)::text] from pg_temp.t('a0000000-0000-4000-8000-0000000000a3')),
-  array['true', 'implausible', 'true'], 'the overlapping upload is stored as its own drive, unscored as implausible');
+select is((select array[(not scored)::text, reason] from pg_temp.t('a0000000-0000-4000-8000-0000000000a3')),
+  array['true', 'implausible'], 'the overlapping upload is stored as its own drive, unscored as implausible');
 select is((select row(g.safety_rating, g.miles_90d)::text from public.progress g where g.user_id = '00000000-0000-0000-0000-000000000001'),
   (select row(b.safety_rating, b.miles_90d)::text from before_overlap b), 'and the rating and its miles are as they were');
 select is(private.drive_overlaps('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000a3', pg_temp.t0() + interval '10 minutes', pg_temp.t0() + interval '40 minutes'),
@@ -185,15 +178,6 @@ reset role;
 select is((select count(*)::int from public.inbox where user_id = '00000000-0000-0000-0000-000000000003' and kind = 'friend_request'), 1,
   'another recipient gets their push');
 select is(has_function_privilege('authenticated', 'public.send_friend_request(uuid)', 'execute'), true, 'send_friend_request is still the client''s to call');
-
--- ---------------------------------------------------------------------------
--- leave_clan: server-only like every clan RPC
--- ---------------------------------------------------------------------------
-select is(array[has_function_privilege('anon', 'public.leave_clan()', 'execute'), has_function_privilege('authenticated', 'public.leave_clan()', 'execute')],
-  array[false, false], 'no client role may call leave_clan');
-select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like '%clan%'
-    and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))), 0,
-  'no clan function in public is executable by a client role');
 
 select * from finish();
 rollback;
