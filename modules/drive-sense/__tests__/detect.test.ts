@@ -143,12 +143,20 @@ describe('with the native module', () => {
   test('the car link: a native build without it rejects by name; a bad uid never crosses; the state is validated', async () => {
     await expect(DriveDetect.carLinkState()).rejects.toThrow('DriveDetect.carLinkState: not in this native build');
     await expect(DriveDetect.pairCar('')).rejects.toThrow('DriveDetect.pairCar: invalid arguments');
-    await expect(DriveDetect.forgetCar('x'.repeat(513))).rejects.toThrow('invalid arguments');
+    await expect(DriveDetect.forgetCar('x'.repeat(257))).rejects.toThrow('invalid arguments');
+    // the uid never rides along in the error (it names the driver's device)
+    await expect(DriveDetect.pairCar('')).rejects.toThrow(/^DriveDetect\.pairCar: invalid arguments$/);
     const state = { current: [], cars: [], linked: false, goneSince: null, drives: [], notMine: [] };
     Object.assign(native, { carLinkState: jest.fn(async () => state), notMyCar: jest.fn(async () => ({ ...state, linked: 'yes' })) });
     try {
       await expect(DriveDetect.carLinkState()).resolves.toEqual(state);
-      await expect(DriveDetect.notMyCar('uid-1')).rejects.toThrow('DriveDetect.notMyCar: invalid result');
+      // only the failing field and how: no uid, no car name
+      const named = { ...state, current: [{ uid: '00:11:22:33:44:55-tacl', name: "Sam's Civic", type: 'usbAudio' }] };
+      native.notMyCar!.mockResolvedValueOnce(named);
+      const err = await DriveDetect.notMyCar('uid-1').catch((e: Error) => e);
+      expect(String((err as Error).message)).toBe('DriveDetect.notMyCar: invalid result (current.0.type invalid_value)');
+      expect(String((err as Error).message)).not.toMatch(/Civic|00:11/);
+      await expect(DriveDetect.notMyCar('uid-1')).rejects.toThrow('DriveDetect.notMyCar: invalid result (linked invalid_type)');
     } finally {
       delete (native as Record<string, unknown>).carLinkState;
       delete (native as Record<string, unknown>).notMyCar;

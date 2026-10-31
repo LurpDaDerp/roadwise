@@ -87,6 +87,7 @@ jest.mock('@/features/drives/useDriveScores', () => ({ useDriveScores: () => new
 // The DashPal slot has its own tests.
 jest.mock('@/dashcam/ui/HomeDashpal', () => ({ HomeDashpal: () => null }));
 jest.mock('@/features/places/PlacesCard', () => ({ HomePlacesCard: () => null }));
+jest.mock('@/features/carLink/PairCarCard', () => ({ HomeCarCard: () => null }));
 jest.mock('@/features/drive/DriveInProgressBanner', () => {
   const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
   return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };

@@ -82,8 +82,22 @@ final class CarLink {
   static func read() -> [CarOutput] {
     AVAudioSession.sharedInstance().currentRoute.outputs.compactMap { p -> CarOutput? in
       guard let type = portType(p.portType) else { return nil }
-      return CarOutput(uid: p.uid, name: String(p.portName.prefix(128)), type: type)
+      return CarOutput(uid: capped(p.uid, 256), name: capped(p.portName, 128), type: type)
     }
+  }
+
+  /// At most `limit` UTF-16 units (what JS counts), cut between whole characters, never inside one.
+  static func capped(_ s: String, _ limit: Int) -> String {
+    guard s.utf16.count > limit else { return s }
+    var out = ""
+    var units = 0
+    for c in s {
+      let k = String(c).utf16.count
+      if units + k > limit { break }
+      out.append(c)
+      units += k
+    }
+    return out
   }
 
   private static func portType(_ t: AVAudioSession.Port) -> String? {

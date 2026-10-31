@@ -18,6 +18,7 @@ import { sinceDays, weekStart } from '@/features/drives/format';
 import { useDriveScores } from '@/features/drives/useDriveScores';
 import { homeCard } from '@/features/permissions/board';
 import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
+import { HomeCarCard } from '@/features/carLink/PairCarCard';
 import { HomePlacesCard } from '@/features/places/PlacesCard';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
@@ -218,6 +219,7 @@ export function HomeScreen() {
         permissions={<PermissionCard board={board} recording={recording} autoDisabled={autoDisabled} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
         places={<HomePlacesCard hidden={recording} />}
+        car={<HomeCarCard hidden={recording} />}
         scrollRef={scrollRef}
         refreshing={refreshing}
         onRefresh={() => {

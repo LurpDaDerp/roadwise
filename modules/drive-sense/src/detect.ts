@@ -126,10 +126,16 @@ export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
   z.strictObject({ ok: z.literal(false), reason: z.enum(['permission', 'busy', 'unavailable']) }),
 ]);
 
-/** A car output's uid: what a pairing matches (AVAudioSession's port uid). */
-const CAR_UID_MAX = 512;
-const carUid = z.string().min(1).max(CAR_UID_MAX);
-const carOutput = z.strictObject({ uid: carUid, name: z.string().max(256), type: z.enum(CAR_PORT_TYPES as [CarPortType, ...CarPortType[]]) });
+/**
+ * A car output's uid (what a pairing matches, AVAudioSession's port uid) and name. Native caps them
+ * at these UTF-16 lengths; a longer one is cut here rather than refused, so one odd name never
+ * takes the whole state down.
+ */
+export const CAR_UID_MAX = 256;
+export const CAR_NAME_MAX = 128;
+const cut = (max: number) => z.string().transform((s) => s.slice(0, max));
+const carUid = z.string().min(1).pipe(cut(CAR_UID_MAX));
+const carOutput = z.strictObject({ uid: carUid, name: cut(CAR_NAME_MAX), type: z.enum(CAR_PORT_TYPES as [CarPortType, ...CarPortType[]]) });
 
 export const carLinkStateSchema: z.ZodType<CarLinkState> = z.strictObject({
   current: z.array(carOutput).max(16),
@@ -179,15 +185,23 @@ function safeJson(v: unknown): string {
 
 const fail = (method: string, what: string): Error => new Error(`DriveDetect.${method}: ${what}`);
 
-async function call<T>(method: DriveDetectMethod, args: readonly unknown[], argsOk: boolean, result: z.ZodType<T>): Promise<T> {
-  if (!argsOk) throw fail(method, `invalid arguments ${safeJson(args)}`);
+/**
+ * `quiet`: the arguments and the answer may name the driver's devices (the car link's Bluetooth uids
+ * and car names), so a failure says only which fields failed and how, never their values.
+ */
+async function call<T>(method: DriveDetectMethod, args: readonly unknown[], argsOk: boolean, result: z.ZodType<T>, quiet = false): Promise<T> {
+  if (!argsOk) throw fail(method, quiet ? 'invalid arguments' : `invalid arguments ${safeJson(args)}`);
   if (!native) throw fail(method, 'not available (Android, Jest, Expo Go or web)');
   const fn = native[method] as ((...a: readonly unknown[]) => Promise<unknown>) | undefined;
   // A native build from before the method (the car link's, say) has nothing to call.
   if (typeof fn !== 'function') throw fail(method, 'not in this native build');
   const raw = await fn(...args);
   const parsed = result.safeParse(raw);
-  if (!parsed.success) throw fail(method, `invalid result ${safeJson(raw)}`);
+  if (!parsed.success) {
+    if (!quiet) throw fail(method, `invalid result ${safeJson(raw)}`);
+    const where = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'} ${i.code}`);
+    throw fail(method, `invalid result (${where.join('; ')})`);
+  }
   return parsed.data;
 }
 
@@ -213,10 +227,10 @@ export const DriveDetect: DriveDetectApi = {
   wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
   // Nor a wake: nothing to wake there, nor in a native build from before the method.
   appForeground: () => (native && typeof native.appForeground === 'function' ? call('appForeground', [], true, voidResult) : Promise.resolve()),
-  carLinkState: () => call('carLinkState', [], true, carLinkStateSchema),
-  pairCar: (uid) => call('pairCar', [uid], isCarUid(uid), carLinkStateSchema),
-  forgetCar: (uid) => call('forgetCar', [uid], isCarUid(uid), carLinkStateSchema),
-  notMyCar: (uid) => call('notMyCar', [uid], isCarUid(uid), carLinkStateSchema),
+  carLinkState: () => call('carLinkState', [], true, carLinkStateSchema, true),
+  pairCar: (uid) => call('pairCar', [uid], isCarUid(uid), carLinkStateSchema, true),
+  forgetCar: (uid) => call('forgetCar', [uid], isCarUid(uid), carLinkStateSchema, true),
+  notMyCar: (uid) => call('notMyCar', [uid], isCarUid(uid), carLinkStateSchema, true),
   addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
     if (!native) return { remove() {} };
     const schema = EVENT_SCHEMAS[event] as z.ZodType<DriveDetectEvents[E]>;
