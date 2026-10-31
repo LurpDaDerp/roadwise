@@ -26,7 +26,7 @@ export const carCopy = {
     already: (name: string) => `${name} is paired.`,
     paired: 'Paired',
     use: 'Use this car',
-    headphones: 'This looks like headphones or a hearing aid, not a car, so it can’t be used.',
+    headphones: 'This looks like headphones or a hearing aid, not a car, so RoadWise can’t use it.',
     full: 'You can pair up to 3 cars. Forget one to add another.',
     cars: 'Your cars',
     connected: 'Connected',
