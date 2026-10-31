@@ -34,7 +34,7 @@ export const carCopy = {
     forget: 'Forget car',
     forgetLabel: (name: string) => `Forget ${name}`,
     note:
-      'Pairing starts drives sooner and ends a drive soon after the car disconnects. It can’t wake your iPhone by itself: RoadWise still notices a drive when you leave where you parked or open the app. RoadWise only reads which Bluetooth or CarPlay audio is connected; it never changes your audio or connections. A car that connects only for calls may not show here.',
+      'Pairing starts drives sooner and ends a drive soon after the car disconnects. It can’t wake your iPhone on its own, so RoadWise still notices a drive when you leave where you parked or open the app. RoadWise only checks which Bluetooth or CarPlay audio is connected and never changes your audio or connections. A car that connects only for calls may not show up here.',
     failed: 'That didn’t work. Try again.',
   },
   card: {
@@ -43,7 +43,7 @@ export const carCopy = {
     hint: 'Opens Your car',
     dismiss: 'Close',
     askTitle: (name: string) => `Is ${name} your car?`,
-    askBody: 'It was connected on your recent drives. Pairing it starts drives sooner.',
+    askBody: 'It was connected during your recent drives. Pair it to start drives sooner.',
     use: 'Use it',
     notMine: 'Not my car',
   },

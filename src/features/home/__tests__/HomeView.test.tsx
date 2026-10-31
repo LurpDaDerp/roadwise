@@ -160,7 +160,7 @@ describe('first run', () => {
 
   test('with automatic drives on, the words say drives start on their own, and Start gets its quiet line', async () => {
     await draw(<HomeView {...props({ driveCount: 0, recent: [], autoDrives: true })} />);
-    expect(screen.getByText("Just drive. RoadWise notices once you're moving and keeps a record.")).toBeOnTheScreen();
+    expect(screen.getByText("Just drive. RoadWise notices once you're moving and records the drive.")).toBeOnTheScreen();
     expect(screen.getByText('Drives record themselves')).toBeOnTheScreen();
     expect(within(screen.getByTestId('home-header')).getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise notices on its own.');
   });

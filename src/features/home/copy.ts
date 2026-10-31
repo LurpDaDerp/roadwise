@@ -36,7 +36,7 @@ export const homeCopy = {
   firstRun: {
     first: 'Take your first drive',
     more: (left: number) => `${left} more ${left === 1 ? 'drive' : 'drives'} to unlock your stats`,
-    auto: "Just drive. RoadWise notices once you're moving and keeps a record.",
+    auto: "Just drive. RoadWise notices once you're moving and records the drive.",
     manual: 'Swipe Start drive before you pull out. Then put your phone down and go.',
     keepGoing: 'Nice start. Your stats show up here after 3 drives.',
   },

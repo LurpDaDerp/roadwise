@@ -146,7 +146,7 @@ describe('the pairing screen', () => {
     await act(async () => mockDetect.setCarRoute([civic]));
     await waitFor(() => expect(screen.getByText(carCopy.screen.full)).toBeTruthy());
     expect(screen.getByTestId('car-use')).toBeDisabled();
-    expect(screen.getByTestId('car-note')).toHaveTextContent(/can’t wake your iPhone by itself/);
+    expect(screen.getByTestId('car-note')).toHaveTextContent(/can’t wake your iPhone on its own/);
   });
 });
 
