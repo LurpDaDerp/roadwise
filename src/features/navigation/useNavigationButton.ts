@@ -1,6 +1,6 @@
 // The navigation button's flow (product spec v3 "Driving screen · Navigation"; design §7.4).
 //
-// - First tap (nothing saved): the list "Select default navigation app" of the apps installed.
+// - First tap (nothing saved): the list "Choose your navigation app" of the apps installed.
 //   Choosing one saves it and opens it.
 // - Later taps: the saved app opens directly. Gone (uninstalled): the saved choice is cleared and the
 //   list shows again, saying so. It did not open: the list shows, saying so.

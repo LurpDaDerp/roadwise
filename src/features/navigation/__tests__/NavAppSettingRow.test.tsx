@@ -59,7 +59,7 @@ test('tapping it shows the list without the driving line; choosing only saves: n
   expect(screen.getByText('Not set')).toBeOnTheScreen();
   await fireEvent.press(screen.getByTestId('settings-nav-app'));
   await act(async () => {});
-  expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+  expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
   expect(screen.queryByText('Your drive keeps recording while you navigate.')).toBeNull();
   expect(screen.getByText('You can change it in Settings › Driving.')).toBeOnTheScreen();
   await fireEvent.press(screen.getByTestId('nav-picker-row-waze'));

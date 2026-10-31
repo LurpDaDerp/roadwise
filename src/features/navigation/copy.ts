@@ -1,7 +1,7 @@
 // The words of the navigation button, its list of apps and its Settings row (product spec v3
 // "Driving screen · Navigation", "Settings").
 export const navCopy = {
-  pickerTitle: 'Select default navigation app',
+  pickerTitle: 'Choose your navigation app',
   /** Under the title, on the driving screen only. */
   driveLine: 'Your drive keeps recording while you navigate.',
   gone: (app: string) => `${app} isn't on this phone anymore.`,

@@ -1,4 +1,4 @@
-// "Select default navigation app": the list of the navigation apps installed on this phone. The
+// "Choose your navigation app": the list of the navigation apps installed on this phone. The
 // driving screen shows it in a panel over the HUD (never a route, and the End button stays
 // reachable below it); Settings shows it in a sheet. The colours are the caller's, so the HUD keeps
 // its own palette.

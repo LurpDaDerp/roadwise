@@ -1173,7 +1173,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     await act(async () => {});
     const c = skyBundle(mood).colors;
     expect(screen.getByTestId('hud-nav-panel')).toHaveStyle({ backgroundColor: c.surface, borderColor: c.border });
-    expect(screen.getByText('Select default navigation app')).toHaveStyle({ color: c.text });
+    expect(screen.getByText('Choose your navigation app')).toHaveStyle({ color: c.text });
   });
 
   test('the first tap opens the list of installed apps over the HUD; End still ends the drive with it open', async () => {
@@ -1181,7 +1181,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     await fireEvent.press(screen.getByTestId('hud-nav'));
     await act(async () => {});
     expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
-    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
     expect(screen.getByText('Your drive keeps recording while you navigate.')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-apple_maps')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-waze')).toBeOnTheScreen();
@@ -1216,7 +1216,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     await fireEvent(button, 'longPress');
     await act(async () => {});
     expect(Linking.openURL).not.toHaveBeenCalled();
-    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-waze')).toHaveProp('accessibilityState', { selected: true });
     expect(screen.getByTestId('nav-picker-row-apple_maps')).toHaveProp('accessibilityState', { selected: false });
     await fireEvent.press(screen.getByTestId('nav-picker-row-apple_maps'));
@@ -1248,7 +1248,7 @@ describe('the navigation button (design §7.4, §8)', () => {
     expect(button.props.accessibilityActions).toBeUndefined();
     await fireEvent(button, 'longPress');
     await act(async () => {});
-    expect(screen.getByText('Select default navigation app')).toBeOnTheScreen();
+    expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
     expect(screen.getByTestId('nav-picker-row-waze')).toHaveProp('accessibilityState', { selected: false });
     expect(Linking.openURL).not.toHaveBeenCalled();
     await fireEvent.press(screen.getByTestId('nav-picker-row-waze'));
