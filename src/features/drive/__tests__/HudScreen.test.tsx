@@ -1955,7 +1955,7 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     const h = await renderHud(waitDrive());
     expect(screen.getByTestId('hud-waiting')).toHaveTextContent(/Ready to roll/);
     expect(screen.getByTestId('hud-waiting-line')).toHaveTextContent('Saved once you drive');
-    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording now; the drive is saved once you're driving.");
+    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording now, and the drive is saved once you're driving.");
     const cancel = screen.getByRole('button', { name: 'Cancel' });
     expect(cancel).toHaveProp('accessibilityHint', 'Swipe right to stop waiting. Nothing is saved.');
     expect(cancel).not.toBeDisabled();

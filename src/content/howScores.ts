@@ -172,7 +172,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Once you’re over ${n.autoMinMph} mph, RoadWise starts recording after about ${n.autoMaxHoldS} s, ${n.autoStepS} s sooner for every ${n.autoStepMph} mph faster, and right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
-          `Riding along? Open the drive screen and tap “${ND}”. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Open the drive screen and tap “${ND}”. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],
       }
@@ -183,7 +183,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Swipe Start drive on Home before you pull out. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
           `It records until you swipe End drive, park and walk away, or stay parked for ${IDLE_MIN} min.`,
-          `Riding along? Tap “${ND}” on the drive screen. It shows once the car reaches driving speed, for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Tap “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
         ],
       },
   {
@@ -223,7 +223,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'Every event on a drive has a Report link.',
       `“Braked for a hazard”, “wrong speed limit” and “phone was mounted” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
       `“DashPal got it wrong” is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
-      `“Wasn’t driving” takes a whole drive off when someone else drove. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” didn’t run out during it.`,
+      `If someone else drove, “Wasn’t driving” takes the whole drive off. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” hadn’t run out on that drive.`,
       'Recorded drives can’t be deleted, so nobody can hide a rough drive.',
     ],
   },

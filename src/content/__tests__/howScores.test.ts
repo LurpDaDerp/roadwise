@@ -45,13 +45,13 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
   expect(section(true, 'drives')).toEqual([
     'Once you’re over 15 mph, RoadWise starts recording after about 25 s, 5 s sooner for every 3 mph faster, and right away from 30 mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.',
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
-    'Riding along? Open the drive screen and tap “Not driving?”. It shows once the car reaches driving speed, for your first 2 minutes on that screen.',
+    'Riding along? Open the drive screen and tap “Not driving?”. It appears once the car reaches driving speed and stays for your first 2 minutes on that screen.',
     'Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to 5 min for you to get moving.',
   ]);
   const other = rules(true, { autoMinMph: 12, autoMaxHoldS: 40, autoStepS: 4, autoStepMph: 2, autoInstantMph: 32, waitMin: 7, notDrivingMin: 3 });
   expect(other.find((s) => s.id === 'drives')!.lines.join(' ')).toMatch(/over 12 mph, .*about 40 s, 4 s sooner for every 2 mph faster, and right away from 32 mph.*first 3 minutes.*up to 7 min/);
   expect(section(false, 'drives')[0]).toBe('Swipe Start drive on Home before you pull out. RoadWise waits up to 5 min for you to get moving.');
-  expect(section(false, 'drives')[2]).toBe('Riding along? Tap “Not driving?” on the drive screen. It shows once the car reaches driving speed, for your first 2 minutes on that screen.');
+  expect(section(false, 'drives')[2]).toBe('Riding along? Tap “Not driving?” on the drive screen. It appears once the car reaches driving speed and stays for your first 2 minutes on that screen.');
   // Too short: a Start-card drive is not saved at all, an automatic one gets no score.
   expect(section(true, 'drive-score')[4]).toBe(
     `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`

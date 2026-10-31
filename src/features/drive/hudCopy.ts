@@ -35,7 +35,7 @@ export const hudCopy = {
   waiting: {
     title: 'Ready to roll',
     line: 'Saved once you drive',
-    spoken: "Ready to roll. Recording now; the drive is saved once you're driving.",
+    spoken: "Ready to roll. Recording now, and the drive is saved once you're driving.",
   },
   /** The panel at 2:00 of waiting. */
   ask: {
