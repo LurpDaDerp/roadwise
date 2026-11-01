@@ -1,8 +1,11 @@
-import { screen, waitFor, within } from '@testing-library/react-native';
+import { act, screen, waitFor, within } from '@testing-library/react-native';
+import { Component, type ComponentType, type ReactNode } from 'react';
+import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 
 import { draw, EXPOSURE, press } from '@/features/drives/__fixtures__/drives';
 import { driveSummaryHref } from '@/features/drives/routes';
+import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { ThemeProvider } from '@/ui/theme';
 
@@ -11,7 +14,18 @@ import { AnalyticsScreen } from '../AnalyticsScreen';
 import type { AnalyticsData } from '../useAnalytics';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn() };
-jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
+// The tab's focus: the screen subscribes on mount (its first focus); `mockFocus()` focuses it again.
+let mockFocus: () => void = () => undefined;
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => mockRouter,
+    useFocusEffect: (cb: () => void) => {
+      mockFocus = cb;
+      useEffect(cb, [cb]);
+    },
+  };
+});
 
 // The problem spots: the data layer's view, and the spots package's card and sheet (their own tests cover them).
 const SPOT = { id: 's1', kind: 'speeding', state: 'active', lastHitTrip: 'd5' };
@@ -333,4 +347,32 @@ test('first load shows a placeholder; a failed read says so in one line', async 
   await draw(<AnalyticsScreen />);
   expect(screen.getByText("Couldn't load your drives.")).toBeOnTheScreen();
   expect(screen.getByTestId('analytics-radar')).toBeOnTheScreen();
+});
+
+test('each time the tab gains focus again the All trips map goes back to the view framing every route', async () => {
+  const animateToRegion = jest.fn();
+  class MapView extends Component<{ children?: ReactNode }> {
+    animateToRegion = animateToRegion;
+    render() {
+      return <View testID="map-view">{this.props.children}</View>;
+    }
+  }
+  setMapsForTests({ default: MapView as unknown as ComponentType, Polyline: View, Marker: View } as unknown as MapsModule);
+  // The mocked spots carry no road to draw; this test is about the map's view.
+  mockSpots = null;
+  try {
+    await draw(<AnalyticsScreen />);
+    // The first focus leaves the map on the view it opens on.
+    expect(screen.getByTestId('trips-map', { includeHiddenElements: true })).toBeOnTheScreen();
+    expect(animateToRegion).not.toHaveBeenCalled();
+    const { region } = mockAnalytics(mockList(), 'week');
+    // A switch back to the tab: back to the framing view (the test theme's Reduce Motion jumps).
+    await act(async () => mockFocus());
+    expect(animateToRegion).toHaveBeenCalledTimes(1);
+    expect(animateToRegion).toHaveBeenCalledWith(region, 0);
+    await act(async () => mockFocus());
+    expect(animateToRegion).toHaveBeenCalledTimes(2);
+  } finally {
+    setMapsForTests(undefined);
+  }
 });

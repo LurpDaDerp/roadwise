@@ -179,6 +179,8 @@ export const analyticsCopy = {
     caption: 'All time',
     empty: 'No trips yet',
     noMap: "Maps aren't available in this build.",
+    recenter: 'Recenter map',
+    recenterHint: 'Shows all your trips again',
   },
   drives: {
     title: 'Drives',

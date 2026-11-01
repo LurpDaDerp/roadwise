@@ -52,6 +52,8 @@ export interface AnalyticsViewProps {
   onPairDashpal: () => void;
   /** This month's passenger rides, shown under the drives when there are any; null for none or unknown. */
   passengerRides?: number | null;
+  /** Goes up each time the tab gains focus again: the All trips map goes back to the view framing every route. */
+  focusCount?: number;
 }
 
 /**
@@ -63,7 +65,7 @@ export interface AnalyticsViewProps {
  * with that behaviour's own numbers over the range, and each spot its own sheet; the page keeps
  * only general ones.
  */
-export function AnalyticsView({ data, rating, spots = null, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal, passengerRides = null }: AnalyticsViewProps) {
+export function AnalyticsView({ data, rating, spots = null, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal, passengerRides = null, focusCount = 0 }: AnalyticsViewProps) {
   // The axis stays set while the sheet slides away, so its content doesn't blank on the way out.
   const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speed', open: false });
   const close = () => setSheet((s) => ({ ...s, open: false }));
@@ -86,7 +88,7 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
           <MetricsCards sums={data.sums} trend={data.trend} range={range} onRange={onRange} />
           <WhenYouDriveCard grid={data.grid} />
           <TimeOfDayCard grid={data.grid} nightPct={data.allTime.nightPct} />
-          <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} />
+          <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} focusCount={focusCount} />
           <SpotsCard view={spots} onOpen={openSpot} />
           <DrivesCard drives={data.drives} onOpen={onOpenDrive} archived={data.archivedDrives} passengerRides={passengerRides} />
           <CategorySheet

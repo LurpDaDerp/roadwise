@@ -1,12 +1,16 @@
-import { Text as RNText, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Text as RNText, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import type MapViewType from 'react-native-maps';
 
 import type { ProblemSpot } from '@/data/queries/spots';
 import { PIN, PIN_PLACE, TeardropPin, useSettling } from '@/features/drives/Pin';
+import { awayFrom } from '@/features/drives/route';
+import { RECENTER_MS } from '@/features/drives/RouteMap';
 import { loadMaps, type Region } from '@/features/settings/maps';
 import { chipText } from '@/features/spots/format';
 import { spotInk } from '@/features/spots/ink';
 import type { LatLng } from '@/lib/geo';
-import { Card, Text, useTheme, withAlpha } from '@/ui';
+import { Card, IconButton, Text, useTheme, withAlpha } from '@/ui';
 
 import { analyticsCopy } from './copy';
 import type { MapPoint } from './model';
@@ -25,6 +29,19 @@ const CHIP_H = 22;
 const CHIP_TOP = PIN.headY - CHIP_H / 2;
 /** The chip starts this far into the pin's right edge (its left edge at x 30). */
 const CHIP_TUCK = 2;
+
+/**
+ * Whether the map, `aspect` (its width over its height) wide, has been dragged or zoomed off the
+ * view that frames every route (`framed`) by more than a tenth: the recap map's `awayFrom`,
+ * measured on the span this wider-than-tall map really shows. The engine widens the framing view
+ * to the map's shape, so each region's height is scaled to the map's width before the compare.
+ */
+export function awayOnMap(current: Region, framed: Region, aspect: number): boolean {
+  const k = aspect > 0 ? aspect : 1;
+  return awayFrom({ ...current, latitudeDelta: current.latitudeDelta * k }, { ...framed, latitudeDelta: framed.latitudeDelta * k });
+}
+
+const regionKey = (r: Region | null) => (r ? `${r.latitude},${r.longitude},${r.latitudeDelta},${r.longitudeDelta}` : '');
 
 const toCoords = (points: readonly LatLng[]) => points.map((p) => ({ latitude: p.lat, longitude: p.lng }));
 
@@ -75,26 +92,60 @@ function SpotMarkerView({ spot, scheme }: { spot: ProblemSpot; scheme: 'light' |
  * Every trip ever, drawn as thin see-through lines so roads driven often build up, with the spots
  * to watch on top: each spot's stretch of road a solid line of the spot ink over a casing, and a
  * pin with the kind's icon and a label chip; tapping a pin opens that spot (`onSpot`). It opens on
- * `fitRegion` (the most-driven roads in the middle) and pans and zooms freely. The map itself is
- * hidden from screen readers; the card's title says what it is, and the "Spots to watch" card
- * lists the spots. Without the maps module it says so in a line instead.
+ * `fitRegion` (the most-driven roads in the middle) and pans and zooms freely. Once dragged or
+ * zoomed off that view by more than a tenth, a Recenter button in its top-right corner takes it
+ * back, as on the recap map. Each time the Analytics tab gains focus (`focusCount` goes up) and
+ * whenever the routes' framing view changes, it goes back on its own and the button hides; under
+ * Reduce Motion it jumps instead of gliding. The map itself is hidden from screen readers (the
+ * Recenter button is not); the card's title says what it is, and the "Spots to watch" card lists
+ * the spots. Without the maps module it says so in a line instead.
  */
 export function TripsMapCard({
   routes,
   region,
   spots = [],
   onSpot,
+  focusCount = 0,
 }: {
   routes: readonly MapPoint[][];
   region: Region | null;
   spots?: readonly ProblemSpot[];
   onSpot?: (id: string) => void;
+  /** Goes up each time the Analytics tab gains focus again: the map goes back to the view framing every route. */
+  focusCount?: number;
 }) {
   const t = useTheme();
   const maps = loadMaps();
   const ink = withAlpha(t.colors.accent, t.scheme === 'dark' ? 0.45 : 0.35);
   const spotLine = spotInk(t.scheme);
   const settling = useSettling(`${t.scheme}|${spots.map((s) => `${s.id}:${s.label ?? ''}`).join(',')}`);
+  const mapRef = useRef<MapViewType>(null);
+  /** The map has been dragged or zoomed off the view framing every route: Recenter shows. */
+  const [away, setAway] = useState(false);
+  /** The map's width over its height, once laid out. */
+  const [aspect, setAspect] = useState(1);
+  const onLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (width > 0 && height > 0) setAspect(width / height);
+  };
+  const still = t.reduceMotion;
+  const recenter = (to: Region) => {
+    mapRef.current?.animateToRegion(to, still ? 0 : RECENTER_MS);
+    setAway(false);
+  };
+
+  // A tab focus, or new routes framed differently, takes the map back to the framing view. A map
+  // that has only just appeared needs nothing: it opens on that view.
+  const key = regionKey(region);
+  const framed = useRef({ focus: focusCount, key });
+  useEffect(() => {
+    const last = framed.current;
+    if (last.focus === focusCount && last.key === key) return;
+    framed.current = { focus: focusCount, key };
+    if (!region || last.key === '') return;
+    mapRef.current?.animateToRegion(region, still ? 0 : RECENTER_MS);
+    setAway(false);
+  }, [focusCount, key, region, still]);
 
   let body;
   if (!region || routes.length === 0) {
@@ -127,70 +178,82 @@ export function TripsMapCard({
         {body}
       </View>
       {maps && region && routes.length > 0 ? (
-        <View
-          testID="trips-map"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={{ height: TRIPS_MAP_HEIGHT }}
-        >
-          <maps.default
-            style={{ flex: 1 }}
-            initialRegion={region}
-            scrollEnabled
-            zoomEnabled
-            pitchEnabled={false}
-            rotateEnabled={false}
-            showsPointsOfInterests={false}
-            showsBuildings={false}
-            showsTraffic={false}
-            toolbarEnabled={false}
-            userInterfaceStyle={t.scheme === 'dark' ? 'dark' : 'light'}
-          >
-            {routes.map((coords, i) => (
-              <maps.Polyline key={i} coordinates={coords} strokeColor={ink} strokeWidth={4} lineCap="round" lineJoin="round" />
-            ))}
-            {spots.map((s) =>
-              s.segment.length >= 2 ? (
-                <maps.Polyline
-                  key={`spot-casing-${s.id}`}
-                  testID={`spot-casing-${s.id}`}
-                  coordinates={toCoords(s.segment)}
-                  strokeColor={spotLine.casing}
-                  strokeWidth={SPOT_CASING_WIDTH}
-                  lineCap="round"
-                  lineJoin="round"
-                  zIndex={SPOT_Z.casing}
-                />
-              ) : null
-            )}
-            {spots.map((s) =>
-              s.segment.length >= 2 ? (
-                <maps.Polyline
-                  key={`spot-line-${s.id}`}
-                  testID={`spot-line-${s.id}`}
-                  coordinates={toCoords(s.segment)}
-                  strokeColor={spotLine.line}
-                  strokeWidth={SPOT_LINE_WIDTH}
-                  lineCap="round"
-                  lineJoin="round"
-                  zIndex={SPOT_Z.line}
-                />
-              ) : null
-            )}
-            {spots.map((s) => (
-              <maps.Marker
-                key={`spot-pin-${s.id}`}
-                testID={`spot-pin-${s.id}`}
-                coordinate={{ latitude: s.pin.lat, longitude: s.pin.lng }}
-                {...PIN_PLACE}
-                tracksViewChanges={settling}
-                zIndex={SPOT_Z.marker(s.rank)}
-                onPress={() => onSpot?.(s.id)}
-              >
-                <SpotMarkerView spot={s} scheme={t.scheme} />
-              </maps.Marker>
-            ))}
-          </maps.default>
+        <View testID="trips-map-frame" style={{ height: TRIPS_MAP_HEIGHT }} onLayout={onLayout}>
+          <View testID="trips-map" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+            <maps.default
+              ref={mapRef}
+              style={{ flex: 1 }}
+              initialRegion={region}
+              onRegionChangeComplete={(r: Region) => setAway(awayOnMap(r, region, aspect))}
+              scrollEnabled
+              zoomEnabled
+              pitchEnabled={false}
+              rotateEnabled={false}
+              showsPointsOfInterests={false}
+              showsBuildings={false}
+              showsTraffic={false}
+              toolbarEnabled={false}
+              userInterfaceStyle={t.scheme === 'dark' ? 'dark' : 'light'}
+            >
+              {routes.map((coords, i) => (
+                <maps.Polyline key={i} coordinates={coords} strokeColor={ink} strokeWidth={4} lineCap="round" lineJoin="round" />
+              ))}
+              {spots.map((s) =>
+                s.segment.length >= 2 ? (
+                  <maps.Polyline
+                    key={`spot-casing-${s.id}`}
+                    testID={`spot-casing-${s.id}`}
+                    coordinates={toCoords(s.segment)}
+                    strokeColor={spotLine.casing}
+                    strokeWidth={SPOT_CASING_WIDTH}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={SPOT_Z.casing}
+                  />
+                ) : null
+              )}
+              {spots.map((s) =>
+                s.segment.length >= 2 ? (
+                  <maps.Polyline
+                    key={`spot-line-${s.id}`}
+                    testID={`spot-line-${s.id}`}
+                    coordinates={toCoords(s.segment)}
+                    strokeColor={spotLine.line}
+                    strokeWidth={SPOT_LINE_WIDTH}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={SPOT_Z.line}
+                  />
+                ) : null
+              )}
+              {spots.map((s) => (
+                <maps.Marker
+                  key={`spot-pin-${s.id}`}
+                  testID={`spot-pin-${s.id}`}
+                  coordinate={{ latitude: s.pin.lat, longitude: s.pin.lng }}
+                  {...PIN_PLACE}
+                  tracksViewChanges={settling}
+                  zIndex={SPOT_Z.marker(s.rank)}
+                  onPress={() => onSpot?.(s.id)}
+                >
+                  <SpotMarkerView spot={s} scheme={t.scheme} />
+                </maps.Marker>
+              ))}
+            </maps.default>
+          </View>
+          {away ? (
+            <View style={{ position: 'absolute', top: t.space.md, right: t.space.md }}>
+              <IconButton
+                icon="scan-outline"
+                accessibilityLabel={analyticsCopy.map.recenter}
+                accessibilityHint={analyticsCopy.map.recenterHint}
+                variant="surface"
+                size={40}
+                onPress={() => recenter(region)}
+                testID="trips-map-recenter"
+              />
+            </View>
+          ) : null}
         </View>
       ) : null}
     </Card>

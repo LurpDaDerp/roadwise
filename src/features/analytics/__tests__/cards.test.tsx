@@ -1162,7 +1162,7 @@ describe('TripsMapCard', () => {
     const region = fitLines(lines);
     await draw(<TripsMapCard routes={lines} region={region} />);
     expect(screen.getByText('All trips')).toBeOnTheScreen();
-    expect(screen.getByTestId('trips-map', { includeHiddenElements: true })).toHaveStyle({ height: 320 });
+    expect(screen.getByTestId('trips-map-frame')).toHaveStyle({ height: 320 });
     expect(screen.getAllByTestId('polyline', { includeHiddenElements: true })).toHaveLength(2);
     expect(seen).toEqual({ region, scroll: true, zoom: true });
   });
