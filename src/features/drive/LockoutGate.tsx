@@ -26,7 +26,8 @@ export const KEEP_AWAKE_TAG = 'roadwise-drive';
  *   notification). Then another route on top goes back to the driving screen while the car moves
  *   (`lockedOut`; a notification tap mid-drive), and each time RoadWise comes to the front. Nothing
  *   but End, "Not driving?", the navigation button (under 35 mph; with its list of apps, part of
- *   the driving screen) and the weather banner's ✕ takes a touch while moving;
+ *   the driving screen), the emergency button with its panel and the weather banner's ✕ takes a
+ *   touch while moving;
  * - leaves an automatic drive whose driving screen has not been shown to the driver: RoadWise
  *   opens on Home, where the Drive in progress strip leads to the driving screen. A screen of the
  *   app left open when RoadWise went behind during such a drive (or that was open when the drive

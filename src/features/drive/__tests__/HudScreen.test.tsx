@@ -5,7 +5,8 @@ import { createFakeDriveSense } from '@drive-sense';
 
 import { T0 as DRIVE_T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows as driveRows, TZ as DRIVE_TZ } from '@/core/engine/__fixtures__/drives';
-import { createDriveHost, type DriveState, type LastFinalized } from '@/drive/host';
+import { createDriveHost, type DriveArrival, type DriveState, type LastFinalized } from '@/drive/host';
+import type { EmergencyContact } from '@/features/emergency/model';
 import type { DriveBearing, DriveLive, ShownSpeed } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
 import { State } from 'react-native-gesture-handler';
@@ -17,10 +18,11 @@ import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 
 import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
 
+import { ARRIVAL_HOLD_MS } from '../ArrivalOverlay';
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
 import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
-import { HudScreen, hudNightOf } from '../HudScreen';
+import { EMERGENCY_IDLE_MS, HudScreen, hudNightOf } from '../HudScreen';
 import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
 // The halo renders for real; its props are kept so a test can read the visual it was given.
@@ -108,6 +110,13 @@ let mockLive: DriveLive;
 let mockShown: ShownSpeed = { mps: null, accel: 0, at: null };
 const mockEnd = jest.fn<Promise<{ clientTripId: string; dropped: 'no_movement' | 'no_gps' | 'cancelled' | null } | null>, []>();
 let mockLastFinalized: LastFinalized = null;
+/** The place-arrival end the host published (`DriveState.arrival`), or null. */
+let mockArrival: DriveArrival | null = null;
+/** The saved emergency contacts (`useEmergencyContacts`), undefined while still being read. */
+let mockContacts: EmergencyContact[] | undefined = [];
+jest.mock('@/features/emergency/useEmergencyContacts', () => ({
+  useEmergencyContacts: () => ({ contacts: mockContacts, loading: false, refetch: jest.fn(), save: jest.fn(), remove: jest.fn() }),
+}));
 /** The drive's controls as the screen calls them (stable, as the real hook's memo is). */
 const mockControls = {
   start: jest.fn(),
@@ -129,8 +138,9 @@ let mockBearing: DriveBearing = { deg: null, source: null };
 jest.mock('@/drive/useDrive', () => ({
   rowSpeedMphOf: jest.requireActual('@/drive/useDrive').rowSpeedMphOf,
   useBearing: () => mockBearing,
-  useDrive: <T,>(sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null }) => T) =>
-    sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockStartedAt, lastRowTs: mockLastRowTs }),
+  useDrive: <T,>(
+    sel: (s: { lastFinalized: LastFinalized; status: DriveLive['status']; startedAt: number | null; lastRowTs: number | null; arrival: DriveArrival | null }) => T
+  ) => sel({ lastFinalized: mockLastFinalized, status: mockLive.status, startedAt: mockStartedAt, lastRowTs: mockLastRowTs, arrival: mockArrival }),
   useDriveLive: () => mockLive,
   useShownSpeed: () => mockShown,
   useDriveControls: () => mockControls,
@@ -235,6 +245,8 @@ beforeEach(() => {
   mockStartedAt = T;
   mockHostListeners.clear();
   mockLastFinalized = null;
+  mockArrival = null;
+  mockContacts = [];
   mockDefaultMph = 34;
   mockEnd.mockResolvedValue({ clientTripId: 't1', dropped: null });
   mockControls.cancelDrive.mockResolvedValue(true);
@@ -1165,17 +1177,249 @@ describe('dimming', () => {
   });
 });
 
-test('while moving, End, the navigation button, "Not driving?" and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
+test('while moving, End, the navigation button, the emergency button, "Not driving?" and the weather ✕ are the only controls on the screen, the same as stopped', async () => {
   const fog = { kind: 'dense_fog', gustMph: null, visibilityM: 150 } as const;
   const h = await renderHud({ speedMph: 45 });
-  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav']);
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-sos']);
   await h.update({ weatherAlert: fog });
-  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-sos', 'hud-weather-close']);
   await h.update({ speedMph: 0 });
-  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-weather-close']);
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-sos', 'hud-weather-close']);
   // while it is offered, "Not driving?" too
   await h.update({ speedMph: 45, notDrivingAvailable: true });
-  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-not-driving', 'hud-weather-close']);
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual(['hud-end', 'hud-nav', 'hud-not-driving', 'hud-sos', 'hud-weather-close']);
+  // the emergency panel's own buttons while it is open
+  await fireEvent.press(screen.getByTestId('hud-sos'));
+  expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual([
+    'hud-end',
+    'hud-nav',
+    'hud-not-driving',
+    'hud-sos',
+    'hud-sos-911',
+    'hud-sos-close',
+    'hud-weather-close',
+  ]);
+});
+
+describe('the emergency button and its panel (round 12)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the RN module the default port uses, after the mocks
+  const { BackHandler, Linking } = require('react-native') as typeof import('react-native');
+  const mom: EmergencyContact = { id: 'contact-1', name: 'Mom', phone: '+15551234567' };
+  const coach: EmergencyContact = { id: 'contact-2', name: 'Coach Lee', phone: '442071234567' };
+  const sos = () => screen.getByRole('button', { name: hudCopy.sos.label });
+  beforeEach(() => {
+    jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+    jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true);
+  });
+
+  test('it is always on screen and live: at 70 mph, while saving, while waiting, dimmed; its hint names 911 without the word phone', async () => {
+    const h = await renderHud({ speedMph: 70 });
+    expect(sos()).toHaveProp('accessibilityHint', hudCopy.sos.hint);
+    expect(hudCopy.sos.hint).not.toMatch(/phone/i);
+    expect(sos().props.accessibilityState).not.toMatchObject({ disabled: true });
+    await h.update({ status: 'finalizing' });
+    expect(sos().props.accessibilityState).not.toMatchObject({ disabled: true });
+    await h.update({ status: 'recording', waiting: { phase: 'waiting', since: T, deadlineAt: T + 120_000 } });
+    expect(sos().props.accessibilityState).not.toMatchObject({ disabled: true });
+    await h.update({ waiting: null });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 1000));
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+    // a touch that starts dimmed still opens it
+    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
+    await fireEvent.press(sos());
+    expect(screen.getByTestId('hud-sos-panel')).toBeOnTheScreen();
+  });
+
+  test('a 64 pt target with the red call glyph on the navigation button’s face (outside a theme the HUD ink), never a red disc', async () => {
+    await renderHud();
+    expect(screen.getByTestId('hud-sos')).toHaveStyle({ width: HUD_MIN_TARGET_PT, height: HUD_MIN_TARGET_PT });
+    expect(screen.getByTestId('hud-sos-face')).toHaveStyle({ backgroundColor: p.ink });
+  });
+
+  test('a tap opens the panel: "Emergency call", Call 911 first, the contacts after with their numbers, then Close', async () => {
+    mockContacts = [mom, coach];
+    await renderHud({ speedMph: 45 });
+    await fireEvent.press(sos());
+    const panel = screen.getByTestId('hud-sos-panel');
+    expect(within(panel).getByRole('header')).toHaveTextContent(hudCopy.sos.title);
+    const buttons = within(panel)
+      .getAllByRole('button')
+      .map((b) => b.props.testID);
+    expect(buttons).toEqual(['hud-sos-911', 'hud-sos-contact-contact-1', 'hud-sos-contact-contact-2', 'hud-sos-close']);
+    expect(screen.getByText('Call 911')).toBeOnTheScreen();
+    expect(screen.getByText('Mom')).toBeOnTheScreen();
+    expect(screen.getByText('+1 (555) 123-4567')).toBeOnTheScreen();
+    expect(screen.getByText('442071234567')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Call Mom, +1 (555) 123-4567' })).toBeOnTheScreen();
+    expect(sos().props.accessibilityState).toMatchObject({ expanded: true });
+  });
+
+  test('with no contacts saved, under 911 it says to add them in Settings (plain words, nothing that leaves the drive)', async () => {
+    await renderHud();
+    await fireEvent.press(sos());
+    expect(screen.getByTestId('hud-sos-none')).toHaveTextContent('Add contacts in Settings.');
+    expect(within(screen.getByTestId('hud-sos-panel')).getAllByRole('button').map((b) => b.props.testID)).toEqual(['hud-sos-911', 'hud-sos-close']);
+  });
+
+  test('Call 911 hands tel:911 to the phone and closes the panel; a contact its own number', async () => {
+    mockContacts = [mom];
+    await renderHud({ speedMph: 45 });
+    await fireEvent.press(sos());
+    await fireEvent.press(screen.getByTestId('hud-sos-911'));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenCalledWith('tel:911');
+    expect(Linking.canOpenURL).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+    await fireEvent.press(sos());
+    await fireEvent.press(screen.getByTestId('hud-sos-contact-contact-1'));
+    await act(async () => {});
+    expect(Linking.openURL).toHaveBeenLastCalledWith('tel:+15551234567');
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+  });
+
+  test('a call that did not start keeps the panel open and says so', async () => {
+    (Linking.openURL as jest.Mock).mockRejectedValueOnce(new Error('no dialer'));
+    await renderHud();
+    await fireEvent.press(sos());
+    await fireEvent.press(screen.getByTestId('hud-sos-911'));
+    await act(async () => {});
+    expect(screen.getByTestId('hud-sos-panel')).toBeOnTheScreen();
+    expect(screen.getByTestId('hud-sos-failed')).toHaveTextContent(hudCopy.sos.failed);
+  });
+
+  test('it takes the panel slot ahead of the navigation list (closing it) and of a waiting panel; a navigation press closes it', async () => {
+    jest.spyOn(Linking, 'canOpenURL').mockImplementation(async (url: string) => url === 'waze://');
+    await renderHud({ speedMph: 8 });
+    await fireEvent.press(screen.getByTestId('hud-nav'));
+    await act(async () => {});
+    expect(screen.getByTestId('hud-nav-panel')).toBeOnTheScreen();
+    await fireEvent.press(sos());
+    expect(screen.getByTestId('hud-sos-sheet')).toBeOnTheScreen();
+    expect(screen.queryByTestId('hud-nav-panel')).toBeNull();
+    await fireEvent.press(screen.getByTestId('hud-nav'));
+    await act(async () => {});
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+    expect(screen.getByTestId('hud-nav-panel')).toBeOnTheScreen();
+  });
+
+  test('ahead of a waiting panel too, which comes back once it closes', async () => {
+    const waiting = { phase: 'popup' as const, since: T - 120_000, deadlineAt: T + 150_000 };
+    await renderHud({ speedMph: 0, waiting });
+    expect(screen.getByTestId('hud-wait')).toBeOnTheScreen();
+    await fireEvent.press(sos());
+    expect(screen.getByTestId('hud-sos-panel')).toBeOnTheScreen();
+    expect(screen.queryByTestId('hud-wait')).toBeNull();
+    await fireEvent.press(screen.getByTestId('hud-sos-close'));
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+    expect(screen.getByTestId('hud-wait')).toBeOnTheScreen();
+  });
+
+  test('it closes on its own after 30 s without a touch; a touch gives it a fresh 30 s; it holds the dimmer off', async () => {
+    await renderHud();
+    await fireEvent.press(sos());
+    await act(() => jest.advanceTimersByTime(EMERGENCY_IDLE_MS - 5000));
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+    await fireEvent(screen.getByTestId('hud-screen'), 'touchStart');
+    await act(() => jest.advanceTimersByTime(EMERGENCY_IDLE_MS - 1));
+    expect(screen.getByTestId('hud-sos-panel')).toBeOnTheScreen();
+    await act(() => jest.advanceTimersByTime(1));
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+  });
+
+  test('Android back closes it', async () => {
+    const handlers: (() => boolean)[] = [];
+    const spy = jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, fn) => {
+      handlers.push(fn as () => boolean);
+      return { remove: () => handlers.splice(handlers.indexOf(fn as () => boolean), 1) };
+    });
+    await renderHud();
+    await fireEvent.press(sos());
+    expect(handlers.length).toBeGreaterThan(0);
+    let handled = false;
+    await act(async () => {
+      handled = handlers.at(-1)!();
+    });
+    expect(handled).toBe(true);
+    expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+    spy.mockRestore();
+  });
+
+  test('an automatic end waits while the panel is open, and leaves once it closes', async () => {
+    const h = await renderHud({ speedMph: 3 });
+    await fireEvent.press(sos());
+    await h.update({ status: 'finalizing' });
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByTestId('hud-sos-close'));
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+  });
+});
+
+describe('the "Welcome" line at a saved place (round 12)', () => {
+  const home: DriveArrival = { clientTripId: 't1', kind: 'home', name: 'Home' };
+  const sosButton = () => screen.getByRole('button', { name: hudCopy.sos.label });
+
+  test('the line for each kind of place', async () => {
+    const { arrivalLine } = jest.requireActual('../ArrivalOverlay') as typeof import('../ArrivalOverlay');
+    expect(arrivalLine({ kind: 'home', name: 'Home' })).toBe('Welcome home');
+    expect(arrivalLine({ kind: 'work', name: 'Work' })).toBe('Welcome to work');
+    expect(arrivalLine({ kind: 'school', name: 'School' })).toBe('Welcome to school');
+    expect(arrivalLine({ kind: 'custom', name: ' Grandma’s ' })).toBe('Welcome to Grandma’s');
+  });
+
+  test('a drive that ends at home fades the line in over a dark scrim, announces it, keeps the emergency button above it, and leaves 2.5 s after it showed', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the RN module, after the mocks
+    const { AccessibilityInfo } = require('react-native') as typeof import('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    const h = await renderHud({ speedMph: 2 });
+    expect(screen.queryByTestId('hud-arrival')).toBeNull();
+    mockArrival = home;
+    await h.update({ status: 'finalizing' });
+    expect(screen.getByTestId('hud-arrival-line')).toHaveTextContent('Welcome home');
+    expect(screen.getByTestId('hud-arrival')).toHaveProp('pointerEvents', 'none');
+    expect(screen.getByTestId('hud-arrival-scrim')).toHaveStyle({ backgroundColor: p.ground, opacity: 0.8 });
+    expect(announce).toHaveBeenCalledWith('Welcome home');
+    // the emergency button sits above it, so it stays in sight and takes its touches
+    const z = (id: string, up = 0) => {
+      let n = screen.getByTestId(id);
+      for (let i = 0; i < up; i += 1) n = n.parent!;
+      return StyleSheet.flatten(n.props.style).zIndex as number;
+    };
+    expect(z('hud-sos', 1)).toBeGreaterThan(z('hud-arrival'));
+    expect(sosButton()).toBeOnTheScreen();
+    await act(() => jest.advanceTimersByTime(1000));
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await act(() => jest.advanceTimersByTime(ARRIVAL_HOLD_MS - 1000 - 1));
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await act(() => jest.advanceTimersByTime(1));
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+  });
+
+  test('arrival and idle together still hold the full 2.5 s; a drive not kept goes Home after it', async () => {
+    const h = await renderHud({ speedMph: 2 });
+    mockArrival = { clientTripId: 't1', kind: 'custom', name: 'the gym' };
+    mockLastFinalized = { clientTripId: 't1', ok: true, status: null, dropped: 'no_movement', endCause: 'stopped', at: T, durationS: null, miles: null };
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(screen.getByTestId('hud-arrival-line')).toHaveTextContent('Welcome to the gym');
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    await act(() => jest.advanceTimersByTime(ARRIVAL_HOLD_MS));
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('another drive’s arrival never shows', async () => {
+    mockArrival = { ...home, clientTripId: 'other' };
+    await renderHud({ speedMph: 2, status: 'finalizing' });
+    expect(screen.queryByTestId('hud-arrival')).toBeNull();
+  });
+
+  test('under Reduce Motion it shows at once', async () => {
+    mockStill = true;
+    mockArrival = home;
+    await renderHud({ speedMph: 0, status: 'finalizing' });
+    expect(StyleSheet.flatten(screen.getByTestId('hud-arrival').props.style).opacity).toBe(1);
+  });
 });
 
 describe('the navigation button (design §7.4, §8)', () => {

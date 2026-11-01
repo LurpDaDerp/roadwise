@@ -10,6 +10,11 @@ import {
 } from '@/ui/drive/hudTokens';
 import { opaque, over } from '@/ui/sky/color';
 import { plainBundle, skyBundle } from '@/ui/sky/palette';
+import type { Theme } from '@/ui/theme';
+
+import { SOS_GLYPH_MIN, sosGlyphColor } from '@/features/drive/EmergencyButton';
+import { sosCallFace } from '@/features/drive/EmergencyPanel';
+import { hudButtonColors } from '@/features/drive/hudButtons';
 
 const palettes: [string, HudPalette][] = [
   ['day', HUD.day],
@@ -97,6 +102,43 @@ describe('white at 0.7 on the driving screen’s sky (the lock screen’s quiet 
         const ink = over(opaque(stop), 'rgba(255, 255, 255, 0.7)');
         expect(contrastRatio(ink, opaque(stop))).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+});
+
+// The emergency button's red call glyph on the buttons' sky-tinted face, and the panel's red
+// "Call 911" with white print, on every sky by day and by night (and outside a theme).
+describe('the emergency button and its Call 911', () => {
+  const phases = ['night', 'dawn', 'day', 'dusk'] as const;
+  const kinds = ['clear', 'cloudy', 'fog', 'rain', 'snow', 'storm'] as const;
+  const bundles = [
+    ...phases.flatMap((phase) => kinds.map((kind) => ({ name: `${phase}/${kind}`, b: skyBundle({ phase, glow: 1, weather: { kind, intensity: 'moderate' } }) }))),
+    { name: 'plain light', b: plainBundle('light') },
+    { name: 'plain dark', b: plainBundle('dark') },
+  ];
+  const red = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+    return r > g + 40 && r > b + 40;
+  };
+
+  test.each(bundles.map((x) => [x.name, x.b] as const))('%s: the glyph reads red on the face at 4.5:1; white on the red 911 button at 7:1', (_name, b) => {
+    for (const night of [false, true]) {
+      const p = { ...HUD[night ? 'night' : 'day'], ground: b.sky.hud[night ? 'night' : 'day'].stops[1] };
+      const face = hudButtonColors({ onScene: b.onScene } as Theme, p, night);
+      const glyph = sosGlyphColor(p, face);
+      expect(contrastRatio(glyph, face.paper)).toBeGreaterThanOrEqual(SOS_GLYPH_MIN);
+      expect(red(glyph)).toBe(true);
+      const call = sosCallFace(p);
+      expect(contrastRatio('#FFFFFF', call)).toBeGreaterThanOrEqual(7);
+      expect(red(call)).toBe(true);
+    }
+  });
+
+  test('outside a theme too', () => {
+    for (const p of [HUD.day, HUD.night]) {
+      const face = hudButtonColors(null, p, p === HUD.night);
+      expect(contrastRatio(sosGlyphColor(p, face), face.paper)).toBeGreaterThanOrEqual(SOS_GLYPH_MIN);
+      expect(contrastRatio('#FFFFFF', sosCallFace(p))).toBeGreaterThanOrEqual(7);
     }
   });
 });

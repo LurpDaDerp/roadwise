@@ -53,3 +53,19 @@ test('nothing about points, no em dash, no exclamation mark; the phone only in t
     expect(s).not.toMatch(/[—!]/);
   }
 });
+
+test('the emergency button and its panel: short words on screen, 911 first, the hint names 911 and contacts without the word phone', () => {
+  expect(hudCopy.sos.label).toBe('Emergency call');
+  expect(hudCopy.sos.hint).toBe('Opens 911 and your emergency contacts.');
+  expect(hudCopy.sos.call911).toBe('Call 911');
+  expect(hudCopy.sos.none).toBe('Add contacts in Settings.');
+  expect(hudCopy.sos.contactLabel('Mom', '(555) 123-4567')).toBe('Call Mom, (555) 123-4567');
+  for (const w of [hudCopy.sos.title, hudCopy.sos.call911, hudCopy.sos.close, hudCopy.sos.failed]) expect(words(w)).toBeLessThanOrEqual(3);
+});
+
+test('the "Welcome" line for each kind of saved place', () => {
+  expect(hudCopy.arrival.home).toBe('Welcome home');
+  expect(hudCopy.arrival.work).toBe('Welcome to work');
+  expect(hudCopy.arrival.school).toBe('Welcome to school');
+  expect(hudCopy.arrival.custom('the gym')).toBe('Welcome to the gym');
+});

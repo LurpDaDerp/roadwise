@@ -3,13 +3,27 @@
 import { compassGeometry, DIGIT_ADVANCE_EM, DIGIT_HEIGHT_EM, haloGeometry, numeralLineHeight, signMetrics, SPEED_UNIT_GAP_PT, unitLineHeight, unitTop } from '@/ui/drive';
 import { numeralBoxWidth, numeralWidthEm } from '@/ui/drive/SpeedReadout';
 
-import { HUD_COMPACT_NAV_H_PT, HUD_NAV_H_PT, HUD_NAV_W_PT, HUD_NOT_DRIVING_PT, hudLayout, snapRect, type HudLayout, type HudLayoutInput, type Rect } from '../hudLayout';
+import {
+  HUD_COMPACT_BAND_MIN_PT,
+  HUD_COMPACT_NAV_H_PT,
+  HUD_NAV_H_PT,
+  HUD_NAV_W_PT,
+  HUD_NOT_DRIVING_PT,
+  HUD_SOS_PT,
+  hudLayout,
+  snapRect,
+  type HudLayout,
+  type HudLayoutInput,
+  type Rect,
+} from '../hudLayout';
 
 const ZERO = { top: 0, bottom: 0, left: 0, right: 0 };
 const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudLayout => hudLayout({ insets: ZERO, fontScale: 1, chip: false, units: 'mi', ...o });
 
 const inside = (r: Rect, w: number, h: number) => r.x >= -1e-9 && r.y >= -1e-9 && r.x + r.w <= w + 1e-9 && r.y + r.h <= h + 1e-9;
 const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w - 1e-9 && b.x < a.x + a.w - 1e-9 && a.y < b.y + b.h - 1e-9 && b.y < a.y + a.h - 1e-9;
+/** `r` grown by `d` on every side (a touch box with its slop). */
+const grow = (r: Rect, d: number): Rect => ({ x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d });
 /** A rect meets the halo's compass (its outer edge, around the lit ring). */
 function hitsCircle(r: Rect, halo: Rect): boolean {
   const cx = halo.x + halo.w / 2;
@@ -110,8 +124,10 @@ describe('worked phones (§3.1, §3.2)', () => {
     // the link's row directly above the navigation button, under the band
     expect(l.notDriving).toEqual({ x: 491, y: 111, w: 160, h: 44 });
     expect([l.numeralPt2, l.numeralPt3]).toEqual([160, 117]);
-    // the navigation list covers the sign and the halo, never the button or End
-    expect(l.panel).toEqual({ x: 16, y: 12, w: 459, h: 347 });
+    // the emergency button at the top of the sign's column
+    expect(l.sos).toEqual({ x: 16, y: 12, w: 64, h: 64 });
+    // the navigation list covers the sign and the halo right of the emergency button, never the buttons or End
+    expect(l.panel).toEqual({ x: 88, y: 12, w: 387, h: 347 });
   });
 
   test('iPhone 15 landscape 852 × 393 (side insets 59, bottom 21): the halo the full height, 344 pt, centred on the screen', () => {
@@ -148,6 +164,40 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(L({ width: 700, height: 286 })).toMatchObject({ compact: true });
   });
 
+  test('portrait: the emergency button in the middle of the top row, centred on the screen and level with the navigation circle, 64 pt', () => {
+    const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } });
+    expect(l.sos.w).toBe(64);
+    expect(l.sos.h).toBe(64);
+    expect(Math.abs(l.sos.x + l.sos.w / 2 - 393 / 2)).toBeLessThanOrEqual(0.5);
+    // the 80 pt circle sits at the top of its 104 pt slot
+    expect(l.sos.y + 32).toBe(l.nav.y + 40);
+    expect(l.sos.x).toBeGreaterThan(l.sign.x + l.sign.w);
+    expect(l.sos.x + l.sos.w).toBeLessThan(l.nav.x);
+    // the panel starts under the row: it never covers the button
+    expect(l.panel.y).toBeGreaterThan(l.sos.y + l.sos.h);
+  });
+
+  test('landscape, a short window: the sign moves down a gap under the emergency button, never meeting it', () => {
+    const l = L({ width: 700, height: 288 });
+    expect(l).toMatchObject({ orientation: 'landscape', compact: false });
+    expect(l.sos).toEqual({ x: 16, y: 12, w: 64, h: 64 });
+    expect(l.sign.y).toBeGreaterThanOrEqual(l.sos.y + l.sos.h + 12);
+    expect(l.sign.y + l.sign.h).toBeLessThanOrEqual(288 - 16);
+  });
+
+  test('compact: the emergency button at the band’s left end when the band keeps 120 pt, else at the right end of End’s row with End a gap short of it', () => {
+    const wide = L({ width: 600, height: 240 });
+    expect(wide.compact).toBe(true);
+    expect(wide.sos.x + wide.sos.w + 8).toBe(wide.band.x);
+    expect(wide.band.w).toBeGreaterThanOrEqual(HUD_COMPACT_BAND_MIN_PT);
+    expect(wide.sos.y).toBe(wide.nav.y);
+    const narrow = L({ width: 412, height: 300 });
+    expect(narrow.compact).toBe(true);
+    expect(narrow.sos).toMatchObject({ x: 412 - 16 - 64, w: 64, h: 64 });
+    expect(narrow.end).toMatchObject({ x: 16, w: 412 - 32 - 72 });
+    expect(narrow.sos.y + 32).toBe(narrow.end.y + narrow.end.h / 2);
+  });
+
   test('a DashPal paired: an 88 pt chip slot at the band right; the line beside it, never under it', () => {
     const l = L({ width: 393, height: 852, chip: true });
     expect(l.chip).toEqual({ x: l.band.x + l.band.w - 88, y: l.band.y, w: 88, h: 56 });
@@ -180,8 +230,9 @@ describe('invariants across windows', () => {
         expect(l.end.h).toBeGreaterThanOrEqual(64);
         expect(l.end.h).toBeLessThanOrEqual(76);
       } else expect(l.end.h).toBe(76);
-      // a landscape End shares its column with the navigation button: at least 160 wide
-      expect(l.end.w).toBeGreaterThanOrEqual(l.orientation === 'landscape' && !l.compact ? 160 : 200);
+      // a landscape End shares its column with the navigation button: at least 160 wide; a compact
+      // one gives the emergency button its room in a narrow window (176 at 280 wide)
+      expect(l.end.w).toBeGreaterThanOrEqual(l.orientation === 'landscape' && !l.compact ? 160 : l.compact ? 176 : 200);
       expect(l.end.w).toBeLessThanOrEqual(420);
     }
   });
@@ -221,6 +272,7 @@ describe('invariants across windows', () => {
           ['sign', l.sign],
           ['nav', l.nav],
           ['end', l.end],
+          ['sos', l.sos],
           ['panel', l.panel],
         ];
         if (l.chip) rects.push(['chip', l.chip]);
@@ -250,6 +302,7 @@ describe('invariants across windows', () => {
         ['sign', l.sign],
         ['end', l.end],
         ['nav', l.nav],
+        ['sos', l.sos],
       ];
       if (l.notDriving !== 'line') items.push(['notDriving', l.notDriving]);
       for (let a = 0; a < items.length; a += 1)
@@ -281,6 +334,33 @@ describe('invariants across windows', () => {
       expect(l.nav.y).toBeGreaterThanOrEqual(l.row.y - 1e-9);
       expect(l.nav.y + l.nav.h).toBeLessThanOrEqual(l.row.y + l.row.h + 1e-9);
     }
+  });
+
+  test('the emergency button: a 64 pt square inside the window in every case, never under the panel, never meeting the halo, the band, the sign, End, the navigation button or the link, at least 8 pt from each button', () => {
+    for (const c of cases)
+      for (const fontScale of [1, 2]) {
+        const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units, fontScale });
+        const at = `${c.w}x${c.h} ${JSON.stringify(c.ins)} x${fontScale}: ${JSON.stringify(l.sos)}`;
+        expect([l.sos.w, l.sos.h]).toEqual([HUD_SOS_PT, HUD_SOS_PT]);
+        if (!inside(l.sos, c.w, c.h)) throw new Error(`the emergency button outside the window at ${at}`);
+        const others: [string, Rect][] = [
+          ['panel', l.panel],
+          ['halo', l.halo],
+          ['band', l.band],
+          ['line', l.line],
+          ['sign', l.sign],
+        ];
+        if (l.chip) others.push(['chip', l.chip]);
+        if (l.notDriving !== 'line') others.push(['notDriving', grow(l.notDriving, 10)]);
+        for (const [name, r] of others) if (overlap(l.sos, r)) throw new Error(`the emergency button meets ${name} at ${at}`);
+        if (l.halo.ring && hitsCircle(l.sos, l.halo)) throw new Error(`the emergency button meets the ring at ${at}`);
+        // the navigation button's 8 pt slop and End's swipe never reach it
+        for (const [name, r] of [
+          ['nav', l.nav],
+          ['end', l.end],
+        ] as const)
+          if (overlap(grow(l.sos, 8), r)) throw new Error(`the emergency button within 8 pt of ${name} at ${at}`);
+      }
   });
 
   test('outside compact windows: a ring of at least 220 pt, two-digit numerals at least 96 pt (120 from 360 wide), "188" inside the chord', () => {
@@ -368,6 +448,10 @@ describe('compact windows (§3.3)', () => {
     for (const [width, height, ins] of compactWindows) {
       const l = L({ width, height, insets: { ...ZERO, ...ins }, fontScale });
       if (!l.compact) continue;
+      // the emergency button inside the window, clear of everything, in the smallest windows too
+      const where = `${width}x${height} ${JSON.stringify(ins)} @${fontScale}`;
+      if (!inside(l.sos, width, height)) throw new Error(`the emergency button outside the window at ${where}`);
+      for (const r of [l.halo, l.band, l.sign, grow(l.nav, 8), grow(l.end, 8), l.panel]) if (overlap(l.sos, r)) throw new Error(`the emergency button meets ${JSON.stringify(r)} at ${where}`);
       // Too short for the top row, a 64 pt End and the label alone (280 x 240 at 2x): nothing readable fits.
       if (l.end.y - 8 - (l.row.y + l.row.h + 8) < SPEED_UNIT_GAP_PT + unitLineHeight(l.unitPt)) continue;
       compact += 1;
@@ -389,7 +473,8 @@ describe('compact windows (§3.3)', () => {
     const l = L({ width: 412, height: 300 });
     expect(l.compact).toBe(true);
     expect(l.halo).toMatchObject({ x: 16, w: 380, ring: false });
-    expect(l.end).toMatchObject({ w: 380, h: 76 });
+    // End gives the emergency button its room at its right
+    expect(l.end).toMatchObject({ w: 308, h: 76 });
     expect(l.band.x).toBeGreaterThanOrEqual(l.sign.x + l.sign.w);
     expect(l.band.x + l.band.w).toBeLessThanOrEqual(l.nav.x);
     expect(l.numeralPt2).toBe(86);

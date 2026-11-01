@@ -19,6 +19,11 @@
 //   over End); End stays pinned to the bottom; the link in the band's line. End is 76 pt tall
 //   everywhere except a compact window too short for it and a readable speed, where it gives back
 //   down to the 64 pt target.
+// - The emergency button (`sos`, a 64 pt circle) is on screen in every layout and meets nothing
+//   else: in portrait the free middle of the top row, level with the navigation circle; in
+//   landscape the top of the sign's column (the sign moves down under it when it would meet it, and
+//   the panel starts right of it); in a compact window the band's left end, or, where that would
+//   leave the band under 120 pt, the right end of End's row (End gives up the room).
 import {
   compassGeometry,
   DIGIT_HEIGHT_EM,
@@ -68,7 +73,12 @@ export interface HudLayout {
   nav: Rect;
   /** the End swipe across the bottom */
   end: Rect;
-  /** the navigation button's list of apps, and the waiting panels: never over the button, the link's row or End */
+  /** the emergency button: a 64 pt square, on screen in every layout, never under the panel or anything else */
+  sos: Rect;
+  /**
+   * the emergency panel, the navigation button's list of apps and the waiting panels: never over the
+   * emergency button, the navigation button, the link's row or End
+   */
   panel: Rect;
   /** the speed numerals for one or two digits, and for three */
   numeralPt2: number;
@@ -102,6 +112,12 @@ export const HUD_ROW_MIN_PT = HUD_NAV_H_PT + 8;
 export const HUD_ROW_MAX_PT = 144;
 /** Landscape's right column (the band, the link, the navigation button and End): at least this wide. */
 export const HUD_LAND_RIGHT_MIN_PT = 160;
+/** The emergency button: the HUD's 64 pt target, a square its round face sits in. */
+export const HUD_SOS_PT = HUD_MIN_TARGET_PT;
+/** A compact band keeps at least this much beside the emergency button, else the button goes by End. */
+export const HUD_COMPACT_BAND_MIN_PT = 120;
+/** The navigation slot's caption under its circle (a 6 pt gap and an 18 pt line). */
+const NAV_CAPTION_PT = HUD_NAV_H_PT - HUD_NAV_BUTTON_PT;
 const GAP = 12;
 const COMPACT_GAP = 8;
 /** A compact window's End never shrinks under the 64 pt target… */
@@ -134,6 +150,12 @@ function rowItems(row: Rect, units: 'mi' | 'km', maxSlot = Infinity, navH = HUD_
     sign: { x: row.x, y: mid - s.h / 2, w: s.w, h: s.h },
     nav: { x: row.x + row.w - navW, y: mid - navH / 2, w: navW, h: navH },
   };
+}
+
+/** The vertical middle of the navigation circle in its slot (the circle and caption centred in the slot). */
+function navCircleMid(nav: Rect): number {
+  const d = Math.min(HUD_NAV_BUTTON_PT, nav.w, nav.h - NAV_CAPTION_PT);
+  return nav.y + (nav.h - d - NAV_CAPTION_PT) / 2 + d / 2;
 }
 
 /** The End swipe centred across a column from `x`, `w` wide, `h` tall, its foot at `bottom`. */
@@ -194,6 +216,7 @@ function snapLayout(l: HudLayout): HudLayout {
     sign: snapRect(l.sign),
     nav: snapRect(l.nav),
     end: snapRect(l.end),
+    sos: snapRect(l.sos),
     panel: snapRect(l.panel),
   };
 }
@@ -240,6 +263,9 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - edgeR - GAP - HUD_BAND_PT - GAP - top)));
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };
+      const items = rowItems(row, i.units);
+      // The emergency button in the row's free middle, level with the navigation circle.
+      const sos: Rect = { x: left + (frameW - HUD_SOS_PT) / 2, y: navCircleMid(items.nav) - HUD_SOS_PT / 2, w: HUD_SOS_PT, h: HUD_SOS_PT };
       return {
         orientation,
         compact: false,
@@ -248,8 +274,9 @@ function layoutRects(i: HudLayoutInput): HudLayout {
         halo: { x: left + (frameW - B) / 2, y: haloY, w: B, h: B, ring: true },
         notDriving: link ?? 'line',
         row,
-        ...rowItems(row, i.units),
+        ...items,
         end,
+        sos,
         panel: panelUnder(row, link ?? end),
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
@@ -269,9 +296,11 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       const haloY = top + (frameH - B) / 2;
       const mid = haloY + B / 2;
       const rx = left + frameW - rightW;
-      // Left: the sign, level with the halo's centre.
+      // Left: the emergency button at the top of the column, and the sign level with the halo's
+      // centre, or as near as the button lets it (a gap under it).
+      const sos: Rect = { x: left, y: top, w: HUD_SOS_PT, h: HUD_SOS_PT };
       const s = signFor(i.units, Math.min(HUD_ROW_MAX_PT, frameH), leftW);
-      const sign: Rect = { x: left + (leftW - s.w) / 2, y: mid - s.h / 2, w: s.w, h: s.h };
+      const sign: Rect = { x: left + (leftW - s.w) / 2, y: Math.max(mid - s.h / 2, sos.y + sos.h + GAP), w: s.w, h: s.h };
       // Right, top to bottom: the band, the link (when the column has room for its row), the
       // navigation button, End.
       const band: Rect = { x: rx, y: top, w: rightW, h: HUD_BAND_PT };
@@ -290,8 +319,10 @@ function layoutRects(i: HudLayoutInput): HudLayout {
         sign,
         nav,
         end,
-        // Over the sign and the halo: the right column's link, navigation button and End stay reachable.
-        panel: { x: left, y: top, w: rx - 16 - left, h: frameH },
+        sos,
+        // Over the sign and the halo, right of the emergency button: it and the right column's link,
+        // navigation button and End stay reachable.
+        panel: { x: sos.x + sos.w + 8, y: top, w: rx - 16 - (sos.x + sos.w + 8), h: frameH },
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
@@ -303,9 +334,18 @@ function layoutRects(i: HudLayoutInput): HudLayout {
   // whatever is left for the numerals; the link in the band's line.
   const row: Rect = { x: left, y: top, w: frameW, h: HUD_COMPACT_NAV_H_PT };
   const sideW = Math.min(frameW / 3, HUD_NAV_W_PT);
-  const band: Rect = { x: left + sideW + COMPACT_GAP, y: top, w: Math.max(0, frameW - 2 * (sideW + COMPACT_GAP)), h: HUD_COMPACT_NAV_H_PT };
+  const items = rowItems(row, i.units, HUD_NAV_W_PT, HUD_COMPACT_NAV_H_PT);
+  const between: Rect = { x: left + sideW + COMPACT_GAP, y: top, w: Math.max(0, frameW - 2 * (sideW + COMPACT_GAP)), h: HUD_COMPACT_NAV_H_PT };
   const room = frameH - HUD_COMPACT_NAV_H_PT - 2 * COMPACT_GAP - SPEED_UNIT_GAP_PT - unitLineHeight(unitPt) - COMPACT_DIGITS_MIN_PT;
-  const end = endAt(left, frameW, bottom, Math.max(COMPACT_END_MIN_PT, Math.min(END_SWIPE_H_PT, Math.floor(room))));
+  const endH = Math.max(COMPACT_END_MIN_PT, Math.min(END_SWIPE_H_PT, Math.floor(room)));
+  // The emergency button at the band's left end, level with the navigation circle; where that would
+  // leave the band too narrow, at the right end of End's row instead (End a gap short of it).
+  const inBand = between.w - HUD_SOS_PT - COMPACT_GAP >= HUD_COMPACT_BAND_MIN_PT;
+  const band: Rect = inBand ? { ...between, x: between.x + HUD_SOS_PT + COMPACT_GAP, w: between.w - HUD_SOS_PT - COMPACT_GAP } : between;
+  const end = inBand ? endAt(left, frameW, bottom, endH) : endAt(left, Math.max(0, frameW - HUD_SOS_PT - COMPACT_GAP), bottom, endH);
+  const sos: Rect = inBand
+    ? { x: between.x, y: navCircleMid(items.nav) - HUD_SOS_PT / 2, w: HUD_SOS_PT, h: HUD_SOS_PT }
+    : { x: left + frameW - HUD_SOS_PT, y: end.y + (end.h - HUD_SOS_PT) / 2, w: HUD_SOS_PT, h: HUD_SOS_PT };
   const regionTop = top + HUD_COMPACT_NAV_H_PT + COMPACT_GAP;
   const regionH = Math.max(0, end.y - COMPACT_GAP - regionTop);
   // The readout centres the digits in the box and hangs the label 6 pt under them, so the box is the
@@ -323,8 +363,9 @@ function layoutRects(i: HudLayoutInput): HudLayout {
     halo: { x: left, y: regionTop, w: frameW, h: boxH, ring: false },
     notDriving: 'line',
     row,
-    ...rowItems(row, i.units, HUD_NAV_W_PT, HUD_COMPACT_NAV_H_PT),
+    ...items,
     end,
+    sos,
     panel: panelUnder(row, end),
     numeralPt2: pt2,
     numeralPt3: pt3,

@@ -1,6 +1,7 @@
 import type { EventType } from '@scoring';
 import type { Href } from 'expo-router';
 
+import { EMERGENCY_NUMBER } from '@/features/emergency/model';
 import { spotsCopy } from '@/features/spots/copy';
 
 /**
@@ -75,6 +76,29 @@ export const hudCopy = {
     retry: 'Try again',
     spoken: "The driving screen hit a problem. If you're on a drive, it's still recording.",
     retryHint: 'Reloads the driving screen.',
+  },
+  /**
+   * The emergency button and its panel: 911 first, then the driver's contacts. A tap on a row hands
+   * the number to the phone's own call screen.
+   */
+  sos: {
+    label: 'Emergency call',
+    hint: 'Opens 911 and your emergency contacts.',
+    title: 'Emergency call',
+    call911: `Call ${EMERGENCY_NUMBER}`,
+    call911Hint: `Calls ${EMERGENCY_NUMBER}.`,
+    contactLabel: (name: string, number: string) => `Call ${name}, ${number}`,
+    none: 'Add contacts in Settings.',
+    close: 'Close',
+    closeHint: 'Closes the emergency panel.',
+    failed: "Call didn't start",
+  },
+  /** The line over the darkened screen as a drive ends at a saved place (the car stopped there). */
+  arrival: {
+    home: 'Welcome home',
+    work: 'Welcome to work',
+    school: 'Welcome to school',
+    custom: (name: string) => `Welcome to ${name}`,
   },
   /** The strip on other screens while a drive records, or while a Start drive swipe waits. */
   banner: {

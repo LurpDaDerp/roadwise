@@ -9,6 +9,7 @@ import { DashpalChip, DashpalHudBanner, useDashpalChip, useDashpalFlash, useDash
 import { useOptionalDb } from '@/data/queries/context';
 import { rowSpeedMphOf, useBearing, useDrive, useDriveControls, useDriveHost, useDriveLive } from '@/drive/useDrive';
 import { driveSummaryHref, HOME_HREF } from '@/features/drives/routes';
+import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts';
 import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { navAppById } from '@/features/navigation/catalog';
 import { NavAppPicker } from '@/features/navigation/NavAppPicker';
@@ -28,6 +29,10 @@ import {
   type HaloProps,
 } from '@/ui/drive';
 
+import { ArrivalOverlay, ARRIVAL_HOLD_MS } from './ArrivalOverlay';
+import { EmergencyButton } from './EmergencyButton';
+import { placeCall } from './emergencyCall';
+import { EmergencyPanel } from './EmergencyPanel';
 import { nextEndLock } from './endLock';
 import { EventBanner, type HudAlert, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
@@ -52,6 +57,8 @@ const END_VERTICAL_SLOP_PT = 24;
 export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 /** A cached position older than this says little about where the car is now. */
 const POSITION_MAX_AGE_MS = 60 * 60_000;
+/** The emergency panel closes on its own after this long without a touch. */
+export const EMERGENCY_IDLE_MS = 30_000;
 
 /**
  * Night by the sun at the phone's last known position (the OS's cached fix: no GPS of its own), or
@@ -145,10 +152,20 @@ export type HudScreenProps = {
  *   neither (landscape before the first track bearing) it sits north-up, its letters dimmed. Rules
  *   in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
- *   the left and the navigation button on the right. The navigation button's list of apps shows in
- *   a panel under the row, never a route: on a tap while no app is saved, or on a long press (to
- *   change the saved app, or to pick one). At 35 mph and over the button greys out and takes no
- *   touch (its list closes) until the car is back under 30 mph.
+ *   the left, the emergency button in the middle and the navigation button on the right. The
+ *   navigation button's list of apps shows in a panel under the row, never a route: on a tap while
+ *   no app is saved, or on a long press (to change the saved app, or to pick one). At 35 mph and
+ *   over the button greys out and takes no touch (its list closes) until the car is back under 30 mph.
+ * - The emergency button (a red call glyph on the buttons' sky-tinted face, a 64 pt target): always
+ *   live, at any speed, dimmed, waiting or saving, and never covered (`hudLayout` keeps every panel
+ *   off it, and it draws above the "Welcome" line). A tap opens the emergency panel in the panel
+ *   slot, ahead of the waiting panel and the list (which it closes): "Call 911", then the driver's
+ *   contacts (`useEmergencyContacts`), then Close. A row's tap hands its number to the phone's call
+ *   screen (`placeCall`) and closes the panel. A navigation-button press, Android back and 30 s
+ *   without a touch close it too; it holds the dimmer off, and an automatic end waits for it to close.
+ * - Arrival: a drive that ends at a saved place (the host's `arrival`, for this drive) darkens the
+ *   screen with "Welcome home" (or the place's line) faded in over everything but the emergency
+ *   button (`ArrivalOverlay`), and the screen leaves no sooner than 2.5 s after it showed.
  * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change)
  *   its icon and one or two words, across the whole band (the DashPal chip steps aside); while the
  *   car is over the speeding line, "Slow down" in the episode's colour stays up from its alert until
@@ -178,10 +195,11 @@ export type HudScreenProps = {
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
  *   20 mph and over it greys out with a lock and takes no swipe, until the car is back under 10.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
- *   End, the navigation button (under 35 mph), "Not driving?" and the weather banner's ✕ are the
- *   only touch targets while moving. Every other touch only undims.
+ *   End, the navigation button (under 35 mph), "Not driving?", the weather banner's ✕, and the
+ *   emergency button with its panel are the only touch targets while moving. Every other touch
+ *   only undims.
  * - After 10 s without a touch a dark scrim dims everything, never while an alert, a nudge or a
- *   panel shows; the halo and the speed stay above it, at reduced strength and still flowing with no
+ *   panel (the emergency panel included) shows; the halo and the speed stay above it, at reduced strength and still flowing with no
  *   warning showing (a tint under the speeding line included), at full strength while warning.
  * - Night: a static theme's own look; else the sun at the phone's last known position (with none
  *   yet, the sky's scheme).
@@ -222,6 +240,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     [theme, p]
   );
   const units = useHudUnits();
+  const { contacts } = useEmergencyContacts();
 
   // A Start-card drive still waiting for driving speed (it records from the tap), or null.
   const waiting = live.waiting;
@@ -305,11 +324,56 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // The waiting panel: "Still planning to drive?" from 2:00, the countdown from 4:30.
   const waitPanel = waiting !== null && (waiting.phase === 'popup' || waiting.phase === 'countdown') ? { ...waiting, phase: waiting.phase } : null;
   const panelUp = waitPanel !== null;
-  // The dimmer stays off while an alert, a nudge, the list of apps or a waiting panel shows.
-  const { dimmed, wake } = useDimmer(chip !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp);
+  // The emergency panel: opened by the emergency button, closed by its Close, a call, a
+  // navigation-button press, Android back, or 30 s without a touch on the screen.
+  const [sosOpen, setSosOpen] = useState(false);
+  const sosTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armSos = useCallback(() => {
+    if (sosTimer.current !== null) clearTimeout(sosTimer.current);
+    sosTimer.current = setTimeout(() => {
+      sosTimer.current = null;
+      setSosOpen(false);
+    }, EMERGENCY_IDLE_MS);
+  }, []);
+  const closeSos = useCallback(() => {
+    if (sosTimer.current !== null) clearTimeout(sosTimer.current);
+    sosTimer.current = null;
+    setSosOpen(false);
+  }, []);
+  useEffect(
+    () => () => {
+      if (sosTimer.current !== null) clearTimeout(sosTimer.current);
+    },
+    []
+  );
+  // The dimmer stays off while an alert, a nudge, the list of apps, a waiting panel or the emergency panel shows.
+  const { dimmed, wake } = useDimmer(chip !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp || sosOpen);
   // Android back closes the list first (before the drive screen's own swallow).
   const pickerOpen = nav.picker !== null;
   const closePicker = nav.close;
+  // The emergency button opens its panel (a second tap keeps it open), closing the list.
+  const openSos = useCallback(() => {
+    setSosOpen(true);
+    armSos();
+    closePicker();
+  }, [armSos, closePicker]);
+  // A call hands the number to the phone and closes the panel; one that didn't start keeps it open.
+  const callSos = useCallback(
+    async (phone: string) => {
+      const ok = await placeCall(phone);
+      if (ok) closeSos();
+      return ok;
+    },
+    [closeSos]
+  );
+  useEffect(() => {
+    if (!sosOpen) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeSos();
+      return true;
+    });
+    return () => sub.remove();
+  }, [sosOpen, closeSos]);
   useEffect(() => {
     if (!pickerOpen) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -323,11 +387,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     if (panelUp) closePicker();
   }, [panelUp, closePicker]);
 
-  // Every touch undims; while waiting it also waits a fresh 5 minutes (the panel's Cancel excepted).
+  // Every touch undims; while waiting it also waits a fresh 5 minutes (the panel's Cancel excepted);
+  // with the emergency panel open it gives the panel a fresh 30 s.
   const onTouchStart = useCallback(() => {
     wake();
     if (isWaiting) controls.touchWaiting();
-  }, [wake, isWaiting, controls]);
+    if (sosTimer.current !== null) armSos();
+  }, [wake, isWaiting, controls, armSos]);
 
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
   // that was not kept has no summary; Home says why). Home is the one under the drive: `dismissTo`
@@ -353,6 +419,25 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const [endFailed, setEndFailed] = useState(false);
   // "Not driving?" is discarding the drive.
   const [cancelling, setCancelling] = useState(false);
+
+  // The drive ended at a saved place (the host's `arrival` for this drive): the "Welcome" line shows
+  // (not after a failed end, which needs End again) and the screen's way out waits until it has
+  // shown for 2.5 s.
+  const arrival = useDrive((d) => d.arrival);
+  // The drive this screen showed last (it stays the same through finalizing and idle), advanced once
+  // per render as the locks are.
+  const [shownTripId, setShownTripId] = useState(live.clientTripId);
+  if (live.clientTripId !== null && live.clientTripId !== shownTripId) setShownTripId(live.clientTripId);
+  const thisTripId = live.clientTripId ?? shownTripId;
+  const arrived = arrival !== null && arrival.clientTripId === thisTripId && !endFailed ? arrival : null;
+  const arrivalId = arrived?.clientTripId ?? null;
+  const [arrivalShown, setArrivalShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (arrivalId === null) return;
+    const timer = setTimeout(() => setArrivalShown(arrivalId), ARRIVAL_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [arrivalId]);
+  const arrivalHolding = arrivalId !== null && arrivalShown !== arrivalId;
 
   /**
    * Stop the wait (nothing is stored) and go Home, saying nothing. The car reached driving speed as
@@ -420,16 +505,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const failedId = useDrive((d) => (d.lastFinalized !== null && !d.lastFinalized.ok ? d.lastFinalized.clientTripId : null));
   const sawRecording = useRef(false);
   const sawWaiting = useRef(false);
+  // The way out also waits while the "Welcome" line holds, and while the emergency panel is open (it
+  // closes by itself within 30 s), so an automatic end never takes the panel away.
   useEffect(() => {
     if (live.status === 'recording') sawRecording.current = true;
     if (isWaiting) sawWaiting.current = true;
-    if (live.status !== 'idle' || ending || cancelling) return;
+    if (live.status !== 'idle' || ending || cancelling || arrivalHolding || sosOpen) return;
     if (sawRecording.current) {
       const id = lastTripId.current;
       if (failedId !== null && failedId === id) setEndFailed(true);
       else leave(droppedId !== null && droppedId === id ? null : id);
     } else if (sawWaiting.current && !isWaiting) leave(null);
-  }, [live.status, isWaiting, ending, cancelling, leave, droppedId, failedId]);
+  }, [live.status, isWaiting, ending, cancelling, arrivalHolding, sosOpen, leave, droppedId, failedId]);
 
   // Over the limit the sign shows (the speed's spoken label says so).
   const speeding = live.overSign;
@@ -481,8 +568,15 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const pressNotDriving = useCallback(() => void onNotDriving(), [onNotDriving]);
   const swipeEnd = useCallback(() => void onEnd(), [onEnd]);
   const { press: navPress, change: navChange } = nav;
-  const pressNav = useCallback(() => void navPress(), [navPress]);
-  const longPressNav = useCallback(() => void navChange(), [navChange]);
+  // A navigation-button press closes the emergency panel.
+  const pressNav = useCallback(() => {
+    closeSos();
+    void navPress();
+  }, [closeSos, navPress]);
+  const longPressNav = useCallback(() => {
+    closeSos();
+    void navChange();
+  }, [closeSos, navChange]);
   const link = <NotDrivingLink palette={p} dimmed={dimmed} onPress={pressNotDriving} />;
 
   return (
@@ -612,7 +706,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         />
       </View>
 
-      {waitPanel !== null ? (
+      {sosOpen ? (
+        <View testID="hud-sos-sheet" style={[styles.panel, styles.sosPanel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
+          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} onCall={callSos} onClose={closeSos} />
+        </View>
+      ) : waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
           <WaitPanel waiting={waitPanel} colors={sheet} height={layout.panel.h} onKeep={() => controls.touchWaiting()} onCancel={() => void stopWaiting()} />
         </View>
@@ -641,6 +739,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           />
         </View>
       ) : null}
+
+      {/* Over everything but the emergency button and its panel. */}
+      {arrived !== null ? <ArrivalOverlay arrival={arrived} palette={p} reduceMotion={reduceMotion} /> : null}
+
+      {/* Drawn last: nothing covers it or takes its touches. */}
+      <View style={[styles.abs, styles.centred, styles.sos, at(layout.sos)]}>
+        <EmergencyButton palette={p} colors={b} open={sosOpen} onPress={openSos} />
+      </View>
     </View>
   );
 }
@@ -691,6 +797,9 @@ const styles = StyleSheet.create({
   abs: { position: 'absolute' },
   centred: { alignItems: 'center', justifyContent: 'center' },
   panel: { position: 'absolute', zIndex: 2, borderRadius: 20, borderWidth: 1, padding: 16 },
+  // The emergency panel and button sit above the "Welcome" line (zIndex 3).
+  sosPanel: { zIndex: 4 },
+  sos: { zIndex: 5 },
   note: { fontFamily: fontFamilies.fieldBold, fontSize: 26, lineHeight: 32 },
   endLabel: { fontFamily: fontFamilies.fieldBold, fontSize: 24, lineHeight: 29, letterSpacing: 0.5 },
 });
