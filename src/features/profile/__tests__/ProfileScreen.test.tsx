@@ -149,8 +149,8 @@ it('achievement hints say how to get each one', () => {
   ]);
   expect(views.find((v) => v.id === 'clean_100')).toMatchObject({ unlocked: false, hint: 'Drive 100 miles with no events.' });
   expect(views.find((v) => v.id === 'perfect_week')).toMatchObject({ unlocked: false, hint: 'Take 3 or more drives in one week, all with no events.' });
-  expect(views.find((v) => v.id === 'better_braking')).toMatchObject({ unlocked: false, hint: 'Get your Braking score up 10 points from where it was 30 days ago.' });
-  expect(views.find((v) => v.id === 'better_phone')).toMatchObject({ unlocked: false, hint: 'Get your Phone use score up 10 points from where it was 30 days ago.' });
+  expect(views.find((v) => v.id === 'better_braking')).toMatchObject({ unlocked: false, hint: 'Get your Braking score 10 higher than it was 30 days ago.' });
+  expect(views.find((v) => v.id === 'better_phone')).toMatchObject({ unlocked: false, hint: 'Get your Phone use score 10 higher than it was 30 days ago.' });
   expect(views.find((v) => v.id === 'spot_cleared')).toMatchObject({ unlocked: false, hint: 'Drive clean through a spot to watch until it clears.' });
   expect(views.find((v) => v.id === 'first_drive')).toMatchObject({ unlocked: true });
   // An unlocked badge says what it was for.
@@ -179,7 +179,7 @@ it('the achievements screen lists all ten with their state', async () => {
   expect(await screen.findByText(profileCopy.achievements.count(2, 10))).toBeOnTheScreen();
   expect(screen.getAllByTestId(/^achievement-row-/)).toHaveLength(10);
   expect(screen.getByTestId('achievement-hint-clean_100')).toHaveTextContent('Drive 100 miles with no events.');
-  expect(screen.getByTestId('achievement-hint-better_attention')).toHaveTextContent('Get your Attention score up 10 points from where it was 30 days ago.');
+  expect(screen.getByTestId('achievement-hint-better_attention')).toHaveTextContent('Get your Attention score 10 higher than it was 30 days ago.');
   expect(screen.getByTestId('achievement-hint-spot_cleared')).toHaveTextContent('Clear a spot to watch.');
 });
 
