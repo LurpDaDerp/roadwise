@@ -211,6 +211,7 @@ export function createSession(start: SessionStart): TripSession {
     lastSpeed: null,
     motion: EMPTY_MOTION,
     cut: false,
+    endPlace: null,
   };
 }
 

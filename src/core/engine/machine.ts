@@ -11,7 +11,8 @@
 // or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2), or once the
 // pedometer counts a walk (`motion.ts` step walk), or after a minute stopped at a known parking
 // spot (`motion.ts`; the spots are the host's, `deps.parkingSpots`), or 15 s after the paired car
-// or CarPlay went with the car not over 3 mph since (`deps.carGoneSince`). Every end
+// or CarPlay went with the car not over 3 mph since (`deps.carGoneSince`), or 10 s stopped at a
+// saved place the car had been 300 m or more from (`motion.ts` place arrival; `deps.places`). Every end
 // but a prompt manual one closes the drive where the car last moved (`closeAtLastMovement`; a
 // walking end at or before the walk began): a manual end `MANUAL_CUT_AFTER_S` or more after the
 // idle clock's base is cut too, a sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
@@ -35,17 +36,20 @@ import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
 
-import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, EventShake, TripSession } from './engine.types';
+import type { AdoptedTrip, AlertEvent, EndCause, Engine, EngineDeps, EngineEvent, EngineSnapshot, EngineStatus, EventShake, PlaceSpot, TripSession } from './engine.types';
 import { nextBearing, NO_BEARING, type DisplayBearing } from './displayBearing';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import {
+  ARRIVE_MS,
   calmFor,
   carGoneEnds,
   carStillDriving,
   fastRow,
   footReading,
   nearSpot,
+  nextArrive,
+  notePlacesLeft,
   noteSteps,
   ON_FOOT_DROP_MS,
   PARK_STOP_MS,
@@ -54,6 +58,7 @@ import {
   vehicleReading,
   WALK_END_MS,
   WALK_STAND_MIN_MS,
+  type ArriveClock,
   type StepMark,
 } from './motion';
 import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
@@ -84,6 +89,7 @@ interface Seen {
 }
 
 const noop = (): void => {};
+const NO_PLACES: readonly PlaceSpot[] = [];
 
 /**
  * The halo's tint ratio: the speed the screen shows over the limit the sign shows (1 = at the
@@ -121,6 +127,12 @@ export function createEngine(deps: EngineDeps): Engine {
    */
   let lastClearAt: number | null = null;
   let lastVehicleAt: number | null = null;
+  /** The place-arrival clock (`motion.ts` `nextArrive`), or null while it is not running. */
+  let arrive: ArriveClock | null = null;
+  /** The saved places the car has been more than 300 m from during the drive (`notePlacesLeft`), by id. */
+  let placesLeft: ReadonlySet<string> = new Set();
+  /** The places list `placesLeft` has read the whole track against (the host's, read as the drive opens). */
+  let placesScanned: readonly PlaceSpot[] | null = null;
   let prefetchedAtM: number | null = null;
   let lastAlert: EngineSnapshot['lastAlert'] = null;
   /** The latest event the halo shakes on, or null. */
@@ -199,6 +211,7 @@ export function createEngine(deps: EngineDeps): Engine {
       lastShake: recording ? lastShake : null,
       stopped: recording && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: recording && session !== null ? (held() ? session.startedAt + MAX_DRIVE_MS : autoEndAt(session)) : null,
+      arriveAt: recording && session !== null && session.droveAt !== null && arrive !== null && !held() ? arrive.since + ARRIVE_MS : null,
       drove: recording && session !== null && session.droveAt !== null,
       distanceM: session?.distanceM ?? 0,
       // The last known speed holds the lockout through a dropout, and after an adopt (the rebuilt session's).
@@ -216,6 +229,7 @@ export function createEngine(deps: EngineDeps): Engine {
     foot = null;
     stepLog = [];
     lastFastAt = null;
+    resetArrive();
     prefetchedAtM = null;
     lastAlert = null;
     lastShake = null;
@@ -223,6 +237,28 @@ export function createEngine(deps: EngineDeps): Engine {
     bearing = NO_BEARING;
     speeding = null;
     touch();
+  }
+
+  function resetArrive(): void {
+    arrive = null;
+    placesLeft = new Set();
+    placesScanned = null;
+  }
+
+  /**
+   * The place-arrival clock after `row` (already appended to the track). A places list not yet read
+   * against the drive (the drive's first rows, an adopted drive, the host's list landing) is checked
+   * against the whole track first, so leaving a place counts from the drive's start.
+   */
+  function noteArrive(s: TripSession, row: FeatureRow): void {
+    const places = deps.places?.() ?? NO_PLACES;
+    if (places !== placesScanned) {
+      placesScanned = places;
+      placesLeft = notePlacesLeft(placesLeft, s.track, places);
+    } else if (row.gnssValid) {
+      placesLeft = notePlacesLeft(placesLeft, [row], places);
+    }
+    arrive = places.length === 0 ? null : nextArrive(arrive, row, places, placesLeft);
   }
 
   /** An alert the HUD shows (`lastAlert`; never one on a replayed or unseen row) and the alert layer plays. */
@@ -341,6 +377,7 @@ export function createEngine(deps: EngineDeps): Engine {
     appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform });
     if (fastRow(row)) lastFastAt = row.ts;
     stepLog = noteSteps(stepLog, row);
+    noteArrive(s, row);
     // A replayed row is where the car was, not where it is going: the tiles ahead are asked for from
     // the first live row (the drive's distance so far does not count against it).
     if (!replaying) maybePrefetch(row, s.distanceM);
@@ -350,6 +387,7 @@ export function createEngine(deps: EngineDeps): Engine {
     if (await checkSteps(row.ts + ROW_MS)) return;
     if (await checkParked(row.ts + ROW_MS)) return;
     if (await checkCarGone(row.ts + ROW_MS)) return;
+    if (await checkArrived(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -464,6 +502,21 @@ export function createEngine(deps: EngineDeps): Engine {
     return true;
   }
 
+  /**
+   * The saved place at `t` (row clock or a tick): once the drive has reached driving speed, the
+   * arrival clock (`motion.ts` `nextArrive`) has run `ARRIVE_MS` at a place the car had left. A
+   * still end (`stopped`) carrying the place (`endPlace`), cut at the last movement. Rows replayed
+   * from a journal count too: the rule reads only the rows' own fixes. True when it ended the drive.
+   */
+  async function checkArrived(t: number): Promise<boolean> {
+    if (status !== 'recording' || held() || arrive === null) return false;
+    const s = session as TripSession;
+    if (s.droveAt === null || t - arrive.since < ARRIVE_MS) return false;
+    const { id, kind, name } = arrive.place;
+    await finalize((open) => Object.freeze({ ...closeAtLastMovement(open, 'stopped'), endPlace: { id, kind, name } }));
+    return true;
+  }
+
   /** What a report says of a car, kept whatever the state (`lastClearAt`, `lastVehicleAt`): `t` is when it arrived. */
   function noteVehicle(a: MotionActivity, t: number): void {
     const reading = vehicleReading(a);
@@ -569,6 +622,7 @@ export function createEngine(deps: EngineDeps): Engine {
     foot = null;
     stepLog = [];
     lastFastAt = null;
+    resetArrive();
     const made = deps.createDetectors();
     session = createSession({
       clientTripId: e.clientTripId ?? deps.newId(),
@@ -600,6 +654,7 @@ export function createEngine(deps: EngineDeps): Engine {
     suite = trip.detectors;
     foot = null;
     stepLog = [];
+    resetArrive();
     // How long the car has stood is not known from the rebuilt session: as if it moved at its last row.
     lastFastAt = trip.session.lastRowTs;
     setStatus('recording');
@@ -646,7 +701,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status === 'recording') await release();
         return;
       case 'tick':
-        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts)) && !(await checkParked(e.ts))) await checkCarGone(e.ts);
+        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts)) && !(await checkParked(e.ts)) && !(await checkCarGone(e.ts))) await checkArrived(e.ts);
         return;
     }
   }

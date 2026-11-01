@@ -141,6 +141,7 @@ function readyRuntime() {
     speedingTier: null,
     stopped: false,
     autoEndAt: null,
+    arriveAt: null,
     distanceM: 0,
     lockedOut: false,
     drove: false,

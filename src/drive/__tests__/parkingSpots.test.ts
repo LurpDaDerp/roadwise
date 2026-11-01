@@ -2,7 +2,7 @@
 import { PARK_SPOTS_MAX } from '@/core/engine/motion';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, createTripsRepo, migrate, type Db, type TripStatus } from '@/data/db';
-import { readDriveEnds, readParkingSpots } from '@/drive/parkingSpots';
+import { readDriveEnds, readParkingSpots, readPlaceSpots } from '@/drive/parkingSpots';
 import { PLACES_KEY } from '@/features/places/model';
 
 const T0 = 1_700_000_000_000;
@@ -57,4 +57,19 @@ test('the saved places too; a failing read leaves the other', async () => {
   const broken = { ...db, execute: async () => Promise.reject(new Error('locked')) } as unknown as Db;
   expect(await readParkingSpots(broken, (e) => errors.push(e))).toEqual([]);
   expect(errors).toHaveLength(2);
+});
+
+test('the saved places with who they are, for the place-arrival end; a failing read is none', async () => {
+  await createSettingsRepo(db).set(PLACES_KEY, [
+    { id: 'home', kind: 'home', name: 'Home', address: '1 Main St', area: '', lat: 47.5, lng: -122.2 },
+    { id: 'place-1', kind: 'custom', name: 'Gym', address: '2 Main St', area: '', lat: 47.6, lng: -122.3 },
+  ]);
+  expect(await readPlaceSpots(db)).toEqual([
+    { id: 'home', kind: 'home', name: 'Home', lat: 47.5, lng: -122.2 },
+    { id: 'place-1', kind: 'custom', name: 'Gym', lat: 47.6, lng: -122.3 },
+  ]);
+  const errors: unknown[] = [];
+  const broken = { ...db, execute: async () => Promise.reject(new Error('locked')) } as unknown as Db;
+  expect(await readPlaceSpots(broken, (e) => errors.push(e))).toEqual([]);
+  expect(errors).toHaveLength(1);
 });

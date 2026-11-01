@@ -33,14 +33,20 @@
 //   drive that had it (native's debounced "gone since", the host's `deps.carGoneSince`), with no
 //   trusted fix over 3 mph since it went: a still end (`stopped`), cut at the last movement. A
 //   disconnect while the car moves never ends a drive; a reconnect clears it. Never on a replayed row.
+// - The saved place: once the drive has reached driving speed and the car has been more than
+//   `ARRIVE_LEFT_M` (300 m) from a saved place at some point in it, `ARRIVE_MS` (10 s) of rows each
+//   with a trusted speed at or under 5 mph and a fix accurate to 20 m within `ARRIVE_NEAR_M` (100 m)
+//   of that place ends the drive (`nextArrive`). A row with no fix keeps the clock running; one over
+//   5 mph, a poor or untrusted fix, or a fix outside 100 m resets it. A still end (`stopped`, the
+//   place on `session.endPlace`), cut at the last movement.
 // While a Start-card drive still waits for driving speed none of them applies.
 import type { MotionActivity } from '@drive-sense';
-import { WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
+import { MAX_H_ACC_M, MOVING_MIN_MPH, WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
 
 import { knownSpeed, MPS_PER_MPH, speedTrusted } from '@/core/detectors/common';
 import { haversineMeters } from '@/lib/geo';
 
-import type { TripSession } from './engine.types';
+import type { PlaceSpot, TrackPoint, TripSession } from './engine.types';
 import { END_CRAWL_MPS, WALK_BAND_MPH } from './session';
 import type { FeatureRow } from './types';
 
@@ -183,4 +189,75 @@ export function vehicleReading(a: MotionActivity): VehicleReading {
 export function nearSpot(here: Spot, spots: readonly Spot[]): boolean {
   for (const p of spots) if (haversineMeters(here, p) <= PARK_NEAR_M) return true;
   return false;
+}
+
+// --- the saved place ------------------------------------------------------------------------------
+
+/** The place-arrival end: this long stopped at a saved place… */
+export const ARRIVE_MS = 10_000;
+/** …within this far of it… */
+export const ARRIVE_NEAR_M = 100;
+/** …once the car has been more than this far from it during the drive (a drive from home never ends in the driveway). */
+export const ARRIVE_LEFT_M = 300;
+/** Stopped: a trusted speed at or under 5 mph (`MOVING_MIN_MPH`). */
+export const ARRIVE_MAX_MPS = MOVING_MIN_MPH * MPS_PER_MPH;
+
+/** The arrival clock: the place the car stopped at and the row clock it stopped there from. */
+export interface ArriveClock {
+  place: PlaceSpot;
+  since: number;
+}
+
+/** A fix the place rules trust: valid and accurate to 20 m (`MAX_H_ACC_M`). */
+const goodFix = (p: { hAcc: number }): boolean => p.hAcc <= MAX_H_ACC_M;
+
+/**
+ * `left` with every place `fixes` show the car more than `ARRIVE_LEFT_M` from (only fixes accurate
+ * to 20 m count). Returns `left` itself when nothing is added.
+ */
+export function notePlacesLeft(left: ReadonlySet<string>, fixes: readonly Pick<TrackPoint, 'lat' | 'lng' | 'hAcc'>[], places: readonly PlaceSpot[]): ReadonlySet<string> {
+  let out: Set<string> | null = null;
+  for (const p of places) {
+    if (left.has(p.id)) continue;
+    for (const f of fixes) {
+      if (goodFix(f) && haversineMeters(f, p) > ARRIVE_LEFT_M) {
+        out ??= new Set(left);
+        out.add(p.id);
+        break;
+      }
+    }
+  }
+  return out ?? left;
+}
+
+/** The nearest of `places` within `ARRIVE_NEAR_M` of `here`, or null. */
+export function placeAt(here: Spot, places: readonly PlaceSpot[]): PlaceSpot | null {
+  let best: PlaceSpot | null = null;
+  let bestM = Infinity;
+  for (const p of places) {
+    const m = haversineMeters(here, p);
+    if (m <= ARRIVE_NEAR_M && m < bestM) {
+      best = p;
+      bestM = m;
+    }
+  }
+  return best;
+}
+
+/**
+ * The arrival clock after `row`: a row over 5 mph resets it; a row with no fix keeps it as it is;
+ * a fix accurate to 20 m with a trusted speed at or under 5 mph within 100 m of a place the car had
+ * left (`left`) keeps it running at that place (or starts it there); any other fix resets it.
+ */
+export function nextArrive(clock: ArriveClock | null, row: FeatureRow, places: readonly PlaceSpot[], left: ReadonlySet<string>): ArriveClock | null {
+  const speed = knownSpeed(row);
+  if (speed !== null && speed > ARRIVE_MAX_MPS) return null;
+  if (!row.gnssValid) return clock;
+  if (!goodFix(row) || speed === null || !speedTrusted(row)) return null;
+  const place = placeAt(
+    row,
+    places.filter((p) => left.has(p.id))
+  );
+  if (place === null) return null;
+  return clock !== null && clock.place.id === place.id ? clock : { place, since: row.ts };
 }

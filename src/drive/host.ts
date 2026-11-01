@@ -51,7 +51,7 @@ import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import { knownSpeed, ROW_MS } from '@/core/detectors/common';
-import type { AdoptedTrip, AlertEvent, DriveOrigin, EndCause, EngineSnapshot, EngineStatus, StartSource, TripSession } from '@/core/engine/engine.types';
+import type { AdoptedTrip, AlertEvent, DriveOrigin, EndCause, EngineSnapshot, EngineStatus, PlaceSpot, StartSource, TripSession } from '@/core/engine/engine.types';
 import { closeDrive, dropTrip, isDropped, type DropReason } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
@@ -79,7 +79,7 @@ import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
 import { clearCancelMarker, readCancelMarker, writeCancelMarker } from './cancel';
 import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
-import { readParkingSpots } from './parkingSpots';
+import { readParkingSpots, readPlaceSpots } from './parkingSpots';
 import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, realScheduler, type Scheduler } from './ticks';
@@ -371,7 +371,13 @@ export function captureEndOf(session: Readonly<TripSession>, at: number, kept: b
   return { drivingEndedAt: kept ? (session.endedAt ?? at) : null, drivingAtEnd, ...(automatic ? { automatic: true } : {}) };
 }
 
-/** An end one of the engine's automatic rules made (still, parking spot, car link, walking, step walk, 12 h): never a manual one or an orphan. */
+/** The ticker's deadline: the sooner of the automatic end and the place arrival, or null with neither. */
+export function nextDeadline(autoEndAt: number | null, arriveAt: number | null): number | null {
+  if (autoEndAt === null) return arriveAt;
+  return arriveAt === null ? autoEndAt : Math.min(autoEndAt, arriveAt);
+}
+
+/** An end one of the engine's automatic rules made (still, parking spot, saved place, car link, walking, step walk, 12 h): never a manual one or an orphan. */
 export const isAutomaticEnd = (cause: EndCause | null): boolean => cause === 'stopped' || cause === 'walking' || cause === 'limit';
 export type DisplayUnit = 'mph' | 'km/h';
 
@@ -522,6 +528,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let budget: NotDrivingBudget | null = null;
   /** The open drive's known parking spots (`parkingSpots.ts`), read as it opens. */
   let parkingSpots: readonly { lat: number; lng: number }[] = [];
+  /** The open drive's saved places, with who they are (`parkingSpots.ts` `readPlaceSpots`), read as it opens. */
+  let places: readonly PlaceSpot[] = [];
   /** iOS: native's car-link "gone since" for the live drive (`carLink`), or null. */
   let carGoneSince: number | null = null;
   let hudFocused = false;
@@ -573,6 +581,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   // --- engine wiring -------------------------------------------------------------------------------
 
   async function onFinalize(session: Readonly<TripSession>): Promise<void> {
+    // The driving screen's "Welcome" line shows while the drive saves.
+    if (session.endPlace !== null && session.endPlace !== undefined) {
+      arrival = { clientTripId: session.clientTripId, kind: session.endPlace.kind, name: session.endPlace.name };
+      publish();
+    }
     if (!persist) return;
     const id = session.clientTripId;
     const closedAt = now();
@@ -719,6 +732,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // A Start-card drive still waiting for driving speed: its wait ends it (`endWait`), never the still or walking end.
     holdEnds: () => waiting !== null,
     parkingSpots: () => parkingSpots,
+    places: () => places,
     carGoneSince: () => carGoneSince,
     onError: (e) => report(e, 'engine'),
   });
@@ -952,10 +966,15 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const s = engine.snapshot();
     const id = s.clientTripId;
     if (s.status !== 'recording' || id === null) return;
+    if (arrival !== null && arrival.clientTripId !== id) {
+      arrival = null;
+      publish();
+    }
     if (opts.adopted) await deps.dashcam?.adopt(id).catch((e: unknown) => report(e, 'dashcam'));
     budget = persist ? await budgetFor(db, id, now()).catch(() => null) : null;
     budget ??= { clientTripId: id, spentMs: 0, expired: false, updatedAt: now() };
     parkingSpots = persist ? await readParkingSpots(db, (e) => report(e, 'parkingSpots')) : [];
+    places = persist ? await readPlaceSpots(db, (e) => report(e, 'parkingSpots')) : [];
     // A drive opens with the link as native has it now; the live `carLink` keeps it from here.
     carGoneSince = null;
     if (ios && detect !== null && detect.available) {
@@ -1200,7 +1219,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!booted) return;
     const s = engine.snapshot();
     await reconcileCapture(s.status);
-    ticker.update(s.status === 'recording' ? s.autoEndAt : null);
+    ticker.update(s.status === 'recording' ? nextDeadline(s.autoEndAt, s.arriveAt) : null);
     // The task that opened a drive behind has taken its confirming rows in: its push-to-start may go.
     flushPush(false);
     // Stored drives' journals go (never the live one: native would refuse it).

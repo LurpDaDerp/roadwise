@@ -1,5 +1,7 @@
 // The known parking spots a drive may end at (`core/engine/motion.ts`): where the latest kept
-// drives ended, and the saved places. Read once as a drive opens; nothing here writes.
+// drives ended, and the saved places; and the saved places with who they are, for the
+// place-arrival end. Read once as a drive opens; nothing here writes.
+import type { PlaceSpot } from '@/core/engine/engine.types';
 import { PARK_SPOTS_MAX, type Spot } from '@/core/engine/motion';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { readPlaces } from '@/features/places/model';
@@ -38,4 +40,13 @@ export async function readParkingSpots(db: Db, onError?: (e: unknown) => void): 
     return [];
   });
   return [...ends, ...places.map((p) => ({ lat: p.lat, lng: p.lng }))];
+}
+
+/** The saved places for the place-arrival end: id, kind, name and point. A failed read is none; `onError` hears of it. */
+export async function readPlaceSpots(db: Db, onError?: (e: unknown) => void): Promise<PlaceSpot[]> {
+  const places = await readPlaces(createSettingsRepo(db)).catch((e: unknown) => {
+    onError?.(e);
+    return [];
+  });
+  return places.map((p) => ({ id: p.id, kind: p.kind, name: p.name, lat: p.lat, lng: p.lng }));
 }

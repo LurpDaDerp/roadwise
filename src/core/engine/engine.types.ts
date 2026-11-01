@@ -32,6 +32,23 @@ export interface Fix {
   ts: number;
 }
 
+/** A saved place's kind, as the engine knows it (the places feature's `PlaceKind`). */
+export type PlaceKindOf = 'home' | 'work' | 'school' | 'custom';
+
+/** The saved place a drive ended at (the place-arrival end, `motion.ts`). */
+export interface EndPlace {
+  id: string;
+  kind: PlaceKindOf;
+  /** Home, Work, School, or the driver's own name for it. */
+  name: string;
+}
+
+/** A saved place as the engine reads it (`EngineDeps.places`): who it is and where. */
+export interface PlaceSpot extends EndPlace {
+  lat: number;
+  lng: number;
+}
+
 /** One valid fix of the drive, kept for the polyline and the events' coordinates. */
 export interface TrackPoint extends Fix {
   hAcc: number;
@@ -177,6 +194,8 @@ export interface TripSession {
   motion: Readonly<MotionTrack>;
   /** Closed at its last movement (`closeAtLastMovement`): the tail after it is left out. */
   cut: boolean;
+  /** The saved place the drive ended at by the place-arrival end (`motion.ts`), else null. */
+  endPlace: EndPlace | null;
 }
 
 /**
@@ -286,6 +305,12 @@ export interface EngineSnapshot {
    * while the host holds the ends, `EngineDeps.holdEnds`); null unless recording.
    */
   autoEndAt: number | null;
+  /**
+   * epoch ms the place-arrival end (`motion.ts`) ends the drive unless the clock resets: the car
+   * stopped at a saved place it had left. Null while that clock is not running, while the host
+   * holds the ends, before driving speed, and unless recording.
+   */
+  arriveAt: number | null;
   /** The drive has reached driving speed (`session.droveAt`: two trusted readings of 10 mph or more in a row); false when not recording. */
   drove: boolean;
   distanceM: number;
@@ -345,6 +370,11 @@ export interface EngineDeps {
    */
   parkingSpots?(): readonly { lat: number; lng: number }[];
   /**
+   * The saved places, with who they are, for the open drive (the host reads them as the drive
+   * opens): 10 s stopped within 100 m of one the car had left ends it (`motion.ts`). Default: none.
+   */
+  places?(): readonly PlaceSpot[];
+  /**
    * iOS: since when the paired car or CarPlay has been gone, continuously, in the open drive that
    * had it (native's debounced `goneSince`), or null: 15 s of it with the car not over 3 mph since
    * ends the drive (`motion.ts`). Default: never.
@@ -400,7 +430,7 @@ export type EngineEvent =
    * while recording.
    */
   | { type: 'release'; ts: number }
-  /** The host's one timer: the automatic end (`autoEndAt`) may have passed with no row. */
+  /** The host's one timer: the automatic end (`autoEndAt`) or the place arrival (`arriveAt`) may have passed with no row. */
   | { type: 'tick'; ts: number }
   /** Continue a drive the previous process was recording. Applied only while idle. */
   | { type: 'adopt'; trip: AdoptedTrip; ts: number };

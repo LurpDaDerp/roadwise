@@ -32,6 +32,7 @@ import { CANCEL_KEY } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
+import { PLACES_KEY } from '@/features/places/model';
 import type { DangerAlert } from '@/features/weather/danger';
 import { attachSummaryNotifier, type SummaryNotificationPort, type SummaryRequest } from '@/features/drive/summaryNotifier';
 
@@ -882,6 +883,60 @@ describe('every drive is a drive of its own', () => {
     await h.host.end();
     expect(await tripCount()).toBe(2);
     expect(await createTripsRepo(db).get(second)).toMatchObject({ status: 'pending', started_at: t1 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('the place arrival', () => {
+  const drove = rows(120, { speedMps: 15 });
+  const end = drove.at(-1)!;
+  const parkedFrom = T0 + 120_000;
+  const parked = (n: number) => rows(n, { t0: parkedFrom, speedMps: 0 }).map((r) => ({ ...r, lng: end.lng }));
+  const savePlace = () => createSettingsRepo(db).set(PLACES_KEY, [{ id: 'home', kind: 'home', name: 'Home', address: '1 Main St', area: '', lat: end.lat, lng: end.lng }]);
+
+  test('10 s stopped at a saved place: arrival is published as the drive starts to save and stays after; the next drive clears it', async () => {
+    await savePlace();
+    const h = build();
+    await h.host.boot();
+    const seen: { status: string; arrival: unknown }[] = [];
+    h.host.subscribe((s) => seen.push({ status: s.status, arrival: s.arrival }));
+    await drive(h, drove);
+    expect(h.host.snapshot().arrival).toBeNull();
+    await feed(h, parked(10));
+    await h.host.untilIdle();
+    const arrival = { clientTripId: uuid(1), kind: 'home', name: 'Home' };
+    expect(seen.find((s) => s.arrival !== null)).toEqual({ status: 'finalizing', arrival });
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', arrival, lastFinalized: { clientTripId: uuid(1), ok: true, dropped: null, endCause: 'stopped' } });
+    expect((await createTripsRepo(db).get(uuid(1)))!.ended_at).toBe(T0 + 120_000);
+    const t1 = parkedFrom + 60_000;
+    clock = t1;
+    await drive(h, rows(20, { t0: t1, speedMps: 15 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', arrival: null });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the timer is armed for the arrival, so it ends on time when rows stop coming', async () => {
+    await savePlace();
+    const h = build();
+    await h.host.boot();
+    await drive(h, drove);
+    await feed(h, parked(3));
+    expect(h.host.snapshot().arriveAt).toBe(parkedFrom + 10_000);
+    // Armed at the first parked row for the arrival plus the ticker's 1 s slack (the 5 min end's timer replaced).
+    expect(h.scheduler.delays()).toEqual([11_000]);
+    clock = parkedFrom + 11_000;
+    h.scheduler.fire();
+    await h.host.untilIdle();
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', arrival: { clientTripId: uuid(1), kind: 'home' }, lastFinalized: { ok: true, endCause: 'stopped' } });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('with no saved places a stop is only the 5 min still end', async () => {
+    const h = build();
+    await h.host.boot();
+    await drive(h, drove);
+    await feed(h, parked(30));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', arrival: null, arriveAt: null });
     await h.host.stop({ endOpenTrip: false });
   });
 });
