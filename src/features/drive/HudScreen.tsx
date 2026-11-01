@@ -29,7 +29,7 @@ import {
 } from '@/ui/drive';
 
 import { nextEndLock } from './endLock';
-import { EventBanner, useAlertFlash } from './EventBanner';
+import { EventBanner, type HudAlert, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
@@ -150,7 +150,9 @@ export type HudScreenProps = {
  *   change the saved app, or to pick one). At 35 mph and over the button greys out and takes no
  *   touch (its list closes) until the car is back under 30 mph.
  * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change)
- *   its icon and one or two words, across the whole band (the DashPal chip steps aside); else a
+ *   its icon and one or two words, across the whole band (the DashPal chip steps aside); while the
+ *   car is over the speeding line, "Slow down" in the episode's colour stays up from its alert until
+ *   the first row back under the line (another event's chip takes the band for its 1.5 s); else a
  *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
  *   ("Watch your speed here"), then the dangerous-weather banner (its ✕ live at any speed; hidden
  *   for the rest of the drive once dismissed). With a DashPal paired, a small static chip top right.
@@ -255,6 +257,12 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   useEffect(() => () => reportPresence(presenceOwner, false, null), [presenceOwner]);
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
+  // "Slow down" holds while the car is over the speeding line, in the episode's colour as it is now;
+  // a fresh alert (another event's, or speeding's own) takes the chip for its flash. Only the flash
+  // bursts the halo.
+  const speedingTier = live.speedingTier;
+  const speedingHeld = useMemo<HudAlert | null>(() => (speedingTier === null ? null : { type: 'speeding', tier: speedingTier, at: 0 }), [speedingTier]);
+  const chip = alert ?? speedingHeld;
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
@@ -298,7 +306,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const waitPanel = waiting !== null && (waiting.phase === 'popup' || waiting.phase === 'countdown') ? { ...waiting, phase: waiting.phase } : null;
   const panelUp = waitPanel !== null;
   // The dimmer stays off while an alert, a nudge, the list of apps or a waiting panel shows.
-  const { dimmed, wake } = useDimmer(alert !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp);
+  const { dimmed, wake } = useDimmer(chip !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp);
   // Android back closes the list first (before the drive screen's own swallow).
   const pickerOpen = nav.picker !== null;
   const closePicker = nav.close;
@@ -464,7 +472,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // The link in the band's line (a failed end keeps the line first): an alert banner yields to it, so
   // a run of alerts can never hide it for its whole budget. The halo still bursts and the sound plays.
   const linkInLine = showLink && layout.notDriving === 'line' && !endFailed;
-  const bannerUp = (dashpal !== null || alert !== null) && !linkInLine;
+  const bannerUp = (dashpal !== null || chip !== null) && !linkInLine;
   // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
   // for the rest of the drive (a more severe kind shows again).
   const weather = live.weatherAlert;
@@ -484,8 +492,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       <View style={[styles.abs, styles.centred, at(layout.band)]}>
         {!bannerUp ? null : dashpal !== null ? (
           <DashpalHudBanner visual={dashpal} palette={p} />
-        ) : alert !== null ? (
-          <EventBanner alert={alert} palette={p} />
+        ) : chip !== null ? (
+          <EventBanner alert={chip} palette={p} />
         ) : null}
       </View>
       {!bannerUp ? (

@@ -85,6 +85,8 @@ export interface DriveLive {
   overSign: boolean;
   /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. */
   speedingOver: boolean;
+  /** While over the speeding line, the episode's tier as of the current row ("Slow down" holds in its colour); else null. */
+  speedingTier: Tier | null;
   /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
@@ -117,6 +119,7 @@ export const selectLive = (s: DriveState) => ({
   speedingTint: speedingTint(s.speedingRatio, s.limitMph),
   overSign: s.speedingRatio !== null && s.speedingRatio > 1,
   speedingOver: s.speedingOver,
+  speedingTier: s.speedingTier,
   lastShake: s.lastShake,
   lastAlert: s.lastAlert,
   weatherAlert: s.weatherAlert,

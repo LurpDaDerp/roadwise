@@ -194,6 +194,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     speedingTint: 0,
     overSign: false,
     speedingOver: false,
+    speedingTier: null,
     lastShake: null,
     lastAlert: null,
     weatherAlert: null,
@@ -855,6 +856,40 @@ describe('event alerts', () => {
     expect(screen.getByTestId('hud-alert')).not.toHaveTextContent(/Speeding/);
     expect(halo().mode).toBe('speeding');
     expect(halo().burst).toBeNull();
+  });
+
+  test('"Slow down" stays up while over the speeding line, in its tier as it is now, and goes on the first row back under it', async () => {
+    const h = await renderHud({ rowTs: T });
+    const over = { speedMph: 41, speedingRatio: 41 / 35, speedingOver: true, speedingTier: 'minor' as const, lastAlert: { type: 'speeding' as const, tier: 'minor' as const, at: T + 1000 } };
+    await h.update({ rowTs: T + 1000, ...over });
+    await act(() => jest.advanceTimersByTime(1500));
+    await h.update({ rowTs: T + 2500, ...over });
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
+    const chipColor = () => StyleSheet.flatten(screen.getByTestId('hud-alert').props.style).backgroundColor;
+    const minorColor = chipColor();
+    // Well past its flash, and further over: still up, in the new tier's colour; it never bursts.
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 5000));
+    await h.update({ rowTs: T + 20_000, ...over, speedMph: 48, speedingRatio: 48 / 35, speedingTier: 'moderate' });
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
+    expect(chipColor()).not.toBe(minorColor);
+    expect(halo().burst).toBeNull();
+    // It holds the dimmer off, as any alert does.
+    expect(mockHalo.at(-1)!.dimmed).toBe(false);
+    // Back under the line (the episode's 5-second end window still open): gone at once.
+    await h.update({ rowTs: T + 21_000, speedMph: 39, speedingRatio: 39 / 35, speedingOver: false, speedingTier: null });
+    expect(screen.queryByTestId('hud-alert')).toBeNull();
+  });
+
+  test('another event takes the chip for its 1.5 s while over the line, then "Slow down" is back', async () => {
+    const over = { speedMph: 41, speedingRatio: 41 / 35, speedingOver: true, speedingTier: 'minor' as const };
+    const h = await renderHud({ rowTs: T, ...over });
+    // Over the line as the screen opens: the held chip is the speed now, not old news.
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
+    await h.update({ rowTs: T + 1000, ...over, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Hard brake/);
+    expect(halo().burst).not.toBeNull();
+    await act(() => jest.advanceTimersByTime(1500));
+    expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
   });
 
   test('the alert already standing when the screen opens is not replayed, and never bursts', async () => {

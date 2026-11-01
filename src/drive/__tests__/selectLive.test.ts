@@ -14,6 +14,7 @@ const state = (over: Partial<DriveState> = {}): DriveState =>
     limitMph: 35,
     speedingRatio: 30 / 35,
     speedingOver: false,
+    speedingTier: null,
     lastShake: null,
     lastAlert: null,
     weatherAlert: null,
