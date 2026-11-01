@@ -47,5 +47,21 @@ export const homeCopy = {
     spokenOpen: (title: string, p: number, t: number, line: string) => `${title}, ${Math.min(p, t)} of ${t}. ${line}`,
     footer: 'New goals every Monday.',
   },
+  /** The "Get set up" row: a few one-time things worth doing, each a tile. */
+  setup: {
+    title: 'Get set up',
+    progress: (done: number, total: number) => `${done} of ${total}`,
+    progressSpoken: (done: number, total: number) => `${done} of ${total} done`,
+    dismiss: 'Hide Get set up',
+    spokenDone: (title: string, line: string) => `${title}, done. ${line}`,
+    spokenOpen: (title: string, line: string) => `${title}. ${line}`,
+    goals: {
+      emergency: { title: 'Emergency contacts', line: 'People to call from a drive', hint: 'Opens Emergency contacts in Settings' },
+      places: { title: 'Your places', line: 'Home, work and school', hint: 'Opens Places in Settings' },
+      car: { title: 'Your car', line: 'Pair its Bluetooth or CarPlay', hint: 'Opens Your car in Settings' },
+      dashpal: { title: 'DashPal', line: 'Set up your dashcam', hint: 'Opens DashPal in Settings' },
+      friend: { title: 'First friend', line: 'Add someone you know', hint: 'Opens Add friends' },
+    },
+  },
   how: { title: 'How it works', action: 'How scores work' },
 } as const;

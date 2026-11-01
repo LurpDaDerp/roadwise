@@ -401,6 +401,19 @@ describe('Settings', () => {
     expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.dashcam);
   });
 
+  it('You › Emergency contacts, after Places, names the contacts and opens their screen', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const row = await screen.findByTestId('settings-emergency');
+    expect(within(row).getByText('Call them from the driving screen')).toBeOnTheScreen();
+    const ids = screen.getAllByTestId(/^settings-(places|emergency)$/).map((el) => el.props.testID);
+    expect(ids).toEqual(['settings-places', 'settings-emergency']);
+    await tap('settings-emergency');
+    expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.emergency);
+    expect(copy.root.emergency.subtitle(['Mom', 'Dad'])).toBe('Mom, Dad');
+    expect(copy.root.emergency.subtitle(['A', 'B', 'C', 'D', 'E'])).toBe('A, B and 3 more');
+  });
+
   it('opens alerts, zones and notifications, and has no driver monitoring entry', async () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);

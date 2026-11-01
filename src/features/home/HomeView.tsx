@@ -81,6 +81,10 @@ export type HomeViewProps = {
   places?: ReactNode;
   /** "Pair your car" or "Is <name> your car?", right after Add your places (iPhone, automatic drives on, no car paired, not closed). */
   car?: ReactNode;
+  /** "Add emergency contacts", the last action item (none saved, not closed, not during a drive). */
+  emergency?: ReactNode;
+  /** The "Get set up" row, after the action items (it renders nothing once every goal is done, it was closed, or during a drive). */
+  setupGoals?: ReactNode;
   /** Home's scroll, so it can return to the top when the permission card shows. */
   scrollRef?: RefObject<ScrollView | null>;
 };
@@ -89,7 +93,8 @@ export type HomeViewProps = {
  * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, this week's
  * drives, distance and goals in three pills (the goals pill scrolls to the goals section), then the drive card, the screen's hero, with the Safety Rating in
  * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
- * weather, a permission to fix, DashPal, a coaching tip, Add your places, Pair your car. Then the detail (stats, recent drives,
+ * weather, a permission to fix, DashPal, a coaching tip, Add your places, Pair your car, Add emergency contacts. Then the
+ * "Get set up" row of one-time goals, then the detail (stats, recent drives,
  * this week's goals; until 3 scored drives the first-drive prompt and the recent drives come first,
  * then the goals) and How it works, always last.
  */
@@ -175,6 +180,8 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
         {tip ? <CoachTipCard coaching={tip} onOpen={p.onAnalytics} /> : null}
         {p.places}
         {p.car}
+        {p.emergency}
+        {p.setupGoals}
 
         {firstRun ? (
           <>

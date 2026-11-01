@@ -10,6 +10,7 @@ import { useDb } from '@/data/queries/context';
 import { useMySummary, type HeatmapVisibility } from '@/data/server/summary';
 import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { CarSettingRow } from '@/features/carLink/CarSettingRow';
+import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { usePlaces } from '@/features/places/usePlaces';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
@@ -165,6 +166,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const edit = useProfileEdit();
   const auto = useAutoDrivesSwitch();
   const { places } = usePlaces();
+  const { contacts } = useEmergencyContacts();
 
   const [units, setUnits] = useState<Units | null>(null);
   const [zoneCount, setZoneCount] = useState(0);
@@ -271,6 +273,13 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
           subtitle={copy.places.subtitle((places ?? []).map((p) => p.name))}
           onPress={() => router.push(SETTINGS_HREFS.places)}
           testID="settings-places"
+        />
+        <LinkRow
+          icon="call-outline"
+          title={copy.emergency.title}
+          subtitle={copy.emergency.subtitle((contacts ?? []).map((c) => c.name))}
+          onPress={() => router.push(SETTINGS_HREFS.emergency)}
+          testID="settings-emergency"
         />
         <SegmentRow<Units> title={copy.units} value={shownUnits} segments={UNIT_SEGMENTS} onChange={(v) => void onUnits(v)} testID="settings-units" />
         <ListRow

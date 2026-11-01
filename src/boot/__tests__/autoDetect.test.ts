@@ -22,6 +22,7 @@ import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, SPOTS_META_KEY, type Db } from '@/data/db';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
+import { EMERGENCY_CARD_DISMISSED_KEY, EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 
 jest.mock('expo-notifications', () => ({}));
 
@@ -160,6 +161,17 @@ test('both wipes disarm automatic drives (iPhone) and wipe native’s drive stat
   await wipeForSignOut(db);
   expect(await createSettingsRepo(db).get(NOT_DRIVING_KEY)).toBeNull();
   expect(await createSettingsRepo(db).get(DRIVE_SCREEN_ENTERED_KEY)).toBeNull();
+});
+
+test('a sign-out takes the emergency contacts and the closed emergency card and setup goals with it', async () => {
+  const keys = [EMERGENCY_CONTACTS_KEY, EMERGENCY_CARD_DISMISSED_KEY, 'home.setupGoalsDismissed'];
+  expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining(keys));
+  const settings = createSettingsRepo(db);
+  await settings.set(EMERGENCY_CONTACTS_KEY, [{ id: 'contact-1', name: 'Mom', phone: '5551234567' }]);
+  await settings.set(EMERGENCY_CARD_DISMISSED_KEY, true);
+  await settings.set('home.setupGoalsDismissed', true);
+  await wipeForSignOut(db);
+  for (const key of keys) expect(await settings.get(key)).toBeNull();
 });
 
 describe('the Automatic drives switch', () => {

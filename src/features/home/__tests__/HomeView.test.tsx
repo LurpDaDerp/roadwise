@@ -278,10 +278,14 @@ describe('the action items', () => {
   const card = <Text testID="perm-card">{"Location is off. Drives can't record."}</Text>;
   const weather = <Text testID="weather-slot">Dense fog</Text>;
   const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
+  const places = <Text testID="places-slot">Add your places</Text>;
+  const car = <Text testID="car-slot">Pair your car</Text>;
+  const emergency = <Text testID="emergency-slot">Add emergency contacts</Text>;
+  const setupGoals = <Text testID="setup-slot">Get set up</Text>;
   const fair = { level: 'fair' as const, axis: 'speed' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
 
-  test('directly under the drive card, in order: weather, permission, DashPal, tip; then stats, drives, goals, and How it works last', async () => {
-    await draw(<HomeView {...props({ weather, permissions: card, dashpal, coaching: fair })} />);
+  test('directly under the drive card, in order: weather, permission, DashPal, tip, places, car, emergency contacts; then Get set up, stats, drives, goals, and How it works last', async () => {
+    await draw(<HomeView {...props({ weather, permissions: card, dashpal, coaching: fair, places, car, emergency, setupGoals })} />);
     const tree = treeJson();
     const at = (s: string) => {
       const i = tree.indexOf(s);
@@ -297,6 +301,10 @@ describe('the action items', () => {
       at("Location is off. Drives can't record."),
       at('A new phone was paired'),
       at('Watch your speed'),
+      at('Add your places'),
+      at('Pair your car'),
+      at('Add emergency contacts'),
+      at('Get set up'),
       at('Last 7 days'),
       at('Recent drives'),
       at("This week's goals"),
@@ -324,6 +332,14 @@ describe('the action items', () => {
     const tree = treeJson();
     expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('Recent drives'));
     expect(tree.indexOf('How it works')).toBeGreaterThan(tree.indexOf('1 more drive'));
+  });
+
+  test('Get set up comes after the action items and before the first-run card', async () => {
+    await draw(<HomeView {...props({ driveCount: 1, recent: [drive()], emergency, setupGoals })} />);
+    const tree = treeJson();
+    expect(tree.indexOf('Get set up')).toBeGreaterThan(tree.indexOf('Add emergency contacts'));
+    expect(tree.indexOf('"first-run"')).toBeGreaterThan(-1);
+    expect(tree.indexOf('Get set up')).toBeLessThan(tree.indexOf('"first-run"'));
   });
 });
 

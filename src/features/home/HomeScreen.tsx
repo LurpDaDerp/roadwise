@@ -19,6 +19,7 @@ import { useDriveScores } from '@/features/drives/useDriveScores';
 import { homeCard } from '@/features/permissions/board';
 import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { HomeCarCard } from '@/features/carLink/PairCarCard';
+import { HomeEmergencyCard } from '@/features/emergency/EmergencyCard';
 import { HomePlacesCard } from '@/features/places/PlacesCard';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
@@ -38,6 +39,7 @@ import { Screen } from '@/ui';
 import { homeCopy } from './copy';
 import { clearHomeNotice, useHomeNotice } from './homeNotice';
 import { HomeView } from './HomeView';
+import { HomeSetupGoals } from './SetupGoals';
 import { dropCopy, type StartRefusal } from './StartDrive';
 
 /** Only a Start-card drive's drop is worth a line (`isManualDrop`): an automatic drive's says nothing. */
@@ -220,6 +222,8 @@ export function HomeScreen() {
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
         places={<HomePlacesCard hidden={recording} />}
         car={<HomeCarCard hidden={recording} />}
+        emergency={<HomeEmergencyCard hidden={recording} />}
+        setupGoals={<HomeSetupGoals hidden={recording} />}
         scrollRef={scrollRef}
         refreshing={refreshing}
         onRefresh={() => {

@@ -58,6 +58,12 @@ export const settingsCopy = {
       subtitle: (names: readonly string[]) =>
         names.length === 0 ? 'Home, work, school and more' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`,
     },
+    /** Up to 5 people to call from the driving screen. */
+    emergency: {
+      title: 'Emergency contacts',
+      subtitle: (names: readonly string[]) =>
+        names.length === 0 ? 'Call them from the driving screen' : names.length <= 3 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`,
+    },
     /** What friends can see. Nobody but a friend ever sees any of it. */
     sharing: {
       rating: { title: 'Safety Rating', subtitle: 'Friends can see your Safety Rating' },
