@@ -421,15 +421,17 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const [cancelling, setCancelling] = useState(false);
 
   // The drive ended at a saved place (the host's `arrival` for this drive): the "Welcome" line shows
-  // (not after a failed end, which needs End again) and the screen's way out waits until it has
-  // shown for 2.5 s.
+  // (never again for a drive whose end failed, which needs End again, retries included) and the
+  // screen's way out waits until it has shown for 2.5 s.
   const arrival = useDrive((d) => d.arrival);
   // The drive this screen showed last (it stays the same through finalizing and idle), advanced once
   // per render as the locks are.
   const [shownTripId, setShownTripId] = useState(live.clientTripId);
   if (live.clientTripId !== null && live.clientTripId !== shownTripId) setShownTripId(live.clientTripId);
   const thisTripId = live.clientTripId ?? shownTripId;
-  const arrived = arrival !== null && arrival.clientTripId === thisTripId && !endFailed ? arrival : null;
+  const [failedTripId, setFailedTripId] = useState<string | null>(null);
+  if (endFailed && thisTripId !== null && thisTripId !== failedTripId) setFailedTripId(thisTripId);
+  const arrived = arrival !== null && arrival.clientTripId === thisTripId && !endFailed && thisTripId !== failedTripId ? arrival : null;
   const arrivalId = arrived?.clientTripId ?? null;
   const [arrivalShown, setArrivalShown] = useState<string | null>(null);
   useEffect(() => {
@@ -707,8 +709,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       </View>
 
       {sosOpen ? (
-        <View testID="hud-sos-sheet" style={[styles.panel, styles.sosPanel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
-          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} onCall={callSos} onClose={closeSos} />
+        <View testID="hud-sos-sheet" style={[styles.panel, styles.sosPanel, { ...at(layout.sosPanel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
+          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={layout.sosPanel.h} onCall={callSos} onClose={closeSos} />
         </View>
       ) : waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>

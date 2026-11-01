@@ -1,7 +1,7 @@
 // The "Welcome" line as a drive ends at a saved place (the car stopped there, under 5 mph): a dark
 // scrim of the screen's own ground fades in over everything but the emergency button, with one large
 // centred line ("Welcome home", "Welcome to work", "Welcome to school", "Welcome to {name}"), read
-// out to screen readers. It fades in over 500 ms, or shows at once under Reduce Motion. It takes no
+// out to screen readers; a long place name shrinks the line rather than being cut off. It fades in over 500 ms, or shows at once under Reduce Motion. It takes no
 // touch. The screen holds its way out (the recap, or Home) until it has shown for `ARRIVAL_HOLD_MS`.
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Animated, StyleSheet, Text, View } from 'react-native';
@@ -16,6 +16,8 @@ import { hudCopy } from './hudCopy';
 export const ARRIVAL_HOLD_MS = 2500;
 /** The fade in. */
 export const ARRIVAL_FADE_MS = 500;
+/** A long place name shrinks the line (two lines at most) down to this share of its 44 pt. */
+export const ARRIVAL_MIN_FONT_SCALE = 0.6;
 /** The scrim: the screen's ground at this strength. */
 export const ARRIVAL_SCRIM_OPACITY = 0.8;
 
@@ -44,7 +46,14 @@ export function ArrivalOverlay({ arrival, palette: p, reduceMotion }: { arrival:
   return (
     <Animated.View testID="hud-arrival" pointerEvents="none" style={[StyleSheet.absoluteFill, styles.root, { opacity }]}>
       <View testID="hud-arrival-scrim" style={[StyleSheet.absoluteFill, { backgroundColor: p.ground, opacity: ARRIVAL_SCRIM_OPACITY }]} />
-      <Text testID="hud-arrival-line" allowFontScaling={false} numberOfLines={2} style={[styles.line, { color: p.ink }]}>
+      <Text
+        testID="hud-arrival-line"
+        allowFontScaling={false}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={ARRIVAL_MIN_FONT_SCALE}
+        style={[styles.line, { color: p.ink }]}
+      >
         {line}
       </Text>
     </Animated.View>

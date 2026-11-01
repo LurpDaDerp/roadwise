@@ -1344,6 +1344,37 @@ describe('the emergency button and its panel (round 12)', () => {
     spy.mockRestore();
   });
 
+  test('a number reads as it does in Settings: 1 and ten digits grouped, seven digits grouped', async () => {
+    mockContacts = [
+      { id: 'contact-3', name: 'Dad', phone: '15551234567' },
+      { id: 'contact-4', name: 'Gran', phone: '5551234' },
+    ];
+    await renderHud();
+    await fireEvent.press(sos());
+    expect(screen.getByText('1 (555) 123-4567')).toBeOnTheScreen();
+    expect(screen.getByText('555-1234')).toBeOnTheScreen();
+    expect(screen.getByRole('button', { name: 'Call Dad, 1 (555) 123-4567' })).toBeOnTheScreen();
+  });
+
+  test('in a split-screen window the panel takes the tall slot beside the button (top of the frame to End), Call 911 first and Close last in one scrolling list', async () => {
+    compactWindow();
+    mockContacts = [mom, coach];
+    await renderHud({ speedMph: 45 });
+    await fireEvent.press(sos());
+    const l = hudLayout({ width: 400, height: 300, insets: { top: 0, bottom: 0, left: 0, right: 0 }, fontScale: 1, chip: false, units: 'mi' });
+    expect(l.compact).toBe(true);
+    expect(l.sosPanel.h).toBeGreaterThan(l.panel.h);
+    expect(screen.getByTestId('hud-sos-sheet')).toHaveStyle({ left: l.sosPanel.x, top: l.sosPanel.y, width: l.sosPanel.w, height: l.sosPanel.h });
+    const panel = screen.getByTestId('hud-sos-panel');
+    // short: the title is only read out, so Call 911 is the first thing in sight
+    expect(within(panel).queryByRole('header')).toBeNull();
+    expect(
+      within(panel)
+        .getAllByRole('button')
+        .map((b) => b.props.testID)
+    ).toEqual(['hud-sos-911', 'hud-sos-contact-contact-1', 'hud-sos-contact-contact-2', 'hud-sos-close']);
+  });
+
   test('an automatic end waits while the panel is open, and leaves once it closes', async () => {
     const h = await renderHud({ speedMph: 3 });
     await fireEvent.press(sos());
@@ -1406,6 +1437,22 @@ describe('the "Welcome" line at a saved place (round 12)', () => {
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
     await act(() => jest.advanceTimersByTime(ARRIVAL_HOLD_MS));
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+  });
+
+  test('a drive whose save failed drops the line, and swiping End to save it again never brings it back', async () => {
+    const h = await renderHud({ speedMph: 2 });
+    mockArrival = home;
+    mockLastFinalized = { clientTripId: 't1', ok: false, at: T };
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(screen.getByTestId('hud-arrival')).toBeOnTheScreen();
+    await act(() => jest.advanceTimersByTime(ARRIVAL_HOLD_MS));
+    expect(screen.getByTestId('hud-end-failed')).toHaveTextContent(hudCopy.endFailed);
+    expect(screen.queryByTestId('hud-arrival')).toBeNull();
+    // the retry is still saving: no veil comes back over it
+    mockEnd.mockImplementationOnce(() => new Promise(() => {}));
+    await swipeEnd();
+    expect(mockEnd).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('hud-arrival')).toBeNull();
   });
 
   test('another drive’s arrival never shows', async () => {

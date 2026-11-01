@@ -16,6 +16,7 @@ import {
   type HudLayoutInput,
   type Rect,
 } from '../hudLayout';
+import { SOS_CALL_H_PT } from '../EmergencyPanel';
 
 const ZERO = { top: 0, bottom: 0, left: 0, right: 0 };
 const L = (o: Partial<HudLayoutInput> & { width: number; height: number }): HudLayout => hudLayout({ insets: ZERO, fontScale: 1, chip: false, units: 'mi', ...o });
@@ -185,7 +186,7 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.sign.y + l.sign.h).toBeLessThanOrEqual(288 - 16);
   });
 
-  test('compact: the emergency button at the band’s left end when the band keeps 120 pt, else at the right end of End’s row with End a gap short of it', () => {
+  test('compact: the emergency button at the band’s left end when the band keeps 160 pt, else at the right end of End’s row with End a gap short of it', () => {
     const wide = L({ width: 600, height: 240 });
     expect(wide.compact).toBe(true);
     expect(wide.sos.x + wide.sos.w + 8).toBe(wide.band.x);
@@ -196,6 +197,20 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(narrow.sos).toMatchObject({ x: 412 - 16 - 64, w: 64, h: 64 });
     expect(narrow.end).toMatchObject({ x: 16, w: 412 - 32 - 72 });
     expect(narrow.sos.y + 32).toBe(narrow.end.y + narrow.end.h / 2);
+  });
+
+  test('compact: the emergency panel runs from the top of the frame down to End, right of the emergency button (or from the left edge when the button is by End), up to the navigation button', () => {
+    const wide = L({ width: 600, height: 240 });
+    expect(wide.sosPanel).toEqual({ x: wide.sos.x + 64 + 8, y: 12, w: wide.nav.x - 8 - (wide.sos.x + 64 + 8), h: wide.end.y - 8 - 12 });
+    // the shared slot under the row is far shorter there
+    expect(wide.panel.h).toBeLessThan(wide.sosPanel.h);
+    const narrow = L({ width: 412, height: 300 });
+    expect(narrow.sosPanel).toEqual({ x: 16, y: 12, w: narrow.nav.x - 8 - 16, h: narrow.end.y - 8 - 12 });
+    // outside compact windows it is the shared slot
+    const phone = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } });
+    expect(phone.sosPanel).toEqual(phone.panel);
+    const turned = L({ width: 852, height: 393 });
+    expect(turned.sosPanel).toEqual(turned.panel);
   });
 
   test('a DashPal paired: an 88 pt chip slot at the band right; the line beside it, never under it', () => {
@@ -274,6 +289,7 @@ describe('invariants across windows', () => {
           ['end', l.end],
           ['sos', l.sos],
           ['panel', l.panel],
+          ['sosPanel', l.sosPanel],
         ];
         if (l.chip) rects.push(['chip', l.chip]);
         if (l.notDriving !== 'line') rects.push(['notDriving', l.notDriving]);
@@ -345,6 +361,7 @@ describe('invariants across windows', () => {
         if (!inside(l.sos, c.w, c.h)) throw new Error(`the emergency button outside the window at ${at}`);
         const others: [string, Rect][] = [
           ['panel', l.panel],
+          ['sosPanel', l.sosPanel],
           ['halo', l.halo],
           ['band', l.band],
           ['line', l.line],
@@ -360,6 +377,24 @@ describe('invariants across windows', () => {
           ['end', l.end],
         ] as const)
           if (overlap(grow(l.sos, 8), r)) throw new Error(`the emergency button within 8 pt of ${name} at ${at}`);
+      }
+  });
+
+  test('the emergency panel always has room for "Call 911" (its 72 pt button inside the 16 pt padding and border, at least 120 pt wide inside), never covering the emergency button, the navigation button, the link or End: every window, both orientations, any insets, font scales 1 and 2', () => {
+    for (const c of cases)
+      for (const fontScale of [1, 2]) {
+        const l = L({ width: c.w, height: c.h, insets: c.ins, chip: c.chip, units: c.units, fontScale });
+        const at = `${c.w}x${c.h} ${JSON.stringify(c.ins)} x${fontScale}: ${JSON.stringify(l.sosPanel)}`;
+        if (!inside(l.sosPanel, c.w, c.h)) throw new Error(`the emergency panel outside the window at ${at}`);
+        if (l.sosPanel.h - 2 * 17 < SOS_CALL_H_PT) throw new Error(`no room for Call 911 at ${at}`);
+        if (l.sosPanel.w - 2 * 17 < 120) throw new Error(`the emergency panel too narrow at ${at}`);
+        const keep: [string, Rect][] = [
+          ['sos', l.sos],
+          ['nav', l.nav],
+          ['end', l.end],
+        ];
+        if (l.notDriving !== 'line') keep.push(['notDriving', l.notDriving]);
+        for (const [name, r] of keep) if (overlap(l.sosPanel, r)) throw new Error(`the emergency panel covers ${name} at ${at}`);
       }
   });
 

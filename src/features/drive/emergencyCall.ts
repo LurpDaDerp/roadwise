@@ -21,11 +21,3 @@ export async function placeCall(phone: string, port: DialPort = defaultDialPort)
     return false;
   }
 }
-
-/** A number as people read it: US numbers grouped, "(555) 123-4567" or "+1 (555) 123-4567"; others as stored. */
-export function displayPhone(phone: string): string {
-  const us = /^(\+1)?(\d{3})(\d{3})(\d{4})$/.exec(phone);
-  if (us === null) return phone;
-  const local = `(${us[2]}) ${us[3]}-${us[4]}`;
-  return us[1] === undefined ? local : `+1 ${local}`;
-}
