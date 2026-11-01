@@ -1,29 +1,33 @@
 -- 0036_improvement_achievements: a category score 10 or more whole points above where it was 30
--- days ago, both windows ranked, unlocks that category's badge, once; no ranked past, no badge.
+-- days ago, both windows ranked, unlocks that category's badge, once; no ranked past, no badge;
+-- drives detected at older lines (scoring version under 11) in either window, no badge.
 -- claim_spot_cleared writes Spot Cleared for its caller only, once, and is closed to anon; the
 -- client still writes no badge itself, and the CHECK takes exactly the ten ids.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(20);
+select plan(21);
 
 -- ava (1) braked hard 40 days ago and drives smoothly now; bo (2) had only 5 miles back then
--- (unranked); cy (3) has no drive before this month
+-- (unranked); cy (3) has no drive before this month; dee (4) drove as ava did, but her drive 40
+-- days ago was detected at the old lines (version 10)
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
   ('00000000-0000-0000-0000-000000000002', 'b@example.com'),
-  ('00000000-0000-0000-0000-000000000003', 'c@example.com');
+  ('00000000-0000-0000-0000-000000000003', 'c@example.com'),
+  ('00000000-0000-0000-0000-000000000004', 'd@example.com');
 
 -- a scored drive with p_brakes minor hard brakes (no measured peak: each weighs 1); 10 speed-ups,
--- 5 turns and 600 s under a limit, so the other categories barely move
-create function pg_temp.trip(p_user uuid, p_started timestamptz, p_miles numeric, p_slowdowns int, p_brakes int) returns uuid
+-- 5 turns and 600 s under a limit, so the other categories barely move; scored at version 11 (today's
+-- lines) unless told otherwise
+create function pg_temp.trip(p_user uuid, p_started timestamptz, p_miles numeric, p_slowdowns int, p_brakes int, p_version int default 11) returns uuid
 language plpgsql as $$
 declare v_id uuid;
 begin
   insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored,
-      n_events, n_hard_brake, clean, slowdowns, speedups, turns, limit_s, moving_s)
+      n_events, n_hard_brake, clean, slowdowns, speedups, turns, limit_s, moving_s, scoring_version)
     values (p_user, gen_random_uuid(), p_started, p_started + interval '20 minutes', (p_started at time zone 'America/New_York')::date,
-      private.league_week(p_started), 'America/New_York', p_miles, 0, 1200, true, p_brakes, p_brakes, p_brakes = 0, p_slowdowns, 10, 5, 600, 1000)
+      private.league_week(p_started), 'America/New_York', p_miles, 0, 1200, true, p_brakes, p_brakes, p_brakes = 0, p_slowdowns, 10, 5, 600, 1000, p_version)
     returning id into v_id;
   insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s)
     select v_id, gen_random_uuid(), p_user, 'hard_brake', 'minor', p_started + make_interval(secs => g * 60), 1
@@ -47,6 +51,9 @@ select pg_temp.trip('00000000-0000-0000-0000-000000000002', now() - interval '40
 select pg_temp.trip('00000000-0000-0000-0000-000000000002', now() - interval '1 day', 20, 100, 0);
 -- cy: only yesterday's drive
 select pg_temp.trip('00000000-0000-0000-0000-000000000003', now() - interval '1 day', 20, 100, 0);
+-- dee: ava's drives, the old one at version 10
+select pg_temp.trip('00000000-0000-0000-0000-000000000004', now() - interval '40 days', 20, 20, 10, 10);
+select pg_temp.trip('00000000-0000-0000-0000-000000000004', now() - interval '1 day', 20, 100, 0);
 
 -- ---------------------------------------------------------------------------
 -- posture
@@ -85,6 +92,8 @@ select is(private.check_achievements('00000000-0000-0000-0000-000000000002', pri
   'an unranked window 30 days ago unlocks no improvement badge');
 select is(private.check_achievements('00000000-0000-0000-0000-000000000003', private.league_week(now())), '["first_drive"]'::jsonb,
   'nor does having no drives 30 days ago');
+select is(private.check_achievements('00000000-0000-0000-0000-000000000004', private.league_week(now())), '["first_drive"]'::jsonb,
+  'a drive detected at older lines in the windows unlocks no improvement badge, however far the score rose');
 
 -- ---------------------------------------------------------------------------
 -- Spot Cleared, claimed by the phone

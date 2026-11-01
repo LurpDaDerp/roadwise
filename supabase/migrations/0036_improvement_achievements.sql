@@ -4,10 +4,16 @@
 --     better_turning, better_phone, better_attention. One unlocks when that category's 90-day score
 --     now, rounded to a whole number, is at least 10 points above the same score 30 days ago, with
 --     both windows ranked (10 mi or more) and both scores known. private.rating_at reads both
---     instants under today's weights and today's accepted reports, so a scoring change never fakes
---     an improvement. Checked in private.check_achievements, which runs after every scored upload
---     and accepted report (never from "Wasn't driving"); the two rating_at reads happen only once a
---     locked better_* badge is reached.
+--     instants under today's weights and today's accepted reports, so a weight change never fakes
+--     an improvement. A detection line decides which events exist at all, so the two windows are
+--     compared only when every drive in them (started in the 120 days to now) was detected at
+--     today's lines: scoring version 11 or later (v10 moved the speed line, v11 the hard-event
+--     lines; a migration that moves a line again raises c_lines_version below). Checked in
+--     private.check_achievements, which runs after every scored upload and accepted report (never
+--     from "Wasn't driving"). Cost: once a locked better_* badge is reached, one indexed read of
+--     the driver's trips in those 120 days decides whether any is possible (today's lines, 10 mi
+--     or more 30 days ago, and for Attention a DashPal-watched drive back then); the two rating_at
+--     reads run only when one is.
 --   * spot_cleared: spots are computed only on the phone and never uploaded, so the phone claims it
 --     through public.claim_spot_cleared(), which writes that one id for the caller and nothing else
 --     (no place, no spot).
@@ -44,6 +50,10 @@ declare
   v_then jsonb;
   v_key text;
   v_hit boolean;
+  -- the scoring version that last moved a detection line
+  c_lines_version constant int := 11;
+  v_possible boolean;   -- null until the first locked better_* badge
+  v_watched boolean;
 begin
   for v_id in
     select a from unnest(array['first_drive', 'clean_100', 'perfect_week', 'better_speed', 'better_braking', 'better_acceleration',
@@ -52,11 +62,6 @@ begin
     order by n
   loop
     if v_id like 'better\_%' then
-      -- the two windows, read once, only when a locked improvement badge is reached
-      if v_now is null then
-        v_now := private.rating_at(p_user, now());
-        v_then := private.rating_at(p_user, now() - interval '30 days');
-      end if;
       v_key := case v_id
         when 'better_speed' then 'speed'
         when 'better_braking' then 'braking'
@@ -64,10 +69,31 @@ begin
         when 'better_turning' then 'turning'
         when 'better_phone' then 'phone'
         when 'better_attention' then 'attention' end;
-      v_hit := coalesce((v_now ->> 'ranked')::boolean, false) and coalesce((v_then ->> 'ranked')::boolean, false)
-        and jsonb_typeof(v_now -> 'scores' -> v_key) = 'number' and jsonb_typeof(v_then -> 'scores' -> v_key) = 'number'
-        and private.round_half_up((v_now -> 'scores' ->> v_key)::float8, 0)
-          - private.round_half_up((v_then -> 'scores' ->> v_key)::float8, 0) >= 10;
+      -- the cheap pre-check, once: the drives of both windows (rating_at's: 2160 hours back from
+      -- now and from 30 days ago), every one at today's lines, and the window 30 days ago ranked
+      if v_possible is null then
+        select coalesce(bool_and(t.scoring_version >= c_lines_version), true)
+            and coalesce(sum(greatest(t.miles, 0)) filter (where t.started_at <= now() - interval '30 days'), 0) >= 10,
+          coalesce(bool_or(t.miles > 0 and t.dashcam_moving_s > 0 and t.dashcam_covered_s > 0)
+            filter (where t.started_at <= now() - interval '30 days'), false)
+          into v_possible, v_watched
+        from public.trips t
+        where t.user_id = p_user and t.scored and not t.not_driving
+          and t.started_at > now() - interval '30 days' - interval '2160 hours' and t.started_at <= now();
+      end if;
+      if not v_possible or (v_key = 'attention' and not v_watched) then
+        v_hit := false;
+      else
+        -- the two windows, read once, only when an improvement badge is possible
+        if v_now is null then
+          v_now := private.rating_at(p_user, now());
+          v_then := private.rating_at(p_user, now() - interval '30 days');
+        end if;
+        v_hit := coalesce((v_now ->> 'ranked')::boolean, false) and coalesce((v_then ->> 'ranked')::boolean, false)
+          and jsonb_typeof(v_now -> 'scores' -> v_key) = 'number' and jsonb_typeof(v_then -> 'scores' -> v_key) = 'number'
+          and private.round_half_up((v_now -> 'scores' ->> v_key)::float8, 0)
+            - private.round_half_up((v_then -> 'scores' ->> v_key)::float8, 0) >= 10;
+      end if;
     else
       v_hit := case v_id
         when 'first_drive' then exists (select 1 from public.trips t where t.user_id = p_user and t.scored and not t.not_driving)

@@ -7,7 +7,7 @@ import { createSpotsRepo } from '@/data/db/spots';
 import type { NewProblemSpot } from '@/data/db/types';
 import { createTestDb } from '@/data/queries/__fixtures__/harness';
 
-import { claimSpotBadge, SPOT_CLAIMED_KEY } from '../claimSpotBadge';
+import { claimSpotBadge, SPOT_CLAIMED_KEY, SPOT_PENDING_KEY } from '../claimSpotBadge';
 
 const UID = '00000000-0000-4000-8000-000000000001';
 
@@ -94,4 +94,17 @@ it('two claims at once send one request', async () => {
   const [a, b] = await Promise.all([claimSpotBadge({ db, queryClient: qc, call }), claimSpotBadge({ db, queryClient: qc, call })]);
   expect([a, b]).toEqual(['claimed', 'claimed']);
   expect(call).toHaveBeenCalledTimes(1);
+});
+
+it('a failed claim is still owed after the cleared spot has left the table', async () => {
+  await seed([spot('b', 1000)]);
+  call.mockRejectedValueOnce(new Error('no such function'));
+  await expect(claimSpotBadge({ db, queryClient: qc, call })).resolves.toBe('failed');
+  expect(await createSettingsRepo(db).get<boolean>(SPOT_PENDING_KEY)).toBe(true);
+  // 30 days on, the cleared spot is gone from the recompute
+  await seed([spot('a', null)]);
+  await expect(claimSpotBadge({ db, queryClient: qc, call })).resolves.toBe('claimed');
+  expect(call).toHaveBeenCalledTimes(2);
+  expect(await flag()).toBe(true);
+  expect(await createSettingsRepo(db).get<boolean>(SPOT_PENDING_KEY)).toBeNull();
 });

@@ -5,8 +5,9 @@
  *
  * After a spot recompute: once any spot has cleared, and neither the cached summary nor the local
  * flag says the badge is already held, the claim goes out once. On success the flag is set and the
- * summary refetches, so Profile shows the badge. A failure (offline, signed out) stays silent and
- * the next recompute tries again.
+ * summary refetches, so Profile shows the badge. A failure (offline, signed out, a server without
+ * the RPC yet) stays silent and the next recompute tries again. The first cleared spot seen sets a
+ * pending flag, so a later try still claims after that spot has aged out of the table (30 days).
  */
 import type { QueryClient } from '@tanstack/react-query';
 
@@ -17,6 +18,8 @@ import type { MySummary } from '@/data/server/summary';
 
 /** Set (true) once the server holds Spot Cleared for this driver; cleared with the account. */
 export const SPOT_CLAIMED_KEY = 'achievements.spotClaimed';
+/** Set (true) once a cleared spot has been seen here and the claim is still owed; cleared with the account. */
+export const SPOT_PENDING_KEY = 'achievements.spotPending';
 const BADGE = 'spot_cleared';
 
 export interface ClaimSpotDeps {
@@ -47,10 +50,14 @@ async function claim(deps: ClaimSpotDeps): Promise<ClaimOutcome> {
       await settings.set(SPOT_CLAIMED_KEY, true);
       return 'held';
     }
-    const spots = await createSpotsRepo(deps.db).list();
-    if (!spots.some((s) => s.cleared_at !== null)) return 'none-cleared';
+    if ((await settings.get<boolean>(SPOT_PENDING_KEY)) !== true) {
+      const spots = await createSpotsRepo(deps.db).list();
+      if (!spots.some((s) => s.cleared_at !== null)) return 'none-cleared';
+      await settings.set(SPOT_PENDING_KEY, true);
+    }
     await (deps.call ?? defaultCall)('claim_spot_cleared');
     await settings.set(SPOT_CLAIMED_KEY, true);
+    await settings.remove(SPOT_PENDING_KEY);
     await deps.queryClient.invalidateQueries({ predicate: isSummary }).catch(() => undefined);
     return 'claimed';
   } catch {
