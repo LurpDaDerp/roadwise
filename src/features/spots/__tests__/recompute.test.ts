@@ -1,4 +1,6 @@
 /** @jest-environment node */
+import { QueryClient } from '@tanstack/react-query';
+
 import { at, DAY, NORTH, T0 } from '@/core/spots/__fixtures__/spots';
 import { PRIVACY_ZONES_KEY } from '@/core/engine/privacy';
 import type { Db } from '@/data/db/driver';
@@ -10,7 +12,11 @@ import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__
 import * as queries from '@/data/queries/spots';
 import { encodePolyline } from '@/lib/polyline';
 
+import { claimSpotBadge } from '../claimSpotBadge';
 import { requestSpotRecompute, startSpotJobs, type SpotJobs } from '../recompute';
+
+jest.mock('../claimSpotBadge', () => ({ claimSpotBadge: jest.fn(async () => 'none-cleared') }));
+const claim = claimSpotBadge as jest.MockedFunction<typeof claimSpotBadge>;
 
 jest.mock('@/data/queries/spots', () => {
   const actual = jest.requireActual<typeof import('@/data/queries/spots')>('@/data/queries/spots');
@@ -76,6 +82,7 @@ beforeEach(async () => {
   offChanges = onDataChanged((e) => changes.push(e.source));
   readInputs.mockReset();
   readInputs.mockImplementation(realRead);
+  claim.mockClear();
 });
 
 afterEach(() => {
@@ -291,4 +298,25 @@ test('stop ends it: no more runs', async () => {
   expect(readInputs).not.toHaveBeenCalled();
   await j.runNow();
   expect(readInputs).not.toHaveBeenCalled();
+});
+
+test('with the query cache, each run then checks for a cleared spot to claim Spot Cleared; without it, never', async () => {
+  await seedDrives(db);
+  await stampDaily();
+  start(fakeAppState('active'));
+  await jest.advanceTimersByTimeAsync(3_000);
+  expect(readInputs).toHaveBeenCalledTimes(1);
+  expect(claim).not.toHaveBeenCalled();
+  jobs?.stop();
+
+  const queryClient = new QueryClient();
+  jobs = startSpotJobs({ db, appState: fakeAppState('active'), isBusy: () => busy, now: () => now, geocode: null, queryClient });
+  await jest.advanceTimersByTimeAsync(3_000);
+  expect(claim).toHaveBeenCalledTimes(1);
+  expect(claim).toHaveBeenCalledWith({ db, queryClient });
+  // A run whose inputs are unchanged writes nothing, and still checks (a failed claim is retried).
+  await jobs.runNow();
+  expect(readInputs).toHaveBeenCalledTimes(3);
+  expect(claim).toHaveBeenCalledTimes(2);
+  queryClient.clear();
 });

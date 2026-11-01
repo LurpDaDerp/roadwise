@@ -51,6 +51,13 @@ export const profileCopy = {
     first_drive: 'Finish a drive of half a mile or more.',
     clean_100: 'Drive 100 miles with no events.',
     perfect_week: 'Take 3 or more drives in one week, all with no events.',
+    better_speed: 'Get your Speed score up 10 points from where it was 30 days ago.',
+    better_braking: 'Get your Braking score up 10 points from where it was 30 days ago.',
+    better_acceleration: 'Get your Acceleration score up 10 points from where it was 30 days ago.',
+    better_turning: 'Get your Turning score up 10 points from where it was 30 days ago.',
+    better_phone: 'Get your Phone use score up 10 points from where it was 30 days ago.',
+    better_attention: 'Get your Attention score up 10 points from where it was 30 days ago.',
+    spot_cleared: 'Drive clean through a spot to watch until it clears.',
   },
 
   public: {

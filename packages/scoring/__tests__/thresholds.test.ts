@@ -13,6 +13,8 @@ import {
   HARD_BRAKE_G,
   HARD_CORNER_G,
   IDLE_END_S,
+  IMPROVEMENT_DAYS,
+  IMPROVEMENT_POINTS,
   MERGE_GAP_S,
   MERGE_RADIUS_M,
   MIN_SCORED_MILES,
@@ -31,12 +33,21 @@ import {
   WALK_STAND_MIN_S,
 } from '../src/thresholds';
 
-test('the three achievements, each with its title and description', () => {
+test('the ten achievements, each with its title and description', () => {
   expect(ACHIEVEMENTS).toEqual([
     { id: 'first_drive', title: 'First Drive', description: 'Complete a scored drive.' },
     { id: 'clean_100', title: 'Clean 100', description: 'Drive 100 clean miles.' },
     { id: 'perfect_week', title: 'Perfect Week', description: 'Take 3 or more drives in a week, all with zero events.' },
+    { id: 'better_speed', title: 'Easing Off', description: 'Raise your Speed score by 10 points in 30 days.' },
+    { id: 'better_braking', title: 'Softer Stops', description: 'Raise your Braking score by 10 points in 30 days.' },
+    { id: 'better_acceleration', title: 'Gentle Starts', description: 'Raise your Acceleration score by 10 points in 30 days.' },
+    { id: 'better_turning', title: 'Smooth Turns', description: 'Raise your Turning score by 10 points in 30 days.' },
+    { id: 'better_phone', title: 'Hands on the Wheel', description: 'Raise your Phone use score by 10 points in 30 days.' },
+    { id: 'better_attention', title: 'Eyes Ahead', description: 'Raise your Attention score by 10 points in 30 days.' },
+    { id: 'spot_cleared', title: 'Spot Cleared', description: 'Clear a spot to watch.' },
   ]);
+  expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(ACHIEVEMENTS.length);
+  expect([IMPROVEMENT_POINTS, IMPROVEMENT_DAYS]).toEqual([10, 30]);
 });
 
 test('detection thresholds match the spec', () => {

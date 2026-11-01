@@ -921,7 +921,7 @@ function startSpots(runtime: AppRuntime, appState: ForegroundAppState, onError: 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the spots feature's module
     const { startSpotJobs } = require('@/features/spots/recompute') as typeof import('@/features/spots/recompute');
-    return startSpotJobs({ db: runtime.db, appState, isBusy: () => runtime.drive.isBusy(), now: runtime.now, onError: (error, context) => onError(error, `spots ${context}`) });
+    return startSpotJobs({ db: runtime.db, appState, isBusy: () => runtime.drive.isBusy(), now: runtime.now, onError: (error, context) => onError(error, `spots ${context}`), queryClient: runtime.queryClient });
   } catch (error) {
     onError(error, 'spots');
     return null;

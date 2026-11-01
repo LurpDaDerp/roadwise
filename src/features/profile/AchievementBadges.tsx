@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ACHIEVEMENTS, type AchievementId } from '@scoring';
+import type { AchievementId } from '@scoring';
 import { View } from 'react-native';
 
 import { Text, useFontScale, useTheme } from '@/ui';
 
-import { ACHIEVEMENT_ICON } from './achievements';
+import { ACHIEVEMENT_ICON, badgeOrder } from './achievements';
 import { profileCopy } from './copy';
 
 /**
@@ -36,17 +36,18 @@ export function AchievementMedal({ id, unlocked, size = 52 }: { id: AchievementI
   );
 }
 
-/** The three medals in a row, each named under it. */
-export function AchievementBadges({ unlocked, testID }: { unlocked: readonly string[]; testID?: string }) {
+/**
+ * The medals, each named under it, three to a row (two with very large text), wrapping onto more
+ * rows. Unlocked ones come first; `limit` caps how many show (Profile's card), the rest are on the
+ * Achievements screen.
+ */
+export function AchievementBadges({ unlocked, limit, testID }: { unlocked: readonly string[]; limit?: number; testID?: string }) {
   const th = useTheme();
   const scale = useFontScale();
   const stacked = scale > 1.35;
   return (
-    <View
-      testID={testID}
-      style={{ flexDirection: 'row', flexWrap: stacked ? 'wrap' : 'nowrap', justifyContent: 'space-around', rowGap: th.space.md }}
-    >
-      {ACHIEVEMENTS.map((a) => {
+    <View testID={testID} style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: th.space.md }}>
+      {badgeOrder(unlocked, limit).map((a) => {
         const got = unlocked.includes(a.id);
         return (
           <View
@@ -54,7 +55,7 @@ export function AchievementBadges({ unlocked, testID }: { unlocked: readonly str
             accessible
             accessibilityLabel={`${a.title}, ${got ? profileCopy.achievements.unlocked : profileCopy.achievements.locked}`}
             testID={`achievement-${a.id}-${got ? 'unlocked' : 'locked'}`}
-            style={{ alignItems: 'center', gap: th.space.xs, width: stacked ? '50%' : '33%' }}
+            style={{ alignItems: 'center', gap: th.space.xs, width: stacked ? '50%' : '33.33%', paddingHorizontal: th.space.xs }}
           >
             <AchievementMedal id={a.id} unlocked={got} />
             <Text variant="caption" tone={got ? 'default' : 'muted'} numberOfLines={2} style={{ textAlign: 'center' }}>

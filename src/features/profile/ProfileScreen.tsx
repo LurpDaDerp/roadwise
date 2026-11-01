@@ -11,6 +11,7 @@ import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useSkyScrollHandler, useTheme } from '@/ui';
 
 import { AchievementBadges } from './AchievementBadges';
+import { PROFILE_BADGES } from './achievements';
 import { profileCopy as copy } from './copy';
 import { ProfileHeader } from './ProfileHeader';
 
@@ -93,7 +94,7 @@ export function ProfileScreen() {
           />
           <Card onPress={() => router.push(PROFILE_HREFS.achievements)} accessibilityLabel={copy.achievements.title} testID="profile-achievements">
             {/* Never shown as locked before the summary is here (the card above says when it can't load). */}
-            {data ? <AchievementBadges unlocked={data.achievements} /> : <Skeleton width="100%" height={88} radius={th.radius.md} testID="profile-achievements-loading" />}
+            {data ? <AchievementBadges unlocked={data.achievements} limit={PROFILE_BADGES} /> : <Skeleton width="100%" height={88} radius={th.radius.md} testID="profile-achievements-loading" />}
           </Card>
         </View>
 

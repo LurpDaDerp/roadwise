@@ -911,6 +911,7 @@ export type Database = {
         Args: { p_lease_seconds: number; p_limit: number }
         Returns: Json
       }
+      claim_spot_cleared: { Args: Record<PropertyKey, never>; Returns: Json }
       claim_username: { Args: { p: string }; Returns: undefined }
       complete_onboarding: {
         Args: { p_terms_version: string }

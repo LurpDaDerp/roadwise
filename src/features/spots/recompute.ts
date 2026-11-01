@@ -16,9 +16,12 @@
  * - **Names.** Then up to 5 active spots without a place name get one from the phone's reverse
  *   geocoder, one at a time 1.2 s apart, never inside a privacy zone; a failed one is retried after
  *   a day.
+ * - **Badge.** After each run, a spot that has cleared claims Spot Cleared once (`claimSpotBadge`).
  * - Each write announces a `spots` change, which refreshes only the spots (and never re-triggers
  *   this job). Errors are reported by name only, never with a coordinate.
  */
+import type { QueryClient } from '@tanstack/react-query';
+
 import { detectSpots, spotsStableUntil } from '@/core/spots/detect';
 import { spotLabel, streetGeocoder, type Geocoder } from '@/core/spots/label';
 import type { DetectedSpot, SpotDrive } from '@/core/spots/types';
@@ -41,6 +44,8 @@ import { readSpotInputs, type SpotInputs } from '@/data/queries/spots';
 import { decodeRoute } from '@/features/drives/route';
 import { encodePolyline } from '@/lib/polyline';
 
+import { claimSpotBadge } from './claimSpotBadge';
+
 export interface SpotJobDeps {
   db: Db;
   /** React Native's AppState (narrowed). */
@@ -52,6 +57,8 @@ export interface SpotJobDeps {
   geocode?: Geocoder | null;
   /** Told about a failure, by name only (never a coordinate). */
   onError?(e: unknown, ctx: string): void;
+  /** The app's query cache: with it, a cleared spot claims Spot Cleared after a run. */
+  queryClient?: QueryClient;
 }
 
 export interface SpotJobs {
@@ -169,6 +176,10 @@ export function startSpotJobs(deps: SpotJobDeps): SpotJobs {
     if (wrote) emitDataChanged({ source: 'spots' }, (e) => report(e, 'spots change'));
   }
 
+  function claimBadge() {
+    if (deps.queryClient) void claimSpotBadge({ db: deps.db, queryClient: deps.queryClient });
+  }
+
   async function run(): Promise<void> {
     if (!ready()) {
       pending = true;
@@ -182,6 +193,7 @@ export function startSpotJobs(deps: SpotJobDeps): SpotJobs {
     if (last !== null && last.key === key && now <= last.until) {
       // The table already holds what this run would write.
       if (asked === round) pending = false;
+      claimBadge();
       await nameSpots(gen);
       return;
     }
@@ -208,6 +220,7 @@ export function startSpotJobs(deps: SpotJobDeps): SpotJobs {
     last = { key, until: spotsStableUntil(inputs.drives, inputs.events, now) };
     if (asked === round) pending = false;
     emitDataChanged({ source: 'spots' }, (e) => report(e, 'spots change'));
+    claimBadge();
     await nameSpots(gen);
   }
 

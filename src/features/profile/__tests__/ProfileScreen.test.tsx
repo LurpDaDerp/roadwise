@@ -9,7 +9,7 @@ import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissi
 import { analyticsCopy } from '@/features/analytics/copy';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 
-import { achievementViews } from '../achievements';
+import { ACHIEVEMENT_ICON, achievementViews, badgeOrder, PROFILE_BADGES } from '../achievements';
 import { AchievementsScreen } from '../AchievementsScreen';
 import { profileCopy } from '../copy';
 import { HeatmapScreen } from '../HeatmapScreen';
@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 afterEach(() => clearQueryClients());
 
-it('the card: the Safety Rating with its week, your totals; the three achievements; a badge for friend requests; no points', async () => {
+it('the card: the Safety Rating with its week, your totals; six of the ten achievements, unlocked first; a badge for friend requests; no points', async () => {
   answerRpc(mockRpc, {
     get_my_summary: summary(),
     list_friends: { friends: [], incoming: [{ user_id: 'x', username: 'newbie' }], outgoing: [] },
@@ -90,6 +90,8 @@ it('the card: the Safety Rating with its week, your totals; the three achievemen
   expect(screen.getByTestId('achievement-clean_100-locked')).toBeOnTheScreen();
   expect(screen.getByTestId('achievement-perfect_week-locked')).toBeOnTheScreen();
   expect(screen.queryByTestId(/achievement-(streak_10|phone_free_25)/)).toBeNull();
+  expect(within(screen.getByTestId('profile-achievements')).getAllByTestId(/^achievement-/)).toHaveLength(6);
+  expect(screen.queryByTestId('achievement-spot_cleared-locked')).toBeNull();
   expect(await screen.findByText(profileCopy.rows.requests(1))).toBeOnTheScreen();
   expect(screen.queryByText(NO_POINTS)).toBeNull();
 
@@ -133,18 +135,52 @@ it.each([
 
 it('achievement hints say how to get each one', () => {
   const views = achievementViews(['first_drive']);
-  expect(views.map((v) => v.id)).toEqual(['first_drive', 'clean_100', 'perfect_week']);
+  expect(views.map((v) => v.id)).toEqual([
+    'first_drive',
+    'clean_100',
+    'perfect_week',
+    'better_speed',
+    'better_braking',
+    'better_acceleration',
+    'better_turning',
+    'better_phone',
+    'better_attention',
+    'spot_cleared',
+  ]);
   expect(views.find((v) => v.id === 'clean_100')).toMatchObject({ unlocked: false, hint: 'Drive 100 miles with no events.' });
   expect(views.find((v) => v.id === 'perfect_week')).toMatchObject({ unlocked: false, hint: 'Take 3 or more drives in one week, all with no events.' });
+  expect(views.find((v) => v.id === 'better_braking')).toMatchObject({ unlocked: false, hint: 'Get your Braking score up 10 points from where it was 30 days ago.' });
+  expect(views.find((v) => v.id === 'better_phone')).toMatchObject({ unlocked: false, hint: 'Get your Phone use score up 10 points from where it was 30 days ago.' });
+  expect(views.find((v) => v.id === 'spot_cleared')).toMatchObject({ unlocked: false, hint: 'Drive clean through a spot to watch until it clears.' });
   expect(views.find((v) => v.id === 'first_drive')).toMatchObject({ unlocked: true });
+  // An unlocked badge says what it was for.
+  expect(achievementViews(['spot_cleared']).find((v) => v.id === 'spot_cleared')).toMatchObject({ unlocked: true, hint: 'Clear a spot to watch.' });
+  // Every badge has its own icon and a hint (no copy is shared by two).
+  expect(new Set(views.map((v) => v.hint)).size).toBe(views.length);
+  expect(new Set(Object.values(ACHIEVEMENT_ICON)).size).toBe(views.length);
 });
 
-it('the achievements screen lists all three with their state', async () => {
-  answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive'] }) });
+it('a badge row puts unlocked badges first and caps at the limit', () => {
+  expect(badgeOrder(['spot_cleared', 'better_turning'], PROFILE_BADGES).map((a) => a.id)).toEqual([
+    'better_turning',
+    'spot_cleared',
+    'first_drive',
+    'clean_100',
+    'perfect_week',
+    'better_speed',
+  ]);
+  expect(badgeOrder([])).toHaveLength(10);
+});
+
+it('the achievements screen lists all ten with their state', async () => {
+  answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive', 'spot_cleared'] }) });
   const w = await appWorld();
   await w.render(<AchievementsScreen />);
-  expect(await screen.findByText(profileCopy.achievements.count(1, 3))).toBeOnTheScreen();
+  expect(await screen.findByText(profileCopy.achievements.count(2, 10))).toBeOnTheScreen();
+  expect(screen.getAllByTestId(/^achievement-row-/)).toHaveLength(10);
   expect(screen.getByTestId('achievement-hint-clean_100')).toHaveTextContent('Drive 100 miles with no events.');
+  expect(screen.getByTestId('achievement-hint-better_attention')).toHaveTextContent('Get your Attention score up 10 points from where it was 30 days ago.');
+  expect(screen.getByTestId('achievement-hint-spot_cleared')).toHaveTextContent('Clear a spot to watch.');
 });
 
 const NO_FRIENDS = { friends: [], incoming: [], outgoing: [] };
@@ -154,7 +190,7 @@ it('the achievements screen shows nothing as locked while the summary loads', as
   const w = await appWorld();
   await w.render(<AchievementsScreen />);
   expect(await screen.findByTestId('achievement-loading-first_drive', { includeHiddenElements: true })).toBeOnTheScreen();
-  expect(screen.queryByText(profileCopy.achievements.count(0, 3))).toBeNull();
+  expect(screen.queryByText(profileCopy.achievements.count(0, 10))).toBeNull();
   expect(screen.queryByTestId('achievement-row-first_drive')).toBeNull();
   expect(screen.queryByText(profileCopy.achievements.locked)).toBeNull();
 });
@@ -165,12 +201,12 @@ it('the achievements screen that cannot load says so, and Try again loads it', a
   await w.render(<AchievementsScreen />);
   // The query tries once more (after about a second) before it fails.
   expect(await screen.findByTestId('achievements-load-error', {}, { timeout: 4000 })).toHaveTextContent(new RegExp(profileCopy.loadError));
-  expect(screen.queryByText(profileCopy.achievements.count(0, 3))).toBeNull();
+  expect(screen.queryByText(profileCopy.achievements.count(0, 10))).toBeNull();
   answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive'] }) });
   await act(async () => {
     fireEvent.press(screen.getByText(profileCopy.retry));
   });
-  expect(await screen.findByText(profileCopy.achievements.count(1, 3))).toBeOnTheScreen();
+  expect(await screen.findByText(profileCopy.achievements.count(1, 10))).toBeOnTheScreen();
 });
 
 it("the Profile card's badges wait for the summary instead of showing every one locked", async () => {

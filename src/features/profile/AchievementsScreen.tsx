@@ -11,7 +11,7 @@ import { profileCopy } from './copy';
 const copy = profileCopy.achievements;
 
 /**
- * `/achievements`: the three in the spec’s order, unlocked ones in gold, each with how to get it.
+ * `/achievements`: all ten in the spec’s order, unlocked ones in gold, each with how to get it.
  * Until the summary has loaded nothing is shown as locked: placeholders, or the error with Try again.
  */
 export function AchievementsScreen() {
