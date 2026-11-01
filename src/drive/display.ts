@@ -11,6 +11,14 @@
 // throttle (the weather line, the "Not driving?" hint running out). Every state goes out wearing the
 // app's current sky (`displayLook.ts`).
 //
+// iOS, the speed's step: iOS meters a Live Activity's updates (an app's own updates from the
+// background are throttled by "priority and budget"; frequent ones are supported only by push), and
+// a steady speed wobbles by 1 mph every few fixes. So the speed goes out within the second only when
+// it moves `LIVE_SPEED_STEP` (2 mph, 3 km/h) from the Live Activity's; a smaller move, and the
+// speeding tint shifting with it, waits until `LIVE_SMALL_CHANGE_MS` (5 s) after the last update.
+// Everything else (the limit, the tint coming on or off, the speeding flag, the hint, the weather,
+// the sky) keeps the second.
+//
 // iOS, RoadWise in front (`setFront`): nobody sees the Live Activity then (iOS keeps an app's own
 // activity out of the Dynamic Island while the app is in use, and the lock screen isn't showing),
 // and every update spends the budget iOS meters a Live Activity's updates against, so the activity
@@ -88,6 +96,17 @@ export const DISPLAY_MIN_INTERVAL_MS = 3000;
  * iOS keeps applying on a locked screen). A change that comes sooner is sent when the second is up.
  */
 export const LIVE_MIN_INTERVAL_MS = 1000;
+/**
+ * iOS: the shown speed goes out within the second only when it moves this much (in the display's
+ * unit) from the Live Activity's. A smaller move waits `LIVE_SMALL_CHANGE_MS`: iOS meters a Live
+ * Activity's updates, and one spent on every 1 mph wobble at a steady speed leaves none for later.
+ */
+export const LIVE_SPEED_STEP: Readonly<Record<DriveDisplayState['unit'], number>> = { mph: 2, 'km/h': 3 };
+/**
+ * iOS: a speed move under `LIVE_SPEED_STEP` (and the speeding tint shifting with it, or alone) goes
+ * out this long after the last update, the newest number then.
+ */
+export const LIVE_SMALL_CHANGE_MS = 5000;
 /** An unchanged display is re-sent this often (one update a minute at a stop). */
 export const DISPLAY_KEEPALIVE_MS = 60_000;
 
@@ -109,6 +128,19 @@ const same = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
   (a.skyMid ?? null) === (b.skyMid ?? null) &&
   (a.skyLow ?? null) === (b.skyLow ?? null) &&
   (a.accent ?? null) === (b.accent ?? null);
+
+/**
+ * `b` differs from `a` only by a speed move under `step` and by the speeding tint shifting (a tint
+ * in both or in neither): a tint coming on or going off, the speeding flag, the limit, the hint,
+ * the weather or the sky is never small.
+ */
+const small = (a: DriveDisplayState | null, b: DriveDisplayState, step: number): boolean =>
+  a !== null &&
+  a.speed !== null &&
+  b.speed !== null &&
+  Math.abs(b.speed - a.speed) < step &&
+  (a.speedTint == null) === (b.speedTint == null) &&
+  same({ ...a, speed: b.speed, speedTint: b.speedTint ?? null }, b);
 
 /** The Live Activity's content (`LiveDriveAttributes.ContentState`): no points, no stopped flag. */
 export const toLive = (s: DriveDisplayState): LiveDriveState => ({
@@ -164,6 +196,8 @@ export function createDriveDisplay(
     look?: () => DisplayLook | null;
     /** Runs `fn` once after `ms` (iOS's held change); returns the cancel. Default: `setTimeout`. */
     later?: (fn: () => void, ms: number) => () => void;
+    /** iOS: the speed move that goes out within the second (default `LIVE_SPEED_STEP` for the unit). */
+    speedStep?: number;
   }
 ): DriveDisplay {
   const ios = deps.platform === 'ios';
@@ -189,9 +223,10 @@ export function createDriveDisplay(
   let whole: number | null = null;
   let cameAt = 0;
   let walkedTo = 0;
-  /** iOS: the newest state the throttle holds (as the host gave it), and the timer that sends it. */
+  /** iOS: the newest state the throttle holds (as the host gave it), and the timer that sends it, and when. */
   let held: DriveDisplayState | null = null;
   let cancelHeld: (() => void) | null = null;
+  let heldDue = 0;
   /** iOS: RoadWise is in front (`setFront`), and the drive's newest state as the host gave it. */
   let front = false;
   let newest: DriveDisplayState | null = null;
@@ -208,11 +243,20 @@ export function createDriveDisplay(
     held = null;
   }
 
+  /**
+   * When `state` may go out: the second after the last update, or on iOS, for a small change
+   * (`small`), `LIVE_SMALL_CHANGE_MS` after it.
+   */
+  function dueAt(state: DriveDisplayState): number {
+    const step = deps.speedStep ?? LIVE_SPEED_STEP[state.unit];
+    return lastAt + (ios && !same(last, state) && small(last, state, step) ? LIVE_SMALL_CHANGE_MS : minInterval);
+  }
+
   /** True when `state` went out. */
   function send(state: DriveDisplayState, force: boolean): boolean {
     const now = deps.now();
     const first = (!speedShown && state.speed !== null) || (!limitShown && state.limit !== null);
-    if (!force && !first && (now - lastAt < minInterval || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return false;
+    if (!force && !first && (now < dueAt(state) || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return false;
     // Whatever waited is older than this.
     dropHeld();
     last = state;
@@ -230,19 +274,22 @@ export function createDriveDisplay(
   const stillCarrying = (at: number): boolean => carry !== null && carry.mps > 0 && carry.accel !== 0 && at < carry.at + CARRY_MAX_MS + SPEED_TICK_MS;
 
   /**
-   * iOS: `state` came inside the second. It is held (the newest wins) and sent when the second is
-   * up, with the halo's number then, if it shows something new by then: a change now, or a number
-   * still being carried. One that shows nothing new also drops what waited (a tint that came and
-   * went inside the second never goes out late).
+   * iOS: `state` came before it may go out (`dueAt`: inside the second, or a small change inside
+   * its 5 s). It is held (the newest wins) and sent when its time is up, with the halo's number
+   * then, if it shows something new by then: a change now, or a number still being carried. One
+   * that shows nothing new also drops what waited (a tint that came and went inside the second never
+   * goes out late). A change that may go sooner than the one waiting brings the send forward.
    */
   function hold(state: DriveDisplayState, shown: DriveDisplayState, now: number): void {
-    const due = lastAt + minInterval;
+    const due = dueAt(shown);
     if (same(last, shown) && !stillCarrying(due)) {
       dropHeld();
       return;
     }
     held = state;
-    if (cancelHeld !== null) return;
+    if (cancelHeld !== null && heldDue <= due) return;
+    cancelHeld?.();
+    heldDue = due;
     cancelHeld = later(
       () => {
         cancelHeld = null;
@@ -266,7 +313,10 @@ export function createDriveDisplay(
       if (now - lastAt >= DISPLAY_KEEPALIVE_MS) send(shown, true);
       return;
     }
-    if (!send(shown, false) && ios && now - lastAt < minInterval) hold(state, shown, now);
+    if (send(shown, false) || !ios) return;
+    if (now < dueAt(shown)) hold(state, shown, now);
+    // Nothing new to show (the Live Activity shows it already): a small change waiting goes too.
+    else dropHeld();
   }
 
   /**

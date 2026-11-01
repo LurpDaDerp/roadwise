@@ -1,7 +1,16 @@
 import { act, renderHook } from '@testing-library/react-native';
 
 import { MPS_PER_MPH } from '@/core/detectors/common';
-import { createDriveDisplay, DISPLAY_KEEPALIVE_MS, DISPLAY_MIN_INTERVAL_MS, LIVE_MIN_INTERVAL_MS, toLive, type DriveDisplayState } from '@/drive/display';
+import {
+  createDriveDisplay,
+  DISPLAY_KEEPALIVE_MS,
+  DISPLAY_MIN_INTERVAL_MS,
+  LIVE_MIN_INTERVAL_MS,
+  LIVE_SMALL_CHANGE_MS,
+  LIVE_SPEED_STEP,
+  toLive,
+  type DriveDisplayState,
+} from '@/drive/display';
 import { displayLook, setDisplayLook, type DisplayLook } from '@/drive/displayLook';
 import type { ShownSpeed } from '@/drive/useDrive';
 import { useCarriedSpeed } from '@/features/drive/HaloReadout';
@@ -273,6 +282,8 @@ function manual() {
   };
 }
 
+// The cadence tests count every whole-number move as a change (`speedStep: 1`); the 2 mph step
+// has its own test.
 describe('iOS: the Live Activity once a second, with the halo’s number', () => {
   test('a change inside the second is held and goes out, the newest one, when the second is up; never two in a second; Android keeps its 3 s', () => {
     expect(LIVE_MIN_INTERVAL_MS).toBe(1000);
@@ -280,7 +291,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later, speedStep: 1 });
     d.start(state());
     now = 200;
     d.update(state({ speed: 31 }));
@@ -346,7 +357,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later, speedStep: 1 });
     d.start(state({ speed: 28 }));
     // a fix at t = 900 ms: 30 mph and gaining 2 mph a second
     const fix = { mps: mph(30), accel: mph(2), at: 900 };
@@ -379,7 +390,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later, speedStep: 1 });
     d.start(state({ speed: 28 }));
     // a fix at t = 900 ms: 30 mph and gaining 2 mph a second; the host rounds 30
     const fix = { mps: mph(30), accel: mph(2), at: 900 };
@@ -450,7 +461,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     try {
       jest.setSystemTime(9200);
       const { set, live } = sinks();
-      const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => Date.now(), platform: 'ios' });
+      const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => Date.now(), platform: 'ios', speedStep: 1 });
       const cruise = { mps: mph(29.9), accel: 0, at: 9000 };
       const halo = await renderHook((shown: ShownSpeed) => useCarriedSpeed(shown, 'mi'), { initialProps: cruise });
       d.start(state({ speed: 30 }));
@@ -486,7 +497,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later, speedStep: 1 });
     d.setFront!(true);
     d.start(state({ speed: null, limit: null }));
     expect(live.start).toHaveBeenCalledTimes(1);
@@ -543,6 +554,85 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
     expect(live.end).toHaveBeenCalledTimes(1);
   });
 
+  test('behind, the speed goes out within the second only when it moves 2 mph (3 km/h); a smaller move, and the tint shifting with it, waits until 5 s after the last update', () => {
+    expect(LIVE_SPEED_STEP).toEqual({ mph: 2, 'km/h': 3 });
+    expect(LIVE_SMALL_CHANGE_MS).toBe(5000);
+    let now = 0;
+    const clock = manual();
+    const { set, live } = sinks();
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', later: clock.later });
+    d.start(state({ speed: 60, limit: 65 }));
+    // 1 mph: held until 5 s after the last update
+    now = 1000;
+    d.update(state({ speed: 61, limit: 65 }));
+    expect(clock.armed()).toEqual([4000]);
+    // 2 mph: at once, and what waited goes with it
+    now = 2000;
+    d.update(state({ speed: 62, limit: 65 }));
+    expect(speeds(set)).toEqual([60, 62]);
+    expect(clock.armed()).toEqual([]);
+    // a small move waits; a 2 mph move inside the second brings the send forward to the second's end
+    now = 2300;
+    d.update(state({ speed: 63, limit: 65 }));
+    expect(clock.armed()).toEqual([4700]);
+    now = 2600;
+    d.update(state({ speed: 64, limit: 65 }));
+    expect(clock.armed()).toEqual([400]);
+    now = 3000;
+    clock.run();
+    expect(speeds(set)).toEqual([60, 62, 64]);
+    // a small move that comes back never goes out
+    now = 4000;
+    d.update(state({ speed: 65, limit: 65 }));
+    expect(clock.armed()).toEqual([4000]);
+    now = 5000;
+    d.update(state({ speed: 64, limit: 65 }));
+    expect(clock.armed()).toEqual([]);
+    // one that stays goes out 5 s after the last update, the newest number
+    now = 6000;
+    d.update(state({ speed: 65, limit: 65 }));
+    now = 7000;
+    d.update(state({ speed: 63, limit: 65 }));
+    expect(clock.armed()).toEqual([2000]);
+    now = 8000;
+    clock.run();
+    expect(speeds(set)).toEqual([60, 62, 64, 63]);
+    // over the line: the tint coming on goes at once, even with a 1 mph move
+    now = 9000;
+    d.update(state({ speed: 64, limit: 65, speedTint: '#E0884F' }));
+    expect(speeds(set)).toEqual([60, 62, 64, 63, 64]);
+    // the tint shifting with a small move (or with none) waits like the move
+    now = 10_000;
+    d.update(state({ speed: 65, limit: 65, speedTint: '#D9734A' }));
+    expect(clock.armed()).toEqual([4000]);
+    // the speeding flag, the limit (and the hint, the weather, the sky) go out at once
+    now = 10_500;
+    d.update(state({ speed: 65, limit: 65, speedTint: '#D9734A', speeding: true }));
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 65, speeding: true }));
+    expect(clock.armed()).toEqual([]);
+    now = 12_000;
+    d.update(state({ speed: 65, limit: 65, speedTint: '#D07050', speeding: true }));
+    expect(clock.armed()).toEqual([3500]);
+    now = 12_500;
+    d.update(state({ speed: 65, limit: 55, speedTint: '#D07050', speeding: true }));
+    expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 55, speedTint: '#D07050' }));
+    expect(set).toHaveBeenCalledTimes(7);
+    expect(clock.armed()).toEqual([]);
+
+    // km/h: 3 km/h
+    now = 0;
+    const kmClock = manual();
+    const k = sinks();
+    const km = createDriveDisplay({ setDriveDisplay: k.set, liveDrive: k.live }, { now: () => now, platform: 'ios', later: kmClock.later });
+    km.start(state({ unit: 'km/h', speed: 100, limit: 100 }));
+    now = 1000;
+    km.update(state({ unit: 'km/h', speed: 102, limit: 100 }));
+    expect(kmClock.armed()).toEqual([4000]);
+    now = 2000;
+    km.update(state({ unit: 'km/h', speed: 103, limit: 100 }));
+    expect(speeds(k.set)).toEqual([100, 103]);
+  });
+
   test('Android ignores whether RoadWise is in front (its notification shows in the shade)', () => {
     let now = 0;
     const sent: DriveDisplayState[] = [];
@@ -559,7 +649,7 @@ describe('iOS: the Live Activity once a second, with the halo’s number', () =>
   test('the end and the next start forget the carried number', () => {
     let now = 0;
     const { set, live } = sinks();
-    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios' });
+    const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', speedStep: 1 });
     d.start(state());
     now = 1000;
     d.update(state({ speed: 30 }), { mps: mph(30.6), accel: 0, at: 1000 });
