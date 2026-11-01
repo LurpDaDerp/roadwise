@@ -37,7 +37,8 @@
 //   `ARRIVE_LEFT_M` (300 m) from a saved place at some point in it, `ARRIVE_MS` (10 s) of rows each
 //   with a trusted speed at or under 5 mph and a fix accurate to 20 m within `ARRIVE_NEAR_M` (100 m)
 //   of that place ends the drive (`nextArrive`). A row with no fix keeps the clock running; one over
-//   5 mph, a poor or untrusted fix, or a fix outside 100 m resets it. A still end (`stopped`, the
+//   5 mph, a poor or untrusted fix, or a fix outside 100 m resets it. The clock starts at the nearest
+//   such place and stays with it while the fix is within 100 m of it. A still end (`stopped`, the
 //   place on `session.endPlace`), cut at the last movement.
 // While a Start-card drive still waits for driving speed none of them applies.
 import type { MotionActivity } from '@drive-sense';
@@ -247,17 +248,20 @@ export function placeAt(here: Spot, places: readonly PlaceSpot[]): PlaceSpot | n
 /**
  * The arrival clock after `row`: a row over 5 mph resets it; a row with no fix keeps it as it is;
  * a fix accurate to 20 m with a trusted speed at or under 5 mph within 100 m of a place the car had
- * left (`left`) keeps it running at that place (or starts it there); any other fix resets it.
+ * left (`left`) keeps it running (it stays with its place while that place is within 100 m) or starts
+ * it at the nearest such place; any other fix resets it.
  */
 export function nextArrive(clock: ArriveClock | null, row: FeatureRow, places: readonly PlaceSpot[], left: ReadonlySet<string>): ArriveClock | null {
   const speed = knownSpeed(row);
   if (speed !== null && speed > ARRIVE_MAX_MPS) return null;
   if (!row.gnssValid) return clock;
   if (!goodFix(row) || speed === null || !speedTrusted(row)) return null;
+  // A running clock stays with its place while the fix is still within 100 m of it, so two saved
+  // places close together don't restart it each time GPS jitter changes which one is nearer.
+  if (clock !== null && left.has(clock.place.id) && haversineMeters(row, clock.place) <= ARRIVE_NEAR_M) return clock;
   const place = placeAt(
     row,
     places.filter((p) => left.has(p.id))
   );
-  if (place === null) return null;
-  return clock !== null && clock.place.id === place.id ? clock : { place, since: row.ts };
+  return place === null ? null : { place, since: row.ts };
 }

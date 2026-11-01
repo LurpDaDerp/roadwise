@@ -180,6 +180,17 @@ describe('the place arrival through the engine', () => {
     expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'place-1', kind: 'custom', name: 'Gym' } });
   });
 
+  test('two places 60 m apart: GPS jitter flipping the nearer one keeps the clock with the first', async () => {
+    const west = placeEast(DRIVE_M - 30, { id: 'west', kind: 'custom', name: 'West' });
+    const east = placeEast(DRIVE_M + 30, { id: 'east', kind: 'custom', name: 'East' });
+    const h = await started({ places: () => [west, east] });
+    const jitter = (i: number) => ({ lng: LNG + (DRIVE_M + (i % 2 === 0 ? 5 : -5)) / M_PER_DEG_LNG });
+    await feed(h, path(T0, DRIVE, stopped(9, jitter)));
+    expect(status(h)).toBe('recording');
+    await feed(h, path(T0 + 69_000, stopped(1, (i) => jitter(i + 9))));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END, endPlace: { id: 'east' } });
+  });
+
   test('replayed rows count: the rule reads only their fixes', async () => {
     const h = await started({ places: () => HOME });
     await feed(h, path(T0, DRIVE, stopped(10)), true);
@@ -235,5 +246,14 @@ describe('the place helpers', () => {
     expect(nextArrive(c, fix(10, { gnssValid: false, speed: -1 }), [home], left)).toBe(c);
     expect(nextArrive(c, fix(10, { speed: mph(6) }), [home], left)).toBeNull();
     expect(nextArrive(null, fix(10), [home], new Set())).toBeNull();
+  });
+
+  test('nextArrive: a running clock stays with its place while it is within 100 m, even when another is nearer', () => {
+    const next = placeEast(60, { id: 'next', kind: 'custom', name: 'Next door' });
+    const left = new Set(['home', 'next']);
+    const c = nextArrive(null, fix(25), [home, next], left);
+    expect(c?.place).toBe(home);
+    expect(nextArrive(c, fix(35, { ts: T0 + 1000 }), [home, next], left)).toBe(c);
+    expect(nextArrive(c, fix(ARRIVE_NEAR_M + 5, { ts: T0 + 2000 }), [home, next], left)).toEqual({ place: next, since: T0 + 2000 });
   });
 });
