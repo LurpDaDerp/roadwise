@@ -44,19 +44,19 @@ export const DETECT = {
   TRUSTED_SPEED_ACC_MPS: 2,
   /**
    * The slow-traffic confirmation (`slowTrafficStep`), beside the speed evidence: inside one
-   * candidate, confident moving car motion standing 90 s in all, from at least two confident
-   * automotive reports 30 s or more apart, with a confident automotive report (moving or standing)
-   * standing for 80 % of the time since the first trusted row over 3 mph; a trusted path of 800 m
-   * whose last fix is 400 m in a straight line from its first (each step at most 1.5 times what the
-   * faster of its two rows could cover, plus 5 m); trusted rows over 3 mph averaging 8 mph; and no
+   * candidate, confident moving car motion standing 20 s in all, from at least two confident
+   * automotive reports 10 s or more apart, with a confident automotive report (moving or standing)
+   * standing for 80 % of the time since the first trusted row over 3 mph; a trusted path of 400 m
+   * whose last fix is 200 m in a straight line from its first (each step at most 1.5 times what the
+   * faster of its two rows could cover, plus 5 m); trusted rows over 3 mph averaging 10 mph; and no
    * confident walking, running or cycling report since the candidate opened.
    */
-  SLOW_CAR_MS: 90_000,
-  SLOW_CAR_SPAN_MS: 30_000,
+  SLOW_CAR_MS: 20_000,
+  SLOW_CAR_SPAN_MS: 10_000,
   SLOW_CAR_COVER_MIN: 0.8,
-  SLOW_PATH_M: 800,
-  SLOW_NET_M: 400,
-  SLOW_AVG_MPS: 3.57632,
+  SLOW_PATH_M: 400,
+  SLOW_NET_M: 200,
+  SLOW_AVG_MPS: 4.4704,
   SLOW_STEP_SLACK: 1.5,
   SLOW_STEP_PAD_M: 5,
   /**
@@ -461,10 +461,10 @@ export function slowTrafficReport(s: SlowTrafficState, r: SlowReport): SlowTraff
 }
 
 /**
- * Whether the slow-traffic path confirms: never on foot; 90 s of car motion, from automotive reports
- * 30 s or more apart, with automotive coverage for 80 % of the time since the first trusted row over
- * 3 mph; an 800 m trusted path, the last trusted fix 400 m in a straight line from the first, and an
- * 8 mph average over the trusted rows over 3 mph.
+ * Whether the slow-traffic path confirms: never on foot; 20 s of car motion, from automotive reports
+ * 10 s or more apart, with automotive coverage for 80 % of the time since the first trusted row over
+ * 3 mph; a 400 m trusted path, the last trusted fix 200 m in a straight line from the first, and a
+ * 10 mph average over the trusted rows over 3 mph.
  */
 export function slowTrafficConfirmed(s: SlowTrafficState, now: number): boolean {
   if (s.onFoot || s.first === null || s.last === null || s.movingRows === 0) return false;
@@ -482,7 +482,7 @@ export function slowTrafficConfirmed(s: SlowTrafficState, now: number): boolean 
 /**
  * One row of the slow-traffic path. As the speed evidence, 5 min with no trusted row over 3 mph
  * forgets it all (not the on-foot mark; a standing car or automotive report starts its stretch
- * again here, and two new reports 30 s apart are needed). A trusted row over 3 mph adds the step
+ * again here, and two new reports 10 s apart are needed). A trusted row over 3 mph adds the step
  * from the last trusted fix to the path when that fix is at most `AUTO_ROW_GAP_MAX_MS` older (a
  * stopped car's GPS jitter, and a jump across a gap, add nothing), never more than 1.5 times what the
  * faster of the two rows covers in the time plus 5 m (a GPS jump inside the gap adds no more), and

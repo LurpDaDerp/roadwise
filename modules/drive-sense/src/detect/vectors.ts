@@ -270,16 +270,16 @@ function slowSteps(rows: readonly DetectRow[], reports: readonly SlowReport[] = 
 /** One row a second from `from` to `to` at `mph`, heading north from `startM` at that speed. */
 const northRows = (from: number, to: number, mph: number, startM = 0): DetectRow[] => vrows(from, to, mph, (s) => ({ northM: startM + mph * MPS_PER_MPH * (s - from) }));
 
-/** 4.4704 m: a second at 10 mph. */
-const M10 = 10 * MPS_PER_MPH;
+/** 5.36448 m: a second at 12 mph. */
+const M12 = 12 * MPS_PER_MPH;
 
-/** From the kerb (31 s parked) at 10 mph, north. */
-const kerb10 = [...vrows(0, 30, 0), ...northRows(31, 400, 10, M10)];
+/** From the kerb (31 s parked) at 12 mph, north: the path passes 400 m on the 75th moving row (t = 105 s). */
+const kerb12 = [...vrows(0, 30, 0), ...northRows(31, 400, 12, M12)];
 
 /**
  * Stop and go at 12 mph: parked 10 s, then per 30 s a 20 s roll (a car motion report as it sets
- * off, 107.3 m) and 10 s at a light (a report of the car standing). The path passes 800 m on the
- * 10th rolling row of the 8th roll (t = 229 s); by then 149 s of car motion stand.
+ * off, 107.3 m) and 10 s at a light (a report of the car standing). The path passes 400 m on the
+ * 15th rolling row of the 4th roll (t = 114 s); by then 74 s of car motion stand.
  */
 function slowStopAndGo(cycles: number): SlowStep[] {
   const v = 12 * MPS_PER_MPH;
@@ -295,10 +295,10 @@ function slowStopAndGo(cycles: number): SlowStep[] {
   return slowSteps(rows, reports);
 }
 
-/** Back and forth between two points 300 m apart at 10 mph (a car park): the path grows, the net never passes 300 m. */
-const carPark = vrows(0, 600, 10, (s) => {
-  const p = (M10 * s) % 600;
-  return { northM: p <= 300 ? p : 600 - p };
+/** Back and forth between two points 150 m apart at 12 mph (a car park): the path grows, the net never passes 150 m. */
+const carPark = vrows(0, 600, 12, (s) => {
+  const p = (M12 * s) % 300;
+  return { northM: p <= 150 ? p : 300 - p };
 });
 
 /** The link flags per row (`link` on by default; `carPlay` and `car` off), and the live reports. */
@@ -549,35 +549,41 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   },
   { name: 'start: no confirmation, no start', kind: 'start', trigger: 'auto', ...confirmRows(vrows(0, 60, 12)), automotiveSince: 0, lastEnd: null, expected: { confirmedAt: null, start: null } },
 
-  // ——— slow traffic: 90 s of car motion from reports 30 s apart, 80 % automotive coverage, an 800 m path 400 m from where it began, 8 mph on average, never on foot ———
+  // ——— slow traffic: 20 s of car motion from reports 10 s apart, 80 % automotive coverage, a 400 m path 200 m from where it began, 10 mph on average, never on foot ———
   {
-    name: 'slow: a 10 mph car with car motion confirms once its path passes 800 m, and starts at the kerb',
+    name: 'slow: a 12 mph car with car motion confirms once its path passes 400 m, and starts at the kerb',
     kind: 'slow',
-    steps: slowSteps(kerb10, [carAt(31), carAt(91)]),
-    expected: { confirmedAt: at(209), runStartTs: at(31), traced: 30, carMs: 178_000 },
+    steps: slowSteps(kerb12, [carAt(31), carAt(41)]),
+    expected: { confirmedAt: at(105), runStartTs: at(31), traced: 30, carMs: 74_000 },
   },
   {
-    name: 'slow: stop and go at 12 mph (car motion only while rolling, the car standing at each light) confirms on the 8th roll and starts where the car first moved',
+    name: 'slow: stop and go at 12 mph (car motion only while rolling, the car standing at each light) confirms on the 4th roll and starts where the car first moved',
     kind: 'slow',
     steps: slowStopAndGo(12),
-    expected: { confirmedAt: at(229), runStartTs: at(10), traced: 9, carMs: 149_000 },
+    expected: { confirmedAt: at(114), runStartTs: at(10), traced: 9, carMs: 74_000 },
   },
   {
-    name: 'slow: 80 s of car motion is not enough; it confirms once more car motion makes 90 s',
+    name: 'slow: 15 s of car motion is not enough; it confirms once more car motion makes 20 s',
     kind: 'slow',
-    steps: slowSteps(kerb10, [carAt(31), carAt(111, { stationary: true }), carAt(300)]),
-    expected: { confirmedAt: at(310), runStartTs: at(31), traced: 30, carMs: 90_000 },
+    steps: slowSteps(kerb12, [carAt(31), carAt(46, { stationary: true }), carAt(200)]),
+    expected: { confirmedAt: at(205), runStartTs: at(31), traced: 30, carMs: 20_000 },
   },
   {
-    name: 'slow: 5 min with nothing over 3 mph forgets the path and the car motion; the next 800 m start after the stop',
+    name: 'slow: two car reports 9 s apart are not enough; it confirms when one comes 10 s or more after the first',
     kind: 'slow',
-    steps: slowSteps([...northRows(0, 99, 10), ...vrows(100, 399, 0, { northM: 99 * M10 }), ...northRows(400, 700, 10, 100 * M10)], [carAt(0), carAt(100, { stationary: true }), carAt(400), carAt(450)]),
-    expected: { confirmedAt: at(578), runStartTs: at(400), traced: 399, carMs: 178_000 },
+    steps: slowSteps(kerb12, [carAt(31), carAt(40), carAt(150)]),
+    expected: { confirmedAt: at(150), runStartTs: at(31), traced: 30, carMs: 119_000 },
   },
   {
-    name: 'slow: one misread car report on a 10 mph bike ride never confirms (no second report 30 s later)',
+    name: 'slow: 5 min with nothing over 3 mph forgets the path and the car motion; the next 400 m start after the stop',
     kind: 'slow',
-    steps: slowSteps(northRows(0, 900, 10), [carAt(60)]),
+    steps: slowSteps([...northRows(0, 59, 12), ...vrows(60, 359, 0, { northM: 59 * M12 }), ...northRows(360, 700, 12, 60 * M12)], [carAt(0), carAt(60, { stationary: true }), carAt(360), carAt(370)]),
+    expected: { confirmedAt: at(434), runStartTs: at(360), traced: 359, carMs: 74_000 },
+  },
+  {
+    name: 'slow: one misread car report on a 12 mph bike ride never confirms (no second report 10 s later)',
+    kind: 'slow',
+    steps: slowSteps(northRows(0, 900, 12), [carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 840_000 },
   },
   {
@@ -589,8 +595,8 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: a 500 m GPS jump adds only 1.5 times the step plus 5 m to the path',
     kind: 'slow',
-    steps: slowSteps([...vrows(0, 30, 0), ...northRows(31, 99, 10, M10), ...northRows(100, 400, 10, 70 * M10 + 500)], [carAt(31), carAt(91)]),
-    expected: { confirmedAt: at(208), runStartTs: at(31), traced: 30, carMs: 177_000 },
+    steps: slowSteps([...vrows(0, 30, 0), ...northRows(31, 99, 12, M12), ...northRows(100, 400, 12, 70 * M12 + 500)], [carAt(31), carAt(91)]),
+    expected: { confirmedAt: at(104), runStartTs: at(31), traced: 30, carMs: 73_000 },
   },
   { name: 'slow: a walk at 3 mph with no car motion never confirms', kind: 'slow', steps: slowSteps(northRows(0, 1200, 3)), expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 } },
   {
@@ -602,18 +608,18 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: a bike at 12 mph with a cycling report never confirms, whatever car motion the phone misreads',
     kind: 'slow',
-    steps: slowSteps(northRows(0, 900, 12), [carAt(0), footAt(60), carAt(120), carAt(200)]),
+    steps: slowSteps(northRows(0, 900, 12), [carAt(0), carAt(10), footAt(60), carAt(120), carAt(200)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 840_000 },
   },
   { name: 'slow: a bike at 12 mph with no car motion never confirms', kind: 'slow', steps: slowSteps(northRows(0, 900, 12)), expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 } },
   {
     name: 'slow: a walk to the car since the candidate opened stops the slow path for good',
     kind: 'slow',
-    steps: slowSteps(kerb10, [footAt(5), carAt(31), carAt(91)]),
+    steps: slowSteps(kerb12, [footAt(5), carAt(31), carAt(91)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 369_000 },
   },
   {
-    name: 'slow: a car-park loop never 400 m from where it began never confirms, however long its path',
+    name: 'slow: a car-park loop never 200 m from where it began never confirms, however long its path',
     kind: 'slow',
     steps: slowSteps(carPark, [carAt(0), carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 600_000 },
@@ -621,19 +627,19 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
   {
     name: 'slow: a short car move (350 m) then a stop never confirms',
     kind: 'slow',
-    steps: slowSteps([...vrows(0, 10, 0), ...northRows(11, 88, 10, M10), ...vrows(89, 300, 0, { northM: 78 * M10 })], [carAt(11), carAt(89, { stationary: true })]),
-    expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 78_000 },
+    steps: slowSteps([...vrows(0, 10, 0), ...northRows(11, 75, 12, M12), ...vrows(76, 300, 0, { northM: 65 * M12 })], [carAt(11), carAt(76, { stationary: true })]),
+    expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 65_000 },
   },
   {
-    name: 'slow: a 6 mph crawl (under the 8 mph average) never confirms',
+    name: 'slow: a 9 mph crawl (under the 10 mph average) never confirms',
     kind: 'slow',
-    steps: slowSteps(northRows(0, 600, 6), [carAt(0), carAt(60)]),
+    steps: slowSteps(northRows(0, 600, 9), [carAt(0), carAt(60)]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 600_000 },
   },
   {
     name: 'slow: low-confidence car motion earns no car time',
     kind: 'slow',
-    steps: slowSteps(kerb10, [carAt(31, { confident: false }), carAt(91, { confident: false })]),
+    steps: slowSteps(kerb12, [carAt(31, { confident: false }), carAt(91, { confident: false })]),
     expected: { confirmedAt: null, runStartTs: null, traced: null, carMs: 0 },
   },
   {

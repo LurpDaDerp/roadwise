@@ -154,9 +154,9 @@ extension DetectPolicy {
     return n
   }
 
-  /// policy.ts `slowTrafficConfirmed`: never on foot; 90 s of car motion from automotive reports 30 s
-  /// or more apart, automotive coverage for 80 % of the time since the first row over 3 mph, an 800 m
-  /// path, the last fix 400 m in a straight line from the first, an 8 mph average.
+  /// policy.ts `slowTrafficConfirmed`: never on foot; 20 s of car motion from automotive reports 10 s
+  /// or more apart, automotive coverage for 80 % of the time since the first row over 3 mph, a 400 m
+  /// path, the last fix 200 m in a straight line from the first, a 10 mph average.
   static func slowTrafficConfirmed(_ s: SlowTrafficState, _ now: Double) -> Bool {
     guard !s.onFoot, let fLat = s.firstLat, let fLng = s.firstLng, s.lastTs != nil, s.movingRows > 0 else { return false }
     guard let c0 = s.firstCarAt, let c1 = s.lastCarAt, let m = s.moveStartTs else { return false }
