@@ -59,8 +59,11 @@ export function orderGoals(goals: readonly SetupGoal[]): SetupGoal[] {
   return [...goals.filter((g) => !g.done), ...goals.filter((g) => g.done)];
 }
 
-/** A DashPal is paired with this phone (false with no runtime, as in a build without Bluetooth, or before its settings are read). */
-const selectDashpalPaired = (s: DashcamState | null): boolean => s?.loaded === true && s.link.paired != null;
+/**
+ * A DashPal is paired with this phone: false with no runtime (a build without Bluetooth), null
+ * until the runtime has read its settings (not known yet).
+ */
+const selectDashpalPaired = (s: DashcamState | null): boolean | null => (s === null ? false : s.loaded ? s.link.paired != null : null);
 
 function GoalTile({ goal, onPress }: { goal: SetupGoal; onPress: () => void }) {
   const t = useTheme();
@@ -158,13 +161,17 @@ export function HomeSetupGoals({ hidden }: { hidden: boolean }) {
     }, [refetchContacts, client])
   );
 
+  // Wait for every goal that can still be read, so a finished driver never sees the row flash in.
+  const friendsLoading = friends.data === undefined && friends.status === 'pending' && friends.fetchStatus === 'fetching';
   if (hidden || dismissed !== false || contacts === undefined || places === undefined) return null;
+  if (car.view.status === 'loading' || dashpal === null || friendsLoading) return null;
   const goals: SetupGoal[] = [
     { id: 'emergency', done: contacts.length > 0 },
     { id: 'places', done: places.length > 0 },
     ...(car.view.status === 'ready' ? [{ id: 'car' as const, done: car.view.state.cars.length > 0 }] : []),
     { id: 'dashpal', done: dashpal },
-    { id: 'friend', done: (friends.data?.friends.length ?? 0) >= 1 },
+    // Friends that could not be read (offline, an error, signed out) leave their tile out.
+    ...(friends.data ? [{ id: 'friend' as const, done: friends.data.friends.length >= 1 }] : []),
   ];
   if (goals.every((g) => g.done)) return null;
   return (

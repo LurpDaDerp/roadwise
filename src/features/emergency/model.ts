@@ -100,15 +100,16 @@ export function newContactId(now: number = Date.now()): string {
 export const telUrl = (phone: string): string => `tel:${cleanPhone(phone)}`;
 
 /**
- * A number laid out for reading: a 10-digit US number as "(555) 123-4567", with a leading 1 or +1
- * as "+1 (555) 123-4567", 7 digits as "123-4567"; anything else as it is stored.
+ * A number laid out for reading, its digits as stored: 10 digits as "(555) 123-4567", +1 and 10
+ * digits as "+1 (555) 123-4567", 1 and 10 digits as "1 (555) 123-4567", 7 digits as "123-4567";
+ * anything else as it is stored.
  */
 export function formatPhone(phone: string): string {
   const clean = cleanPhone(phone);
   const digits = clean.replace('+', '');
   const us = (d: string) => `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
   if (!clean.startsWith('+') && digits.length === 10) return us(digits);
-  if (digits.length === 11 && digits.startsWith('1')) return `+1 ${us(digits.slice(1))}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `${clean.startsWith('+') ? '+' : ''}1 ${us(digits.slice(1))}`;
   if (!clean.startsWith('+') && digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
   return clean;
 }

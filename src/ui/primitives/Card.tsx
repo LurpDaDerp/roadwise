@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, View, type AccessibilityActionEvent, type AccessibilityActionInfo, type StyleProp, type ViewStyle } from 'react-native';
 
 import { SkyScene } from '../sky/SkyScene';
 import { SceneScope, useTheme } from '../theme';
@@ -28,6 +28,12 @@ export type CardProps = {
   onPress?: () => void;
   accessibilityLabel?: string;
   accessibilityHint?: string;
+  /**
+   * Extra screen-reader actions for a pressable card (VoiceOver can't reach a button nested in
+   * one), e.g. a 'dismiss' for its ✕. Include `{ name: 'activate' }` and handle it.
+   */
+  accessibilityActions?: readonly AccessibilityActionInfo[];
+  onAccessibilityAction?: (e: AccessibilityActionEvent) => void;
   /** Layout only. Merged last. */
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -42,6 +48,8 @@ export function Card({
   onPress,
   accessibilityLabel,
   accessibilityHint,
+  accessibilityActions,
+  onAccessibilityAction,
   style,
   testID,
 }: CardProps) {
@@ -105,6 +113,8 @@ export function Card({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
+      accessibilityActions={accessibilityActions}
+      onAccessibilityAction={onAccessibilityAction}
       onPress={onPress}
       style={({ pressed }) => [
         face,

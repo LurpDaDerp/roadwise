@@ -63,7 +63,7 @@ describe('stored contacts', () => {
   it('lays a number out for reading', () => {
     expect(formatPhone('5551234567')).toBe('(555) 123-4567');
     expect(formatPhone('+15551234567')).toBe('+1 (555) 123-4567');
-    expect(formatPhone('15551234567')).toBe('+1 (555) 123-4567');
+    expect(formatPhone('15551234567')).toBe('1 (555) 123-4567');
     expect(formatPhone('1234567')).toBe('123-4567');
     expect(formatPhone('+442071234567')).toBe('+442071234567');
     expect(formatPhone('911')).toBe('911');
@@ -210,6 +210,18 @@ describe('Home’s emergency card', () => {
     expect(screen.queryByTestId('home-emergency')).toBeNull();
     await waitFor(async () => expect(await w.settings.get(EMERGENCY_CARD_DISMISSED_KEY)).toBe(true));
     expect(await readEmergencyCard(w.settings)).toBe(false);
+  });
+
+  it('a screen reader can open it or close it with "Not now" from the card itself', async () => {
+    const w = await appWorld();
+    await w.render(<HomeEmergencyCard hidden={false} />);
+    const card = await screen.findByTestId('home-emergency');
+    expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Not now' }]);
+    await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } }));
+    expect(mockPush).toHaveBeenCalledWith('/settings/emergency');
+    await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } }));
+    expect(screen.queryByTestId('home-emergency')).toBeNull();
+    await waitFor(async () => expect(await w.settings.get(EMERGENCY_CARD_DISMISSED_KEY)).toBe(true));
   });
 
   it('never shows during a drive, or with a contact saved', async () => {

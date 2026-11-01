@@ -15,7 +15,18 @@ const copy = emergencyCopy.card;
 export function EmergencyCardView({ onOpen, onDismiss }: { onOpen: () => void; onDismiss: () => void }) {
   const t = useTheme();
   return (
-    <Card onPress={onOpen} accessibilityLabel={`${copy.title}. ${copy.body}`} accessibilityHint={copy.hint} testID="home-emergency">
+    <Card
+      onPress={onOpen}
+      accessibilityLabel={`${copy.title}. ${copy.body}`}
+      accessibilityHint={copy.hint}
+      // VoiceOver reads the card as one button, so its ✕ is an action on it too.
+      accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.dismiss }]}
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'activate') onOpen();
+        else if (e.nativeEvent.actionName === 'dismiss') onDismiss();
+      }}
+      testID="home-emergency"
+    >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
         <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentFaint }}>
           <Ionicons name="call" size={t.size.iconLg} color={t.colors.accent} accessible={false} />

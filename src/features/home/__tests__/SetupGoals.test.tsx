@@ -2,7 +2,8 @@
  * Home's "Get set up" row: which goals it offers and when each is done, open tiles first, where a
  * tile goes, and when the row is gone (all done, closed for good, during a drive).
  */
-import { screen, waitFor, within } from '@testing-library/react-native';
+import { act, screen, waitFor, within } from '@testing-library/react-native';
+import { useEffect, useState } from 'react';
 
 import { SIGN_OUT_SETTINGS } from '@/boot/device';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
@@ -25,8 +26,10 @@ jest.mock('expo-router', () => ({
 }));
 let mockCarView: unknown = { status: 'unsupported' };
 jest.mock('@/features/carLink/useCarLink', () => ({ useCarLink: () => ({ view: mockCarView }) }));
-let mockFriends: { friends: unknown[] } | undefined = { friends: [] };
-jest.mock('@/features/social/api', () => ({ useFriends: () => ({ data: mockFriends }) }));
+/** The friends query as Home sees it. */
+let mockFriends: { data?: { friends: unknown[] }; status: string; fetchStatus: string } = { data: { friends: [] }, status: 'success', fetchStatus: 'idle' };
+const friendsList = (friends: unknown[]) => ({ data: { friends }, status: 'success', fetchStatus: 'idle' });
+jest.mock('@/features/social/api', () => ({ useFriends: () => mockFriends }));
 /** The DashPal runtime's state (null: no runtime, as in a build without Bluetooth). */
 let mockDashcam: unknown = null;
 jest.mock('@/dashcam/ui/useDashcam', () => ({ useDashcamSelector: (select: (s: unknown) => unknown) => select(mockDashcam) }));
@@ -36,12 +39,22 @@ const MOM = { id: 'contact-mom', name: 'Mom', phone: '5551234567' };
 const READY = (cars: unknown[]) => ({ status: 'ready', state: { cars, outputs: [], seen: [], notMine: [] } });
 const PAIRED_DASHPAL = { loaded: true, link: { paired: { dashcamId: 'd', name: 'DashPal-AB12' } } };
 
+/** Renders the row again on `redraw()` (the mocks are read on each render). */
+let redraw: () => void = () => {};
+function Redrawn() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    redraw = () => set((x) => x + 1);
+  }, []);
+  return <HomeSetupGoals hidden={false} />;
+}
+
 const tileIds = () => within(screen.getByTestId('home-setup-row')).getAllByTestId(/^home-setup-[a-z]+$/).map((el) => String(el.props.testID));
 
 beforeEach(() => {
   mockPush.mockClear();
   mockCarView = { status: 'unsupported' };
-  mockFriends = { friends: [] };
+  mockFriends = friendsList([]);
   mockDashcam = null;
 });
 afterEach(() => clearQueryClients());
@@ -68,7 +81,7 @@ describe('the goals', () => {
   it('adds Your car on an iPhone with the car link, and marks each done goal with a check at the end', async () => {
     mockCarView = READY([{ uid: 'car-1', name: 'My car' }]);
     mockDashcam = PAIRED_DASHPAL;
-    mockFriends = { friends: [{ username: 'pal' }] };
+    mockFriends = friendsList([{ username: 'pal' }]);
     const w = await appWorld({ settings: { [EMERGENCY_CONTACTS_KEY]: [MOM] } });
     await w.render(<HomeSetupGoals hidden={false} />);
     await screen.findByTestId('home-setup');
@@ -79,13 +92,22 @@ describe('the goals', () => {
     expect(screen.getByLabelText('Emergency contacts, done. People to call from a drive')).toBeOnTheScreen();
   });
 
-  it('counts DashPal only once one is paired (never with no runtime or before its settings are read)', async () => {
-    mockDashcam = { loaded: false, link: { paired: null } };
+  it('counts DashPal only once one is paired, and never with no runtime', async () => {
+    mockDashcam = { loaded: true, link: { paired: null } };
     const w = await appWorld();
     await w.render(<HomeSetupGoals hidden={false} />);
     await screen.findByTestId('home-setup');
     expect(screen.queryByTestId('home-setup-dashpal-done', { includeHiddenElements: true })).toBeNull();
     expect(screen.queryByTestId('home-setup-dashpal')).toBeOnTheScreen();
+  });
+
+  it('leaves the First friend tile out when friends cannot be read (offline or an error)', async () => {
+    mockFriends = { status: 'error', fetchStatus: 'idle' };
+    const w = await appWorld();
+    await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
+    expect(tileIds()).toEqual(['home-setup-emergency', 'home-setup-places', 'home-setup-dashpal']);
+    expect(screen.getByTestId('home-setup-count')).toHaveTextContent('0 of 3');
   });
 
   it('each tile opens its screen', async () => {
@@ -100,11 +122,31 @@ describe('the goals', () => {
 describe('when the row is gone', () => {
   it('once every goal is done', async () => {
     mockDashcam = PAIRED_DASHPAL;
-    mockFriends = { friends: [{ username: 'pal' }] };
+    mockFriends = friendsList([{ username: 'pal' }]);
     const w = await appWorld({ settings: { [EMERGENCY_CONTACTS_KEY]: [MOM], [PLACES_KEY]: [HOME] } });
     await w.render(<HomeSetupGoals hidden={false} />);
     await waitFor(async () => expect(await w.settings.get(PLACES_KEY)).not.toBeNull());
     expect(screen.queryByTestId('home-setup')).toBeNull();
+  });
+
+  it('until friends, DashPal and the car link are read, so a finished driver never sees it flash in', async () => {
+    const w = await appWorld();
+    await w.render(<Redrawn />);
+    await screen.findByTestId('home-setup');
+    for (const [friends, dashcam, car] of [
+      [{ status: 'pending', fetchStatus: 'fetching' }, null, { status: 'unsupported' }],
+      [friendsList([]), { loaded: false, link: { paired: null } }, { status: 'unsupported' }],
+      [friendsList([]), null, { status: 'loading' }],
+    ] as const) {
+      mockFriends = friends as typeof mockFriends;
+      mockDashcam = dashcam;
+      mockCarView = car;
+      await act(async () => redraw());
+      expect(screen.queryByTestId('home-setup')).toBeNull();
+    }
+    mockCarView = { status: 'unsupported' };
+    await act(async () => redraw());
+    expect(screen.getByTestId('home-setup')).toBeOnTheScreen();
   });
 
   it('for good after its ✕, until a sign-out', async () => {
