@@ -94,9 +94,10 @@ function SpotMarkerView({ spot, scheme }: { spot: ProblemSpot; scheme: 'light' |
  * pin with the kind's icon and a label chip; tapping a pin opens that spot (`onSpot`). It opens on
  * `fitRegion` (the most-driven roads in the middle) and pans and zooms freely. Once dragged or
  * zoomed off that view by more than a tenth, a Recenter button in its top-right corner takes it
- * back, as on the recap map. Each time the Analytics tab gains focus (`focusCount` goes up) and
- * whenever the routes' framing view changes, it goes back on its own and the button hides; under
- * Reduce Motion it jumps instead of gliding. The map itself is hidden from screen readers (the
+ * back, as on the recap map. Each time the Analytics tab gains focus (`focusCount` goes up) it goes
+ * back on its own and the button hides; when the routes' framing view changes it follows only if it
+ * was on that view, so a map the driver has moved stays put with Recenter showing. Under Reduce
+ * Motion every return jumps instead of gliding. The map itself is hidden from screen readers (the
  * Recenter button is not); the card's title says what it is, and the "Spots to watch" card lists
  * the spots. Without the maps module it says so in a line instead.
  */
@@ -134,8 +135,9 @@ export function TripsMapCard({
     setAway(false);
   };
 
-  // A tab focus, or new routes framed differently, takes the map back to the framing view. A map
-  // that has only just appeared needs nothing: it opens on that view.
+  // A tab focus takes the map back to the framing view. New routes framed differently move it only
+  // while it sits on the old framing view: one dragged or zoomed off it stays put (Recenter shows
+  // and goes to the new view). A map that has only just appeared needs nothing: it opens on that view.
   const key = regionKey(region);
   const framed = useRef({ focus: focusCount, key });
   useEffect(() => {
@@ -143,9 +145,10 @@ export function TripsMapCard({
     if (last.focus === focusCount && last.key === key) return;
     framed.current = { focus: focusCount, key };
     if (!region || last.key === '') return;
+    if (last.focus === focusCount && away) return;
     mapRef.current?.animateToRegion(region, still ? 0 : RECENTER_MS);
     setAway(false);
-  }, [focusCount, key, region, still]);
+  }, [away, focusCount, key, region, still]);
 
   let body;
   if (!region || routes.length === 0) {

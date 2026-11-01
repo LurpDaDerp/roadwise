@@ -140,6 +140,21 @@ test('each new focus of the tab takes the map back to its framing view and hides
   // The same framing in a new object is no change.
   await rerender(card(2, { ...wider }));
   expect(animateToRegion).toHaveBeenCalledTimes(3);
+
+  // Moved off the view, the map stays put when the routes change (a drive restore landing mid-drag);
+  // Recenter keeps showing and goes to the newest framing view.
+  await settle({ ...SHOWN, longitude: SHOWN.longitude + SHOWN.longitudeDelta });
+  const widest = { ...REGION, latitudeDelta: 0.08, longitudeDelta: 0.08 };
+  await rerender(card(2, widest));
+  expect(animateToRegion).toHaveBeenCalledTimes(3);
+  await press(screen.getByTestId('trips-map-recenter'));
+  expect(animateToRegion).toHaveBeenLastCalledWith(widest, RECENTER_MS);
+  expect(screen.queryByTestId('trips-map-recenter')).toBeNull();
+  // A focus still takes a moved map back.
+  await settle({ ...SHOWN, longitude: SHOWN.longitude + SHOWN.longitudeDelta });
+  await rerender(card(3, widest));
+  expect(animateToRegion).toHaveBeenCalledTimes(5);
+  expect(screen.queryByTestId('trips-map-recenter')).toBeNull();
 });
 
 test('a map that has only just appeared (the first trips) is left on the view it opens on', async () => {
