@@ -88,14 +88,14 @@ describe('the step log', () => {
     expect(log).toEqual([{ ts: T0 + 1000, steps: 2 }]);
   });
 
-  test('a walk is 15 steps between the oldest and newest count; since is the last row before the first step', () => {
-    expect(stepWalk([{ ts: T0, steps: 3 }, { ts: T0 + 19_000, steps: 17 }])).toBeNull();
+  test('a walk is 20 steps between the oldest and newest count; since is the last row before the first step', () => {
+    expect(stepWalk([{ ts: T0, steps: 3 }, { ts: T0 + 19_000, steps: 22 }])).toBeNull();
     expect(
       stepWalk([
         { ts: T0, steps: 3 },
         { ts: T0 + 1000, steps: 3 },
         { ts: T0 + 2000, steps: 5 },
-        { ts: T0 + 9000, steps: 18 },
+        { ts: T0 + 9000, steps: 23 },
       ])
     ).toEqual({ since: T0 + 1000 });
   });
@@ -105,7 +105,7 @@ describe('the step walk', () => {
   /** Stopped after the drive, the count rising 2 a row from `from` rows into the stop. */
   const stopWithSteps = (n: number, from = 2, perRow = 2) => ({ n, mps: 0, over: (i: number) => ({ steps: Math.max(0, i - from) * perRow }) });
 
-  test('15 steps in 20 s once nothing has been over 3 mph for 15 s: a walking end cut at the last movement', async () => {
+  test('20 steps in 20 s once nothing has been over 3 mph for 15 s: a walking end cut at the last movement', async () => {
     const h = await started();
     const rows = path(T0, DRIVE, stopWithSteps(30));
     // The last fast row is at T0 + 59 s: the 15th still row after it (T0 + 74 s) is the first calm one.
@@ -122,10 +122,10 @@ describe('the step walk', () => {
     expect(status(h)).toBe('recording');
   });
 
-  test('fewer than 15 steps in any 20 s end nothing (the still end comes later)', async () => {
+  test('fewer than 20 steps in any 20 s end nothing (the still end comes later)', async () => {
     const h = await started();
-    // One step every 2 s: at most 10 in 20 s.
-    await feed(h, path(T0, DRIVE, { n: 120, mps: 0, over: (i) => ({ steps: Math.floor(i / 2) }) }));
+    // 0.9 steps a second (54 a minute, under a slow walk's 60): 18 in any 20 s.
+    await feed(h, path(T0, DRIVE, { n: 120, mps: 0, over: (i) => ({ steps: Math.floor(i * 0.9) }) }));
     expect(status(h)).toBe('recording');
   });
 

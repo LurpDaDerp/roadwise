@@ -162,7 +162,7 @@ enum DetectPolicy {
   static let WALKER_PACE_MAX_MPS: Double = 2.2352
   static let SAFETY_SLACK_MS: Double = 60_000
   static let WALK_SAFETY_SLACK_MS: Double = 10_000
-  static let STEP_WALK_MIN: Int = 15
+  static let STEP_WALK_MIN: Int = 20
   static let STEP_WINDOW_MS: Double = 20_000
   static let STEP_CALM_MS: Double = 15_000
   static let CAR_GONE_MS: Double = 15_000

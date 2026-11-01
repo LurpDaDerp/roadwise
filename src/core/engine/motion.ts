@@ -17,7 +17,7 @@
 // Without the permission no reports come and neither rule ever applies.
 //
 // Two more automatic ends read the phone's own senses (`machine.ts`):
-// - The step walk (iOS): `STEP_WALK_MIN` (15) steps or more within `STEP_WINDOW_MS` (20 s) on the
+// - The step walk (iOS): `STEP_WALK_MIN` (20) steps or more within `STEP_WINDOW_MS` (20 s) on the
 //   rows' pedometer count (`FeatureRow.steps`), with no trusted fix over 3 mph in the last
 //   `STEP_CALM_MS` (15 s), is a walking end, cut at the last movement at or before the first of
 //   those steps. The W2 age applies as on a report.
@@ -84,8 +84,8 @@ export function carStillDriving(last: TripSession['lastSpeed'], t: number): bool
 
 // --- the step walk ------------------------------------------------------------------------------
 
-/** The step walk: this many steps or more on the rows' pedometer count… */
-export const STEP_WALK_MIN = 15;
+/** The step walk: this many steps or more on the rows' pedometer count (60 a minute, the floor of a slow walk's cadence)… */
+export const STEP_WALK_MIN = 20;
 /** …within this long (row clock, between two rows' counts)… */
 export const STEP_WINDOW_MS = 20_000;
 /** …with no trusted fix over 3 mph in this long (the last 15 rows). */

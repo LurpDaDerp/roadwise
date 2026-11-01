@@ -145,8 +145,11 @@ export const DETECT = {
   SAFETY_SLACK_MS: 60_000,
   /** …and this long after the JS walking end would have (`END_NATIVE_WALK_SLACK_S`). */
   WALK_SAFETY_SLACK_MS: 10_000,
-  /** The JS step walk (`motion.ts`): this many steps on the pedometer… */
-  STEP_WALK_MIN: 15,
+  /**
+   * The JS step walk (`motion.ts`): this many steps on the pedometer… (20 in 20 s is 60 steps a
+   * minute, the floor of a slow walk's cadence; fidgeting in a seat steps slower.)
+   */
+  STEP_WALK_MIN: 20,
   /** …within this long… */
   STEP_WINDOW_MS: 20_000,
   /** …with no trusted fix over 3 mph in this long. */

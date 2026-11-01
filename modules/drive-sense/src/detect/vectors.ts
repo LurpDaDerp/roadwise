@@ -782,7 +782,7 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
 
   // ——— the native safety stop ———
   {
-    name: 'end: a step walk (15 steps in 20 s, nothing over 3 mph for 15 s) is overdue at its row\'s end; native stops 10 s later; a JS end opens the linger',
+    name: 'end: a step walk (20 steps in 20 s, nothing over 3 mph for 15 s) is overdue at its row\'s end; native stops 10 s later; a JS end opens the linger',
     kind: 'end',
     startedAt: at(0),
     steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 40, 0), (s) => Math.max(0, s - 12) * 2), check(25), check(26), check(35), check(36)],
@@ -801,10 +801,10 @@ export const DETECT_VECTORS: readonly DetectVector[] = [
     expected: [{ due: null, overdue: null, linger: false }],
   },
   {
-    name: 'end: 10 steps in 20 s is no step walk',
+    name: 'end: 18 steps in 20 s (54 a minute, under a slow walk) is no step walk',
     kind: 'end',
     startedAt: at(0),
-    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 60, 0), (s) => Math.floor((s - 11) / 2)), check(60)],
+    steps: [...steps(vrows(0, 10, 20)), ...stepRows(vrows(11, 60, 0), (s) => Math.floor((s - 11) * 0.9)), check(60)],
     expected: [{ due: null, overdue: null, linger: false }],
   },
   {
