@@ -145,6 +145,7 @@ function readyRuntime() {
     lockedOut: false,
     drove: false,
     lastAlert: null,
+    arrival: null,
     callActive: false,
     lastFinalized: null,
     alertsAvailable: true,

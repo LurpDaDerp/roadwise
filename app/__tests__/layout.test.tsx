@@ -188,6 +188,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     lockedOut: false,
     drove: false,
     lastAlert: null,
+    arrival: null,
     callActive: false,
     lastFinalized: null,
     alertsAvailable: true,

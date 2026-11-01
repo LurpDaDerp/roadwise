@@ -119,7 +119,19 @@ export interface ShownWeather {
   text: string;
 }
 
+/** The saved place a drive ended at on its own (the place-arrival end), for the driving screen's "Welcome" line. */
+export interface DriveArrival {
+  clientTripId: string;
+  kind: 'home' | 'work' | 'school' | 'custom';
+  name: string;
+}
+
 export interface DriveState extends EngineSnapshot {
+  /**
+   * The drive that just closed by arriving at a saved place: set as its finalize starts, cleared
+   * when the next drive opens; null otherwise.
+   */
+  arrival: DriveArrival | null;
   /** A hands-free call is active (iOS CallKit observer; Android phone-state receiver where present): the player's in-call gain. */
   callActive: boolean;
   lastFinalized: LastFinalized;
@@ -547,6 +559,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
   let lastFixAt: { lat: number; lng: number; ts: number } | null = null;
+  /** The place-arrival end of the drive closing or last closed (published as `DriveState.arrival`). */
+  let arrival: DriveArrival | null = null;
   /** The row the engine is taking in is a replay (a journal drained): no sound or reminder from it. */
   let replayingRow = false;
   let subscriptions: (() => void)[] = [];
@@ -746,6 +760,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const alertNow = shownWeather();
     return Object.freeze({
       ...engine.snapshot(),
+      arrival,
       callActive,
       lastFinalized,
       alertsAvailable: (deps.alertsAvailable ?? true) && !soundFailedThisDrive,
