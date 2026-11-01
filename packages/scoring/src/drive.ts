@@ -7,7 +7,7 @@ import { roundTo } from './num';
 import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_MPH, MIN_SCORED_MILES, MIN_SCORED_S, PHONE_SEVERE_S } from './thresholds';
 
 /** Bumped whenever the rules a drive is judged by change; stored with every drive. */
-export const SCORING_VERSION = 10;
+export const SCORING_VERSION = 11;
 
 export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'phone_pickup' | 'eyes_off' | 'drowsy';
 

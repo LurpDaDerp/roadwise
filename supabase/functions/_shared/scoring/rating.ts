@@ -251,7 +251,7 @@ export function speedFactor(mph: number | null): number {
 
 /**
  * A hard brake, start or turn's weight: (peakG / its type's threshold)², between 1 and
- * `HARD_EVENT_WEIGHT_MAX` (4): a brake at 0.30 g weighs 1, at 0.45 g 2.25, at 0.60 g or more 4.
+ * `HARD_EVENT_WEIGHT_MAX` (4): a brake at 0.36 g weighs 1, at 0.45 g 1.5625, at 0.72 g or more 4.
  * Without a finite peak, its tier's `HARD_EVENT_WEIGHT`. Written r * r, as the SQL copy is.
  */
 export function hardEventWeight(type: 'hard_brake' | 'hard_accel' | 'hard_corner', tier: Tier, peakG: number | null): number {

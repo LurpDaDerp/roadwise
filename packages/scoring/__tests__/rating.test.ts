@@ -101,7 +101,7 @@ describe('categories', () => {
     expect(PHONE_PICKUP_WEIGHT_S).toBe(10);
     expect(HARD_EVENT_WEIGHT).toEqual({ minor: 1, severe: 2 });
     expect(HARD_EVENT_WEIGHT_MAX).toBe(4);
-    expect(HARD_EVENT_MIN_G).toEqual({ hard_brake: 0.3, hard_accel: 0.32, hard_corner: 0.4 });
+    expect(HARD_EVENT_MIN_G).toEqual({ hard_brake: 0.36, hard_accel: 0.45, hard_corner: 0.55 });
     expect(SPEED_FACTOR).toEqual({ minMph: 10, refMph: 30, maxMph: 80 });
     expect([ATTENTION_REF_S, ATTENTION_LENGTH_MAX]).toEqual([5, 3]);
     expect([OVER_REF_MPH, OVER_CAP_MPH]).toEqual([5, 40]);
@@ -190,12 +190,12 @@ describe('the severity of the other events', () => {
   });
 
   test('hardEventWeight: (peak / threshold)² between 1 and 4; the tier without a peak', () => {
-    expect(hardEventWeight('hard_brake', 'minor', 0.3)).toBe(1);
-    expect(hardEventWeight('hard_brake', 'severe', 0.45)).toBe((0.45 / 0.3) * (0.45 / 0.3));
-    expect(hardEventWeight('hard_brake', 'severe', 0.6)).toBe(4);
+    expect(hardEventWeight('hard_brake', 'minor', 0.36)).toBe(1);
+    expect(hardEventWeight('hard_brake', 'severe', 0.55)).toBe((0.55 / 0.36) * (0.55 / 0.36));
+    expect(hardEventWeight('hard_brake', 'severe', 0.72)).toBe(4);
     expect(hardEventWeight('hard_brake', 'severe', 2)).toBe(4);
-    expect(hardEventWeight('hard_accel', 'minor', 0.4)).toBe((0.4 / 0.32) * (0.4 / 0.32));
-    expect(hardEventWeight('hard_corner', 'minor', 0.5)).toBe((0.5 / 0.4) * (0.5 / 0.4));
+    expect(hardEventWeight('hard_accel', 'minor', 0.5)).toBe((0.5 / 0.45) * (0.5 / 0.45));
+    expect(hardEventWeight('hard_corner', 'minor', 0.6)).toBe((0.6 / 0.55) * (0.6 / 0.55));
     expect(hardEventWeight('hard_corner', 'minor', 0.2)).toBe(1);
     expect(hardEventWeight('hard_brake', 'minor', null)).toBe(1);
     expect(hardEventWeight('hard_brake', 'severe', null)).toBe(2);
@@ -230,7 +230,7 @@ describe('eventWeight', () => {
     expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor' }))).toBe(1);
     expect(eventWeight(ev({ type: 'hard_accel', tier: 'severe' }))).toBe(2);
     expect(eventWeight(ev({ type: 'hard_corner', tier: 'moderate' }))).toBe(1);
-    expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.36 } }))).toBe((0.36 / 0.3) * (0.36 / 0.3));
+    expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.45 } }))).toBe((0.45 / 0.36) * (0.45 / 0.36));
     expect(eventWeight(ev({ type: 'hard_brake', tier: 'severe', measured: { peakG: 'x' as unknown as number } }))).toBe(2);
   });
 
@@ -346,15 +346,15 @@ describe('driveLoads', () => {
   test('every event weighs by its severity: peaks, the speed a pickup was driven at, a DashPal episode\'s speed and length', () => {
     const loads = driveLoads(
       [
-        ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.36 } }),
-        ev({ type: 'hard_brake', tier: 'severe', measured: { peakG: 0.6 } }),
-        ev({ type: 'hard_accel', tier: 'minor', measured: { peakG: 0.32 } }),
+        ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.45 } }),
+        ev({ type: 'hard_brake', tier: 'severe', measured: { peakG: 0.72 } }),
+        ev({ type: 'hard_accel', tier: 'minor', measured: { peakG: 0.45 } }),
         ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5, measured: { speedMph: 30, maxSpeedMph: 45 } }),
         ev({ type: 'eyes_off', tier: 'severe', durationS: 8, measured: { source: 'dashcam', speedMph: 60 } }),
       ],
       exp(15, 15, 9, 840, 1136, 900)
     );
-    expect(loads.rates.braking).toEqual({ weight: (0.36 / 0.3) * (0.36 / 0.3) + 4, count: 2, opportunities: 15 });
+    expect(loads.rates.braking).toEqual({ weight: (0.45 / 0.36) * (0.45 / 0.36) + 4, count: 2, opportunities: 15 });
     expect(loads.rates.acceleration).toEqual({ weight: 1, count: 1, opportunities: 15 });
     expect(loads.rates.phone).toEqual({ weight: 22.5, count: 5, opportunities: 900 });
     expect(loads.attentionPenalty).toBe(40 * 2 * 1.6);
@@ -566,10 +566,10 @@ const pinQ = drive({
   watchedMiles: 15,
   exposure: exp(20, 18, 11, 1500, 1800, 1700),
   events: [
-    q(1, 'hard_brake', 'minor', 60, 2, { peakG: 0.36 }),
-    q(2, 'hard_brake', 'severe', 120, 2, { peakG: 0.62 }),
-    q(3, 'hard_accel', 'minor', 180, 2, { peakG: 0.4 }),
-    q(4, 'hard_corner', 'severe', 240, 2, { peakG: 0.5 }),
+    q(1, 'hard_brake', 'minor', 60, 2, { peakG: 0.45 }),
+    q(2, 'hard_brake', 'severe', 120, 2, { peakG: 0.75 }),
+    q(3, 'hard_accel', 'minor', 180, 2, { peakG: 0.54 }),
+    q(4, 'hard_corner', 'severe', 240, 2, { peakG: 0.66 }),
     q(5, 'speeding', 'minor', 300, 3, { overMphS: 4.5 }),
     q(6, 'speeding', 'moderate', 400, 12, { overMphS: 72 }),
     q(7, 'phone_pickup', 'moderate', 500, 6, { speedMph: 22, maxSpeedMph: 52.5 }),
@@ -581,13 +581,13 @@ const pinQ = drive({
 describe('ratingAt: every event at its own severity', () => {
   test('pin Q: peaks, a short speeding, a fast pickup and two DashPal episodes, to the digit', () => {
     expect(ratingAt([pinQ], AT)).toEqual({
-      rating: 70.8,
+      rating: 71.1,
       ranked: true,
       miles: 15,
       scores: {
-        acceleration: 63.38621493232948,
-        braking: 42.875157629255995,
-        turning: 61.17781227230969,
+        acceleration: 64.80938416422288,
+        braking: 42.384105960264904,
+        turning: 62.636222106901926,
         attention: 48.06408544726301,
         phone: 87.4757281553398,
         speed: 87.82410285072866,
@@ -597,9 +597,9 @@ describe('ratingAt: every event at its own severity', () => {
 
   test('pin Q: each event weighs something', () => {
     const loads = driveLoads(pinQ.events, pinQ.exposure);
-    expect(loads.rates.braking.weight).toBe(1.44 + 4);
-    expect(loads.rates.acceleration.weight).toBe(1.5625);
-    expect(loads.rates.turning.weight).toBe(1.5625);
+    expect(loads.rates.braking.weight).toBe((0.45 / 0.36) * (0.45 / 0.36) + 4);
+    expect(loads.rates.acceleration.weight).toBe((0.54 / 0.45) * (0.54 / 0.45));
+    expect(loads.rates.turning.weight).toBe((0.66 / 0.55) * (0.66 / 0.55));
     expect(loads.rates.speed).toEqual({ weight: 0.49295030175464943 + 15.774409656148782, count: 15, opportunities: 1500 });
     expect(loads.rates.phone).toEqual({ weight: 28, count: 6, opportunities: 1700 });
     expect(loads.attentionPenalty).toBe(157.66666666666666 + 101.66666666666666);

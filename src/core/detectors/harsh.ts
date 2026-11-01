@@ -1,6 +1,6 @@
 // Hard braking, hard acceleration and hard cornering (product spec event table, "Rules against
 // false positives") from the per-second IMU extremes:
-// - braking ≥ 0.30 g (severe ≥ 0.45) and acceleration ≥ 0.32 g (severe ≥ 0.45) count only when
+// - braking ≥ 0.36 g (severe ≥ 0.55) and acceleration ≥ 0.45 g (severe ≥ 0.60) count only when
 //   the GNSS speed changed to match (a drop, or a rise, of at least `GNSS_CONFIRM_G` over a second
 //   inside or right after the episode), read only from two fixes whose speed the phone rates at
 //   2 m/s or better (`speedTrusted`);
@@ -8,7 +8,7 @@
 //   extremes), the GNSS speed change itself stands in for them, from two fixes rated at
 //   `GNSS_ONLY_ACC_MAX_MPS` or better: a second's mean is never above its peak, so it can only
 //   under-read, and a change past `GNSS_ONLY_MAX_G` is a jump in the fix;
-// - cornering ≥ 0.40 g (severe ≥ 0.55) sideways, at 10 mph or more, counts only when the car turned
+// - cornering ≥ 0.55 g (severe ≥ 0.70) sideways, at 10 mph or more, counts only when the car turned
 //   with it: the row's gyroscope turned the phone fast enough (speed × yaw rate at least
 //   `CORNER_YAW_SHARE` of the peak), the force is not a wobble (both sides past `CORNER_WOBBLE_G` in
 //   one second), and the GPS course turned the same way (left-positive lateral force against a

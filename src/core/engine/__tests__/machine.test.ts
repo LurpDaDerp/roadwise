@@ -117,7 +117,7 @@ test('alerts: one shown speeding alert per episode (its repeats are sounded only
   expect(h.snapshots.some((s) => s.lastShake?.at === T0 + 65_000 || s.lastAlert?.at === T0 + 65_000)).toBe(false);
   // A brake is told on the row the GNSS confirms it (its peak row here), not after the 2-s veto hold.
   await feed(h, seq([5, (i) => ({ speed: mph(35), ts: T0 + 74_000 + i * 1000 })]));
-  await feed(h, [row({ speed: mph(25), aLonMin: -0.35, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
+  await feed(h, [row({ speed: mph(25), aLonMin: -0.4, ts: T0 + 79_000 }), ...seq([4, (i) => ({ speed: mph(25), ts: T0 + 80_000 + i * 1000 })])]);
   expect(h.alerts.at(-1)).toEqual({ id: expect.any(String), type: 'hard_brake', tier: 'minor', at: T0 + 79_000 });
   expect(h.engine.snapshot().lastAlert?.type).toBe('hard_brake');
   await h.engine.dispatch({ type: 'end', ts: T0 + 90_000 });
@@ -586,7 +586,7 @@ describe('speeding alerts and the event shake', () => {
     const steady = { aLonMax: 0.02, aLonMin: -0.02 };
     const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
     // 60 on a 35 for 5 rows (over the line), then a hard brake to 50.
-    const list = [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })];
+    const list = [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.4 }), ...at(6, 4, { speed: mph(50), ...steady })];
     const replayed = await started();
     for (const r of list) await replayed.engine.dispatch({ type: 'row', row: r, replay: true });
     expect(replayed.alerts.map((a) => a.type)).toEqual(expect.arrayContaining(['speeding', 'hard_brake']));
@@ -609,7 +609,7 @@ describe('speeding alerts and the event shake', () => {
     // 60 on a 35 for 5 rows, then a hard brake to 50 on the 6th over row (still over the line, 39).
     const steady = { aLonMax: 0.02, aLonMin: -0.02 };
     const at = (fromS: number, n: number, o: Partial<FeatureRow>) => seq([n, (i) => ({ ...o, ts: T0 + 31_000 + (fromS + i) * 1000 })]);
-    await feed(h, [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.35 }), ...at(6, 4, { speed: mph(50), ...steady })]);
+    await feed(h, [...at(0, 5, { speed: mph(60), ...steady }), ...at(5, 1, { speed: mph(50), aLonMax: 0.02, aLonMin: -0.4 }), ...at(6, 4, { speed: mph(50), ...steady })]);
     const brakeRow = T0 + 31_000 + 5000;
     const first = h.alerts.find((a) => a.type === 'speeding')!;
     expect(first.at).toBe(T0 + 31_000);

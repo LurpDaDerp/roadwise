@@ -64,15 +64,16 @@ select is((select array_agg(p.proname::text || ':' || p.prosecdef::text || ':' |
 select col_default_is('public', 'trips', 'scoring_version', '9', 'scoring version 9');
 
 -- ---------------------------------------------------------------------------
--- the weights, to the digit (packages/scoring rating.test.ts pins the same values)
+-- the weights, to the digit (packages/scoring rating.test.ts pins the same values). The hard-event
+-- digits are at 0035's lines (0.36 g brake, 0.45 g start, 0.55 g turn), which replace 0028's.
 -- ---------------------------------------------------------------------------
 select is(array[private.speed_factor(30), private.speed_factor(60), private.speed_factor(10), private.speed_factor(4), private.speed_factor(120), private.speed_factor(null)],
   array[1, 2, 0.3333333333333333, 0.3333333333333333, 2.6666666666666665, 1]::float8[], 'speed_factor: the speed over 30 mph, read between 10 and 80; 1 with none');
-select is(array[private.hard_event_weight('hard_brake', 'minor', '{"peakG": 0.36}'), private.hard_event_weight('hard_accel', 'severe', '{"peakG": 0.5}'),
-    private.hard_event_weight('hard_corner', 'minor', '{"peakG": 0.47}'), private.hard_event_weight('hard_brake', 'severe', '{"peakG": 0.62}'),
+select is(array[private.hard_event_weight('hard_brake', 'minor', '{"peakG": 0.45}'), private.hard_event_weight('hard_accel', 'severe', '{"peakG": 0.5}'),
+    private.hard_event_weight('hard_corner', 'minor', '{"peakG": 0.6}'), private.hard_event_weight('hard_brake', 'severe', '{"peakG": 0.75}'),
     private.hard_event_weight('hard_corner', 'minor', '{"peakG": 0.2}'), private.hard_event_weight('hard_brake', 'severe', '{}'),
     private.hard_event_weight('hard_brake', 'minor', '{"peakG": "x"}')],
-  array[1.44, 2.44140625, 1.3806249999999995, 4, 1, 2, 1]::float8[], 'hard_event_weight: (peak / threshold)^2 between 1 and 4; the tier without a peak');
+  array[1.5625, 1.234567901234568, 1.190082644628099, 4, 1, 2, 1]::float8[], 'hard_event_weight: (peak / threshold)^2 between 1 and 4; the tier without a peak');
 select is(array[private.speeding_weight(1, '{"overMphS": 1}', 'minor'), private.speeding_weight(3, '{"overMphS": 4.5}', 'minor'), private.speeding_weight(5, '{"overMphS": 65}', 'severe')],
   array[0.08944271909999159, 0.49295030175464943, 5 * (13 / 5.0)::float8 * sqrt((13 / 5.0)::float8)]::float8[],
   'speeding_weight: no grace, one second just over the line weighs a little and five seconds count all five');
@@ -81,18 +82,18 @@ select is(array[private.phone_pickup_weight(6, '{"speedMph": 22, "maxSpeedMph": 
 select is(array[private.attention_weight('eyes_off', 12.5, '{"source": "dashcam", "speedMph": 47.3}'), private.attention_weight('drowsy', 3, '{"source": "dashcam", "speedMph": 61}'),
     private.attention_weight('eyes_off', 2, '{"source": "dashcam"}'), private.attention_weight('drowsy', 60, '{"speedMph": 90}'), private.attention_weight('hard_brake', 2, '{}')],
   array[157.66666666666666, 101.66666666666666, 40, 399.99999999999994, 0]::float8[], 'attention_weight: the base x the speed factor x the length over 5 s (1 to 3)');
-select is(array[private.event_weight_of('hard_brake', 'minor', 2, '{"peakG": 0.36}'), private.event_weight_of('phone_pickup', 'moderate', 6, '{"speedMph": 22, "maxSpeedMph": 52.5}'),
+select is(array[private.event_weight_of('hard_brake', 'minor', 2, '{"peakG": 0.45}'), private.event_weight_of('phone_pickup', 'moderate', 6, '{"speedMph": 22, "maxSpeedMph": 52.5}'),
     private.event_weight_of('speeding', 'minor', 3, '{"overMphS": 4.5}'), private.event_weight_of('eyes_off', 'severe', 12.5, '{"speedMph": 47.3}')],
-  array[1.44, 28, 0.49295030175464943, 0]::float8[], 'event_weight_of dispatches to the new weights; a DashPal event weighs on Attention only');
+  array[1.5625, 28, 0.49295030175464943, 0]::float8[], 'event_weight_of dispatches to the new weights; a DashPal event weighs on Attention only');
 
 -- ---------------------------------------------------------------------------
 -- pin Q (ava): one drive with every kind of event at its own severity, watched by DashPal
 -- ---------------------------------------------------------------------------
 select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000aa', now() - interval '1 hour', 3600, 15,
-  '[{"id":"a1000000-0000-4000-8000-000000000001","type":"hard_brake","measured":{"peakG":0.36},"at":60},
-    {"id":"a1000000-0000-4000-8000-000000000002","type":"hard_brake","tier":"severe","measured":{"peakG":0.62},"at":120},
-    {"id":"a1000000-0000-4000-8000-000000000003","type":"hard_accel","measured":{"peakG":0.4},"at":180},
-    {"id":"a1000000-0000-4000-8000-000000000004","type":"hard_corner","tier":"severe","measured":{"peakG":0.5},"at":240},
+  '[{"id":"a1000000-0000-4000-8000-000000000001","type":"hard_brake","measured":{"peakG":0.45},"at":60},
+    {"id":"a1000000-0000-4000-8000-000000000002","type":"hard_brake","tier":"severe","measured":{"peakG":0.75},"at":120},
+    {"id":"a1000000-0000-4000-8000-000000000003","type":"hard_accel","measured":{"peakG":0.54},"at":180},
+    {"id":"a1000000-0000-4000-8000-000000000004","type":"hard_corner","tier":"severe","measured":{"peakG":0.66},"at":240},
     {"id":"a1000000-0000-4000-8000-000000000005","type":"speeding","durationS":3,"measured":{"overMphS":4.5},"at":300},
     {"id":"a1000000-0000-4000-8000-000000000006","type":"speeding","tier":"moderate","durationS":12,"measured":{"overMphS":72},"at":400},
     {"id":"a1000000-0000-4000-8000-000000000007","type":"phone_pickup","tier":"moderate","durationS":6,"measured":{"speedMph":22,"maxSpeedMph":52.5},"at":500},
@@ -103,19 +104,19 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000
 select is((select row(n_events, n_speeding, clean, scoring_version)::text from public.trips where client_trip_id = 'a0000000-0000-4000-8000-0000000000aa'),
   row(7, 2, false, 9)::text, 'the 3-second speeding is an event like the rest: it is counted and breaks a clean drive');
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[70.8, 63.38621493232948, 42.875157629255995, 61.17781227230969, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
-  'pin Q: 70.8 and every category to the digit (scoring ratingAt)');
-select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 70.8, 'the stored rating is the new one');
+  array[71.1, 64.80938416422288, 42.384105960264904, 62.636222106901926, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
+  'pin Q: 71.1 and every category to the digit (scoring ratingAt)');
+select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 71.1, 'the stored rating is the new one');
 -- a short episode weighs on Speed: taking it away raises the score
 update public.trip_events set status = 'removed' where client_event_id = 'a1000000-0000-4000-8000-000000000005';
 select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 87.82410285072866::float8,
   'the 3-second speeding weighed on Speed');
 update public.trip_events set status = 'active' where client_event_id = 'a1000000-0000-4000-8000-000000000005';
 -- a harder brake weighs more: the same drive with the severe brake at its threshold reads higher on Braking
-update public.trip_events set measured = '{"peakG": 0.45}' where client_event_id = 'a1000000-0000-4000-8000-000000000002';
-select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'braking')::float8, '>', 42.875157629255995::float8,
+update public.trip_events set measured = '{"peakG": 0.55}' where client_event_id = 'a1000000-0000-4000-8000-000000000002';
+select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'braking')::float8, '>', 42.384105960264904::float8,
   'a softer peak weighs less on Braking');
-update public.trip_events set measured = '{"peakG": 0.62}' where client_event_id = 'a1000000-0000-4000-8000-000000000002';
+update public.trip_events set measured = '{"peakG": 0.75}' where client_event_id = 'a1000000-0000-4000-8000-000000000002';
 -- a pickup at a lower speed weighs less on Phone use
 update public.trip_events set measured = '{"speedMph": 15, "maxSpeedMph": 20}' where client_event_id = 'a1000000-0000-4000-8000-000000000007';
 select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'phone')::float8, '>', 87.4757281553398::float8,
@@ -127,7 +128,7 @@ select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) 
   'a 4-second eyes-off weighs less than a 12.5-second one');
 update public.trip_events set duration_s = 12.5 where client_event_id = 'a1000000-0000-4000-8000-000000000008';
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[70.8, 63.38621493232948, 42.875157629255995, 61.17781227230969, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
+  array[71.1, 64.80938416422288, 42.384105960264904, 62.636222106901926, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
   'and back as it was');
 
 -- ---------------------------------------------------------------------------

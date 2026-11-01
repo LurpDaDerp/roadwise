@@ -40,9 +40,9 @@ test('the three achievements, each with its title and description', () => {
 });
 
 test('detection thresholds match the spec', () => {
-  expect(HARD_BRAKE_G).toEqual({ minor: 0.3, severe: 0.45 });
-  expect(HARD_ACCEL_G).toEqual({ minor: 0.32, severe: 0.45 });
-  expect(HARD_CORNER_G).toEqual({ minor: 0.4, severe: 0.55 });
+  expect(HARD_BRAKE_G).toEqual({ minor: 0.36, severe: 0.55 });
+  expect(HARD_ACCEL_G).toEqual({ minor: 0.45, severe: 0.6 });
+  expect(HARD_CORNER_G).toEqual({ minor: 0.55, severe: 0.7 });
   expect(NO_EVENTS_FIRST_S).toBe(30);
   expect(MOVING_MIN_MPH).toBe(5);
   expect(MIN_SCORED_MILES).toBe(0.5);
