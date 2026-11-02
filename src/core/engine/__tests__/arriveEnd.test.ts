@@ -1,4 +1,4 @@
-// The place-arrival end (motion.ts `nextArrive`), through the real engine. Every time is on the row
+// The place-arrival end (motion.ts `nextArrive` and a reported walk), through the real engine. Every time is on the row
 // clock: a row at `ts` ends at `ts + 1 s`.
 import { createDetectors } from '@/core/detectors';
 import { limit, mph, row } from '@/core/detectors/__fixtures__/rows';
@@ -80,61 +80,89 @@ const placeEast = (m = DRIVE_M, over: Partial<PlaceSpot> = {}): PlaceSpot => ({
 const HOME = [placeEast()];
 const stopped = (n: number, over?: Seg['over']): Seg => ({ n, mps: 0, ...(over ? { over } : {}) });
 
+/** A high-confidence walking report whose walk began at `since` (the engine reads it on the row clock: the latest row's end). */
+const walk = (h: H, since: number) => h.engine.dispatch({ type: 'motion', activity: { type: 'walking', confidence: 'high', ts: since }, ts: since });
+/** `DRIVE` then 20 s stopped at its end: rows 0–59 drive, 60–79 stand. Feeding rows 0–69 puts the row clock at T0 + 70 s. */
+const ARRIVED = 70;
+
 describe('the place arrival through the engine', () => {
-  test('10 s stopped at a saved place the car had left ends the drive, cut where it last moved, with the place', async () => {
+  test('stopped at a saved place the car had left, 5 s into a reported walk ends the drive, cut where it last moved, with the place', async () => {
     const h = await started({ places: () => HOME });
-    const rows = path(T0, DRIVE, stopped(30));
-    await feed(h, rows.slice(0, 69));
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED));
+    // Stopped there alone, nothing is due.
+    expect(h.engine.snapshot().arriveAt).toBeNull();
+    await walk(h, T0 + 68_000);
+    // 5 s from the walk's start, the report standing 3 s from its arrival (T0 + 70 s).
+    expect(h.engine.snapshot().arriveAt).toBe(T0 + 73_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 2));
     expect(status(h)).toBe('recording');
-    expect(h.engine.snapshot().arriveAt).toBe(T0 + 70_000);
-    await feed(h, rows.slice(69, 70));
+    await feed(h, rows.slice(ARRIVED + 2, ARRIVED + 3));
     expect(status(h)).toBe('idle');
     expect(h.finalized).toHaveLength(1);
-    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', cut: true, endedAt: DRIVE_END, endPlace: { id: 'home', kind: 'home', name: 'Home' } });
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', cut: true, endedAt: DRIVE_END, endPlace: { id: 'home', kind: 'home', name: 'Home' } });
     expect(h.finalized[0]).not.toHaveProperty('endPlace.lat');
   });
 
-  test('9 s is not enough', async () => {
+  test('stopping at the place without walking never ends the drive', async () => {
     const h = await started({ places: () => HOME });
-    await feed(h, path(T0, DRIVE, stopped(9)));
+    await feed(h, path(T0, DRIVE, stopped(60)));
+    expect(status(h)).toBe('recording');
+    expect(h.engine.snapshot().arriveAt).toBeNull();
+  });
+
+  test('a late report: due 3 s after it arrives when its walk began earlier', async () => {
+    const h = await started({ places: () => HOME });
+    await feed(h, path(T0, DRIVE, stopped(20)).slice(0, ARRIVED));
+    await walk(h, T0 + 61_000);
+    expect(h.engine.snapshot().arriveAt).toBe(T0 + 73_000);
+  });
+
+  test('a walk that began before the car last drove is no arrival (the walk to the car)', async () => {
+    const h = await started({ places: () => HOME });
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED));
+    await walk(h, T0 + 50_000);
+    expect(h.engine.snapshot().arriveAt).toBeNull();
+    await feed(h, rows.slice(ARRIVED));
     expect(status(h)).toBe('recording');
   });
 
-  test('a row over 5 mph starts the 10 s again', async () => {
-    const h = await started({ places: () => HOME });
-    const rows = path(T0, DRIVE, stopped(5), { n: 1, mps: mph(6) }, stopped(10));
-    await feed(h, rows.slice(0, -1));
-    expect(status(h)).toBe('recording');
-    await feed(h, rows.slice(-1));
-    expect(status(h)).toBe('idle');
-    expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
-  });
-
-  test('a stop 110 m from the place is no arrival; 90 m is', async () => {
+  test('a walk 110 m from the place is the plain walking end (10 s, no place); at 90 m it is the arrival', async () => {
     const far = await started({ places: () => [placeEast(DRIVE_M + 110)] });
-    await feed(far, path(T0, DRIVE, stopped(30)));
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(far, rows.slice(0, ARRIVED));
+    await walk(far, T0 + 68_000);
+    await feed(far, rows.slice(ARRIVED, ARRIVED + 3));
     expect(status(far)).toBe('recording');
+    await feed(far, rows.slice(ARRIVED + 3, ARRIVED + 8));
+    expect(far.finalized[0]).toMatchObject({ endCause: 'walking', endPlace: null });
     const near = await started({ places: () => [placeEast(DRIVE_M + 90)] });
-    await feed(near, path(T0, DRIVE, stopped(30)));
-    expect(status(near)).toBe('idle');
+    await feed(near, rows.slice(0, ARRIVED));
+    await walk(near, T0 + 68_000);
+    await feed(near, rows.slice(ARRIVED, ARRIVED + 3));
+    expect(near.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
   });
 
-  test('a fix worse than 20 m, or an untrusted speed, does not count and resets the clock', async () => {
-    const poor = await started({ places: () => HOME });
-    await feed(poor, path(T0, DRIVE, stopped(30, (i) => (i === 5 ? { hAcc: 25 } : {}))).slice(0, 75));
-    expect(status(poor)).toBe('recording');
-    const untrusted = await started({ places: () => HOME });
-    await feed(untrusted, path(T0, DRIVE, stopped(30, (i) => (i === 5 ? { speedAcc: 3 } : {}))).slice(0, 75));
-    expect(status(untrusted)).toBe('recording');
-    // The clock from the row after the poor one: 10 s more ends it.
-    await feed(poor, path(T0, DRIVE, stopped(30)).slice(75, 76));
-    expect(status(poor)).toBe('idle');
+  test('a fix worse than 20 m, or an untrusted speed, as it falls due puts it off to the next good row', async () => {
+    for (const bad of [{ hAcc: 25 }, { speedAcc: 3 }]) {
+      const h = await started({ places: () => HOME });
+      const rows = path(T0, DRIVE, stopped(20, (i) => (i === 12 ? bad : {})));
+      await feed(h, rows.slice(0, ARRIVED));
+      await walk(h, T0 + 68_000);
+      await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
+      expect(status(h)).toBe('recording');
+      await feed(h, rows.slice(ARRIVED + 3, ARRIVED + 4));
+      expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
+    }
   });
 
-  test('a row without a fix keeps the clock running', async () => {
+  test('rows without a fix keep the car at the place', async () => {
     const h = await started({ places: () => HOME });
-    await feed(h, path(T0, DRIVE, stopped(10, (i) => (i >= 3 && i <= 6 ? { gnssValid: false, speed: -1 } : {}))));
-    expect(status(h)).toBe('idle');
+    const rows = path(T0, DRIVE, stopped(20, (i) => (i >= 10 ? { gnssValid: false, speed: -1 } : {})));
+    await feed(h, rows.slice(0, ARRIVED));
+    await walk(h, T0 + 68_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
     expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
   });
 
@@ -142,76 +170,101 @@ describe('the place arrival through the engine', () => {
     // 7 mph never reaches driving speed (10 mph).
     const n = 120;
     const h = await started({ places: () => [placeEast(n * mph(7))] });
-    await feed(h, path(T0, { n, mps: mph(7) }, stopped(30)));
+    const rows = path(T0, { n, mps: mph(7) }, stopped(30));
+    await feed(h, rows.slice(0, n + 10));
+    await walk(h, T0 + (n + 8) * 1000);
+    await feed(h, rows.slice(n + 10));
     expect(status(h)).toBe('recording');
   });
 
   test('a place the car never got 300 m from never ends the drive (a drive from home is not over in the driveway)', async () => {
-    const short = 20 * mph(30); // about 270 m
-    const stay = await started({ places: () => [placeEast(short)] });
-    await feed(stay, path(T0, { n: 20, mps: mph(30) }, stopped(30)));
-    expect(status(stay)).toBe('recording');
-    const longer = 25 * mph(30); // about 335 m
-    const left = await started({ places: () => [placeEast(longer)] });
-    await feed(left, path(T0, { n: 25, mps: mph(30) }, stopped(30)));
-    expect(status(left)).toBe('idle');
+    const run = async (n: number) => {
+      const h = await started({ places: () => [placeEast(n * mph(30))] });
+      const rows = path(T0, { n, mps: mph(30) }, stopped(20));
+      await feed(h, rows.slice(0, n + 10));
+      await walk(h, T0 + (n + 8) * 1000);
+      await feed(h, rows.slice(n + 10, n + 13));
+      return h;
+    };
+    // About 270 m: no arrival at 5 s.
+    expect(status(await run(20))).toBe('recording');
+    // About 335 m: the arrival.
+    expect((await run(25)).finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
   });
 
   test('held while a Start-card drive waits', async () => {
     const h = await started({ places: () => HOME, holdEnds: () => true });
-    await feed(h, path(T0, DRIVE, stopped(30)));
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED));
+    await walk(h, T0 + 68_000);
+    await feed(h, rows.slice(ARRIVED));
     expect(status(h)).toBe('recording');
     expect(h.engine.snapshot().arriveAt).toBeNull();
   });
 
   test('a tick ends it on time when no row comes', async () => {
     const h = await started({ places: () => HOME });
-    await feed(h, path(T0, DRIVE, stopped(3)));
-    await h.engine.dispatch({ type: 'tick', ts: T0 + 69_000 });
+    await feed(h, path(T0, DRIVE, stopped(20)).slice(0, ARRIVED));
+    await walk(h, T0 + 68_000);
+    await h.engine.dispatch({ type: 'tick', ts: T0 + 72_999 });
     expect(status(h)).toBe('recording');
-    await h.engine.dispatch({ type: 'tick', ts: T0 + 70_000 });
-    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END, endPlace: { kind: 'home' } });
+    await h.engine.dispatch({ type: 'tick', ts: T0 + 73_000 });
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, endPlace: { kind: 'home' } });
   });
 
   test('the nearest place within 100 m is the one; a custom place carries its own name', async () => {
     const shop = placeEast(DRIVE_M + 30, { id: 'place-1', kind: 'custom', name: 'Gym' });
     const h = await started({ places: () => [placeEast(DRIVE_M + 80, { id: 'work', kind: 'work', name: 'Work' }), shop] });
-    await feed(h, path(T0, DRIVE, stopped(10)));
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED));
+    await walk(h, T0 + 68_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
     expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'place-1', kind: 'custom', name: 'Gym' } });
   });
 
-  test('two places 60 m apart: GPS jitter flipping the nearer one keeps the clock with the first', async () => {
+  test('two places 60 m apart: GPS jitter flipping the nearer one keeps the drive with the first', async () => {
     const west = placeEast(DRIVE_M - 30, { id: 'west', kind: 'custom', name: 'West' });
     const east = placeEast(DRIVE_M + 30, { id: 'east', kind: 'custom', name: 'East' });
     const h = await started({ places: () => [west, east] });
     const jitter = (i: number) => ({ lng: LNG + (DRIVE_M + (i % 2 === 0 ? 5 : -5)) / M_PER_DEG_LNG });
-    await feed(h, path(T0, DRIVE, stopped(9, jitter)));
-    expect(status(h)).toBe('recording');
-    await feed(h, path(T0 + 69_000, stopped(1, (i) => jitter(i + 9))));
-    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', endedAt: DRIVE_END, endPlace: { id: 'east' } });
+    const rows = path(T0, DRIVE, stopped(20, jitter));
+    await feed(h, rows.slice(0, ARRIVED));
+    // Due at T0 + 74 s: the row that ends then sits west of centre, nearer West.
+    await walk(h, T0 + 69_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 4));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END, endPlace: { id: 'east' } });
   });
 
   test('replayed rows count: the rule reads only their fixes', async () => {
     const h = await started({ places: () => HOME });
-    await feed(h, path(T0, DRIVE, stopped(10)), true);
-    expect(status(h)).toBe('idle');
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED), true);
+    await walk(h, T0 + 68_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
+    expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
   });
 
-  test('with no places, nothing', async () => {
+  test('with no places, a walk is the plain walking end', async () => {
     const h = await started();
-    await feed(h, path(T0, DRIVE, stopped(30)));
-    expect(status(h)).toBe('recording');
+    const rows = path(T0, DRIVE, stopped(20));
+    await feed(h, rows.slice(0, ARRIVED));
+    await walk(h, T0 + 68_000);
     expect(h.engine.snapshot().arriveAt).toBeNull();
+    await feed(h, rows.slice(ARRIVED));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endPlace: null });
   });
 
   test('places that land after the drive opened are read against the whole drive so far', async () => {
     let places: readonly PlaceSpot[] = [];
     const h = await started({ places: () => places });
-    const rows = path(T0, DRIVE, stopped(30));
+    const rows = path(T0, DRIVE, stopped(20));
     await feed(h, rows.slice(0, 55));
     places = HOME;
-    await feed(h, rows.slice(55, 70));
+    await feed(h, rows.slice(55, ARRIVED));
+    await walk(h, T0 + 68_000);
+    await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
     expect(status(h)).toBe('idle');
+    expect(h.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
   });
 
   test('another end leaves endPlace null', async () => {

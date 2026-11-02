@@ -306,9 +306,10 @@ export interface EngineSnapshot {
    */
   autoEndAt: number | null;
   /**
-   * epoch ms the place-arrival end (`motion.ts`) ends the drive unless the clock resets: the car
-   * stopped at a saved place it had left. Null while that clock is not running, while the host
-   * holds the ends, before driving speed, and unless recording.
+   * epoch ms the place-arrival end (`motion.ts`) ends the drive unless the walk or the stop is
+   * called off: the car stopped at a saved place it had left and the driver 5 s into a reported
+   * walk. Null with no car at a place or no standing walk, while the host holds the ends, before
+   * driving speed, and unless recording.
    */
   arriveAt: number | null;
   /** The drive has reached driving speed (`session.droveAt`: two trusted readings of 10 mph or more in a row); false when not recording. */

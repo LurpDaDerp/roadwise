@@ -11,8 +11,9 @@
 // or at a walker's pace with the phone carried (`motion` reports; `motion.ts` W1/W2), or once the
 // pedometer counts a walk (`motion.ts` step walk), or after a minute stopped at a known parking
 // spot (`motion.ts`; the spots are the host's, `deps.parkingSpots`), or 15 s after the paired car
-// or CarPlay went with the car not over 3 mph since (`deps.carGoneSince`), or 10 s stopped at a
-// saved place the car had been 300 m or more from (`motion.ts` place arrival; `deps.places`). Every end
+// or CarPlay went with the car not over 3 mph since (`deps.carGoneSince`), or 5 s into a reported
+// walk with the car stopped at a saved place it had been 300 m or more from (`motion.ts` place
+// arrival; `deps.places`). Every end
 // but a prompt manual one closes the drive where the car last moved (`closeAtLastMovement`; a
 // walking end at or before the walk began): a manual end `MANUAL_CUT_AFTER_S` or more after the
 // idle clock's base is cut too, a sooner one ends at the tap. `cancel` ("Not driving?") discards the drive: never finalized.
@@ -41,7 +42,7 @@ import { nextBearing, NO_BEARING, type DisplayBearing } from './displayBearing';
 import { nextDisplayLimit, NO_DISPLAY_LIMIT, type DisplayLimit } from './displayLimit';
 import { displayFix, displayRow, type DisplaySpeed } from './displaySpeed';
 import {
-  ARRIVE_MS,
+  ARRIVE_WALK_MS,
   calmFor,
   carGoneEnds,
   carStillDriving,
@@ -211,7 +212,7 @@ export function createEngine(deps: EngineDeps): Engine {
       lastShake: recording ? lastShake : null,
       stopped: recording && speed !== null && speed <= STOPPED_MPS,
       autoEndAt: recording && session !== null ? (held() ? session.startedAt + MAX_DRIVE_MS : autoEndAt(session)) : null,
-      arriveAt: recording && session !== null && session.droveAt !== null && arrive !== null && !held() ? arrive.since + ARRIVE_MS : null,
+      arriveAt: recording && session !== null && session.droveAt !== null && !held() ? arriveDue(session) : null,
       drove: recording && session !== null && session.droveAt !== null,
       distanceM: session?.distanceM ?? 0,
       // The last known speed holds the lockout through a dropout, and after an adopt (the rebuilt session's).
@@ -383,11 +384,11 @@ export function createEngine(deps: EngineDeps): Engine {
     if (!replaying) maybePrefetch(row, s.distanceM);
 
     if (await endIfDue(row.ts + ROW_MS)) return;
+    if (await checkArrived(row.ts + ROW_MS)) return;
     if (await checkFoot(row.ts + ROW_MS)) return;
     if (await checkSteps(row.ts + ROW_MS)) return;
     if (await checkParked(row.ts + ROW_MS)) return;
     if (await checkCarGone(row.ts + ROW_MS)) return;
-    if (await checkArrived(row.ts + ROW_MS)) return;
     if (s.rowsCount % CHECKPOINT_ROWS === 0) {
       try {
         await checkpoint(s);
@@ -503,17 +504,33 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * The saved place at `t` (row clock or a tick): once the drive has reached driving speed, the
-   * arrival clock (`motion.ts` `nextArrive`) has run `ARRIVE_MS` at a place the car had left. A
-   * still end (`stopped`) carrying the place (`endPlace`), cut at the last movement. Rows replayed
-   * from a journal count too: the rule reads only the rows' own fixes. True when it ended the drive.
+   * When the place arrival would end the drive (row clock): the car at a saved place it had left
+   * (the arrival clock) with a standing on-foot report not void by driving since its walk began,
+   * `ARRIVE_WALK_MS` after the walk began and `WALK_STAND_MIN_MS` after the report arrived. Null
+   * when it can't yet.
+   */
+  function arriveDue(s: TripSession): number | null {
+    if (arrive === null || foot === null) return null;
+    if (s.lastDroveAt !== null && s.lastDroveAt >= foot.since) return null;
+    return Math.max(foot.since + ARRIVE_WALK_MS, foot.at + WALK_STAND_MIN_MS);
+  }
+
+  /**
+   * The saved place at `t` (row clock, a tick or a motion report): once the drive has reached
+   * driving speed, the car is at a place it had left (`motion.ts` `nextArrive`) and the driver has
+   * been walking `ARRIVE_WALK_MS` (`arriveDue`). A walking end carrying the place (`endPlace`), cut
+   * at the last movement at or before the walk began. Checked before the plain walking end, so a
+   * walk at a saved place always ends here. True when it ended the drive.
    */
   async function checkArrived(t: number): Promise<boolean> {
-    if (status !== 'recording' || held() || arrive === null) return false;
+    if (status !== 'recording' || held() || arrive === null || foot === null) return false;
     const s = session as TripSession;
-    if (s.droveAt === null || t - arrive.since < ARRIVE_MS) return false;
+    if (s.droveAt === null) return false;
+    const due = arriveDue(s);
+    if (due === null || t < due) return false;
     const { id, kind, name } = arrive.place;
-    await finalize((open) => Object.freeze({ ...closeAtLastMovement(open, 'stopped'), endPlace: { id, kind, name } }));
+    const since = foot.since;
+    await finalize((open) => Object.freeze({ ...closeAtLastMovement(open, 'walking', { notAfter: since }), endPlace: { id, kind, name } }));
     return true;
   }
 
@@ -535,13 +552,17 @@ export function createEngine(deps: EngineDeps): Engine {
     if (status !== 'recording') return;
     const s = session as TripSession;
     const reading = footReading(a);
+    const dueBefore = arriveDue(s);
     if (reading === 'clear') foot = null;
     else if (reading === 'onFoot' && foot === null) {
       // A walk that began before the car was last at driving speed (a late or replayed report of
       // the walk to the car, or a misread the driving since contradicts) is void at once in `checkFoot`.
       foot = { since: Math.min(Math.max(a.ts, s.startedAt), t), at: t };
     }
+    // The place arrival's deadline (`arriveAt`, the host's timer) moves with the walk.
+    if (s.droveAt !== null && !held() && arriveDue(s) !== dueBefore) touch();
     // A repeat on-foot report (a confidence change, walking to running) keeps the first one's times.
+    if (await checkArrived(t)) return;
     await checkFoot(t);
   }
 
@@ -701,7 +722,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (status === 'recording') await release();
         return;
       case 'tick':
-        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkFoot(e.ts)) && !(await checkParked(e.ts)) && !(await checkCarGone(e.ts))) await checkArrived(e.ts);
+        if (status === 'recording' && !(await endIfDue(e.ts)) && !(await checkArrived(e.ts)) && !(await checkFoot(e.ts)) && !(await checkParked(e.ts))) await checkCarGone(e.ts);
         return;
     }
   }

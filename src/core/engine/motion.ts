@@ -34,12 +34,14 @@
 //   trusted fix over 3 mph since it went: a still end (`stopped`), cut at the last movement. A
 //   disconnect while the car moves never ends a drive; a reconnect clears it. Never on a replayed row.
 // - The saved place: once the drive has reached driving speed and the car has been more than
-//   `ARRIVE_LEFT_M` (300 m) from a saved place at some point in it, `ARRIVE_MS` (10 s) of rows each
-//   with a trusted speed at or under 5 mph and a fix accurate to 20 m within `ARRIVE_NEAR_M` (100 m)
-//   of that place ends the drive (`nextArrive`). A row with no fix keeps the clock running; one over
-//   5 mph, a poor or untrusted fix, or a fix outside 100 m resets it. The clock starts at the nearest
-//   such place and stays with it while the fix is within 100 m of it. A still end (`stopped`, the
-//   place on `session.endPlace`), cut at the last movement.
+//   `ARRIVE_LEFT_M` (300 m) from a saved place at some point in it, the car is at that place while
+//   its rows each have a trusted speed at or under 5 mph and a fix accurate to 20 m within
+//   `ARRIVE_NEAR_M` (100 m) of it (`nextArrive`). A row with no fix keeps it there; one over 5 mph,
+//   a poor or untrusted fix, or a fix outside 100 m takes it away. It starts at the nearest such
+//   place and stays with it while the fix is within 100 m of it. At the place, a standing on-foot
+//   report whose walk began `ARRIVE_WALK_MS` (5 s) ago (the report standing 3 s at least) ends the
+//   drive: a walking end (`walking`, the place on `session.endPlace`), cut at the last movement at
+//   or before the walk began. Stopping there alone never ends it.
 // While a Start-card drive still waits for driving speed none of them applies.
 import type { MotionActivity } from '@drive-sense';
 import { MAX_H_ACC_M, MOVING_MIN_MPH, WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
@@ -194,8 +196,8 @@ export function nearSpot(here: Spot, spots: readonly Spot[]): boolean {
 
 // --- the saved place ------------------------------------------------------------------------------
 
-/** The place-arrival end: this long stopped at a saved place… */
-export const ARRIVE_MS = 10_000;
+/** The place-arrival end: this long on foot (the walk's own start) at a saved place… */
+export const ARRIVE_WALK_MS = 5_000;
 /** …within this far of it… */
 export const ARRIVE_NEAR_M = 100;
 /** …once the car has been more than this far from it during the drive (a drive from home never ends in the driveway). */
@@ -203,7 +205,7 @@ export const ARRIVE_LEFT_M = 300;
 /** Stopped: a trusted speed at or under 5 mph (`MOVING_MIN_MPH`). */
 export const ARRIVE_MAX_MPS = MOVING_MIN_MPH * MPS_PER_MPH;
 
-/** The arrival clock: the place the car stopped at and the row clock it stopped there from. */
+/** The arrival clock: the place the car stopped at and the row clock it stopped there from (the walk ends the drive). */
 export interface ArriveClock {
   place: PlaceSpot;
   since: number;
