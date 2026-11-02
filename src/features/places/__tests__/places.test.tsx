@@ -233,13 +233,14 @@ describe('the Places screen', () => {
     expect(search).toHaveBeenCalledWith('500 pine', null, expect.anything());
   });
 
-  it('offers the place your drives say is home, with how likely it is', async () => {
+  it('offers the place your drives say is home under a plain Suggestions title, with no guess or chance shown', async () => {
     const w = await appWorld({ settings: { [PLACE_NAMES_KEY]: [{ lat: 47.62, lng: -122.35, title: '742 Evergreen Ter', subtitle: 'Seattle' }] } });
     withTrips(w.db, commuteRows(Date.now()));
     await w.render(<PlacesScreen deps={{ search: jest.fn(), bias: async () => null, addressAt: async () => null }} />);
     await tap('places-home');
     const row = await screen.findByText('742 Evergreen Ter', {}, { timeout: 3000 });
-    expect(screen.getByTestId('place-suggestions')).toHaveTextContent(/Likely home · \d+%/);
+    expect(screen.getByText('Suggestions')).toBeOnTheScreen();
+    expect(screen.getByTestId('place-suggestions')).not.toHaveTextContent(/%|Likely|home|work|school|visit/i);
     await act(async () => {
       fireEvent.press(row);
     });

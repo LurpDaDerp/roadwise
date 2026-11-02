@@ -435,13 +435,13 @@ function PlaceEditor({
       ) : null}
 
       {shownSuggestions.length > 0 ? (
-        <Section title={copy.fromDrives} testID="place-suggestions">
+        <Section title={copy.suggestions} testID="place-suggestions">
           {shownSuggestions.map((s) => (
             <ListRow
               key={s.place.id}
               title={s.title ?? (s.zone ? copy.inZone(s.zone.name) : copy.unnamed)}
-              subtitle={[copy.why(s.place), s.subtitle].filter((x) => x !== '').join(' · ')}
-              leading={<RowIcon name={s.place.kind === 'home' ? 'home-outline' : s.place.kind === 'work' ? 'briefcase-outline' : 'time-outline'} />}
+              subtitle={s.subtitle || undefined}
+              leading={<RowIcon name="time-outline" />}
               onPress={busy ? undefined : () => void pickSuggestion(s)}
               testID={`place-suggestion-${s.place.id}`}
             />
