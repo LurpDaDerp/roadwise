@@ -54,6 +54,8 @@ export const homeCopy = {
     progressSpoken: (done: number, total: number) => `${done} of ${total} done`,
     spokenDone: (title: string, line: string) => `${title}, done. ${line}`,
     spokenOpen: (title: string, line: string) => `${title}. ${line}`,
+    hide: (title: string) => `Hide ${title}`,
+    hideHint: 'Removes it from Get set up',
     goals: {
       emergency: { title: 'Emergency contacts', line: 'People to call from a drive', hint: 'Opens Emergency contacts in Settings' },
       places: { title: 'Your places', line: 'Home, work and school', hint: 'Opens Places in Settings' },

@@ -97,6 +97,8 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   'home.carCardDismissed',
   // The emergency contacts.
   EMERGENCY_CONTACTS_KEY,
+  // The tiles removed from Home's "Get set up" row (`src/features/home/SetupGoals.tsx`).
+  'home.setupGoalsHidden',
   DROP_NOTICE_KEY,
   NOT_DRIVING_KEY,
   // The drive that asked "Are you driving?", and where the car was parked (iPhone with the car link).

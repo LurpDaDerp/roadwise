@@ -1,6 +1,6 @@
 /**
  * Home's "Get set up" row: which goals it offers and when each is done, open tiles first, where a
- * tile goes, and when the row is gone (all done, closed for good, during a drive).
+ * tile goes, its ✕ or check, and when the row is gone (all done, every tile removed, during a drive).
  */
 import { act, screen, waitFor, within } from '@testing-library/react-native';
 import { useEffect, useState } from 'react';
@@ -11,7 +11,7 @@ import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtu
 import { PLACES_KEY } from '@/features/places/model';
 
 import { homeCopy } from '../copy';
-import { HomeSetupGoals, orderGoals } from '../SetupGoals';
+import { HomeSetupGoals, orderGoals, parseHiddenGoals, SETUP_GOALS_HIDDEN_KEY } from '../SetupGoals';
 
 const mockPush = jest.fn();
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -119,6 +119,41 @@ describe('the goals', () => {
   });
 });
 
+describe("each tile's ✕ or check", () => {
+  it('an open goal has a ✕ in its corner and a done one a check; each removes its tile for good, until a sign-out', async () => {
+    const w = await appWorld({ settings: { [EMERGENCY_CONTACTS_KEY]: [MOM] } });
+    await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
+    expect(screen.getByTestId('home-setup-places-x')).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-setup-places-check')).toBeNull();
+    expect(screen.getByTestId('home-setup-emergency-check')).toBeOnTheScreen();
+    expect(screen.queryByTestId('home-setup-emergency-x')).toBeNull();
+    expect(screen.getByLabelText('Hide Your places')).toBeOnTheScreen();
+    expect(screen.getByTestId('home-setup-count')).toHaveTextContent('1 of 4');
+
+    // The done one goes and still counts as done.
+    await tap('home-setup-emergency-hide');
+    expect(tileIds()).toEqual(['home-setup-places', 'home-setup-dashpal', 'home-setup-friend']);
+    expect(screen.getByTestId('home-setup-count')).toHaveTextContent('1 of 4');
+    // An open one goes and leaves the count.
+    await tap('home-setup-places-hide');
+    expect(tileIds()).toEqual(['home-setup-dashpal', 'home-setup-friend']);
+    expect(screen.getByTestId('home-setup-count')).toHaveTextContent('1 of 3');
+    expect(mockPush).not.toHaveBeenCalled();
+    await waitFor(async () => expect(await w.settings.get(SETUP_GOALS_HIDDEN_KEY)).toEqual(['emergency', 'places']));
+    expect(SIGN_OUT_SETTINGS).toContain(SETUP_GOALS_HIDDEN_KEY);
+  });
+
+  it('a tile removed before stays removed, and a stored value that is not a list removes nothing', async () => {
+    const w = await appWorld({ settings: { [SETUP_GOALS_HIDDEN_KEY]: ['places', 'nope'] } });
+    await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
+    expect(tileIds()).toEqual(['home-setup-emergency', 'home-setup-dashpal', 'home-setup-friend']);
+    expect(parseHiddenGoals('places')).toEqual([]);
+    expect(parseHiddenGoals(['friend', 'car', 7])).toEqual(['car', 'friend']);
+  });
+});
+
 describe('when the row is gone', () => {
   it('once every goal is done', async () => {
     mockDashcam = PAIRED_DASHPAL;
@@ -149,12 +184,18 @@ describe('when the row is gone', () => {
     expect(screen.getByTestId('home-setup')).toBeOnTheScreen();
   });
 
-  it('has no ✕: it stays until every goal is done, even for a driver who closed it before', async () => {
-    const w = await appWorld({ settings: { 'home.setupGoalsDismissed': true } });
+  it('once every tile is removed', async () => {
+    const w = await appWorld({ settings: { [SETUP_GOALS_HIDDEN_KEY]: ['emergency', 'places', 'dashpal', 'friend'] } });
     await w.render(<HomeSetupGoals hidden={false} />);
-    await waitFor(() => expect(screen.getByTestId('home-setup')).toBeOnTheScreen());
+    await waitFor(async () => expect(await w.settings.get(SETUP_GOALS_HIDDEN_KEY)).not.toBeNull());
+    expect(screen.queryByTestId('home-setup')).toBeNull();
+  });
+
+  it('has no ✕ of its own', async () => {
+    const w = await appWorld();
+    await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
     expect(screen.queryByTestId('home-setup-dismiss')).toBeNull();
-    expect(SIGN_OUT_SETTINGS).not.toContain('home.setupGoalsDismissed');
   });
 
   it('during a drive', async () => {
