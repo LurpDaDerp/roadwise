@@ -37,9 +37,6 @@ export const carCopy = {
     failed: 'That didn’t work. Try again.',
   },
   card: {
-    title: 'Pair your car',
-    body: 'Drives start sooner when RoadWise knows your car’s Bluetooth or CarPlay.',
-    hint: 'Opens Your car',
     dismiss: 'Close',
     askTitle: (name: string) => `Is ${name} your car?`,
     askBody: 'It was connected during your recent drives. Pair it to start drives sooner.',

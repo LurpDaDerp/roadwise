@@ -58,11 +58,11 @@ export function EmergencyContactsScreen() {
       />
 
       <View style={{ gap: th.space.sm }}>
-        <Text variant="footnote" tone="muted" testID="emergency-always">
-          {copy.always}
-        </Text>
         <Text variant="footnote" tone="muted">
           {copy.confirm}
+        </Text>
+        <Text variant="footnote" tone="muted" testID="emergency-always">
+          {copy.always}
         </Text>
       </View>
 

@@ -1,14 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { View } from 'react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { readZones } from '@/features/settings/privacyZones';
 import { LinkRow, RowIcon, Section, SwitchRow, TopBar } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
-import { Button, ListRow, Screen, Text, useTheme } from '@/ui';
+import { Button, ListRow, Screen, Text } from '@/ui';
 
 import { placesCopy } from './copy';
 import { PROMPT_QUERY, readPromptOn } from './drivePrompt';
@@ -40,7 +39,6 @@ function PlaceRow({ title, place, icon, onPress, testID }: { title: string; plac
  * Everything stays on this phone.
  */
 export function PlacesScreen({ deps = {} }: { deps?: PlaceSheetDeps }) {
-  const th = useTheme();
   const router = useRouter();
   const db = useDb();
   const client = useQueryClient();
@@ -108,14 +106,9 @@ export function PlacesScreen({ deps = {} }: { deps?: PlaceSheetDeps }) {
         ) : null}
       </Section>
 
-      <View style={{ gap: th.space.sm }}>
-        <Text variant="footnote" tone="muted">
-          {copy.local}
-        </Text>
-        <Text variant="footnote" tone="muted">
-          {copy.searchNote}
-        </Text>
-      </View>
+      <Text variant="footnote" tone="muted" testID="places-local">
+        {copy.local}
+      </Text>
 
       <PlaceSheet target={target} places={list} onClose={() => setTarget(null)} onSave={save} onRemove={(p) => remove(p.id)} deps={deps} />
     </Screen>

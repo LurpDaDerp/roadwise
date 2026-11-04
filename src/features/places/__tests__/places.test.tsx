@@ -16,11 +16,10 @@ import { PrivacyZonesScreen } from '@/features/settings/PrivacyZonesScreen';
 
 import { placesCopy } from '../copy';
 import { nameSuggestions } from '../learned';
-import { PLACES_CARD_DISMISSED_KEY, PLACES_KEY, PLACE_NAMES_KEY, placesProblem, readPlaces, writePlaces, type SavedPlace } from '../model';
-import { HomePlacesCard } from '../PlacesCard';
+import { PLACES_KEY, PLACE_NAMES_KEY, placesProblem, readPlaces, writePlaces, type SavedPlace } from '../model';
 import { PlacesScreen } from '../PlacesScreen';
 import { clearSearchCache, coarse, hitFromPhoton, photonUrl, searchAddresses, type AddressHit } from '../search';
-import { readPlacesCard, removePlace, savePlace, zonesFollowing, zonesUnlinked } from '../usePlaces';
+import { removePlace, savePlace, zonesFollowing, zonesUnlinked } from '../usePlaces';
 
 const mockPush = jest.fn();
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -289,33 +288,6 @@ describe('the Places screen', () => {
     await tap('place-remove');
     await waitFor(async () => expect(await readPlaces(w.settings)).toEqual([]));
     alert.mockRestore();
-  });
-});
-
-describe('Home’s places card', () => {
-  it('shows until a place is saved, and opens Places', async () => {
-    const w = await appWorld();
-    await w.render(<HomePlacesCard hidden={false} />);
-    await tap('home-places');
-    expect(mockPush).toHaveBeenCalledWith('/settings/places');
-    await w.settings.set(PLACES_KEY, [HOME]);
-    expect(await readPlacesCard(w.settings)).toBe(false);
-  });
-
-  it('goes for good with Not now', async () => {
-    const w = await appWorld();
-    await w.render(<HomePlacesCard hidden={false} />);
-    await tap('home-places-dismiss');
-    expect(screen.queryByTestId('home-places')).toBeNull();
-    await waitFor(async () => expect(await readPlacesCard(w.settings)).toBe(false));
-    expect(await w.settings.get(PLACES_CARD_DISMISSED_KEY)).toBe(true);
-  });
-
-  it('never shows during a drive', async () => {
-    const w = await appWorld();
-    await w.render(<HomePlacesCard hidden />);
-    await waitFor(async () => expect(await readPlacesCard(w.settings)).toBe(true));
-    expect(screen.queryByTestId('home-places')).toBeNull();
   });
 });
 

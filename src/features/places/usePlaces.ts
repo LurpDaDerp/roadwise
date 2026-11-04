@@ -12,10 +12,9 @@ import { useDb } from '@/data/queries/context';
 import { requestSpotRecompute } from '@/features/spots/recompute';
 import { readZones, writeZones, ZONE_NAME_MAX, type PrivacyZone } from '@/features/settings/privacyZones';
 
-import { PLACES_CARD_DISMISSED_KEY, readPlaces, withPlace, writePlaces, type SavedPlace } from './model';
+import { readPlaces, withPlace, writePlaces, type SavedPlace } from './model';
 
 export const PLACES_QUERY = ['places', 'saved'] as const;
-export const PLACES_CARD_QUERY = ['places', 'card'] as const;
 
 /** The zones once `place` is saved: its zone (if it has one) moved and renamed with it; null when nothing changes. */
 export function zonesFollowing(zones: readonly PrivacyZone[], place: SavedPlace): PrivacyZone[] | null {
@@ -70,7 +69,6 @@ export function usePlaces() {
   const settle = useCallback(
     (places: SavedPlace[]) => {
       client.setQueryData(PLACES_QUERY, places);
-      void client.invalidateQueries({ queryKey: PLACES_CARD_QUERY });
       void client.invalidateQueries({ queryKey: ['places', 'suggestions'] });
       void client.invalidateQueries({ queryKey: ['places', 'prompt'] });
     },
@@ -102,22 +100,4 @@ export function usePlaces() {
   );
 
   return { places: query.data, loading: query.isLoading, save, remove };
-}
-
-/** Whether Home shows "Add your places": no place saved and the card not closed with Not now. */
-export async function readPlacesCard(settings: Pick<SettingsRepo, 'get'>): Promise<boolean> {
-  const [places, dismissed] = await Promise.all([readPlaces(settings), settings.get<boolean>(PLACES_CARD_DISMISSED_KEY)]);
-  return places.length === 0 && dismissed !== true;
-}
-
-export function usePlacesCard() {
-  const db = useDb();
-  const client = useQueryClient();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const query = useQuery({ queryKey: PLACES_CARD_QUERY, queryFn: () => readPlacesCard(settings) });
-  const dismiss = useCallback(() => {
-    client.setQueryData(PLACES_CARD_QUERY, false);
-    void settings.set(PLACES_CARD_DISMISSED_KEY, true).catch(() => {});
-  }, [client, settings]);
-  return { show: query.data === true, dismiss, refetch: query.refetch };
 }

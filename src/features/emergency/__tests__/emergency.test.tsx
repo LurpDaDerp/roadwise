@@ -10,12 +10,10 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { appWorld, clearQueryClients, memoryDb, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { emergencyCopy } from '../copy';
-import { HomeEmergencyCard } from '../EmergencyCard';
 import { EmergencyContactsScreen } from '../EmergencyContactsScreen';
 import {
   cleanPhone,
   contactProblem,
-  EMERGENCY_CARD_DISMISSED_KEY,
   EMERGENCY_CONTACTS_KEY,
   EMERGENCY_NUMBER,
   formatPhone,
@@ -27,7 +25,7 @@ import {
   writeContacts,
   type EmergencyContact,
 } from '../model';
-import { readEmergencyCard, removeContact, saveContact } from '../useEmergencyContacts';
+import { removeContact, saveContact } from '../useEmergencyContacts';
 
 const mockPush = jest.fn();
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -124,7 +122,7 @@ describe('Settings › Emergency contacts', () => {
     await w.render(<EmergencyContactsScreen />);
     expect(await screen.findByText(emergencyCopy.intro)).toBeOnTheScreen();
     expect(emergencyCopy.intro).toBe('Add up to 5 people to call from the driving screen. They stay on this phone.');
-    expect(screen.getByTestId('emergency-always')).toHaveTextContent(/always offers 911 first/);
+    expect(screen.getByTestId('emergency-always')).toHaveTextContent("911 is always on the call list while you drive, so you don't need to add it.");
     expect(screen.queryByTestId('emergency-list')).toBeNull();
   });
 
@@ -189,49 +187,5 @@ describe('Settings › Emergency contacts', () => {
   it('copy is plain: no dashes, no exclamation marks', () => {
     const words = JSON.stringify(emergencyCopy, (_k, v: unknown) => (typeof v === 'function' ? (v as (...a: string[]) => string)('Mom', '(555) 123-4567') : v));
     expect(words).not.toMatch(/[–—!]/);
-  });
-});
-
-describe('Home’s emergency card', () => {
-  it('shows until a contact is saved, and opens Settings › Emergency contacts', async () => {
-    const w = await appWorld();
-    await w.render(<HomeEmergencyCard hidden={false} />);
-    expect(await screen.findByText('Add emergency contacts')).toBeOnTheScreen();
-    await tap('home-emergency');
-    expect(mockPush).toHaveBeenCalledWith('/settings/emergency');
-    await w.settings.set(EMERGENCY_CONTACTS_KEY, [MOM]);
-    expect(await readEmergencyCard(w.settings)).toBe(false);
-  });
-
-  it('goes for good with its ✕', async () => {
-    const w = await appWorld();
-    await w.render(<HomeEmergencyCard hidden={false} />);
-    await tap('home-emergency-dismiss');
-    expect(screen.queryByTestId('home-emergency')).toBeNull();
-    await waitFor(async () => expect(await w.settings.get(EMERGENCY_CARD_DISMISSED_KEY)).toBe(true));
-    expect(await readEmergencyCard(w.settings)).toBe(false);
-  });
-
-  it('a screen reader can open it or close it with "Not now" from the card itself', async () => {
-    const w = await appWorld();
-    await w.render(<HomeEmergencyCard hidden={false} />);
-    const card = await screen.findByTestId('home-emergency');
-    expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Not now' }]);
-    await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } }));
-    expect(mockPush).toHaveBeenCalledWith('/settings/emergency');
-    await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } }));
-    expect(screen.queryByTestId('home-emergency')).toBeNull();
-    await waitFor(async () => expect(await w.settings.get(EMERGENCY_CARD_DISMISSED_KEY)).toBe(true));
-  });
-
-  it('never shows during a drive, or with a contact saved', async () => {
-    const w = await appWorld();
-    await w.render(<HomeEmergencyCard hidden />);
-    await waitFor(async () => expect(await readEmergencyCard(w.settings)).toBe(true));
-    expect(screen.queryByTestId('home-emergency')).toBeNull();
-    const saved = await appWorld({ settings: { [EMERGENCY_CONTACTS_KEY]: [MOM] } });
-    await saved.render(<HomeEmergencyCard hidden={false} />);
-    await waitFor(async () => expect(await readEmergencyCard(saved.settings)).toBe(false));
-    expect(screen.queryByTestId('home-emergency')).toBeNull();
   });
 });

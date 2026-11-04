@@ -175,26 +175,35 @@ describe('the pairing screen', () => {
 });
 
 describe("Home's car card", () => {
-  it('asks to pair while automatic drives are on and no car is paired; a tap opens Your car; ✕ closes it for good', async () => {
+  it('shows nothing until a car was seen on recent drives (pairing one is a Get set up tile)', async () => {
     const w = await appWorld();
     await w.render(<HomeCarCard hidden={false} />);
-    await tap('home-car');
-    expect(mockPush).toHaveBeenCalledWith('/settings/car');
-    await tap('home-car-dismiss');
-    expect(screen.queryByTestId('home-car')).toBeNull();
-    await waitFor(async () => expect(await w.settings.get(CAR_CARD_DISMISSED_KEY)).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
   });
 
-  it('turns into "Is <name> your car?" from the drives; Not my car never asks again', async () => {
+  it('asks "Is <name> your car?" from the drives; Not my car never asks again', async () => {
     mockDetect.seeCarDrive([civic]);
     mockDetect.seeCarDrive([civic]);
     const w = await appWorld();
     const r = await w.render(<HomeCarCard hidden={false} />);
     await waitFor(() => expect(screen.getByTestId('home-car-ask')).toHaveTextContent(/Is Civic your car\?/));
     await tap('home-car-not-mine');
-    await waitFor(() => expect(screen.getByTestId('home-car')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByTestId('home-car-ask')).toBeNull());
     expect(mockDetect.carLink.notMine).toEqual([civic.uid]);
     r.unmount();
+  });
+
+  it('its ✕, top right, closes it for good', async () => {
+    mockDetect.seeCarDrive([civic]);
+    mockDetect.seeCarDrive([civic]);
+    const w = await appWorld();
+    await w.render(<HomeCarCard hidden={false} />);
+    await waitFor(() => expect(screen.getByTestId('home-car-ask')).toBeTruthy());
+    expect(screen.getByTestId('home-car-dismiss')).toHaveStyle({ alignSelf: 'flex-start' });
+    await tap('home-car-dismiss');
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
+    await waitFor(async () => expect(await w.settings.get(CAR_CARD_DISMISSED_KEY)).toBe(true));
   });
 
   it('suggests CarPlay after one drive; Use it pairs it and the card goes', async () => {
@@ -208,27 +217,29 @@ describe("Home's car card", () => {
   });
 
   it('never shows during a drive, with automatic drives off, once a car is paired, once closed, or on Android', async () => {
+    mockDetect.seeCarDrive([civic]);
+    mockDetect.seeCarDrive([civic]);
     const w = await appWorld({ settings: { [CAR_CARD_DISMISSED_KEY]: true } });
     const closed = await w.render(<HomeCarCard hidden={false} />);
     await act(async () => {});
-    expect(screen.queryByTestId('home-car')).toBeNull();
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
     closed.unmount();
     const w2 = await appWorld();
     const during = await w2.render(<HomeCarCard hidden />);
     await act(async () => {});
-    expect(screen.queryByTestId('home-car')).toBeNull();
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
     during.unmount();
     mockAuto = { state: 'disabled' };
     const off = await w2.render(<HomeCarCard hidden={false} />);
     await act(async () => {});
-    expect(screen.queryByTestId('home-car')).toBeNull();
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
     off.unmount();
     mockAuto = { state: 'on' };
     mockDetect.setCarRoute([civic]);
     await mockDetect.pairCar(civic.uid);
     const paired = await w2.render(<HomeCarCard hidden={false} />);
     await act(async () => {});
-    expect(screen.queryByTestId('home-car')).toBeNull();
+    expect(screen.queryByTestId('home-car-ask')).toBeNull();
     paired.unmount();
     const os = Platform.OS;
     Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
@@ -236,7 +247,7 @@ describe("Home's car card", () => {
       await mockDetect.forgetCar(civic.uid);
       await w2.render(<HomeCarCard hidden={false} />);
       await act(async () => {});
-      expect(screen.queryByTestId('home-car')).toBeNull();
+      expect(screen.queryByTestId('home-car-ask')).toBeNull();
     } finally {
       Object.defineProperty(Platform, 'OS', { value: os, configurable: true });
     }

@@ -51,6 +51,8 @@ export const dashpalCopy = {
     addPhoneNeedsLink: 'Connect to your DashPal first.',
     newPhone: 'A new phone paired with your DashPal. Not yours? Press its button 10 times in 6 seconds to clear all phones.',
     newPhoneOk: 'OK',
+    /** Home's card closes with its ✕. */
+    newPhoneDismiss: 'Close',
     phonesPaired: (n: number) => `Phones paired: ${n}`,
     phonesPairedHelp: 'See a phone you don’t know? Press DashPal’s button 10 times in 6 seconds to clear all phones, then set yours up again.',
     forget: 'Forget DashPal',
@@ -89,6 +91,7 @@ export const dashpalCopy = {
       homeTitle: 'Adjust DashPal’s camera',
       homeBody: 'It can’t see you well. Tap to re-aim it.',
       homeHint: 'Opens DashPal’s camera view',
+      homeNotNow: 'Not now',
     },
   },
 

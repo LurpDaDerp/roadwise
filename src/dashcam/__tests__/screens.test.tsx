@@ -391,7 +391,7 @@ describe('Settings › DashPal', () => {
 });
 
 describe('Home: the new-phone card', () => {
-  it('shows while the notice waits (a DashPal paired), OK dismisses it; hidden during a drive or without the notice', async () => {
+  it('shows while the notice waits (a DashPal paired), its ✕ top right dismisses it; hidden during a drive or without the notice', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
     const { NewPhoneCard } = require('../ui/NewPhoneCard') as typeof import('../ui/NewPhoneCard');
     const rt = createFakeDashcamRuntime({ newPhone: true, link: { lifecycle: 'connected', paired: PAIRED } });
@@ -399,7 +399,9 @@ describe('Home: the new-phone card', () => {
     const w = await appWorld();
     await w.render(<NewPhoneCard />);
     expect(await screen.findByTestId('home-dashpal-new-phone')).toHaveTextContent(dashpalCopy.screen.newPhone, { exact: false });
-    await tap('home-dashpal-new-phone-ok');
+    expect(screen.getByTestId('home-dashpal-new-phone-dismiss')).toHaveStyle({ alignSelf: 'flex-start' });
+    expect(screen.getByRole('button', { name: 'Close' })).toBeTruthy();
+    await tap('home-dashpal-new-phone-dismiss');
     expect(rt.log).toContain('dismissNewPhone');
     expect(screen.queryByTestId('home-dashpal-new-phone')).toBeNull();
   });
@@ -429,6 +431,32 @@ describe('Home: the camera needs adjusting', () => {
     expect(await screen.findByTestId('home-dashpal-reaim')).toHaveTextContent(dashpalCopy.screen.reaim.homeTitle, { exact: false });
     await tap('home-dashpal-reaim');
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/settings/dashcam', params: { aim: '1' } });
+  });
+
+  it('its ✕ top right (or the screen reader\'s "Not now") hides it until RoadWise next starts', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- after the mocks above
+    const { ReaimCard, resetReaimSnooze } = require('../ui/ReaimCard') as typeof import('../ui/ReaimCard');
+    resetReaimSnooze();
+    setActiveDashcam(createFakeDashcamRuntime({ reaim: true, link: { lifecycle: 'idle', paired: PAIRED } }));
+    const w = await appWorld();
+    const r = await w.render(<ReaimCard />);
+    const card = await screen.findByTestId('home-dashpal-reaim');
+    expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Not now' }]);
+    expect(screen.getByTestId('home-dashpal-reaim-dismiss')).toHaveStyle({ alignSelf: 'flex-start' });
+    await tap('home-dashpal-reaim-dismiss');
+    expect(screen.queryByTestId('home-dashpal-reaim')).toBeNull();
+    await act(async () => r.unmount());
+    // Home again in the same run: still hidden
+    const again = await w.render(<ReaimCard />);
+    expect(screen.queryByTestId('home-dashpal-reaim')).toBeNull();
+    await act(async () => again.unmount());
+    await act(async () => resetReaimSnooze());
+    const fresh = await w.render(<ReaimCard />);
+    const card2 = await screen.findByTestId('home-dashpal-reaim');
+    await act(async () => fireEvent(card2, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } }));
+    expect(screen.queryByTestId('home-dashpal-reaim')).toBeNull();
+    await act(async () => fresh.unmount());
+    await act(async () => resetReaimSnooze());
   });
 
   it.each([

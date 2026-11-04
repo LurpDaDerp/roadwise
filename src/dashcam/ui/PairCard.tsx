@@ -11,7 +11,7 @@ const copy = dashpalCopy.wizard.card;
 /**
  * Home's DashPal card: a DashPal ready to pair nearby ("Pair DashPal-XXXX?"), or this phone's own
  * DashPal once it no longer knows this phone ("Set up DashPal-XXXX again?"). The card is one button
- * that opens setup; its ✕ is "Not now" (also the screen reader's action).
+ * that opens setup; its ✕, top right, is "Not now" (also the screen reader's action).
  */
 export function PairCard({ kind, name, onOpen, onNotNow }: { kind: CardKind; name: string; onOpen(): void; onNotNow(): void }) {
   const th = useTheme();
@@ -50,7 +50,13 @@ export function PairCard({ kind, name, onOpen, onNotNow }: { kind: CardKind; nam
             </Text>
           </View>
         </Pressable>
-        <IconButton icon="close" accessibilityLabel={copy.notNow} onPress={onNotNow} style={{ marginRight: th.space.sm }} testID="home-dashpal-pair-not-now" />
+        <IconButton
+          icon="close"
+          accessibilityLabel={copy.notNow}
+          onPress={onNotNow}
+          style={{ alignSelf: 'flex-start', marginTop: th.space.sm, marginRight: th.space.sm }}
+          testID="home-dashpal-pair-not-now"
+        />
       </View>
     </Card>
   );

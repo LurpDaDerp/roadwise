@@ -1,6 +1,6 @@
 import { View } from 'react-native';
 
-import { Button, Card, Text, useTheme } from '@/ui';
+import { Card, IconButton, Text, useTheme } from '@/ui';
 
 import { dashpalCopy } from '../copy';
 import type { DashcamState } from '../runtime';
@@ -12,8 +12,8 @@ const selectNotice = (s: DashcamState | null): boolean => s?.newPhone === true &
 
 /**
  * Home's one-time card (pairing v2 §9.8): the paired DashPal reported a phone this phone did not add.
- * Shown under the permission card until OK; never while a drive is open (Home shows the drive strip
- * instead, `hidden`).
+ * Shown under the permission card until its ✕ (top right); never while a drive is open (Home shows
+ * the drive strip instead, `hidden`).
  */
 export function NewPhoneCard({ hidden = false }: { hidden?: boolean }) {
   const th = useTheme();
@@ -22,9 +22,17 @@ export function NewPhoneCard({ hidden = false }: { hidden?: boolean }) {
   if (!show || hidden || !runtime) return null;
   return (
     <Card testID="home-dashpal-new-phone">
-      <Text variant="callout">{copy.newPhone}</Text>
-      <View style={{ flexDirection: 'row', marginTop: th.space.sm }}>
-        <Button label={copy.newPhoneOk} size="sm" variant="secondary" onPress={() => void runtime.dismissNewPhone()} testID="home-dashpal-new-phone-ok" />
+      <View style={{ flexDirection: 'row', gap: th.space.sm }}>
+        <Text variant="callout" style={{ flex: 1 }}>
+          {copy.newPhone}
+        </Text>
+        <IconButton
+          icon="close"
+          accessibilityLabel={copy.newPhoneDismiss}
+          onPress={() => void runtime.dismissNewPhone()}
+          style={{ alignSelf: 'flex-start' }}
+          testID="home-dashpal-new-phone-dismiss"
+        />
       </View>
     </Card>
   );

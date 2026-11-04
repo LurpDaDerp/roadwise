@@ -11,8 +11,7 @@ export const placesCopy = {
   noAddress: 'Add address',
   kindLabel: { home: 'Home', work: 'Work', school: 'School', custom: 'Place' } satisfies Record<PlaceKind, string>,
   zonesRow: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Keep a place private' : `${n} ${n === 1 ? 'place' : 'places'} hidden`) },
-  local: 'Places stay on this phone. They’re never uploaded.',
-  searchNote: 'Photon runs address search, using OpenStreetMap. Only what you type is sent.',
+  local: 'Your saved addresses never leave this phone.',
   saveError: "Couldn't save your places. Try again.",
 
   sheet: {
@@ -69,10 +68,4 @@ export const placesCopy = {
   /** Places' switch for the recap card. */
   askAfterDrives: { title: 'Suggest after drives', subtitle: 'Offers to save a likely home, work or school' },
 
-  card: {
-    title: 'Add your places',
-    body: 'Save home, work or school in a few taps, and keep them private.',
-    hint: 'Opens Places in Settings',
-    dismiss: 'Not now',
-  },
 } as const;

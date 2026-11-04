@@ -1,6 +1,6 @@
 /**
- * The emergency contacts for the screens (Settings, Home's card and goals, the driving screen's
- * panel): read once and kept in the query cache (a sign-out clears it), saved and removed here.
+ * The emergency contacts for the screens (Settings, Home's goals, the driving screen's panel):
+ * read once and kept in the query cache (a sign-out clears it), saved and removed here.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
@@ -8,16 +8,9 @@ import { useCallback, useMemo } from 'react';
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 
-import {
-  EMERGENCY_CARD_DISMISSED_KEY,
-  readContacts,
-  withContact,
-  writeContacts,
-  type EmergencyContact,
-} from './model';
+import { readContacts, withContact, writeContacts, type EmergencyContact } from './model';
 
 export const EMERGENCY_CONTACTS_QUERY = ['emergency', 'contacts'] as const;
-export const EMERGENCY_CARD_QUERY = ['emergency', 'card'] as const;
 
 /** Save `contact` (new, or replacing the one with its id). */
 export async function saveContact(settings: SettingsRepo, contact: EmergencyContact): Promise<EmergencyContact[]> {
@@ -40,7 +33,6 @@ export function useEmergencyContacts() {
   const settle = useCallback(
     (contacts: EmergencyContact[]) => {
       client.setQueryData(EMERGENCY_CONTACTS_QUERY, contacts);
-      void client.invalidateQueries({ queryKey: EMERGENCY_CARD_QUERY });
     },
     [client]
   );
@@ -70,25 +62,4 @@ export function useEmergencyContacts() {
   );
 
   return { contacts: query.data, loading: query.isLoading, refetch: query.refetch, save, remove };
-}
-
-/** Whether Home shows "Add emergency contacts": none saved and the card not closed. */
-export async function readEmergencyCard(settings: Pick<SettingsRepo, 'get'>): Promise<boolean> {
-  const [contacts, dismissed] = await Promise.all([
-    readContacts(settings),
-    settings.get<boolean>(EMERGENCY_CARD_DISMISSED_KEY),
-  ]);
-  return contacts.length === 0 && dismissed !== true;
-}
-
-export function useEmergencyCard() {
-  const db = useDb();
-  const client = useQueryClient();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const query = useQuery({ queryKey: EMERGENCY_CARD_QUERY, queryFn: () => readEmergencyCard(settings) });
-  const dismiss = useCallback(() => {
-    client.setQueryData(EMERGENCY_CARD_QUERY, false);
-    void settings.set(EMERGENCY_CARD_DISMISSED_KEY, true).catch(() => {});
-  }, [client, settings]);
-  return { show: query.data === true, dismiss, refetch: query.refetch };
 }

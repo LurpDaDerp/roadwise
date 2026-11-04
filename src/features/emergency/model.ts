@@ -6,8 +6,6 @@
 import type { SettingsRepo } from '@/data/db/settings';
 
 export const EMERGENCY_CONTACTS_KEY = 'emergency.contacts';
-/** Home's "Add emergency contacts" card was closed with its ✕. */
-export const EMERGENCY_CARD_DISMISSED_KEY = 'home.emergencyCardDismissed';
 
 export const MAX_CONTACTS = 5;
 export const CONTACT_NAME_MAX = 20;

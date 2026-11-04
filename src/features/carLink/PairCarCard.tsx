@@ -1,9 +1,10 @@
-// Home's car card (iPhone): "Pair your car" while automatic drives are on and no car is paired, one
-// tap to Settings › Your car; or, once the same Bluetooth or CarPlay was connected for most of 2 of
-// the last 3 drives (CarPlay after one), "Is <name> your car?" with Use it and Not my car. Its ✕
-// closes it for good. Never while a drive records; never on Android.
+// Home's car card (iPhone): once the same Bluetooth or CarPlay was connected for most of 2 of the
+// last 3 drives (CarPlay after one), "Is <name> your car?" with Use it and Not my car, its ✕ in the
+// top right corner closing it for good. Shown only while automatic drives are on and no car is
+// paired; never while a drive records; never on Android. Pairing a car with nothing detected yet is
+// a tile in Home's "Get set up" row.
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, type Href } from 'expo-router';
+import type { Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Platform, View } from 'react-native';
 
@@ -30,38 +31,19 @@ function CarDisc() {
   );
 }
 
-/** The card itself: the generic prompt (`suggestion` null) or the learned one. */
+/** The card itself: the car seen on recent drives, Use it and Not my car, the ✕ top right. */
 export function PairCarCardView({
   suggestion,
-  onOpen,
   onUse,
   onNotMine,
   onDismiss,
 }: {
-  suggestion: CarOutput | null;
-  onOpen: () => void;
+  suggestion: CarOutput;
   onUse: () => void;
   onNotMine: () => void;
   onDismiss: () => void;
 }) {
   const t = useTheme();
-  const close = <IconButton icon="close" accessibilityLabel={copy.dismiss} onPress={onDismiss} variant="plain" testID="home-car-dismiss" />;
-  if (suggestion === null) {
-    return (
-      <Card onPress={onOpen} accessibilityLabel={`${copy.title}. ${copy.body}`} accessibilityHint={copy.hint} testID="home-car">
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-          <CarDisc />
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="headline">{copy.title}</Text>
-            <Text variant="subhead" tone="muted">
-              {copy.body}
-            </Text>
-          </View>
-          {close}
-        </View>
-      </Card>
-    );
-  }
   const name = outputName(suggestion);
   return (
     <Card testID="home-car-ask">
@@ -74,7 +56,7 @@ export function PairCarCardView({
               {copy.askBody}
             </Text>
           </View>
-          {close}
+          <IconButton icon="close" accessibilityLabel={copy.dismiss} onPress={onDismiss} variant="plain" style={{ alignSelf: 'flex-start' }} testID="home-car-dismiss" />
         </View>
         <View style={{ flexDirection: 'row', gap: t.space.sm }}>
           <Button label={copy.use} size="sm" onPress={onUse} testID="home-car-use" />
@@ -85,9 +67,8 @@ export function PairCarCardView({
   );
 }
 
-/** Home's slot: renders nothing unless the card applies. */
+/** Home's slot: renders nothing unless a car was seen on recent drives (and the card applies). */
 export function HomeCarCard({ hidden }: { hidden: boolean }) {
-  const router = useRouter();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const auto = useAutoDrives();
@@ -109,16 +90,12 @@ export function HomeCarCard({ hidden }: { hidden: boolean }) {
   const state = link.view.state;
   if (state.cars.length > 0) return null;
   const suggestion = carSuggestion(state);
+  if (suggestion === null) return null;
   return (
     <PairCarCardView
       suggestion={suggestion}
-      onOpen={() => router.push(CAR_HREF)}
-      onUse={() => {
-        if (suggestion) void link.pair(suggestion.uid);
-      }}
-      onNotMine={() => {
-        if (suggestion) void link.notMine(suggestion.uid);
-      }}
+      onUse={() => void link.pair(suggestion.uid)}
+      onNotMine={() => void link.notMine(suggestion.uid)}
       onDismiss={() => {
         setDismissed(true);
         void settings.set(CAR_CARD_DISMISSED_KEY, true).catch(() => {});

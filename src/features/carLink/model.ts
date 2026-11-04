@@ -4,7 +4,7 @@ import type { CarLinkState, CarOutput } from '@drive-sense';
 
 import { carCopy } from './copy';
 
-/** Home's dismissal of its car card, for good (cleared at sign-out with the other device settings). */
+/** Home's "Is <name> your car?" card was closed, for good (cleared at sign-out with the other device settings). */
 export const CAR_CARD_DISMISSED_KEY = 'home.carCardDismissed';
 /** At most this many paired cars (native's CARS_MAX). */
 export const CARS_MAX = 3;

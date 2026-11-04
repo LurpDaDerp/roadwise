@@ -6,8 +6,6 @@
 import type { SettingsRepo } from '@/data/db/settings';
 
 export const PLACES_KEY = 'places.saved';
-/** Home's "Add your places" card was closed with Not now. */
-export const PLACES_CARD_DISMISSED_KEY = 'places.cardDismissed';
 /** Addresses already looked up for learned places (`learned.ts`). */
 export const PLACE_NAMES_KEY = 'places.names';
 /** The recap's "Save as …?" card was turned off (Don't remind me, or the switch in Places). */

@@ -8,8 +8,8 @@ export const emergencyCopy = {
   listTitle: 'Your contacts',
   add: 'Add a contact',
   max: `You can add up to ${MAX_CONTACTS} contacts.`,
-  always: `The driving screen's emergency button always offers ${EMERGENCY_NUMBER} first, then these contacts.`,
   confirm: 'Your phone asks you to confirm each call before it goes through.',
+  always: `${EMERGENCY_NUMBER} is always on the call list while you drive, so you don't need to add it.`,
   saveError: "Couldn't save your contacts. Try again.",
   /** One contact's row, read aloud: "Mom, (555) 123-4567". */
   rowSpoken: (name: string, number: string) => `${name}, ${number}`,
@@ -32,13 +32,5 @@ export const emergencyCopy = {
       phone: `Check the number. It needs ${PHONE_DIGITS_MIN} to ${PHONE_DIGITS_MAX} digits.`,
       too_many: `You can add up to ${MAX_CONTACTS} contacts.`,
     } satisfies Record<ContactProblem, string>,
-  },
-
-  /** Home's card. */
-  card: {
-    title: 'Add emergency contacts',
-    body: 'Call someone you trust right from the driving screen.',
-    hint: 'Opens Emergency contacts in Settings',
-    dismiss: 'Not now',
   },
 } as const;
