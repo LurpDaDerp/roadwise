@@ -25,7 +25,7 @@ export interface PlaceTarget {
 export interface PlaceSheetDeps {
   search?: (q: string, near: LatLng | null, opts: { signal?: AbortSignal }) => Promise<SearchResult>;
   exact?: (q: string) => Promise<AddressHit | null>;
-  addressAt?: (p: LatLng) => Promise<{ title: string; subtitle: string } | null>;
+  addressAt?: (p: LatLng) => Promise<{ title: string; subtitle: string; number?: string | null; street?: string | null } | null>;
   locate?: () => Promise<LocateResult>;
   bias?: () => Promise<LatLng | null>;
 }
@@ -35,7 +35,18 @@ interface Chosen {
   subtitle: string;
   lat: number;
   lng: number;
+  /** The address's house number and street from its source (null: it has none); absent: read from the title when used. */
+  number?: string | null;
+  street?: string | null;
+  /** True when the lookup failed and `title` is a stand-in ("Address not found"): the place's address is unknown. */
+  unknown?: boolean;
 }
+
+/** The address parts a lookup gave, when it gave them. */
+const partsOf = (a: { number?: string | null; street?: string | null }): Pick<Chosen, 'number' | 'street'> => ({
+  ...(a.number !== undefined ? { number: a.number } : {}),
+  ...(a.street !== undefined ? { street: a.street } : {}),
+});
 
 type SearchState = { state: 'idle' | 'loading' | 'done' | 'failed'; hits: AddressHit[] };
 
@@ -109,7 +120,7 @@ function PlaceEditor({
   const [mode, setMode] = useState<'search' | 'confirm'>(place ? 'confirm' : 'search');
   const [query, setQuery] = useState('');
   const [answer, setAnswer] = useState<{ q: string; ok: boolean; hits: AddressHit[] } | null>(null);
-  const [chosen, setChosen] = useState<Chosen | null>(place ? { title: place.address, subtitle: place.area, lat: place.lat, lng: place.lng } : null);
+  const [chosen, setChosen] = useState<Chosen | null>(place ? { title: place.address, subtitle: place.area, lat: place.lat, lng: place.lng, ...partsOf(place), unknown: place.unknownAddress === true } : null);
   const [name, setName] = useState(place?.kind === 'custom' ? place.name : '');
   const [problem, setProblem] = useState<PlaceProblem | null>(null);
   const [busy, setBusy] = useState<null | 'locate' | 'exact' | 'pick' | 'save'>(null);
@@ -179,7 +190,7 @@ function PlaceEditor({
     setMode('confirm');
   };
 
-  const pickHit = (h: AddressHit) => choose({ title: h.title, subtitle: h.subtitle, lat: h.lat, lng: h.lng }, h.title);
+  const pickHit = (h: AddressHit) => choose({ title: h.title, subtitle: h.subtitle, lat: h.lat, lng: h.lng, ...partsOf(h) }, h.title);
 
   const pickSuggestion = async (s: Suggestion) => {
     const point = s.place.center;
@@ -192,7 +203,12 @@ function PlaceEditor({
     const lines = await reverse(point);
     if (!live.current) return;
     setBusy(null);
-    choose({ title: lines?.title ?? (s.zone ? copy.inZone(s.zone.name) : copy.unnamed), subtitle: lines?.subtitle ?? '', ...point });
+    choose({
+      title: lines?.title ?? (s.zone ? copy.inZone(s.zone.name) : copy.unnamed),
+      subtitle: lines?.subtitle ?? '',
+      ...point,
+      ...(lines ? partsOf(lines) : { number: null, street: null, unknown: true }),
+    });
   };
 
   const locateHere = async () => {
@@ -208,7 +224,7 @@ function PlaceEditor({
     const lines = await reverse({ lat: r.lat, lng: r.lng });
     if (!live.current) return;
     setBusy(null);
-    choose({ title: lines?.title ?? copy.unnamed, subtitle: lines?.subtitle ?? '', lat: r.lat, lng: r.lng });
+    choose({ title: lines?.title ?? copy.unnamed, subtitle: lines?.subtitle ?? '', lat: r.lat, lng: r.lng, ...(lines ? partsOf(lines) : { number: null, street: null, unknown: true }) });
   };
 
   const lookUp = async () => {
@@ -222,12 +238,13 @@ function PlaceEditor({
     else setNote(copy.exactFailed);
   };
 
-  // A tap on the map moves the pin; the address follows when the phone can name the new spot.
+  // A tap on the map moves the pin; the address follows when the phone can name the new spot (its parts
+  // with it: none given, they're read from the new address line).
   const moveTo = (p: LatLng) => {
     setChosen((c) => (c ? { ...c, lat: p.lat, lng: p.lng } : c));
     void reverse(p).then((lines) => {
       if (!live.current || !lines) return;
-      setChosen((c) => (c && c.lat === p.lat && c.lng === p.lng ? { ...c, ...lines } : c));
+      setChosen((c) => (c && c.lat === p.lat && c.lng === p.lng ? { ...c, title: lines.title, subtitle: lines.subtitle, number: lines.number, street: lines.street, unknown: false } : c));
     });
   };
 
@@ -244,6 +261,8 @@ function PlaceEditor({
       area: chosen.subtitle,
       lat: chosen.lat,
       lng: chosen.lng,
+      ...partsOf(chosen),
+      ...(chosen.unknown === true ? { unknownAddress: true as const } : {}),
     };
     const p = placeProblem(next);
     if (p) {

@@ -18,7 +18,7 @@ import { placesCopy } from '../copy';
 import { nameSuggestions } from '../learned';
 import { PLACES_KEY, PLACE_NAMES_KEY, placesProblem, readPlaces, writePlaces, type SavedPlace } from '../model';
 import { PlacesScreen } from '../PlacesScreen';
-import { clearSearchCache, coarse, hitFromPhoton, photonUrl, searchAddresses, type AddressHit } from '../search';
+import { clearSearchCache, coarse, hitFromPhoton, linesFromGeo, photonUrl, searchAddresses, type AddressHit } from '../search';
 import { removePlace, savePlace, zonesFollowing, zonesUnlinked } from '../usePlaces';
 
 const mockPush = jest.fn();
@@ -71,6 +71,48 @@ describe('stored places', () => {
     expect(placesProblem(eight.slice(0, 7))).toBeNull();
     expect(await readPlaces(settings)).toEqual([]);
   });
+
+  it('keeps the house number and street through a save and a read; a place saved before them has neither stored', async () => {
+    const settings = createSettingsRepo(memoryDb());
+    await writePlaces(settings, [
+      { ...HOME, number: ' 123 ', street: 'Main Street' },
+      { id: 'school', kind: 'school', name: 'School', address: 'Roosevelt High School', area: '', lat: 2, lng: 2, number: null, street: 'NE 66th St' },
+      { id: 'work', kind: 'work', name: 'Work', address: '500 Pine St', area: '', lat: 3, lng: 3 },
+      { id: 'place-1', kind: 'custom', name: 'Gym', address: '1 Gym Rd', area: '', lat: 4, lng: 4, number: '', street: '' },
+    ]);
+    const stored = (await settings.get<Record<string, unknown>[]>(PLACES_KEY)) ?? [];
+    expect(stored[0]).toMatchObject({ number: '123', street: 'Main Street' });
+    // Stored in order: Home, Work, School, then your own.
+    expect(stored[1]).not.toHaveProperty('number');
+    expect(stored[1]).not.toHaveProperty('street');
+    expect(stored[2]).toMatchObject({ number: null, street: 'NE 66th St' });
+    expect(stored[3]).toMatchObject({ number: null, street: null });
+    const places = await readPlaces(settings);
+    expect(places.map((p) => [p.id, p.number, p.street])).toEqual([
+      ['home', '123', 'Main Street'],
+      ['work', undefined, undefined],
+      ['school', null, 'NE 66th St'],
+      ['place-1', null, null],
+    ]);
+  });
+
+  it('keeps the mark of an address that could not be looked up, and nothing else in its place', async () => {
+    const settings = createSettingsRepo(memoryDb());
+    await writePlaces(settings, [{ ...HOME, address: 'Address not found', number: null, street: null, unknownAddress: true }]);
+    expect(((await settings.get<unknown[]>(PLACES_KEY)) ?? [])[0]).toMatchObject({ unknownAddress: true, number: null, street: null });
+    expect((await readPlaces(settings))[0]).toMatchObject({ unknownAddress: true });
+    await settings.set(PLACES_KEY, [{ ...HOME, unknownAddress: 'yes' }]);
+    expect((await readPlaces(settings))[0]).not.toHaveProperty('unknownAddress');
+  });
+
+  it('reads a part of the wrong type as unknown, keeping the place', async () => {
+    const settings = createSettingsRepo(memoryDb());
+    await settings.set(PLACES_KEY, [{ ...HOME, number: 123, street: ['Main'] }]);
+    const [home] = await readPlaces(settings);
+    expect(home?.id).toBe('home');
+    expect(home).not.toHaveProperty('number');
+    expect(home).not.toHaveProperty('street');
+  });
 });
 
 describe('address search', () => {
@@ -85,6 +127,18 @@ describe('address search', () => {
   it('reads a named place by its name, with its address under it', () => {
     const hit = hitFromPhoton(feature({ name: 'Roosevelt High School', housenumber: '1410', street: 'NE 66th St', city: 'Seattle', state: 'Washington', countrycode: 'US' }));
     expect(hit).toEqual(expect.objectContaining({ title: 'Roosevelt High School', subtitle: '1410 NE 66th St, Seattle, Washington' }));
+  });
+
+  it('keeps the house number and street apart, none where Photon has none', () => {
+    expect(hitFromPhoton(feature({ housenumber: '123', street: 'South Main Street', city: 'Seattle' }))).toMatchObject({ number: '123', street: 'South Main Street' });
+    expect(hitFromPhoton(feature({ name: 'Roosevelt High School', street: 'NE 66th St' }))).toMatchObject({ number: null, street: 'NE 66th St' });
+    expect(hitFromPhoton(feature({ name: 'Green Lake Park', city: 'Seattle' }))).toMatchObject({ number: null, street: null });
+  });
+
+  it('reads the phone geocoder’s house number and street apart too', () => {
+    expect(linesFromGeo({ streetNumber: '742', street: 'Evergreen Terrace', city: 'Springfield' })).toMatchObject({ title: '742 Evergreen Terrace', number: '742', street: 'Evergreen Terrace' });
+    expect(linesFromGeo({ name: 'Lincoln High School', street: 'Elm St' })).toMatchObject({ title: 'Elm St', number: null, street: 'Elm St' });
+    expect(linesFromGeo({ name: 'Lincoln High School' })).toMatchObject({ title: 'Lincoln High School', number: null, street: null });
   });
 
   it('names the country outside the US, and drops a feature with no point', () => {
@@ -228,8 +282,55 @@ describe('the Places screen', () => {
     await tap('place-save');
 
     await waitFor(async () => expect(await readPlaces(w.settings)).toEqual([expect.objectContaining({ id: 'home', kind: 'home', name: 'Home', address: '500 Pine St', area: 'Seattle, WA 98101', lat: 47.611 })]));
+    // The hit gave no parts: none are stored, and the address line is read when they're needed.
+    expect((await readPlaces(w.settings))[0]).not.toHaveProperty('number');
     expect(await screen.findByTestId('places-home')).toHaveTextContent(/500 Pine St/);
     expect(search).toHaveBeenCalledWith('500 pine', null, expect.anything());
+  });
+
+  it('saves the house number and street the address came with, and the new ones when the address changes', async () => {
+    const w = await appWorld();
+    withTrips(w.db, []);
+    const search = jest.fn(async (q: string) =>
+      q.startsWith('500')
+        ? { ok: true as const, hits: [{ ...hit, number: '500', street: 'Pine Street' }] }
+        : { ok: true as const, hits: [{ ...hit, id: 'h2', title: 'Roosevelt High School', lat: 47.7, number: null, street: 'NE 66th St' }] }
+    );
+    await w.render(<PlacesScreen deps={{ search, bias: async () => null }} />);
+    await tap('places-home');
+    await typeQuery('500 pine');
+    await tap('place-hit-h1');
+    await tap('place-save');
+    await waitFor(async () => expect((await readPlaces(w.settings))[0]).toEqual(expect.objectContaining({ id: 'home', number: '500', street: 'Pine Street' })));
+
+    await tap('places-home');
+    await tap('place-change');
+    await typeQuery('roosevelt');
+    await tap('place-hit-h2');
+    await tap('place-save');
+    await waitFor(async () => expect((await readPlaces(w.settings))[0]).toEqual(expect.objectContaining({ id: 'home', address: 'Roosevelt High School', number: null, street: 'NE 66th St' })));
+  });
+
+  it('saves Home from your location while the address lookup fails as an unknown address, and clears the mark once the pin is named', async () => {
+    const w = await appWorld();
+    withTrips(w.db, []);
+    let named = false;
+    const addressAt = jest.fn(async () => (named ? { title: '500 Pine St', subtitle: 'Seattle', number: '500', street: 'Pine St' } : null));
+    await w.render(<PlacesScreen deps={{ search: jest.fn(), bias: async () => null, addressAt, locate: async () => ({ ok: true as const, lat: 47.62, lng: -122.35 }) }} />);
+    await tap('places-home');
+    await tap('place-use-location');
+    expect(await screen.findByTestId('place-address')).toHaveTextContent(placesCopy.sheet.unnamed);
+    await tap('place-save');
+    await waitFor(async () => expect((await readPlaces(w.settings))[0]).toEqual(expect.objectContaining({ id: 'home', address: placesCopy.sheet.unnamed, number: null, street: null, unknownAddress: true })));
+
+    named = true;
+    await tap('places-home');
+    await tap('place-change');
+    await tap('place-use-location');
+    await waitFor(() => expect(screen.getByTestId('place-address')).toHaveTextContent('500 Pine St'));
+    await tap('place-save');
+    await waitFor(async () => expect((await readPlaces(w.settings))[0]).toEqual(expect.objectContaining({ address: '500 Pine St', number: '500', street: 'Pine St' })));
+    expect((await readPlaces(w.settings))[0]).not.toHaveProperty('unknownAddress');
   });
 
   it('offers the place your drives say is home under a plain Suggestions title, with no guess or chance shown', async () => {

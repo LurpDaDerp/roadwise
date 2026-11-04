@@ -68,6 +68,17 @@ test('update changes the named columns, moves updated_at and answers null for an
   expect(await trips.update('nope', { status: 'pending' })).toBeNull();
 });
 
+test('the saved places at each end and the car are written and read back; null until set', async () => {
+  expect(await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0)).toMatchObject({ from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null });
+  expect(await trips.update('a', { from_place: 'home', to_place: 'place-k3x-ab12', car_uid: 'AA:BB', car_name: 'Civic', end_lat_full: 47.60012, end_lng_full: -122.30034 }, T0 + 1)).toMatchObject({
+    from_place: 'home',
+    to_place: 'place-k3x-ab12',
+    car_uid: 'AA:BB',
+    car_name: 'Civic',
+  });
+  expect(await trips.get('a')).toMatchObject({ from_place: 'home', to_place: 'place-k3x-ab12', car_uid: 'AA:BB', car_name: 'Civic', end_lat_full: 47.60012, end_lng_full: -122.30034 });
+});
+
 test('list is newest first; listRecording picks the drives still recording', async () => {
   await trips.insert({ client_trip_id: 'old', started_at: T0, tz: 'UTC', status: 'scored' }, T0);
   await trips.insert({ client_trip_id: 'mid', started_at: T0 + 1000, tz: 'UTC', status: 'not_driving' }, T0);

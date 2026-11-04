@@ -1,11 +1,26 @@
 /**
  * Saved places: Home, Work and School (one each) and up to 7 more of the driver's own, each an
  * address and the point it stands for. Stored only on this phone, under `places.saved`, like the
- * privacy zones; a sign-out removes them.
+ * privacy zones; a sign-out removes them. The stored shape and its read are core's
+ * (`core/places/saved.ts`): the drive labels read the same list.
  */
+import { ADDRESS_MAX, FIXED_KINDS, MAX_CUSTOM_PLACES, parsePlaces, PLACES_KEY, placeProblem, sortPlaces, type PlaceKind, type PlaceProblem, type SavedPlace } from '@/core/places/saved';
 import type { SettingsRepo } from '@/data/db/settings';
 
-export const PLACES_KEY = 'places.saved';
+export {
+  ADDRESS_MAX,
+  FIXED_KINDS,
+  MAX_CUSTOM_PLACES,
+  PLACE_NAME_MAX,
+  PLACES_KEY,
+  placeProblem,
+  sortPlaces,
+  type FixedKind,
+  type PlaceKind,
+  type PlaceProblem,
+  type SavedPlace,
+} from '@/core/places/saved';
+
 /** Addresses already looked up for learned places (`learned.ts`). */
 export const PLACE_NAMES_KEY = 'places.names';
 /** The recap's "Save as …?" card was turned off (Don't remind me, or the switch in Places). */
@@ -13,74 +28,11 @@ export const PROMPT_OFF_KEY = 'places.promptOff';
 /** The points the driver said No to on that card (they're never asked about again). */
 export const PROMPT_DECLINED_KEY = 'places.promptDeclined';
 
-export type PlaceKind = 'home' | 'work' | 'school' | 'custom';
-export const FIXED_KINDS = ['home', 'work', 'school'] as const satisfies readonly PlaceKind[];
-export type FixedKind = (typeof FIXED_KINDS)[number];
-
-export const MAX_CUSTOM_PLACES = 7;
-export const PLACE_NAME_MAX = 20;
-export const ADDRESS_MAX = 120;
-
-export const FIXED_NAME: Record<FixedKind, string> = { home: 'Home', work: 'Work', school: 'School' };
-
-export interface SavedPlace {
-  /** `home`, `work`, `school`, or `place-…` for the driver's own. */
-  id: string;
-  kind: PlaceKind;
-  /** Home, Work, School, or the driver's own name for it. */
-  name: string;
-  /** The address as shown: "123 Main St", then the city line. */
-  address: string;
-  /** The second line ("Seattle, WA 98104"), or ''. */
-  area: string;
-  lat: number;
-  lng: number;
-}
-
-export type PlaceProblem = 'name_empty' | 'name_long' | 'point' | 'too_many';
-
-const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
-
-/** What is wrong with one place, or null. */
-export function placeProblem(p: Pick<SavedPlace, 'name' | 'lat' | 'lng'>): PlaceProblem | null {
-  const name = p.name.trim();
-  if (name.length === 0) return 'name_empty';
-  if (name.length > PLACE_NAME_MAX) return 'name_long';
-  if (!finite(p.lat) || !finite(p.lng) || Math.abs(p.lat) > 90 || Math.abs(p.lng) > 180) return 'point';
-  return null;
-}
-
-function isPlace(v: unknown): v is SavedPlace {
-  if (typeof v !== 'object' || v === null) return false;
-  const p = v as Record<string, unknown>;
-  return (
-    typeof p.id === 'string' &&
-    (p.kind === 'home' || p.kind === 'work' || p.kind === 'school' || p.kind === 'custom') &&
-    typeof p.name === 'string' &&
-    typeof p.address === 'string' &&
-    placeProblem({ name: p.name, lat: p.lat as number, lng: p.lng as number }) === null
-  );
-}
-
-/** Home, Work, School, then the driver's own in the order added. */
-export function sortPlaces(places: readonly SavedPlace[]): SavedPlace[] {
-  const rank = (p: SavedPlace) => (p.kind === 'custom' ? 3 : FIXED_KINDS.indexOf(p.kind));
-  return places.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map(({ p }) => p);
-}
+export const FIXED_NAME: Record<(typeof FIXED_KINDS)[number], string> = { home: 'Home', work: 'Work', school: 'School' };
 
 /** The stored places; anything malformed, a second Home and customs past the cap are skipped. */
 export async function readPlaces(settings: Pick<SettingsRepo, 'get'>): Promise<SavedPlace[]> {
-  const raw = await settings.get<unknown>(PLACES_KEY);
-  if (!Array.isArray(raw)) return [];
-  const out: SavedPlace[] = [];
-  let customs = 0;
-  for (const v of raw) {
-    if (!isPlace(v)) continue;
-    if (v.kind !== 'custom' && out.some((p) => p.kind === v.kind)) continue;
-    if (v.kind === 'custom' && ++customs > MAX_CUSTOM_PLACES) continue;
-    out.push({ ...v, area: typeof v.area === 'string' ? v.area : '' });
-  }
-  return sortPlaces(out);
+  return parsePlaces(await settings.get<unknown>(PLACES_KEY));
 }
 
 /** What is wrong with the whole list, or null. */
@@ -96,6 +48,13 @@ export function placesProblem(places: readonly SavedPlace[]): PlaceProblem | nul
 
 const clip = (s: string, max: number) => (s.length > max ? s.slice(0, max) : s);
 
+/** An address part as stored: trimmed and clipped, '' as null; absent stays absent (read from the address line). */
+const part = (key: 'number' | 'street', v: string | null | undefined): Partial<Pick<SavedPlace, 'number' | 'street'>> => {
+  if (v === undefined) return {};
+  const s = v === null ? '' : clip(v.trim(), ADDRESS_MAX);
+  return { [key]: s === '' ? null : s };
+};
+
 /** Saves the list, trimmed. Rejects (writing nothing) when it breaks a rule. */
 export async function writePlaces(settings: Pick<SettingsRepo, 'set'>, places: readonly SavedPlace[]): Promise<void> {
   const problem = placesProblem(places);
@@ -110,6 +69,9 @@ export async function writePlaces(settings: Pick<SettingsRepo, 'set'>, places: r
       area: clip(p.area.trim(), ADDRESS_MAX),
       lat: p.lat,
       lng: p.lng,
+      ...part('number', p.number),
+      ...part('street', p.street),
+      ...(p.unknownAddress === true ? { unknownAddress: true } : {}),
     }))
   );
 }

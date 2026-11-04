@@ -10,7 +10,7 @@ import { opaque, over } from '@/ui/sky/color';
 
 import { recapCopy } from './copy';
 import { EventList } from './EventList';
-import { formatDay, formatDuration, formatTimeSpan, spokenDuration } from './format';
+import { formatDay, formatDuration, formatTimeSpan, routeLine, spokenDuration, spokenRoute } from './format';
 import { meritWash } from './merit';
 import { MeritFacts } from './MeritFacts';
 import type { LocalDrive, LocalDriveEvent } from './model';
@@ -102,6 +102,8 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
   const listed = state.kind === 'score' || state.kind === 'too_short' || state.kind === 'not_scored';
   const wash = tier !== null && score !== null ? meritWash(tier, t.scheme) : null;
   const surface = opaque(t.colors.surface);
+  // From → to, as the drive rows show it; a drive with no labels (restored, or from before) shows none.
+  const labelled = drive.fromLabel !== null || drive.toLabel !== null;
   const share = (
     <Button label={recapCopy.share} icon="share-outline" size="sm" variant="secondary" onPress={() => setSharing(true)} testID="share" />
   );
@@ -117,11 +119,16 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
             testID="summary-trip"
             accessible
             accessibilityRole="header"
-            accessibilityLabel={`${spokenDuration(drive.durationS)}, ${formatDistance(drive.miles, units, { spoken: true })}. ${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}`}
+            accessibilityLabel={`${spokenDuration(drive.durationS)}, ${formatDistance(drive.miles, units, { spoken: true })}. ${labelled ? `${spokenRoute(drive)}. ` : ''}${formatDay(drive.startedAt)}, ${formatTimeSpan(drive.startedAt, drive.endedAt)}`}
           >
             <Text variant="title2">
               {formatDuration(drive.durationS)} · {formatDistance(drive.miles, units)}
             </Text>
+            {labelled ? (
+              <Text variant="subhead" testID="summary-route">
+                {routeLine(drive)}
+              </Text>
+            ) : null}
             <Text variant="subhead" tone="muted">
               {formatDay(drive.startedAt)} · {formatTimeSpan(drive.startedAt, drive.endedAt)}
             </Text>

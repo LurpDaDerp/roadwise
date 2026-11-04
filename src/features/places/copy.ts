@@ -3,7 +3,7 @@ import { MAX_CUSTOM_PLACES, PLACE_NAME_MAX, type PlaceKind, type PlaceProblem } 
 
 export const placesCopy = {
   title: 'Places',
-  intro: 'Save the places you drive to most. You can make any of them a privacy zone.',
+  intro: 'Your places name your drives and show your commute. They also give you one-tap directions on the driving screen and a heads-up when bad weather is due before you usually leave.',
   fixedTitle: 'Your places',
   otherTitle: 'Other places',
   add: 'Add a place',
@@ -11,7 +11,7 @@ export const placesCopy = {
   noAddress: 'Add address',
   kindLabel: { home: 'Home', work: 'Work', school: 'School', custom: 'Place' } satisfies Record<PlaceKind, string>,
   zonesRow: { title: 'Privacy zones', subtitle: (n: number) => (n === 0 ? 'Keep a place private' : `${n} ${n === 1 ? 'place' : 'places'} hidden`) },
-  local: 'Your saved addresses never leave this phone.',
+  local: 'Your places stay on this phone.',
   saveError: "Couldn't save your places. Try again.",
 
   sheet: {

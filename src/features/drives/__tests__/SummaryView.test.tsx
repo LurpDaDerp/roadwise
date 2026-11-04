@@ -66,7 +66,7 @@ test('top to bottom: time and distance, the route map, then the hero with Share 
   const trip = screen.getByTestId('summary-trip');
   expect(within(trip).getByText('24 min · 12.0 mi')).toBeOnTheScreen();
   expect(within(trip).getByText(/^Mon, Oct 5 · /)).toBeOnTheScreen();
-  expect(trip).toHaveProp('accessibilityLabel', expect.stringMatching(/^24 minutes, 12\.0 miles\. Mon, Oct 5, /));
+  expect(trip).toHaveProp('accessibilityLabel', expect.stringMatching(/^24 minutes, 12\.0 miles\. Home to School\. Mon, Oct 5, /));
   expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
 });
 
@@ -426,4 +426,20 @@ describe('how the drive started and ended', () => {
     await draw(<SummaryView {...props({ drive: drive({ origin: 'auto', endCause }) })} />);
     expect(screen.queryByText(/Started on its own|Ended |Ends where|walked away/)).toBeNull();
   });
+});
+
+test('the route line under the title, as the drive rows read it; a drive with no labels shows none', async () => {
+  await draw(<SummaryView {...props()} />);
+  expect(screen.getByTestId('summary-route')).toHaveTextContent('Home → School');
+  expect(screen.getByTestId('summary-trip').props.accessibilityLabel).toContain('Home to School.');
+  const ids = testIds();
+  expect(ids.indexOf('summary-route')).toBeGreaterThan(ids.indexOf('summary-trip'));
+  expect(ids.indexOf('summary-route')).toBeLessThan(ids.indexOf('route-map'));
+
+  await draw(<SummaryView {...props({ drive: drive({ fromLabel: null, toLabel: 'Work' }) })} />);
+  expect(screen.getByTestId('summary-route')).toHaveTextContent('Start → Work');
+
+  await draw(<SummaryView {...props({ drive: drive({ fromLabel: null, toLabel: null }) })} />);
+  expect(screen.queryByTestId('summary-route')).toBeNull();
+  expect(screen.getByTestId('summary-trip').props.accessibilityLabel).not.toContain(' to ');
 });

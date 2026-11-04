@@ -4,7 +4,8 @@ import { createDetectors } from '@/core/detectors';
 import { limit, mph, row } from '@/core/detectors/__fixtures__/rows';
 import type { EngineDeps, PlaceSpot, TripSession } from '@/core/engine/engine.types';
 import { createEngine } from '@/core/engine/machine';
-import { ARRIVE_LEFT_M, ARRIVE_NEAR_M, nextArrive, notePlacesLeft, placeAt } from '@/core/engine/motion';
+import { ARRIVE_LEFT_M, ARRIVE_NEAR_M, nextArrive, notePlacesLeft, placeAt, welcomeAt } from '@/core/engine/motion';
+import { PLACE_ANCHOR_M, PLACE_SURE_M } from '@/core/places/match';
 import type { FeatureRow } from '@/core/engine/types';
 
 const T0 = 1_700_000_000_000;
@@ -78,6 +79,9 @@ const placeEast = (m = DRIVE_M, over: Partial<PlaceSpot> = {}): PlaceSpot => ({
   ...over,
 });
 const HOME = [placeEast()];
+/** Where a drive cut after `DRIVE` ends: its last movement, the row at T0 + 59 s (13 m short of `placeEast()`). */
+const CUT_M = 59 * mph(30);
+const east = (m: number) => ({ lat: LAT, lng: LNG + m / M_PER_DEG_LNG });
 const stopped = (n: number, over?: Seg['over']): Seg => ({ n, mps: 0, ...(over ? { over } : {}) });
 
 /** A high-confidence walking report whose walk began at `since` (the engine reads it on the row clock: the latest row's end). */
@@ -128,7 +132,7 @@ describe('the place arrival through the engine', () => {
     expect(status(h)).toBe('recording');
   });
 
-  test('a walk 110 m from the place is the plain walking end (10 s, no place); at 90 m it is the arrival', async () => {
+  test('a walk 110 m from the place is the plain walking end (10 s, no place); at 90 m it is the arrival, with no Welcome', async () => {
     const far = await started({ places: () => [placeEast(DRIVE_M + 110)] });
     const rows = path(T0, DRIVE, stopped(20));
     await feed(far, rows.slice(0, ARRIVED));
@@ -141,7 +145,28 @@ describe('the place arrival through the engine', () => {
     await feed(near, rows.slice(0, ARRIVED));
     await walk(near, T0 + 68_000);
     await feed(near, rows.slice(ARRIVED, ARRIVED + 3));
-    expect(near.finalized[0]).toMatchObject({ endPlace: { id: 'home' } });
+    // The arrival end (5 s into the walk, cut where the car last moved), but 90 m off is a house down
+    // the street, not surely Home: no Welcome.
+    expect(status(near)).toBe('idle');
+    expect(near.finalized[0]).toMatchObject({ endCause: 'walking', cut: true, endedAt: DRIVE_END, endPlace: null });
+  });
+
+  test('the Welcome: the car last moved within 20 m of the place, or 12 m of where the driver usually parks there', async () => {
+    const rows = path(T0, DRIVE, stopped(20));
+    const end = async (place: PlaceSpot) => {
+      const h = await started({ places: () => [place] });
+      await feed(h, rows.slice(0, ARRIVED));
+      await walk(h, T0 + 68_000);
+      await feed(h, rows.slice(ARRIVED, ARRIVED + 3));
+      expect(h.finalized[0]).toMatchObject({ endCause: 'walking', endedAt: DRIVE_END });
+      return h.finalized[0]?.endPlace ?? null;
+    };
+    expect(await end(placeEast(CUT_M + PLACE_SURE_M - 1))).toMatchObject({ id: 'home' });
+    expect(await end(placeEast(CUT_M + PLACE_SURE_M + 2))).toBeNull();
+    // A pin 60 m off the driveway: the usual parking spot (the anchor) at the stop makes it Home.
+    expect(await end(placeEast(CUT_M + 60, { anchor: east(CUT_M + PLACE_ANCHOR_M - 1) }))).toEqual({ id: 'home', kind: 'home', name: 'Home' });
+    expect(await end(placeEast(CUT_M + 60, { anchor: east(CUT_M + PLACE_ANCHOR_M + 2) }))).toBeNull();
+    expect(await end(placeEast(CUT_M + 60, { anchor: null }))).toBeNull();
   });
 
   test('a fix worse than 20 m, or an untrusted speed, as it falls due puts it off to the next good row', async () => {
@@ -213,7 +238,7 @@ describe('the place arrival through the engine', () => {
   });
 
   test('the nearest place within 100 m is the one; a custom place carries its own name', async () => {
-    const shop = placeEast(DRIVE_M + 30, { id: 'place-1', kind: 'custom', name: 'Gym' });
+    const shop = placeEast(DRIVE_M + 30, { id: 'place-1', kind: 'custom', name: 'Gym', anchor: east(CUT_M) });
     const h = await started({ places: () => [placeEast(DRIVE_M + 80, { id: 'work', kind: 'work', name: 'Work' }), shop] });
     const rows = path(T0, DRIVE, stopped(20));
     await feed(h, rows.slice(0, ARRIVED));
@@ -224,8 +249,9 @@ describe('the place arrival through the engine', () => {
 
   test('two places 60 m apart: GPS jitter flipping the nearer one keeps the drive with the first', async () => {
     const west = placeEast(DRIVE_M - 30, { id: 'west', kind: 'custom', name: 'West' });
-    const east = placeEast(DRIVE_M + 30, { id: 'east', kind: 'custom', name: 'East' });
-    const h = await started({ places: () => [west, east] });
+    // East has the driver's usual parking spot where the car stops (so its Welcome shows which place the drive kept).
+    const eastPlace = placeEast(DRIVE_M + 30, { id: 'east', kind: 'custom', name: 'East', anchor: east(CUT_M) });
+    const h = await started({ places: () => [west, eastPlace] });
     const jitter = (i: number) => ({ lng: LNG + (DRIVE_M + (i % 2 === 0 ? 5 : -5)) / M_PER_DEG_LNG });
     const rows = path(T0, DRIVE, stopped(20, jitter));
     await feed(h, rows.slice(0, ARRIVED));
@@ -278,6 +304,15 @@ describe('the place arrival through the engine', () => {
 describe('the place helpers', () => {
   const home = placeEast(0);
   const fix = (m: number, over: Partial<FeatureRow> = {}) => row({ ts: T0, lat: LAT, lng: LNG + m / M_PER_DEG_LNG, speed: 0, ...over });
+
+  test('welcomeAt: within 20 m of the place, or 12 m of its anchor; never without a point', () => {
+    expect(welcomeAt(east(PLACE_SURE_M - 0.5), home)).toBe(true);
+    expect(welcomeAt(east(PLACE_SURE_M + 0.5), home)).toBe(false);
+    const parked = { ...home, anchor: east(40) };
+    expect(welcomeAt(east(40 + PLACE_ANCHOR_M - 0.5), parked)).toBe(true);
+    expect(welcomeAt(east(40 - PLACE_ANCHOR_M - 0.5), parked)).toBe(false);
+    expect(welcomeAt(null, home)).toBe(false);
+  });
 
   test('placeAt: within 100 m, the nearest', () => {
     expect(placeAt(fix(ARRIVE_NEAR_M - 1), [home])).toBe(home);

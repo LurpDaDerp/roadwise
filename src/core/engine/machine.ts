@@ -59,6 +59,7 @@ import {
   vehicleReading,
   WALK_END_MS,
   WALK_STAND_MIN_MS,
+  welcomeAt,
   type ArriveClock,
   type StepMark,
 } from './motion';
@@ -528,9 +529,13 @@ export function createEngine(deps: EngineDeps): Engine {
     if (s.droveAt === null) return false;
     const due = arriveDue(s);
     if (due === null || t < due) return false;
-    const { id, kind, name } = arrive.place;
+    const place = arrive.place;
     const since = foot.since;
-    await finalize((open) => Object.freeze({ ...closeAtLastMovement(open, 'walking', { notAfter: since }), endPlace: { id, kind, name } }));
+    await finalize((open) => {
+      const closed = closeAtLastMovement(open, 'walking', { notAfter: since });
+      // The Welcome only where the car surely stopped at the place, not at a house down the street.
+      return Object.freeze({ ...closed, endPlace: welcomeAt(closed.lastFix, place) ? { id: place.id, kind: place.kind, name: place.name } : null });
+    });
     return true;
   }
 

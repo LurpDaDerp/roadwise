@@ -107,6 +107,16 @@ export interface TripRow {
    * Null on a drive recorded before it was kept, one restored from the server, and an archived one.
    */
   route_full: string | null;
+  /** The saved place the drive started at (its id, an exact match); local only, null when none and once archived. */
+  from_place: string | null;
+  /** The saved place the drive ended at; as `from_place`. */
+  to_place: string | null;
+  /** The paired car the drive was in (its uid) and its name then; local only, null without one and once archived. */
+  car_uid: string | null;
+  car_name: string | null;
+  /** Where the drive ended, 5 dp (`end_lat`/`end_lng` are 4 dp); local only, null on a drive recorded before and once archived. */
+  end_lat_full: number | null;
+  end_lng_full: number | null;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

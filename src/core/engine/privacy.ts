@@ -26,6 +26,8 @@ export interface PrivacyZone {
   lat: number;
   lng: number;
   radiusM: number;
+  /** The saved place the zone was made from (it moves and is renamed with it); absent for a zone of its own. */
+  placeId?: string;
 }
 
 /** Settings key the privacy zones live under (WP9 edits them; this reads them). */
@@ -67,6 +69,7 @@ export function parseZones(raw: unknown): PrivacyZone[] {
       lat,
       lng,
       radiusM: Math.min(ZONE_RADIUS_M.max, Math.max(ZONE_RADIUS_M.min, radiusM)),
+      ...(typeof r.placeId === 'string' && r.placeId !== '' ? { placeId: r.placeId } : {}),
     });
     if (out.length >= MAX_ZONES) break;
   }

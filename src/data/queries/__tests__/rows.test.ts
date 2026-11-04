@@ -66,6 +66,12 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   phone_s: 0,
   archived_at: null,
   route_full: null,
+  from_place: null,
+  to_place: null,
+  car_uid: null,
+  car_name: null,
+  end_lat_full: null,
+  end_lng_full: null,
   ...over,
 });
 
@@ -165,4 +171,13 @@ test("the driver's own views read the whole route and the exact event places whe
   expect(toLocalDriveEvent(row({ lat: 47.62, lng: -122.35 }))).toMatchObject({ lat: 47.62, lng: -122.35 });
   // Half an exact place is no place: the uploaded one stands.
   expect(toLocalDriveEvent(row({ lat_full: 47.6101 }))).toMatchObject({ lat: null, lng: null });
+});
+
+test('a drive reads its saved places, its car, its zone and where it ended (local only); none of them on a restored or archived drive', () => {
+  const recorded = toLocalDrive(trip({ tz: 'America/Los_Angeles', from_place: 'home', to_place: 'work', car_uid: 'AA:BB', car_name: 'Civic', end_lat: 47.62, end_lng: -122.35 }));
+  expect(recorded).toMatchObject({ fromPlace: 'home', toPlace: 'work', carUid: 'AA:BB', carName: 'Civic', tz: 'America/Los_Angeles', end: { lat: 47.62, lng: -122.35 } });
+  const bare = toLocalDrive(trip());
+  expect(bare).toMatchObject({ fromPlace: null, toPlace: null, carUid: null, carName: null, tz: 'UTC' });
+  expect(bare).not.toHaveProperty('end');
+  expect(toLocalDrive(trip({ end_lat: 47.62 }))).not.toHaveProperty('end');
 });

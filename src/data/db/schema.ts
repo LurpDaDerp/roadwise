@@ -441,3 +441,25 @@ export const SCHEMA_V14: readonly string[] = [
   'ALTER TABLE trip_events ADD COLUMN lat_full REAL',
   'ALTER TABLE trip_events ADD COLUMN lng_full REAL',
 ];
+
+/**
+ * V15: which saved places a drive started and ended at, and which paired car it was in.
+ * - `trips.from_place` / `to_place`: the saved place id (`home`, `work`, `school`, `place-…`) each
+ *   end matched exactly (`core/places/match.ts`); null when it matched none, on a drive recorded
+ *   before, one restored from the server, and an archived one.
+ * - `trips.car_uid` / `car_name`: the paired car connected for most of the drive (the host's car
+ *   tally) and its name then; null without one.
+ * - `trips.end_lat_full` / `end_lng_full`: where the drive ended (5 dp, against `end_lat`/`end_lng`'s
+ *   4 dp), so where the driver usually parks at a place (`placeAnchor`) is learned to the metre;
+ *   null on a drive recorded before.
+ * All six are local only: never uploaded or restored, and cleared with the drive's other places
+ * when it is archived.
+ */
+export const SCHEMA_V15: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN from_place TEXT',
+  'ALTER TABLE trips ADD COLUMN to_place TEXT',
+  'ALTER TABLE trips ADD COLUMN car_uid TEXT',
+  'ALTER TABLE trips ADD COLUMN car_name TEXT',
+  'ALTER TABLE trips ADD COLUMN end_lat_full REAL',
+  'ALTER TABLE trips ADD COLUMN end_lng_full REAL',
+];

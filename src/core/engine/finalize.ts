@@ -33,6 +33,8 @@ import {
 
 import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
 
+import { readAnchoredPlaces } from '@/core/places/store';
+
 import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
@@ -54,8 +56,8 @@ import { dayKey } from '@/lib/time';
 import type { TripSession } from './engine.types';
 import { closeExposure } from './exposure';
 import { fullRoute, placeOnTrack } from './fullRoute';
-import { expoGeocoder, labelFor, startPoint, type Geocoder } from './labels';
-import { parseZones, PRIVACY_ZONES_KEY, trimRoute, type PrivacyZone } from './privacy';
+import { endLabel, expoGeocoder, startPoint, type Geocoder, type LabelPlace } from './labels';
+import { parseZones, PRIVACY_ZONES_KEY, roundCoord5, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
 import type { DetectedEvent } from './types';
 
@@ -67,8 +69,19 @@ export interface FinalizeDeps {
   appVersion: string;
   /** The privacy zones; default: the settings repo's `privacy.zones`. */
   zones?: () => Promise<PrivacyZone[]>;
-  /** Reverse geocoder for the labels; default expo-location. `null`: no geocode (zone names only). */
+  /** Reverse geocoder for the labels; default expo-location. `null`: no geocode (zone and place names only). */
   geocode?: Geocoder | null;
+  /**
+   * The saved places with where the driver usually parks at each (`core/places/store.ts`), for the
+   * exact place labels and `from_place` / `to_place`. Default: read from the database (none on a
+   * failed read).
+   */
+  places?: () => Promise<readonly LabelPlace[]>;
+  /**
+   * The paired car the drive was in (the host's car tally), its id and its name now: stored on the
+   * phone only (`car_uid`, `car_name`). Absent, null or failing: no car.
+   */
+  carTag?: () => { uid: string; name: string } | null;
   /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
   trimSeed?: (clientTripId: string) => Promise<string>;
   /**
@@ -274,6 +287,25 @@ const toNewEvent = (e: PayloadEvent, clientTripId: string, exact: { lat: number;
   dispute_status: 'none',
 });
 
+/** The longest car id and name kept (a Bluetooth uid and an output's name are far shorter). */
+const CAR_UID_MAX = 128;
+const CAR_NAME_MAX = 64;
+
+/** The host's car tag as stored: a non-empty id and a name, trimmed and clipped; anything else (or a throw) is no car. */
+export function carTagOf(tag: FinalizeDeps['carTag']): { uid: string; name: string | null } | null {
+  let t: unknown;
+  try {
+    t = tag?.() ?? null;
+  } catch {
+    return null;
+  }
+  if (typeof t !== 'object' || t === null) return null;
+  const { uid, name } = t as { uid?: unknown; name?: unknown };
+  if (typeof uid !== 'string' || uid.trim() === '' || uid.length > CAR_UID_MAX) return null;
+  const n = typeof name === 'string' ? name.trim().slice(0, CAR_NAME_MAX) : '';
+  return { uid, name: n === '' ? null : n };
+}
+
 async function readZones(db: Db): Promise<PrivacyZone[]> {
   try {
     return parseZones(await createSettingsRepo(db).get<unknown>(PRIVACY_ZONES_KEY));
@@ -411,8 +443,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   // The whole route, for the driver's own views only.
   const routeFull = fullRoute(session.track);
   const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
+  const places = await (deps.places ?? (() => readAnchoredPlaces(db, now())))().catch((): LabelPlace[] => []);
   const from = startPoint(session);
-  const [fromLabel, toLabel] = await Promise.all([labelFor(from, zones, geocode), labelFor(session.lastFix, zones, geocode)]);
+  const [fromEnd, toEnd] = await Promise.all([endLabel(from, zones, places, geocode), endLabel(session.lastFix, zones, places, geocode)]);
+  const car = carTagOf(deps.carTag);
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
@@ -493,8 +527,16 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     end_lng: end?.lng ?? null,
     polyline: polyline === '' ? null : polyline,
     route_full: routeFull === '' ? null : routeFull,
-    from_label: fromLabel,
-    to_label: toLabel,
+    from_label: fromEnd.label,
+    to_label: toEnd.label,
+    // Local only: the saved places the drive started and ended at (exact matches), and the paired car it was in.
+    from_place: fromEnd.placeId,
+    to_place: toEnd.placeId,
+    car_uid: car?.uid ?? null,
+    car_name: car?.name ?? null,
+    // Local only: the end to the metre, for where the driver usually parks at a place (`placeAnchor`).
+    end_lat_full: session.lastFix === null ? null : roundCoord5(session.lastFix.lat),
+    end_lng_full: session.lastFix === null ? null : roundCoord5(session.lastFix.lng),
     max_speed_mph: maxSpeedMph,
     integrity_json: JSON.stringify(integrity),
     clean: drive.scored ? (drive.activeEventCount === 0 ? 1 : 0) : null,

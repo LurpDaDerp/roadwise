@@ -55,7 +55,17 @@ export function DrivePlacePrompt({ clientTripId }: { clientTripId: string }) {
     setState('busy');
     // Inside a zone (never looked up on its own) or unnamed: the driver said Yes, so name it now.
     const lines = p.address ?? (await addressAt(p.point));
-    const ok = await save({ id: p.kind, kind: p.kind, name, address: lines?.title ?? copy.unnamed, area: lines?.subtitle ?? '', lat: p.point.lat, lng: p.point.lng });
+    const ok = await save({
+      id: p.kind,
+      kind: p.kind,
+      name,
+      address: lines?.title ?? copy.unnamed,
+      area: lines?.subtitle ?? '',
+      lat: p.point.lat,
+      lng: p.point.lng,
+      // Not named: the address is unknown (it matches its drives by distance and parking spot only).
+      ...(lines ? { ...(lines.number !== undefined ? { number: lines.number } : {}), ...(lines.street !== undefined ? { street: lines.street } : {}) } : { number: null, street: null, unknownAddress: true as const }),
+    });
     setState(ok ? 'saved' : 'failed');
   };
 

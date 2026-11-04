@@ -9,6 +9,7 @@ import type { Db } from '@/data/db/driver';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import type { PrivacyZone } from '@/features/settings/privacyZones';
 
+import { placesCopy } from '../copy';
 import { DrivePlacePrompt } from '../DrivePlacePrompt';
 import { pickPrompt, readPromptOn, type PromptInputs } from '../drivePrompt';
 import { PLACES_KEY, PLACE_NAMES_KEY, PROMPT_DECLINED_KEY, PROMPT_OFF_KEY, readPlaces } from '../model';
@@ -112,6 +113,16 @@ describe('the recap card', () => {
     expect(await screen.findByTestId('drive-place-saved')).toBeOnTheScreen();
     // Home's address was remembered, so it wasn't looked up again.
     expect(mockAddressAt).not.toHaveBeenCalledWith(HOME);
+  });
+
+  it('saves Home with Yes as an unknown address when the phone can’t name the spot', async () => {
+    const w = await appWorld();
+    withDrives(w.db);
+    mockAddressAt.mockResolvedValue(null);
+    await w.render(<DrivePlacePrompt clientTripId="in1" />);
+    await screen.findByTestId('drive-place-prompt', {}, { timeout: 3000 });
+    await tap('drive-place-yes');
+    await waitFor(async () => expect(await readPlaces(w.settings)).toEqual([expect.objectContaining({ id: 'home', address: placesCopy.prompt.unnamed, number: null, street: null, unknownAddress: true })]));
   });
 
   it('No never asks about that spot again', async () => {

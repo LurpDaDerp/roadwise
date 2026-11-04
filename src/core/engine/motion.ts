@@ -40,13 +40,16 @@
 //   a poor or untrusted fix, or a fix outside 100 m takes it away. It starts at the nearest such
 //   place and stays with it while the fix is within 100 m of it. At the place, a standing on-foot
 //   report whose walk began `ARRIVE_WALK_MS` (5 s) ago (the report standing 3 s at least) ends the
-//   drive: a walking end (`walking`, the place on `session.endPlace`), cut at the last movement at
-//   or before the walk began. Stopping there alone never ends it.
+//   drive: a walking end (`walking`), cut at the last movement at or before the walk began. The
+//   place goes on `session.endPlace` (the "Welcome home" line) only when the car last moved surely
+//   at it (`welcomeAt`: 20 m from it, or 12 m from where the driver usually parks there). Stopping
+//   there alone never ends it.
 // While a Start-card drive still waits for driving speed none of them applies.
 import type { MotionActivity } from '@drive-sense';
 import { MAX_H_ACC_M, MOVING_MIN_MPH, WALK_END_S, WALK_STAND_MIN_S } from '@scoring';
 
 import { knownSpeed, MPS_PER_MPH, speedTrusted } from '@/core/detectors/common';
+import { matchPlace } from '@/core/places/match';
 import { haversineMeters } from '@/lib/geo';
 
 import type { PlaceSpot, TrackPoint, TripSession } from './engine.types';
@@ -231,6 +234,18 @@ export function notePlacesLeft(left: ReadonlySet<string>, fixes: readonly Pick<T
     }
   }
   return out ?? left;
+}
+
+/**
+ * Whether the car's last-moved point `here` is surely `place` (rule 1 or 2 of the place match,
+ * `core/places/match.ts`: within 20 m of it, or 12 m of where the driver usually parks there), so
+ * the place-arrival end may greet the driver there. No geocode and no guess by name: a house down
+ * the street still ends the drive by the 100 m rule, without the Welcome.
+ */
+export function welcomeAt(here: Spot | null, place: PlaceSpot): boolean {
+  if (here === null) return false;
+  const anchors = place.anchor ? new Map([[place.id, place.anchor]]) : undefined;
+  return matchPlace(here, [place], { sureOnly: true, ...(anchors ? { anchors } : {}) }) !== null;
 }
 
 /** The nearest of `places` within `ARRIVE_NEAR_M` of `here`, or null. */

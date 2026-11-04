@@ -65,11 +65,39 @@ test('the saved places with who they are, for the place-arrival end; a failing r
     { id: 'place-1', kind: 'custom', name: 'Gym', address: '2 Main St', area: '', lat: 47.6, lng: -122.3 },
   ]);
   expect(await readPlaceSpots(db)).toEqual([
-    { id: 'home', kind: 'home', name: 'Home', lat: 47.5, lng: -122.2 },
-    { id: 'place-1', kind: 'custom', name: 'Gym', lat: 47.6, lng: -122.3 },
+    { id: 'home', kind: 'home', name: 'Home', lat: 47.5, lng: -122.2, anchor: null },
+    { id: 'place-1', kind: 'custom', name: 'Gym', lat: 47.6, lng: -122.3, anchor: null },
   ]);
   const errors: unknown[] = [];
   const broken = { ...db, execute: async () => Promise.reject(new Error('locked')) } as unknown as Db;
   expect(await readPlaceSpots(broken, (e) => errors.push(e))).toEqual([]);
   expect(errors).toHaveLength(1);
+});
+
+test('each saved place carries where the driver usually parks there, from the kept drive ends of the last 183 days', async () => {
+  const DAY = 86_400_000;
+  // Home's pin is on the house; the driveway is about 25 m east of it.
+  const home = { lat: 47.5, lng: -122.2 };
+  const drive = { lat: 47.5, lng: -122.2 + 25 / 75_200 };
+  await createSettingsRepo(db).set(PLACES_KEY, [
+    { id: 'home', kind: 'home', name: 'Home', address: '1 Main St', area: '', ...home },
+    { id: 'school', kind: 'school', name: 'School', address: 'Roosevelt High School', area: '', lat: 47.6, lng: -122.3 },
+  ]);
+  const at = async (i: number, endedAt: number, status: TripStatus = 'scored') =>
+    createTripsRepo(db).insert(
+      { client_trip_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, started_at: endedAt - 600_000, ended_at: endedAt, tz: 'UTC', status, end_lat: drive.lat, end_lng: drive.lng },
+      T0
+    );
+  const now = T0 + 200 * DAY;
+  // Three recent ends, a passenger ride and one 190 days old: not yet enough.
+  for (let i = 1; i <= 3; i += 1) await at(i, now - i * DAY);
+  await at(4, now - 5 * DAY, 'not_driving');
+  await at(5, now - 190 * DAY);
+  expect((await readPlaceSpots(db, undefined, now)).map((p) => p.anchor)).toEqual([null, null]);
+  // A fourth recent end: Home has its anchor; School (no house number) never has one.
+  await at(6, now - 4 * DAY);
+  const [h, s] = await readPlaceSpots(db, undefined, now);
+  expect(h?.anchor?.lat).toBeCloseTo(drive.lat, 6);
+  expect(h?.anchor?.lng).toBeCloseTo(drive.lng, 6);
+  expect(s?.anchor).toBeNull();
 });

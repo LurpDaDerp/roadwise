@@ -4,11 +4,11 @@
 // shows its new name); "Not my car" is remembered; the wipe empties it all; `carLink` is live only.
 // The contract's schema refuses a malformed state.
 import { CAR_NAME_MAX, CAR_UID_MAX, carLinkStateSchema } from '../src/detect';
-
-declare const __dirname: string;
 import { DETECT, carLinked, SLOW_TRAFFIC_START, slowTrafficHeld, slowTrafficReport } from '../src/detect/policy';
 import type { CarLinkState, CarOutput } from '../src/detect/types';
 import { createFakeDriveDetect } from '../src/fakeDetect';
+
+declare const __dirname: string;
 
 const civic: CarOutput = { uid: '00:11:22:33:44:55-tacl', name: 'Civic', type: 'bluetoothA2DP' };
 const carplay: CarOutput = { uid: 'carplay-1', name: 'CarPlay', type: 'carAudio' };

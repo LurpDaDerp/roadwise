@@ -27,6 +27,12 @@ const drive = (id: string, daysAgo: number, over: Partial<NewTrip> = {}): NewTri
   route_full: `whole-${id}`,
   from_label: 'Home',
   to_label: 'School',
+  from_place: 'home',
+  to_place: 'school',
+  car_uid: 'car-1',
+  car_name: 'Civic',
+  end_lat_full: 47.60012,
+  end_lng_full: -122.30034,
   start_lat: 47.6,
   start_lng: -122.3,
   end_lat: 47.7,
@@ -85,6 +91,7 @@ test('a settled drive past the 183 days loses its route, ends, labels and event 
   for (const id of ['old-scored', 'old-unscored', 'old-passenger', 'old-failed']) {
     expect(await trips.get(id)).toMatchObject({
       polyline: null, route_full: null, from_label: null, to_label: null, start_lat: null, start_lng: null, end_lat: null, end_lng: null, archived_at: NOW, miles: 12, duration_s: 1800,
+      from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null,
     });
   }
   expect(await trips.get('old-scored')).toMatchObject({ status: 'scored', clean: 1 });
@@ -97,7 +104,7 @@ test('a settled drive past the 183 days loses its route, ends, labels and event 
     ['e2', 'eyes_off', 'severe', null, null, null, null, null],
   ]);
   // A recent drive keeps its whole route and its exact places.
-  expect(await trips.get('recent')).toMatchObject({ polyline: 'route-recent', route_full: 'whole-recent', archived_at: null });
+  expect(await trips.get('recent')).toMatchObject({ polyline: 'route-recent', route_full: 'whole-recent', archived_at: null, from_place: 'home', to_place: 'school', car_uid: 'car-1', car_name: 'Civic', end_lat_full: 47.60012, end_lng_full: -122.30034 });
   expect(await createEventsRepo(db).get('e6')).toMatchObject({ lat: null, lng: null, lat_full: 47.6002, lng_full: -122.3002 });
   expect((await db.execute("SELECT client_trip_id FROM samples")).rows).toEqual([{ client_trip_id: 'old-pending' }]);
   expect((await db.execute('SELECT idempotency_key FROM sync_queue')).rows).toEqual([{ idempotency_key: 'finalize:old-pending' }]);

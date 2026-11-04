@@ -5,8 +5,9 @@
  * - a scored drive's trimmed route (`polyline`, what friends see) goes into `route_pool` (a line
  *   with no drive and no date), so the All trips map still draws it; any other drive's route is
  *   dropped (no map draws it);
- * - the route (trimmed and whole), the start and end points, the from/to labels and every event's
- *   place (uploaded and exact) are cleared;
+ * - the route (trimmed and whole), the start and end points, the from/to labels, the saved places
+ *   it started and ended at, the car it was in and every event's place (uploaded and exact) are
+ *   cleared;
  * - any samples left go, and so does a finalize upload the server refused for good (its payload
  *   holds the route and the places);
  * - `archived_at` is stamped: the drive leaves every list and its recap reads as not found.
@@ -92,7 +93,9 @@ export async function archiveDue(on: Db, now: number): Promise<number> {
   );
   const { changes } = await on.execute(
     `UPDATE trips SET polyline = NULL, route_full = NULL, start_lat = NULL, start_lng = NULL, end_lat = NULL, end_lng = NULL,
-       from_label = NULL, to_label = NULL, archived_at = ?, updated_at = ?
+       from_label = NULL, to_label = NULL, from_place = NULL, to_place = NULL, car_uid = NULL, car_name = NULL,
+       end_lat_full = NULL, end_lng_full = NULL,
+       archived_at = ?, updated_at = ?
      WHERE ${DUE}`,
     [now, now, cutoff]
   );

@@ -8,6 +8,7 @@ import { UPLOAD_FAILED_SQL } from '@/data/db/queue';
 import { asNumberOrNull } from '@/data/db/row';
 import { toTripRow } from '@/data/db/trips';
 import type { DriveOrigin, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
+import { carFilterUid, type DriveHistoryFilter } from '@/data/queries/keys';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
 import type { LatLng } from '@/lib/geo';
 
@@ -45,6 +46,18 @@ export interface LocalDrive {
   fromLabel: string | null;
   toLabel: string | null;
   /**
+   * The saved place the drive started at and the one it ended at (their ids: `home`, `work`,
+   * `school`, `place-…`), exact matches made when it was stored (`core/places/match.ts`); null when
+   * an end matched none, on a drive recorded before, a restored one and an archived one. Local only.
+   */
+  fromPlace?: string | null;
+  toPlace?: string | null;
+  /** The paired car the drive was in (its uid) and its name then; null without one. Local only. */
+  carUid?: string | null;
+  carName?: string | null;
+  /** The drive's IANA time zone (its local day and hours are read in it). */
+  tz?: string;
+  /**
    * The route the driver's own views draw: the whole route on a drive this phone recorded
    * (`route_full`), else the trimmed one it uploaded (a drive restored from the server, or one
    * recorded before the whole route was kept). Never what friends see: theirs is the server's.
@@ -78,6 +91,8 @@ export interface LocalDrive {
    * lead-in from it to the route (`leadIn`). Absent otherwise.
    */
   start?: LatLng;
+  /** Where the drive ended (the car's last-moved spot, 4 dp), when the phone keeps it. Absent otherwise (restored, archived). */
+  end?: LatLng;
   /**
    * The drive's chances to slip: counted while it recorded, or estimated (`exposureEstimated`).
    * `phoneS` (seconds at driving speed watched for phone use) is 0 on a drive recorded before phone
@@ -225,6 +240,11 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive
     nightMiles: row.night_miles,
     fromLabel: row.from_label,
     toLabel: row.to_label,
+    fromPlace: row.from_place,
+    toPlace: row.to_place,
+    carUid: row.car_uid,
+    carName: row.car_name,
+    tz: row.tz,
     polyline: row.route_full ?? row.polyline,
     status: row.status,
     clean: row.clean === null ? null : row.clean === 1,
@@ -241,6 +261,7 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive
     exposureEstimated: estimated,
     // Present only with the whole route; on an archived drive; on one whose upload has failed.
     ...(row.route_full !== null && row.start_lat !== null && row.start_lng !== null ? { start: { lat: row.start_lat, lng: row.start_lng } } : {}),
+    ...(row.end_lat !== null && row.end_lng !== null ? { end: { lat: row.end_lat, lng: row.end_lng } } : {}),
     ...(row.archived_at !== null ? { archived: true } : {}),
     ...(row.upload_failed === 1 ? { uploadFailed: true } : {}),
   };
@@ -308,7 +329,12 @@ export const isListed = (d: Pick<LocalDrive, 'status' | 'archived'>): boolean =>
 export const isScoredDrive = (d: Pick<LocalDrive, 'status' | 'reason'>): boolean =>
   d.status === 'scored' || (d.status === 'pending' && d.reason === null);
 
-export function matchesHistoryFilter(d: LocalDrive, filter: 'all' | 'clean' | 'passenger'): boolean {
+/**
+ * Whether a listed drive belongs under a history filter: every drive, the clean ones, the "Wasn't
+ * driving" ones, or the ones made in one paired car (`car:{uid}`: the drive's own car tag; a drive
+ * with none is in no car).
+ */
+export function matchesHistoryFilter(d: Pick<LocalDrive, 'status' | 'archived' | 'clean' | 'carUid'>, filter: DriveHistoryFilter): boolean {
   if (!isListed(d)) return false;
   switch (filter) {
     case 'all':
@@ -317,6 +343,10 @@ export function matchesHistoryFilter(d: LocalDrive, filter: 'all' | 'clean' | 'p
       return d.clean === true;
     case 'passenger':
       return d.status === 'not_driving';
+    default: {
+      const uid = carFilterUid(filter);
+      return uid !== null && typeof d.carUid === 'string' && d.carUid === uid;
+    }
   }
 }
 

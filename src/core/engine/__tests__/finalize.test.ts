@@ -10,6 +10,7 @@ import {
   manualTooShort,
   dropTrip,
   boundExposure,
+  carTagOf,
   exposureOf,
   finalizeTrip,
   INVALID_PAYLOAD_SYNC_ERROR,
@@ -212,6 +213,9 @@ test('the phone keeps the whole route and the exact place of every event the tri
   expect(whole).toHaveLength(1);
   expect(whole[0]![0]).toEqual({ lat: roundCoord5(first.lat), lng: roundCoord5(first.lng) });
   expect(whole[0]![whole[0]!.length - 1]).toEqual({ lat: roundCoord5(last.lat), lng: roundCoord5(last.lng) });
+  // The end to the metre (5 dp) beside the 4 dp one, for where the driver usually parks at a place.
+  const lastFix = session.lastFix!;
+  expect(result.trip).toMatchObject({ end_lat: Math.round(lastFix.lat * 1e4) / 1e4, end_lat_full: roundCoord5(lastFix.lat), end_lng_full: roundCoord5(lastFix.lng) });
   // The stored polyline is still the trimmed upload's, cut around the zone.
   expect(result.trip.polyline).toBe(payload.polyline);
   expect(decodeRuns(payload.polyline).length).toBeGreaterThanOrEqual(2);
@@ -625,4 +629,90 @@ test('the time counters are held to the distance as the server holds them: movin
   expect(boundExposure({ ...claimed, limitS: 360, movingS: 360, phoneS: 360 }, 360, 1)).toMatchObject({ movingS: 360, limitS: 360, phoneS: 360 });
   // no distance at all: a minute of each at most
   expect(boundExposure(claimed, 600, 0)).toMatchObject({ movingS: 60, limitS: 60, phoneS: 60 });
+});
+
+describe('exact place labels, the saved places at each end and the car (local only)', () => {
+  const M_PER_DEG_LNG = 111_194.93 * Math.cos((47.6062 * Math.PI) / 180);
+  /** A point `m` metres east of the drives' start (`closedSession` drives due east at 15 m a row). */
+  const east = (m: number) => ({ lat: 47.6062, lng: -122.3321 + m / M_PER_DEG_LNG });
+  const N = 300;
+  const END_M = (N - 1) * 15;
+  const place = (id: string, kind: string, name: string, address: string, m: number) => ({ id, kind, name, address, area: '', ...east(m) });
+  const spy = (answer: Awaited<ReturnType<NonNullable<Parameters<typeof finalizeTrip>[1]['geocode']>>>) => {
+    const calls: string[] = [];
+    return { calls, geocode: async (p: { lat: number; lng: number }) => (calls.push(`${p.lat},${p.lng}`), answer) };
+  };
+
+  test('both ends at saved places: their names and ids, read from the database, with no geocode', async () => {
+    await createSettingsRepo(db).set('places.saved', [place('home', 'home', 'Home', '123 Main St', 10), place('work', 'work', 'Work', '500 Pine St', END_M - 15)]);
+    const g = spy({ label: 'Capitol Hill', number: null, street: null });
+    const result = await finalizeTrip(closedSession(N), deps({ geocode: g.geocode }));
+    expect(result.trip).toMatchObject({ from_label: 'Home', to_label: 'Work', from_place: 'home', to_place: 'work', car_uid: null, car_name: null });
+    expect(g.calls).toHaveLength(0);
+    // Never uploaded.
+    const sent = JSON.stringify(result.payload);
+    for (const s of ['"home"', '"work"', '"Home"', '"Work"', 'Place"', 'place"', '"car', 'Label"']) expect(sent).not.toContain(s);
+  });
+
+  test('a neighbour inside the Home zone is "Near Home"; one a few doors down outside a zone keeps the geocoder label', async () => {
+    await createSettingsRepo(db).set('places.saved', [place('home', 'home', 'Home', '123 Main St', 60), place('work', 'work', 'Work', '500 Pine St', END_M + 45)]);
+    await createSettingsRepo(db).set(PRIVACY_ZONES_KEY, [{ id: 'z', name: 'Home', ...east(60), radiusM: 300, placeId: 'home' }]);
+    const g = spy({ label: 'Capitol Hill', number: '520', street: 'Pine Street' });
+    const result = await finalizeTrip(closedSession(N), deps({ geocode: g.geocode }));
+    expect(result.trip).toMatchObject({ from_label: 'Near Home', from_place: null, to_label: 'Capitol Hill', to_place: null });
+    // Only the end outside the zone was geocoded.
+    expect(g.calls).toHaveLength(1);
+  });
+
+  test('the same geocoded house number and street within 150 m is the place', async () => {
+    await createSettingsRepo(db).set('places.saved', [place('work', 'work', 'Work', '500 Pine St', END_M + 80)]);
+    const g = spy({ label: 'Capitol Hill', number: '500', street: 'Pine Street' });
+    const result = await finalizeTrip(closedSession(N), deps({ geocode: g.geocode }));
+    expect(result.trip).toMatchObject({ to_label: 'Work', to_place: 'work', from_label: 'Capitol Hill', from_place: null });
+  });
+
+  test('where the driver usually parks at a place (four earlier ends) makes it that place', async () => {
+    // Home's pin is 40 m past where the drive ends; the four earlier drives ended where this one does.
+    await createSettingsRepo(db).set('places.saved', [place('home', 'home', 'Home', '123 Main St', END_M + 35)]);
+    const end = east(END_M);
+    for (let i = 0; i < 4; i += 1) {
+      await createTripsRepo(db).insert(
+        { client_trip_id: uuid(60 + i), started_at: NOW - (i + 2) * 86_400_000, ended_at: NOW - (i + 2) * 86_400_000 + 600_000, tz: TZ, status: 'scored', end_lat: roundCoord5(end.lat), end_lng: roundCoord5(end.lng) },
+        T0
+      );
+    }
+    const result = await finalizeTrip(closedSession(N), deps());
+    expect(result.trip).toMatchObject({ to_label: 'Home', to_place: 'home' });
+    // Without them (a fresh phone) it is not.
+    await db.execute("UPDATE trips SET status = 'not_driving' WHERE client_trip_id != ?", [result.trip.client_trip_id]);
+    const again = await finalizeTrip(closedSession(N, [], { clientTripId: uuid(70) }), deps());
+    expect(again.trip).toMatchObject({ to_label: null, to_place: null });
+  });
+
+  test('a places dep replaces the database read; one that fails leaves the places out', async () => {
+    const dep = async () => [{ id: 'place-1', name: 'Gym', address: 'Downtown Fitness', ...east(50) }];
+    expect((await finalizeTrip(closedSession(N), deps({ places: dep }))).trip).toMatchObject({ from_label: 'Gym', from_place: 'place-1' });
+    const failing = async () => Promise.reject(new Error('locked'));
+    expect((await finalizeTrip(closedSession(N, [], { clientTripId: uuid(71) }), deps({ places: failing }))).trip).toMatchObject({ from_label: null, from_place: null });
+  });
+
+  test('the car the host tagged: its uid and name, trimmed; a broken or throwing tag is no car', async () => {
+    const tagged = await finalizeTrip(closedSession(N), deps({ carTag: () => ({ uid: 'AA:BB:CC', name: '  Mazda CX-5  ' }) }));
+    expect(tagged.trip).toMatchObject({ car_uid: 'AA:BB:CC', car_name: 'Mazda CX-5' });
+    expect(JSON.stringify(tagged.payload)).not.toContain('"AA:BB:CC"');
+    expect(JSON.stringify(tagged.payload)).not.toContain('Mazda CX-5');
+    expect(carTagOf(() => ({ uid: 'x', name: '' }))).toEqual({ uid: 'x', name: null });
+    expect(carTagOf(() => ({ uid: 'x', name: 'n'.repeat(100) }))?.name).toHaveLength(64);
+    expect(carTagOf(() => ({ uid: '  ', name: 'Car' }))).toBeNull();
+    expect(carTagOf(() => ({ uid: 'u'.repeat(129), name: 'Car' }))).toBeNull();
+    expect(carTagOf(() => null)).toBeNull();
+    expect(carTagOf(undefined)).toBeNull();
+    expect(
+      carTagOf(() => {
+        throw new Error('tally');
+      })
+    ).toBeNull();
+    const none = await finalizeTrip(closedSession(N, [], { clientTripId: uuid(72) }), deps({ carTag: () => null }));
+    expect(none.trip).toMatchObject({ car_uid: null, car_name: null });
+  });
 });

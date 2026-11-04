@@ -28,6 +28,9 @@ export interface AddressHit {
   subtitle: string;
   lat: number;
   lng: number;
+  /** The house number and street the source gave ("123", "Main St"), null where it has none; absent when unknown. */
+  number?: string | null;
+  street?: string | null;
 }
 
 export type SearchResult = { ok: true; hits: AddressHit[] } | { ok: false };
@@ -62,7 +65,15 @@ export function hitFromPhoton(feature: unknown): AddressHit | null {
   const title = name && name !== streetLine ? name : streetLine || name || city;
   if (title === '') return null;
   const subtitle = title === streetLine ? areaWithCountry : join(title === name ? streetLine : '', areaWithCountry);
-  return { id: `${text(p.osm_type)}${String(p.osm_id ?? '')}-${lat.toFixed(5)},${lng.toFixed(5)}`, title, subtitle, lat, lng };
+  return {
+    id: `${text(p.osm_type)}${String(p.osm_id ?? '')}-${lat.toFixed(5)},${lng.toFixed(5)}`,
+    title,
+    subtitle,
+    lat,
+    lng,
+    number: number || null,
+    street: street || null,
+  };
 }
 
 /** Photon's answer as hits, duplicates (same two lines) dropped. */
@@ -148,6 +159,9 @@ export interface AddressLines {
   title: string;
   subtitle: string;
   poi?: string;
+  /** The house number and street the geocoder gave, null where it has none. */
+  number?: string | null;
+  street?: string | null;
 }
 
 /** The phone geocoder's address as two lines; null when it says nothing usable. */
@@ -163,7 +177,13 @@ export function linesFromGeo(a: GeoAddress | undefined | null): AddressLines | n
   const area = join(text(a.city) || text(a.district) || text(a.subregion), [text(a.region), text(a.postalCode)].filter((s) => s !== '').join(' '));
   // A name that isn't the street address (nor starts like one) is the place's own.
   const poi = name !== '' && name !== title && name !== street && !/^\d/.test(name) ? name : undefined;
-  return { title, subtitle: country && country !== 'US' ? join(area, text(a.country)) : area, ...(poi ? { poi } : {}) };
+  return {
+    title,
+    subtitle: country && country !== 'US' ? join(area, text(a.country)) : area,
+    ...(poi ? { poi } : {}),
+    number: number || null,
+    street: street || null,
+  };
 }
 
 /** The address at a point from the phone's reverse geocoder; null on any failure. Never throws. */

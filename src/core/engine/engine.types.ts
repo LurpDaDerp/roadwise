@@ -35,7 +35,10 @@ export interface Fix {
 /** A saved place's kind, as the engine knows it (the places feature's `PlaceKind`). */
 export type PlaceKindOf = 'home' | 'work' | 'school' | 'custom';
 
-/** The saved place a drive ended at (the place-arrival end, `motion.ts`). */
+/**
+ * The saved place a drive ended at: the place-arrival end (`motion.ts`) at a place where the car
+ * last moved surely at it (`motion.ts` `welcomeAt`), for the "Welcome home" line.
+ */
 export interface EndPlace {
   id: string;
   kind: PlaceKindOf;
@@ -47,6 +50,8 @@ export interface EndPlace {
 export interface PlaceSpot extends EndPlace {
   lat: number;
   lng: number;
+  /** Where the driver usually parks there (`core/places/match.ts` `placeAnchor`); null or absent: none yet. */
+  anchor?: { lat: number; lng: number } | null;
 }
 
 /** One valid fix of the drive, kept for the polyline and the events' coordinates. */
@@ -194,7 +199,10 @@ export interface TripSession {
   motion: Readonly<MotionTrack>;
   /** Closed at its last movement (`closeAtLastMovement`): the tail after it is left out. */
   cut: boolean;
-  /** The saved place the drive ended at by the place-arrival end (`motion.ts`), else null. */
+  /**
+   * The saved place the drive ended at by the place-arrival end (`motion.ts`) when the car last moved
+   * within 20 m of it or 12 m of where the driver usually parks there (`welcomeAt`), else null.
+   */
   endPlace: EndPlace | null;
 }
 
@@ -371,8 +379,9 @@ export interface EngineDeps {
    */
   parkingSpots?(): readonly { lat: number; lng: number }[];
   /**
-   * The saved places, with who they are, for the open drive (the host reads them as the drive
-   * opens): 10 s stopped within 100 m of one the car had left ends it (`motion.ts`). Default: none.
+   * The saved places, with who they are and where the driver usually parks at each, for the open
+   * drive (the host reads them as the drive opens): a walk from a stop within 100 m of one the car had
+   * left ends it (`motion.ts`). Default: none.
    */
   places?(): readonly PlaceSpot[];
   /**
