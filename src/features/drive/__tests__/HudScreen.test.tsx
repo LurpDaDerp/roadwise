@@ -753,17 +753,17 @@ describe('the dangerous-weather banner (plan D14)', () => {
   const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
   const GUSTS = { kind: 'strong_wind', gustMph: 52, visibilityM: null } as const;
 
-  test('only while an alert is active: a yellow outline, the warning glyph in yellow, the title and the warning; the line is spoken', async () => {
+  test('only while an alert is active: in its slot under the halo, a yellow outline, the warning glyph in yellow, the title and the warning; the line is spoken', async () => {
     const h = await renderHud();
     expect(screen.queryByTestId('hud-weather')).toBeNull();
     await h.update({ weatherAlert: ICE });
-    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
-    expect(screen.getByTestId('hud-weather')).toHaveStyle({ borderColor: p.minor, backgroundColor: p.chrome });
+    expect(within(screen.getByTestId('hud-weather-slot')).getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
+    expect(screen.getByTestId('hud-weather')).toHaveStyle({ borderColor: p.minor, backgroundColor: p.chrome, borderWidth: 2 });
     expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.minor });
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Freezing rain. Rain is freezing on the road. Slow down, brake gently.');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Freezing rain. Rain is freezing on the road. Go easy on the brakes.');
     // Under the title, the warning in quiet print, one line, fixed size; the full line is only spoken.
     const action = screen.getByTestId('hud-weather-action');
-    expect(action).toHaveTextContent('Slow down, brake gently');
+    expect(action).toHaveTextContent('Easy on the brakes');
     expect(action).toHaveStyle({ color: p.inkMuted, fontSize: 15 });
     expect(action).toHaveProp('allowFontScaling', false);
     expect(action).toHaveProp('numberOfLines', 1);
@@ -809,8 +809,8 @@ describe('the dangerous-weather banner (plan D14)', () => {
     mockUnits = 'km';
     await renderHud({ weatherAlert: GUSTS });
     expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Hands on the wheel');
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Keep both hands on the wheel.');
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Hold the wheel firmly');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Hold the wheel firmly.');
   });
 
   test('the ✕ shows and works at any speed: it asks the host to hide it for the rest of the drive', async () => {
@@ -832,13 +832,33 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.queryByTestId('hud-weather')).toBeNull();
   });
 
-  test('an event banner still takes the band for its 1.5 s', async () => {
+  test('in its own slot an event banner never covers it, and its appearing moves nothing else', async () => {
+    const h = await renderHud({ rowTs: T });
+    const where = (id: string) => StyleSheet.flatten(screen.getByTestId(id, HIDDEN).props.style as never) as unknown;
+    const before = { halo: where('hud-halo-slot'), end: where('hud-end-slot') };
+    await h.update({ weatherAlert: ICE });
+    expect({ halo: where('hud-halo-slot'), end: where('hud-end-slot') }).toEqual(before);
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+  });
+
+  test('in a compact window it sits in the band line, and an event banner takes the band for its 1.5 s', async () => {
+    compactWindow();
     const h = await renderHud({ weatherAlert: ICE, rowTs: T });
+    expect(within(screen.getByTestId('hud-line')).getByTestId('hud-weather')).toBeTruthy();
+    expect(screen.queryByTestId('hud-weather-slot')).toBeNull();
     await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 } });
     expect(screen.getByTestId('hud-alert')).toBeTruthy();
     expect(screen.queryByTestId('hud-weather')).toBeNull();
     await act(() => jest.advanceTimersByTime(1500));
     expect(screen.getByTestId('hud-weather')).toBeTruthy();
+    jest.restoreAllMocks();
+  });
+
+  test('the ✕ sits in the card’s top right corner', async () => {
+    await renderHud({ weatherAlert: ICE });
+    expect(screen.getByTestId('hud-weather-close')).toHaveStyle({ position: 'absolute', top: 5, right: 5 });
   });
 });
 
@@ -2216,7 +2236,8 @@ describe('the band: a spot nudge, the weather, a failed end', () => {
   const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
   const spot = (at: number, kind: 'speeding' | 'hard_brake' = 'speeding') => ({ key: `s1@${at}`, spotId: 's1', kind, at });
 
-  test('a nudge covers the weather banner for its 4 s, then the banner is back', async () => {
+  test('in a compact window a nudge covers the weather card for its 4 s, then the card is back', async () => {
+    compactWindow();
     const h = await renderHud({ rowTs: T, weatherAlert: ICE });
     expect(screen.getByTestId('hud-weather')).toBeTruthy();
     await h.update({ rowTs: T + 1000, spotNudge: spot(T + 1000) });
@@ -2226,6 +2247,14 @@ describe('the band: a spot nudge, the weather, a failed end', () => {
     expect(screen.getByTestId('hud-spot')).toBeTruthy();
     await act(() => jest.advanceTimersByTime(1));
     expect(screen.queryByTestId('hud-spot')).toBeNull();
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+    jest.restoreAllMocks();
+  });
+
+  test('with its own slot a nudge shows in the band and the weather card stays', async () => {
+    const h = await renderHud({ rowTs: T, weatherAlert: ICE });
+    await h.update({ rowTs: T + 1000, spotNudge: spot(T + 1000) });
+    expect(screen.getByTestId('hud-spot')).toBeTruthy();
     expect(screen.getByTestId('hud-weather')).toBeTruthy();
   });
 
@@ -2277,11 +2306,10 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     ...over,
   });
 
-  test('the band says "Ready to roll" · "Saved once you drive"; End is Cancel, never locked; the halo and the sign are the drive’s own', async () => {
+  test('nothing in the band says it waits; End is Cancel, never locked; the halo and the sign are the drive’s own', async () => {
     const h = await renderHud(waitDrive());
-    expect(screen.getByTestId('hud-waiting')).toHaveTextContent(/Ready to roll/);
-    expect(screen.getByTestId('hud-waiting-line')).toHaveTextContent('Saved once you drive');
-    expect(screen.getByTestId('hud-waiting')).toHaveProp('accessibilityLabel', "Ready to roll. Recording now, and the drive is saved once you're driving.");
+    expect(screen.queryByText(/Ready to roll/)).toBeNull();
+    expect(screen.getByTestId('hud-line').children).toHaveLength(0);
     const cancel = screen.getByRole('button', { name: 'Cancel' });
     expect(cancel).toHaveProp('accessibilityHint', 'Swipe right to stop waiting. Nothing is saved.');
     expect(cancel).not.toBeDisabled();
@@ -2414,7 +2442,7 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     expect(screen.getByTestId('hud-wait')).toBeTruthy();
     await h.update({ waiting: null, speedMph: 12, notDrivingAvailable: true });
     expect(screen.queryByTestId('hud-wait')).toBeNull();
-    expect(screen.queryByTestId('hud-waiting')).toBeNull();
+    expect(screen.queryByRole('button', { name: hudCopy.cancelLabel })).toBeNull();
     expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeTruthy();
     expect(screen.getByTestId('hud-not-driving')).toBeTruthy();
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
@@ -2495,15 +2523,15 @@ describe('a Start-card drive, as a real host publishes it (review I1)', () => {
     const over = states.findIndex((st) => st.waiting === null);
     expect(over).toBeGreaterThan(0);
     const h = await renderHud(liveOf(states[0]!));
-    expect(screen.getByTestId('hud-waiting')).toBeTruthy();
+    expect(screen.getByRole('button', { name: hudCopy.cancelLabel })).toBeTruthy();
     for (const st of states.slice(1, over)) await h.update(liveOf(st));
     // still waiting, the sign the drive's own limit
-    expect(screen.getByTestId('hud-waiting')).toBeTruthy();
+    expect(screen.getByRole('button', { name: hudCopy.cancelLabel })).toBeTruthy();
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('35');
     for (const st of states.slice(over)) await h.update(liveOf(st));
     expect(mockRouter.dismissTo).not.toHaveBeenCalled();
     expect(mockRouter.replace).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('hud-waiting')).toBeNull();
+    expect(screen.queryByRole('button', { name: hudCopy.cancelLabel })).toBeNull();
     expect(screen.getByRole('button', { name: hudCopy.endLabel })).toBeTruthy();
   });
 });

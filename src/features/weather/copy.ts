@@ -27,29 +27,29 @@ export const WEATHER_TITLES: Readonly<Record<DangerKind, string>> = {
   rain_at_night: 'Rain at night',
 };
 
-/** The driving screen's warning under the title: the line's "what to do", at a glance. */
+/** The driving screen's warning under the title: what to do, at a glance (four words at most). */
 export const WEATHER_ACTIONS: Readonly<Record<DangerKind, string>> = {
   blizzard: 'Stay off the road',
-  freezing_rain: 'Slow down, brake gently',
-  black_ice: 'Slow down, brake gently',
-  freezing_drizzle: 'Slow down, brake gently',
-  hail: 'Pull over safely',
-  high_wind: 'Hands on the wheel',
-  heavy_snow: 'Slow down, leave room',
-  snow_on_road: 'Slow down, brake gently',
-  freezing_fog: 'Slow down, low beams',
-  dense_fog: 'Slow down, low beams',
-  low_visibility: 'Slow down, low beams',
-  thunderstorm: 'Slow down',
-  heavy_rain: 'Slow down',
-  standing_water: 'Slow down, avoid puddles',
-  strong_wind: 'Hands on the wheel',
-  rain_at_night: 'Slow down, leave room',
+  freezing_rain: 'Easy on the brakes',
+  black_ice: 'Easy on the brakes',
+  freezing_drizzle: 'Easy on the brakes',
+  hail: 'Pull over somewhere safe',
+  high_wind: 'Hold the wheel firmly',
+  heavy_snow: 'Leave extra room',
+  snow_on_road: 'Take it slow',
+  freezing_fog: 'Use your low beams',
+  dense_fog: 'Use your low beams',
+  low_visibility: 'Use your low beams',
+  thunderstorm: 'Take it slow',
+  heavy_rain: 'Ease off the gas',
+  standing_water: 'Slow down for puddles',
+  strong_wind: 'Hold the wheel firmly',
+  rain_at_night: 'Leave extra room',
 };
 
-const HANDS = 'Keep both hands on the wheel.';
-const LOW_BEAMS = 'Slow down, low beams on.';
-const ICE = 'Slow down, brake gently.';
+const GRIP = 'Hold the wheel firmly.';
+const LOW_BEAMS = 'Slow down and use your low beams.';
+const ICE = 'Go easy on the brakes.';
 
 /** "Gusts to 52 mph" / "Gusts to 84 km/h". */
 const gusts = (mph: number, units: Units): string =>
@@ -76,24 +76,24 @@ export function weatherLine(a: DangerAlert, units: Units): string {
       return 'A hailstorm is nearby. Pull over somewhere safe.';
     case 'high_wind':
     case 'strong_wind':
-      return a.gustMph === null ? `Strong, steady wind. ${HANDS}` : `${gusts(a.gustMph, units)}. ${HANDS}`;
+      return a.gustMph === null ? `Strong, steady wind. ${GRIP}` : `${gusts(a.gustMph, units)}. ${GRIP}`;
     case 'heavy_snow':
-      return 'Snow is piling up fast. Slow down and leave more room.';
+      return 'Snow is piling up fast. Slow down and leave extra room.';
     case 'snow_on_road':
-      return `Fresh snow on the road. ${ICE}`;
+      return 'Fresh snow on the road. Take it slow.';
     case 'freezing_fog':
       return `Fog is icing the road. ${LOW_BEAMS}`;
     case 'dense_fog':
     case 'low_visibility':
       return a.visibilityM === null ? `You can't see far. ${LOW_BEAMS}` : `Visibility ${sight(a.visibilityM, units)}. ${LOW_BEAMS}`;
     case 'thunderstorm':
-      return 'Lightning and downpours nearby. Slow down.';
+      return 'Lightning and downpours nearby. Take it slow.';
     case 'heavy_rain':
-      return 'Water on the road. Slow down to avoid hydroplaning.';
+      return 'Water on the road. Ease off the gas to avoid hydroplaning.';
     case 'standing_water':
-      return 'Water is pooling on the road. Slow down, avoid puddles.';
+      return 'Water is pooling on the road. Slow down for puddles.';
     case 'rain_at_night':
-      return 'Rain at night hides the lane lines. Slow down, leave room.';
+      return 'Rain at night hides the lane lines. Leave extra room.';
   }
 }
 

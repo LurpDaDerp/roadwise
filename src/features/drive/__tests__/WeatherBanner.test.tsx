@@ -7,6 +7,7 @@ import { DANGER_ORDER, type DangerAlert } from '@/features/weather/danger';
 import { weatherTitle } from '@/features/weather/copy';
 import { HUD } from '@/ui/drive';
 
+import { HUD_WEATHER_PT } from '../hudLayout';
 import { WeatherBanner, weatherBannerPt } from '../WeatherBanner';
 
 const alert: DangerAlert = { kind: 'freezing_rain', gustMph: null, visibilityM: null };
@@ -32,6 +33,7 @@ test('the compact lines add up to the 36 pt box the bar leaves (40 less its outl
   expect(weatherBannerPt(true)).toBe(40);
 });
 
-test('the full lines and padding make a bar whose top in the 56 pt band is a whole number of points', () => {
+test('the full lines and padding make a card whose top in the 56 pt band is a whole number of points, and that fills its slot under the halo', () => {
   expect(Number.isInteger((56 - weatherBannerPt(false)) / 2)).toBe(true);
+  expect(weatherBannerPt(false)).toBe(HUD_WEATHER_PT);
 });

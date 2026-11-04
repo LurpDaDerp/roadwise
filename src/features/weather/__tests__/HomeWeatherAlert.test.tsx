@@ -108,8 +108,8 @@ describe('the card', () => {
     // sizes come from the scale: a touch-size disc around a large glyph
     expect(screen.getByTestId('home-weather-alert-icon', { includeHiddenElements: true })).toHaveStyle({ fontSize: tokens.size.iconLg });
     expect(screen.getByTestId('home-weather-alert-title')).toHaveTextContent('Dense fog');
-    expect(screen.getByTestId('home-weather-alert-line')).toHaveTextContent('Visibility 600 ft. Slow down, low beams on.');
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Dense fog. Visibility 600 ft. Slow down, low beams on.');
+    expect(screen.getByTestId('home-weather-alert-line')).toHaveTextContent('Visibility 600 ft. Slow down and use your low beams.');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Dense fog. Visibility 600 ft. Slow down and use your low beams.');
     expect(screen.getByRole('button', { name: 'Hide weather alert' })).toHaveProp('accessibilityHint', 'Hides it until the weather changes.');
   });
 
@@ -118,7 +118,7 @@ describe('the card', () => {
     body = GUSTS;
     await show();
     expect(screen.getByTestId('home-weather-alert-title')).toHaveTextContent('Strong winds');
-    expect(screen.getByTestId('home-weather-alert-line')).toHaveTextContent('Gusts to 84 km/h. Keep both hands on the wheel.');
+    expect(screen.getByTestId('home-weather-alert-line')).toHaveTextContent('Gusts to 84 km/h. Hold the wheel firmly.');
   });
 
   test('no position (location not allowed or never read): no request, no card', async () => {

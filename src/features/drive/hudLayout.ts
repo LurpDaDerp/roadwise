@@ -2,12 +2,14 @@
 // pure function, so "End is always on screen" and "nothing overlaps" are tests, not hopes.
 //
 // - Portrait: a top row (the sign at its left, the navigation button at its right), the 56 pt band
-//   under it (with a DashPal paired its right 88 pt are the chip's slot), the halo centred
-//   on the screen (as near as the shortest top row and End allow; the band clears its compass) and
-//   the End swipe across the bottom. The top row takes the height above the band (up to 144 pt: a
-//   bigger sign). The "Not driving?" link's 44 pt row is always kept directly above End, whether the
-//   link shows or not, so the halo never moves when it appears or goes; a window that would lose
-//   the ring for it (a small Android phone) puts the link in the band's line instead.
+//   under it (right of the emergency button; with a DashPal paired its right 88 pt are the chip's
+//   slot), the halo centred on the screen (as near as the shortest top row and End allow; the band
+//   clears its compass), the weather card's slot under the halo, and the End swipe across the
+//   bottom. The top row takes the height above the band (up to 144 pt: a bigger sign). The "Not
+//   driving?" link's 44 pt row is always kept directly above End, and the weather slot a gap above
+//   it, whether either shows or not, so nothing moves when they appear or go; a window that would
+//   lose the ring for the link (a small Android phone) puts the link in the band's line instead,
+//   and one where the slot would leave the halo under 336 pt puts the weather card there too.
 // - Landscape: three columns, the halo the full height in the middle: the sign on the left, level
 //   with the halo's centre; on the right the band at the top, the "Not driving?" link, the
 //   navigation button and the End swipe under it at the foot (a 160 pt column at least, so End
@@ -20,10 +22,11 @@
 //   everywhere except a compact window too short for it and a readable speed, where it gives back
 //   down to the 64 pt target.
 // - The emergency button (`sos`, a 64 pt circle) is on screen in every layout and meets nothing
-//   else: in portrait the free middle of the top row, level with the navigation circle; in
-//   landscape the top of the sign's column (the sign moves down under it when it would meet it, and
-//   the panel starts right of it); in a compact window the band's left end, or, where that would
-//   leave the band under 160 pt, the right end of End's row (End gives up the room).
+//   else: in portrait under the sign, level with the band (the band starts right of it, and the
+//   panels start under it); in landscape under the sign in the sign's column (the sign moves up
+//   when the button would leave the frame, and the panel starts right of it); in a compact window
+//   the band's left end, or, where that would leave the band under 160 pt, the right end of End's
+//   row (End gives up the room).
 // - The emergency panel (`sosPanel`) is the shared panel slot, except in a compact window, where
 //   the slot under the row is too short for "Call 911": there it runs from the top of the frame
 //   down to End, right of the emergency button (or from the left edge when the button is by End),
@@ -57,7 +60,7 @@ export interface HudLayout {
   compact: boolean;
   /** the band under the top row: alert banners take all of it */
   band: Rect;
-  /** inside the band: the failed end, the waiting line, a spot's nudge, the weather banner, and the link when it has no row of its own */
+  /** inside the band: the failed end, a spot's nudge, the weather card when it has no slot of its own, and the link when it has no row of its own */
   line: Rect;
   /** inside the band, right: the DashPal chip's slot, when one is paired */
   chip: Rect | null;
@@ -71,6 +74,11 @@ export interface HudLayout {
    * navigation button), or 'line' (the band's line: compact windows, and windows with no room for it).
    */
   notDriving: Rect | 'line';
+  /**
+   * The dangerous-weather card's own slot (portrait: under the halo, a gap above the link's row or
+   * End), or 'line' (the band's line: landscape, compact windows, and windows with no room for it).
+   */
+  weather: Rect | 'line';
   /** the top row and its two items */
   row: Rect;
   sign: Rect;
@@ -129,6 +137,18 @@ export const HUD_SOS_PT = HUD_MIN_TARGET_PT;
  * The compact emergency panel takes the band's width, so this is also its narrowest there.
  */
 export const HUD_COMPACT_BAND_MIN_PT = 160;
+/** The weather card's slot under the halo: the card's two lines, padding and outline (`weatherBannerPt(false)`). */
+export const HUD_WEATHER_PT = 48;
+/**
+ * The weather slot's gap above the link's row: the link's touch box reaches 10 pt up through its
+ * slop, so it stays off the card.
+ */
+export const HUD_WEATHER_LINK_GAP_PT = 10;
+/**
+ * The halo keeps at least this box with the weather slot under it (the smallest whose compass
+ * letters stay 19 pt); a window that can't puts the card in the band's line.
+ */
+export const HUD_WEATHER_MIN_HALO_PT = 336;
 /** The navigation slot's caption under its circle (a 6 pt gap and an 18 pt line). */
 const NAV_CAPTION_PT = HUD_NAV_H_PT - HUD_NAV_BUTTON_PT;
 const GAP = 12;
@@ -187,9 +207,9 @@ function bandParts(band: Rect, chip: boolean): { line: Rect; chip: Rect | null }
   };
 }
 
-/** The panel between the top row and `below` (the link's row or End), across the frame. */
-function panelUnder(row: Rect, below: Rect): Rect {
-  const y = row.y + row.h + 8;
+/** The panel between `above` (the top row, or the emergency button) and `below` (the link's row or End), across the frame. */
+function panelUnder(row: Rect, below: Rect, above: Rect = row): Rect {
+  const y = above.y + above.h + 8;
   return { x: row.x, y, w: row.w, h: Math.max(0, below.y - 8 - y) };
 }
 
@@ -225,6 +245,7 @@ function snapLayout(l: HudLayout): HudLayout {
     chip: l.chip === null ? null : snapRect(l.chip),
     halo: snapRect(l.halo),
     notDriving: l.notDriving === 'line' ? 'line' : snapRect(l.notDriving),
+    weather: l.weather === 'line' ? 'line' : snapRect(l.weather),
     row: snapRect(l.row),
     sign: snapRect(l.sign),
     nav: snapRect(l.nav),
@@ -255,11 +276,16 @@ function layoutRects(i: HudLayoutInput): HudLayout {
 
   if (orientation === 'portrait') {
     // The halo's room: the frame less the shortest top row, the band, End and their gaps; the link's
-    // row comes out of it too unless that would cost the ring.
+    // row comes out of it too unless that would cost the ring, then the weather slot (a gap above
+    // it, and a 10 pt one under it when the link's row is there) unless that would take the halo
+    // under 336 pt.
     const region = frameH - HUD_ROW_MIN_PT - GAP - HUD_BAND_PT - GAP - GAP - END_SWIPE_H_PT;
     const boxFor = (room: number) => Math.floor(Math.min(HALO_MAX_BOX_PT, frameW, room));
     const withLink = boxFor(region - HUD_NOT_DRIVING_PT) >= HALO_MIN_RING_BOX_PT;
-    const B = boxFor(withLink ? region - HUD_NOT_DRIVING_PT : region);
+    const linkRoom = withLink ? HUD_NOT_DRIVING_PT : 0;
+    const weatherRoom = GAP + HUD_WEATHER_PT + (withLink ? HUD_WEATHER_LINK_GAP_PT : 0);
+    const withWeather = boxFor(region - linkRoom - weatherRoom) >= HUD_WEATHER_MIN_HALO_PT;
+    const B = boxFor(region - linkRoom - (withWeather ? weatherRoom : 0));
     if (B >= HALO_MIN_RING_BOX_PT) {
       const g = haloGeometry(B);
       // The compass's outer edge (around the ring, just inside the box); the band clears it by a gap
@@ -269,17 +295,28 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       // The link's row sits a gap above End; the halo rests on it (the row's own air keeps the line
       // clear of the compass), or a gap above End when the link is in the band's line.
       const link: Rect | null = withLink ? { x: left, y: end.y - GAP - HUD_NOT_DRIVING_PT, w: frameW, h: HUD_NOT_DRIVING_PT } : null;
-      const floor = link !== null ? link.y : end.y - GAP;
+      // The weather slot 10 pt above the link's row (or a gap above End); then the halo rests a gap above it.
+      const weatherBottom = link !== null ? link.y - HUD_WEATHER_LINK_GAP_PT : end.y - GAP;
+      const weather: Rect | null = withWeather ? { x: left, y: weatherBottom - HUD_WEATHER_PT, w: frameW, h: HUD_WEATHER_PT } : null;
+      const floor = weather !== null ? weather.y - GAP : link !== null ? link.y : end.y - GAP;
       // The halo centred on the screen, held between the shortest top row and the floor.
       const highest = top + HUD_ROW_MIN_PT + GAP + HUD_BAND_PT + GAP + edgeR - B / 2;
       const lowest = floor - B;
       const haloY = Math.min(lowest, Math.max(highest, height / 2 - B / 2));
       const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - edgeR - GAP - HUD_BAND_PT - GAP - top)));
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
-      const band: Rect = { x: left, y: top + rowH + GAP, w: frameW, h: HUD_BAND_PT };
       const items = rowItems(row, i.units);
-      // The emergency button in the row's free middle, level with the navigation circle.
-      const sos: Rect = { x: left + (frameW - HUD_SOS_PT) / 2, y: navCircleMid(items.nav) - HUD_SOS_PT / 2, w: HUD_SOS_PT, h: HUD_SOS_PT };
+      // The emergency button under the sign (centred on it), level with the band; the band starts a
+      // gap right of it.
+      const bandY = top + rowH + GAP;
+      const sos: Rect = {
+        x: Math.max(left, items.sign.x + (items.sign.w - HUD_SOS_PT) / 2),
+        y: bandY + (HUD_BAND_PT - HUD_SOS_PT) / 2,
+        w: HUD_SOS_PT,
+        h: HUD_SOS_PT,
+      };
+      const bandX = sos.x + sos.w + GAP;
+      const band: Rect = { x: bandX, y: bandY, w: Math.max(0, left + frameW - bandX), h: HUD_BAND_PT };
       return {
         orientation,
         compact: false,
@@ -287,12 +324,14 @@ function layoutRects(i: HudLayoutInput): HudLayout {
         ...bandParts(band, i.chip),
         halo: { x: left + (frameW - B) / 2, y: haloY, w: B, h: B, ring: true },
         notDriving: link ?? 'line',
+        weather: weather ?? 'line',
         row,
         ...items,
         end,
         sos,
-        panel: panelUnder(row, link ?? end),
-        sosPanel: panelUnder(row, link ?? end),
+        // Under the emergency button, down to the link's row or End.
+        panel: panelUnder(row, link ?? end, sos),
+        sosPanel: panelUnder(row, link ?? end, sos),
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
         numeralPt3: haloNumeralPt(g.rc, 3, unitPt),
         unitPt,
@@ -311,11 +350,12 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       const haloY = top + (frameH - B) / 2;
       const mid = haloY + B / 2;
       const rx = left + frameW - rightW;
-      // Left: the emergency button at the top of the column, and the sign level with the halo's
-      // centre, or as near as the button lets it (a gap under it).
-      const sos: Rect = { x: left, y: top, w: HUD_SOS_PT, h: HUD_SOS_PT };
+      // Left: the sign level with the halo's centre, or as near as the emergency button under it
+      // (a gap below, centred on the sign) lets it while the button stays in the frame.
       const s = signFor(i.units, Math.min(HUD_ROW_MAX_PT, frameH), leftW);
-      const sign: Rect = { x: left + (leftW - s.w) / 2, y: Math.max(mid - s.h / 2, sos.y + sos.h + GAP), w: s.w, h: s.h };
+      const signX = left + (leftW - s.w) / 2;
+      const sign: Rect = { x: signX, y: Math.max(top, Math.min(mid - s.h / 2, bottom - HUD_SOS_PT - GAP - s.h)), w: s.w, h: s.h };
+      const sos: Rect = { x: Math.max(left, signX + (s.w - HUD_SOS_PT) / 2), y: sign.y + sign.h + GAP, w: HUD_SOS_PT, h: HUD_SOS_PT };
       // Right, top to bottom: the band, the link (when the column has room for its row), the
       // navigation button, End.
       const band: Rect = { x: rx, y: top, w: rightW, h: HUD_BAND_PT };
@@ -330,13 +370,14 @@ function layoutRects(i: HudLayoutInput): HudLayout {
         ...bandParts(band, i.chip),
         halo: { x: left + leftW + 16, y: haloY, w: B, h: B, ring: true },
         notDriving: linkFits ? { x: rx, y: nav.y - GAP - HUD_NOT_DRIVING_PT, w: rightW, h: HUD_NOT_DRIVING_PT } : 'line',
+        weather: 'line',
         row: { x: left, y: top, w: frameW, h: frameH },
         sign,
         nav,
         end,
         sos,
-        // Over the sign and the halo, right of the emergency button: it and the right column's link,
-        // navigation button and End stay reachable.
+        // Over the halo (and the sign where it reaches past the button), right of the emergency
+        // button: it and the right column's link, navigation button and End stay reachable.
         panel: { x: sos.x + sos.w + 8, y: top, w: rx - 16 - (sos.x + sos.w + 8), h: frameH },
         sosPanel: { x: sos.x + sos.w + 8, y: top, w: rx - 16 - (sos.x + sos.w + 8), h: frameH },
         numeralPt2: haloNumeralPt(g.rc, 2, unitPt),
@@ -382,6 +423,7 @@ function layoutRects(i: HudLayoutInput): HudLayout {
     ...bandParts(band, i.chip),
     halo: { x: left, y: regionTop, w: frameW, h: boxH, ring: false },
     notDriving: 'line',
+    weather: 'line',
     row,
     ...items,
     end,

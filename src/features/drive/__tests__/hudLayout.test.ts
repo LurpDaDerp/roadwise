@@ -10,6 +10,8 @@ import {
   HUD_NAV_W_PT,
   HUD_NOT_DRIVING_PT,
   HUD_SOS_PT,
+  HUD_WEATHER_MIN_HALO_PT,
+  HUD_WEATHER_PT,
   hudLayout,
   snapRect,
   type HudLayout,
@@ -48,13 +50,13 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.numeralPt2).toBe(135);
   });
 
-  test('top to bottom: the top row (sign left, navigation right), the band, the halo, End across the foot', () => {
+  test('top to bottom: the top row (sign left, navigation right), the band, the halo, the weather slot, End across the foot', () => {
     const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } });
     expect(l.sign.x).toBe(l.row.x);
     expect(l.nav.x + l.nav.w).toBe(l.row.x + l.row.w);
     expect(l.band.y).toBeGreaterThanOrEqual(l.row.y + l.row.h);
     // the halo as near the centre as the shortest top row allows (its compass clears the band by 12 pt)
-    expect(l.halo.y + l.halo.h / 2).toBe(442.5);
+    expect(l.halo.y + l.halo.h / 2).toBe(430.5);
     expect(hitsCircle(l.band, l.halo)).toBe(false);
     expect(l.halo.y + l.halo.h / 2 - compassGeometry(l.halo.w).outer - (l.band.y + l.band.h)).toBe(12);
     expect(l.row.h).toBe(112);
@@ -62,7 +64,29 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.end.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h);
     // the link's 44 pt row a gap above End, under the halo
     expect(l.notDriving).toEqual({ x: 16, y: l.end.y - 12 - 44, w: 361, h: 44 });
-    expect(l.halo.y + l.halo.h).toBeLessThanOrEqual(l.end.y - 12 - 44);
+    // the weather card's 48 pt slot 10 pt above the link's row, across the frame; the halo a gap above it
+    expect(l.weather).toEqual({ x: 16, y: l.end.y - 12 - 44 - 10 - HUD_WEATHER_PT, w: 361, h: HUD_WEATHER_PT });
+    expect(l.halo.y + l.halo.h).toBeLessThanOrEqual(l.end.y - 12 - 44 - 10 - HUD_WEATHER_PT - 12);
+  });
+
+  test('the weather slot only where the halo keeps 336 pt with it (19 pt compass letters): a small phone, landscape and a compact window put the card in the band line', () => {
+    expect(L({ width: 375, height: 667, insets: { ...ZERO, top: 20 } }).weather).toBe('line');
+    expect(L({ width: 360, height: 640, insets: { ...ZERO, top: 24, bottom: 48 } }).weather).toBe('line');
+    expect(L({ width: 667, height: 375 }).weather).toBe('line');
+    expect(L({ width: 400, height: 300 }).weather).toBe('line');
+    expect(L({ width: 375, height: 812, insets: { ...ZERO, top: 50, bottom: 34 } }).weather).toBe('line');
+    for (const [width, height, top] of [
+      [393, 852, 59],
+      [402, 874, 62],
+      [390, 844, 47],
+      [430, 932, 59],
+    ] as const) {
+      const l = L({ width, height, insets: { ...ZERO, top, bottom: 34 } });
+      expect(l.weather).not.toBe('line');
+      expect(l.halo.w).toBeGreaterThanOrEqual(HUD_WEATHER_MIN_HALO_PT);
+    }
+    // every box from 336 pt up keeps 19 pt letters
+    for (let B = HUD_WEATHER_MIN_HALO_PT; B <= 420; B += 1) expect(compassGeometry(B).letterPt).toBeGreaterThanOrEqual(19);
   });
 
   test('360 × 640 Android (24 / 48): the link’s row would cost the ring, so it goes in the band line and the halo keeps 260; a 112 pt top row', () => {
@@ -73,9 +97,9 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(l.numeralPt2).toBe(118);
   });
 
-  test('iPhone 13 mini, 15 and 15 Pro Max: halos 343, 361 and 398', () => {
+  test('iPhone 13 mini, 15 and 15 Pro Max: halos 343, 337 and 398 (the 15 and the Pro Max with the weather slot under it)', () => {
     expect(L({ width: 375, height: 812, insets: { ...ZERO, top: 50, bottom: 34 } }).halo.w).toBe(343);
-    expect(L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } }).halo.w).toBe(361);
+    expect(L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } }).halo.w).toBe(337);
     const max = L({ width: 430, height: 932, insets: { ...ZERO, top: 59, bottom: 34 } });
     expect(max.halo.w).toBe(398);
     // the row takes what the halo, centred, leaves above the band (its compass clear of it)
@@ -125,10 +149,10 @@ describe('worked phones (§3.1, §3.2)', () => {
     // the link's row directly above the navigation button, under the band
     expect(l.notDriving).toEqual({ x: 491, y: 111, w: 160, h: 44 });
     expect([l.numeralPt2, l.numeralPt3]).toEqual([160, 117]);
-    // the emergency button at the top of the sign's column
-    expect(l.sos).toEqual({ x: 16, y: 12, w: 64, h: 64 });
-    // the navigation list covers the sign and the halo right of the emergency button, never the buttons or End
-    expect(l.panel).toEqual({ x: 88, y: 12, w: 387, h: 347 });
+    // the emergency button a gap under the sign, centred on it
+    expect(l.sos).toEqual({ x: 32, y: 258, w: 64, h: 64 });
+    // the navigation list covers the halo right of the emergency button, never the buttons or End
+    expect(l.panel).toEqual({ x: 104, y: 12, w: 371, h: 347 });
   });
 
   test('iPhone 15 landscape 852 × 393 (side insets 59, bottom 21): the halo the full height, 344 pt, centred on the screen', () => {
@@ -165,25 +189,28 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(L({ width: 700, height: 286 })).toMatchObject({ compact: true });
   });
 
-  test('portrait: the emergency button in the middle of the top row, centred on the screen and level with the navigation circle, 64 pt', () => {
-    const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 } });
-    expect(l.sos.w).toBe(64);
-    expect(l.sos.h).toBe(64);
-    expect(Math.abs(l.sos.x + l.sos.w / 2 - 393 / 2)).toBeLessThanOrEqual(0.5);
-    // the 80 pt circle sits at the top of its 104 pt slot
-    expect(l.sos.y + 32).toBe(l.nav.y + 40);
-    expect(l.sos.x).toBeGreaterThan(l.sign.x + l.sign.w);
-    expect(l.sos.x + l.sos.w).toBeLessThan(l.nav.x);
-    // the panel starts under the row: it never covers the button
-    expect(l.panel.y).toBeGreaterThan(l.sos.y + l.sos.h);
+  test('portrait: the emergency button under the sign, centred on it and level with the band, 64 pt; the band starts a gap right of it', () => {
+    for (const units of ['mi', 'km'] as const) {
+      const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 }, units });
+      expect([l.sos.w, l.sos.h]).toEqual([64, 64]);
+      expect(Math.abs(l.sos.x + l.sos.w / 2 - (l.sign.x + l.sign.w / 2))).toBeLessThanOrEqual(0.5);
+      expect(l.sos.y).toBeGreaterThanOrEqual(l.sign.y + l.sign.h + 8);
+      expect(l.sos.y + l.sos.h / 2).toBe(l.band.y + l.band.h / 2);
+      expect(l.band.x).toBe(l.sos.x + l.sos.w + 12);
+      expect(l.band.x + l.band.w).toBe(l.row.x + l.row.w);
+      // the panels start under it: they never cover the button
+      expect(l.panel.y).toBe(l.sos.y + l.sos.h + 8);
+      expect(l.sosPanel).toEqual(l.panel);
+    }
   });
 
-  test('landscape, a short window: the sign moves down a gap under the emergency button, never meeting it', () => {
+  test('landscape: the emergency button a gap under the sign, centred on it; a short window lifts the sign so the button stays in the frame', () => {
     const l = L({ width: 700, height: 288 });
     expect(l).toMatchObject({ orientation: 'landscape', compact: false });
-    expect(l.sos).toEqual({ x: 16, y: 12, w: 64, h: 64 });
-    expect(l.sign.y).toBeGreaterThanOrEqual(l.sos.y + l.sos.h + 12);
-    expect(l.sign.y + l.sign.h).toBeLessThanOrEqual(288 - 16);
+    expect(l.sos.y).toBe(l.sign.y + l.sign.h + 12);
+    expect(Math.abs(l.sos.x + l.sos.w / 2 - (l.sign.x + l.sign.w / 2))).toBeLessThanOrEqual(0.5);
+    expect(l.sos.y + l.sos.h).toBeLessThanOrEqual(288 - 16);
+    expect(l.sign.y).toBeGreaterThanOrEqual(12);
   });
 
   test('compact: the emergency button at the band’s left end when the band keeps 160 pt, else at the right end of End’s row with End a gap short of it', () => {
@@ -293,6 +320,7 @@ describe('invariants across windows', () => {
         ];
         if (l.chip) rects.push(['chip', l.chip]);
         if (l.notDriving !== 'line') rects.push(['notDriving', l.notDriving]);
+        if (l.weather !== 'line') rects.push(['weather', l.weather]);
         for (const [name, r] of rects)
           for (const v of [r.x, r.y, r.w, r.h]) if (!Number.isInteger(v)) throw new Error(`${name} ${JSON.stringify(r)} at ${c.w}x${c.h} ${JSON.stringify(c.ins)} x${fontScale}`);
         if (l.halo.ring) expect(l.halo.w).toBe(l.halo.h);
@@ -321,6 +349,14 @@ describe('invariants across windows', () => {
         ['sos', l.sos],
       ];
       if (l.notDriving !== 'line') items.push(['notDriving', l.notDriving]);
+      if (l.weather !== 'line') {
+        items.push(['weather', l.weather]);
+        // a gap under the halo's box, and 10 pt above the link's row (its touch slop stays off it) or a gap above End
+        expect(l.weather.y).toBeGreaterThanOrEqual(l.halo.y + l.halo.h + 12 - 1e-9);
+        if (l.notDriving !== 'line') expect(l.weather.y + l.weather.h + 10).toBeLessThanOrEqual(l.notDriving.y + 1e-9);
+        else expect(l.weather.y + l.weather.h + 12).toBeLessThanOrEqual(l.end.y + 1e-9);
+        expect(l.halo.w).toBeGreaterThanOrEqual(HUD_WEATHER_MIN_HALO_PT);
+      }
       for (let a = 0; a < items.length; a += 1)
         for (let b = a + 1; b < items.length; b += 1)
           if (overlap(items[a]![1], items[b]![1])) throw new Error(`${items[a]![0]} meets ${items[b]![0]} at ${c.w}x${c.h}`);

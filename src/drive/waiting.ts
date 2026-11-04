@@ -1,7 +1,7 @@
 // A Start-card drive's wait for driving speed (modes plan §3.7; drive-fixes brief). A swipe on
 // Start drive opens the driving screen on a drive that records from the tap (speed, limit, halo,
-// alerts, the Live Activity), with a "Ready to roll" band until the car reaches driving speed (two
-// trusted readings of 10 mph or more in a row, the engine's `droveAt`). Until then a sheet asks
+// alerts, the Live Activity), waiting until the car reaches driving speed (two trusted readings
+// of 10 mph or more in a row, the engine's `droveAt`). Until then a sheet asks
 // "Still planning to drive?" at 2:00, a countdown runs from 4:30, and at 5:00 the drive ends
 // unsaved (it never reached driving speed, so it is not kept). Any touch on the screen starts the
 // 5 min again.

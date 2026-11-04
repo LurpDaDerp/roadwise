@@ -257,44 +257,42 @@ describe('the words', () => {
       expect(weatherAction(alert(kind))).toBe(action);
     }
     expect(weatherAction(alert('blizzard'))).toBe('Stay off the road');
-    expect(weatherAction(alert('black_ice'))).toBe('Slow down, brake gently');
-    expect(weatherLine(alert('freezing_rain'), 'mi')).toContain(weatherAction(alert('freezing_rain')));
-    expect(weatherLine(alert('dense_fog'), 'mi')).toContain(weatherAction(alert('dense_fog')));
-    expect(weatherLine(alert('strong_wind'), 'mi')).toContain(weatherAction(alert('strong_wind')).toLowerCase());
-    for (const kind of ['snow_on_road', 'standing_water', 'rain_at_night'] as const) {
-      expect(weatherLine(alert(kind), 'mi')).toContain(weatherAction(alert(kind)));
+    expect(weatherAction(alert('black_ice'))).toBe('Easy on the brakes');
+    // Every line but the blizzard's and black ice's says the warning in the same words.
+    for (const kind of DANGER_ORDER.filter((k) => k !== 'blizzard' && k !== 'black_ice')) {
+      expect(weatherLine(alert(kind), 'mi').toLowerCase()).toContain(weatherAction(alert(kind)).toLowerCase());
     }
   });
 
   test('the new dangers read plainly', () => {
     expect([weatherTitle(alert('rain_at_night')), weatherLine(alert('rain_at_night'), 'mi')]).toEqual([
       'Rain at night',
-      'Rain at night hides the lane lines. Slow down, leave room.',
+      'Rain at night hides the lane lines. Leave extra room.',
     ]);
     expect([weatherTitle(alert('standing_water')), weatherLine(alert('standing_water'), 'km')]).toEqual([
       'Standing water',
-      'Water is pooling on the road. Slow down, avoid puddles.',
+      'Water is pooling on the road. Slow down for puddles.',
     ]);
     expect([weatherTitle(alert('snow_on_road')), weatherLine(alert('snow_on_road'), 'mi')]).toEqual([
       'Snowy roads',
-      'Fresh snow on the road. Slow down, brake gently.',
+      'Fresh snow on the road. Take it slow.',
     ]);
   });
 
   test('wind in the driver units', () => {
-    expect(weatherLine(alert('strong_wind', { gustMph: 52.4 }), 'mi')).toBe('Gusts to 52 mph. Keep both hands on the wheel.');
-    expect(weatherLine(alert('high_wind', { gustMph: 60 }), 'km')).toBe(`Gusts to ${Math.round(60 * KMH_PER_MPH)} km/h. Keep both hands on the wheel.`);
+    expect(weatherLine(alert('strong_wind', { gustMph: 52.4 }), 'mi')).toBe('Gusts to 52 mph. Hold the wheel firmly.');
+    expect(weatherLine(alert('high_wind', { gustMph: 60 }), 'km')).toBe(`Gusts to ${Math.round(60 * KMH_PER_MPH)} km/h. Hold the wheel firmly.`);
   });
 
   test('visibility in feet or metres, to the nearest 50', () => {
-    expect(weatherLine(alert('dense_fog', { visibilityM: 200 }), 'mi')).toBe('Visibility 650 ft. Slow down, low beams on.');
-    expect(weatherLine(alert('dense_fog', { visibilityM: 180 }), 'km')).toBe('Visibility 200 m. Slow down, low beams on.');
-    expect(weatherLine(alert('dense_fog', { visibilityM: 5 }), 'km')).toBe('Visibility 50 m. Slow down, low beams on.');
+    expect(weatherLine(alert('dense_fog', { visibilityM: 200 }), 'mi')).toBe('Visibility 650 ft. Slow down and use your low beams.');
+    expect(weatherLine(alert('dense_fog', { visibilityM: 180 }), 'km')).toBe('Visibility 200 m. Slow down and use your low beams.');
+    expect(weatherLine(alert('dense_fog', { visibilityM: 5 }), 'km')).toBe('Visibility 50 m. Slow down and use your low beams.');
   });
 
   test('the spoken label carries the title and the line', () => {
     const a = alert('freezing_rain');
     expect(weatherTitle(a)).toBe('Freezing rain');
-    expect(weatherLabel(a, 'mi')).toBe('Weather alert. Freezing rain. Rain is freezing on the road. Slow down, brake gently.');
+    expect(weatherLabel(a, 'mi')).toBe('Weather alert. Freezing rain. Rain is freezing on the road. Go easy on the brakes.');
   });
 });

@@ -13,27 +13,30 @@ export const WEATHER_CLOSE_PT = 34;
 
 const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
+/** The ✕ sits this far inside the outline from the card's top right corner (less in a card too short for it). */
+const CLOSE_INSET_PT = 5;
 /**
- * The two lines' type: the full band (56 pt), and a compact window's narrow band between the sign and the navigation button.
- * The lines are whole points and the compact pair (20 + 16) fills the words' 36 pt box, so every Text frame lands on
- * whole points in any band; the texts never scale themselves (a long line gets a tail ellipsis).
+ * The two lines' type: the full card (its slot under the halo, or the band), and a compact window's narrow band between the sign
+ * and the navigation button. The lines are whole points and the compact pair (20 + 16) fills the words' 36 pt box, so every Text
+ * frame lands on whole points in any slot; the texts never scale themselves (a long line gets a tail ellipsis).
  */
 const TYPE = {
-  full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 3 },
+  full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 1 },
   compact: { title: 16, titleLine: 20, action: 13, actionLine: 16, pad: 0 },
 } as const;
 
-/** The banner's height at most: its two lines, padding and outline, or its floor (the band must hold it). */
+/** The card's height: its two lines, padding and outline, or its floor (its slot or the band must hold it). */
 export function weatherBannerPt(compact: boolean): number {
   const t = TYPE[compact ? 'compact' : 'full'];
   return Math.max(BAR_MIN_PT, t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT);
 }
 
 /**
- * The dangerous-weather banner at the top of the driving screen (plan D14): a yellow outline, the
- * warning glyph, the alert's title (one to three words) and under it the warning, what to do in
- * four words at most. The full line is spoken with it. Its ✕ shows and takes a touch at any speed,
- * moving or stopped: with End and the navigation button, the only touch targets while moving.
+ * The dangerous-weather card on the driving screen (plan D14): a yellow outline as on Home's card,
+ * the warning glyph, the alert's title (one to three words) and under it the warning, what to do in
+ * four words at most, with the ✕ in the top right corner. It fills its slot's width. The full line
+ * is spoken with it. Its ✕ shows and takes a touch at any speed, moving or stopped: with End and the
+ * navigation button, the only touch targets while moving.
  */
 function WeatherBannerView({
   alert,
@@ -51,10 +54,12 @@ function WeatherBannerView({
 }) {
   const slop = (HUD_MIN_TARGET_PT - WEATHER_CLOSE_PT) / 2;
   const t = TYPE[compact ? 'compact' : 'full'];
+  // Inside the outline: the card's inner height less the disc, split evenly when it can't spare the inset.
+  const inset = Math.min(CLOSE_INSET_PT, Math.max(0, (weatherBannerPt(compact) - 2 * OUTLINE_PT - WEATHER_CLOSE_PT) / 2));
   return (
-    <View testID="hud-weather" style={[styles.bar, { backgroundColor: p.chrome, borderColor: p.minor, paddingVertical: t.pad }]}>
+    <View testID="hud-weather" style={[styles.card, { backgroundColor: p.chrome, borderColor: p.minor, paddingVertical: t.pad }]}>
       <View accessible accessibilityRole="alert" accessibilityLabel={weatherLabel(alert, units)} style={styles.words}>
-        {/* The HUD's warning yellow: this banner shows only when the weather is dangerous. */}
+        {/* The HUD's warning yellow: this card shows only when the weather is dangerous. */}
         <Ionicons testID="hud-weather-icon" name="warning" size={22} color={p.minor} />
         <View style={styles.lines}>
           <Text
@@ -81,7 +86,7 @@ function WeatherBannerView({
         accessibilityHint={weatherCopy.dismissDriveHint}
         hitSlop={slop}
         onPress={onDismiss}
-        style={({ pressed }) => [styles.close, { borderColor: p.chromeEdge, opacity: pressed ? 0.7 : 1 }]}
+        style={({ pressed }) => [styles.close, { top: inset, right: inset, borderColor: p.chromeEdge, opacity: pressed ? 0.7 : 1 }]}
       >
         <Ionicons name="close" size={22} color={p.ink} />
       </Pressable>
@@ -92,23 +97,24 @@ function WeatherBannerView({
 export const WeatherBanner = memo(WeatherBannerView);
 
 const styles = StyleSheet.create({
-  bar: {
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'center',
-    maxWidth: '100%',
-    gap: 10,
+    alignSelf: 'stretch',
     minHeight: BAR_MIN_PT,
     paddingLeft: 14,
-    paddingRight: 6,
-    borderRadius: 22,
+    // Room for the ✕ in the corner.
+    paddingRight: CLOSE_INSET_PT + WEATHER_CLOSE_PT + 8,
+    borderRadius: 16,
+    borderCurve: 'continuous',
     borderWidth: OUTLINE_PT,
   },
-  words: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, paddingRight: 8, minHeight: 36 },
+  words: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
   lines: { flexShrink: 1 },
   title: { fontFamily: fontFamilies.fieldBold },
   action: { fontFamily: fontFamilies.field },
   close: {
+    position: 'absolute',
     width: WEATHER_CLOSE_PT,
     height: WEATHER_CLOSE_PT,
     borderRadius: WEATHER_CLOSE_PT / 2,

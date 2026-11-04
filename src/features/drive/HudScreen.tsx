@@ -47,7 +47,6 @@ import { compassHeadingOf, deviceHeadingWanted, nextHeldTrack, useDeviceHeading,
 import { useAppActive, useAppBehind, useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
 import { inUnits, useHudUnits } from './useHudUnits';
-import { WaitingBanner } from './WaitingBanner';
 import { WaitPanel } from './WaitPanel';
 import { WeatherBanner } from './WeatherBanner';
 
@@ -152,7 +151,7 @@ export type HudScreenProps = {
  *   neither (landscape before the first track bearing) it sits north-up, its letters dimmed. Rules
  *   in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
- *   the left, the emergency button in the middle and the navigation button on the right. The
+ *   the left with the emergency button under it, and the navigation button on the right. The
  *   navigation button's list of apps shows in a panel under the row, never a route: on a tap while
  *   no app is saved, or on a long press (to change the saved app, or to pick one). At 35 mph and
  *   over the button greys out and takes no touch (its list closes) until the car is back under 30 mph.
@@ -171,8 +170,13 @@ export type HudScreenProps = {
  *   car is over the speeding line, "Slow down" in the episode's colour stays up from its alert until
  *   the first row back under the line (another event's chip takes the band for its 1.5 s); else a
  *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
- *   ("Watch your speed here"), then the dangerous-weather banner (its ✕ live at any speed; hidden
- *   for the rest of the drive once dismissed). With a DashPal paired, a small static chip top right.
+ *   ("Watch your speed here"), and the dangerous-weather card where it has no slot of its own.
+ *   With a DashPal paired, a small static chip top right.
+ * - Weather (portrait): the dangerous-weather card in its own slot under the halo, above End (and
+ *   the link's row), kept free whether it shows or not, so nothing moves when it appears: a yellow
+ *   outline, the title and what to do, its ✕ top right (live at any speed; hidden for the rest of
+ *   the drive once dismissed). Alerts and nudges never cover it. A window too small for the slot
+ *   (landscape, compact, a small phone) shows it in the band's line instead, last.
  *   Where the link lives in the band's line (compact windows), an event or DashPal banner yields to
  *   it while it is offered (the halo's burst and the sound still carry the alert), so no run of
  *   alerts can hide it for its whole budget.
@@ -184,14 +188,14 @@ export type HudScreenProps = {
  *   drive's id): the recap notifier and the lockout read it. Blur, the background and unmount say
  *   it is not.
  * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
- *   tap (its speed, its limit, its halo and alerts); the band says "Ready to roll" · "Saved once you
- *   drive", End is "Cancel", the one discard ("Not driving?" only once the car has reached driving
- *   speed, its budget counted from then). At 2:00 a panel asks "Still planning to drive?", from
- *   4:30 it counts down; any touch waits a fresh 5 minutes; at 5:00, or on Cancel, the drive ends
+ *   tap (its speed, its limit, its halo and alerts); End is "Cancel", the one discard ("Not
+ *   driving?" only once the car has reached driving speed, its budget counted from then). At 2:00
+ *   a panel asks "Still planning to drive?", from 4:30 it counts down; any touch waits a fresh 5
+ *   minutes; at 5:00, or on Cancel, the drive ends
  *   unsaved and the screen goes Home, saying nothing (a Cancel that lands as the car reaches driving
  *   speed stays on the drive).
- * - Landscape: the halo the full height, the sign left of it; on the right the band, the link, the
- *   navigation button and End under it.
+ * - Landscape: the halo the full height, the sign left of it with the emergency button under it; on
+ *   the right the band, the link, the navigation button and End under it.
  * - Bottom: the End swipe across the screen: the driver swipes its knob right to end the drive. At
  *   20 mph and over it greys out with a lock and takes no swipe, until the car is back under 10.
  *   End and the navigation button wear the app's paper, ink and sky accent (`hudButtonColors`).
@@ -563,9 +567,11 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const linkInLine = showLink && layout.notDriving === 'line' && !endFailed;
   const bannerUp = (dashpal !== null || chip !== null) && !linkInLine;
   // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
-  // for the rest of the drive (a more severe kind shows again).
+  // for the rest of the drive (a more severe kind shows again). In its own slot under the halo where
+  // the window has one, else in the band's line.
   const weather = live.weatherAlert;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
+  const weatherSlot = layout.weather === 'line' ? null : layout.weather;
   // Stable handlers, so the memoised link and buttons (and End's swipe gesture) are not rebuilt per row.
   const pressNotDriving = useCallback(() => void onNotDriving(), [onNotDriving]);
   const swipeEnd = useCallback(() => void onEnd(), [onEnd]);
@@ -606,15 +612,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             >
               {hudCopy.endFailed}
             </Text>
-          ) : isWaiting ? (
-            <WaitingBanner palette={p} compact={compactBand} />
           ) : linkInLine ? (
             link
           ) : nudge !== null ? (
             <SpotNudgeLine nudge={nudge} palette={p} compact={compactBand} />
-          ) : weather !== null ? (
+          ) : weather !== null && weatherSlot === null ? (
             <WeatherBanner alert={weather} units={units} palette={p} compact={compactBand} onDismiss={dismissWeather} />
           ) : null}
+        </View>
+      ) : null}
+      {weather !== null && weatherSlot !== null ? (
+        <View testID="hud-weather-slot" style={[styles.abs, styles.slot, at(weatherSlot)]}>
+          <WeatherBanner alert={weather} units={units} palette={p} compact={false} onDismiss={dismissWeather} />
         </View>
       ) : null}
       {dashpalChip !== null && layout.chip !== null && !bannerUp ? (
@@ -628,7 +637,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
         <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
       </View>
       {showLink && layout.notDriving !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.notDriving)]}>{link}</View> : null}
-      <View style={[styles.abs, styles.centred, at(layout.end)]}>
+      <View testID="hud-end-slot" style={[styles.abs, styles.centred, at(layout.end)]}>
         <View style={{ width: layout.end.w }}>
           <SwipeButton
             testID="hud-end"
@@ -675,7 +684,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       ) : null}
 
       {/* Above the scrim: the halo is a safety cue, not decoration. It takes no touch. */}
-      <View pointerEvents="none" style={[styles.abs, at(layout.halo)]}>
+      <View testID="hud-halo-slot" pointerEvents="none" style={[styles.abs, at(layout.halo)]}>
         <HudHalo
           track={nextTrack}
           deviceWanted={deviceHeadingWanted({
@@ -798,6 +807,7 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   abs: { position: 'absolute' },
   centred: { alignItems: 'center', justifyContent: 'center' },
+  slot: { justifyContent: 'center' },
   panel: { position: 'absolute', zIndex: 2, borderRadius: 20, borderWidth: 1, padding: 16 },
   // The emergency panel and button sit above the "Welcome" line (zIndex 3).
   sosPanel: { zIndex: 4 },
