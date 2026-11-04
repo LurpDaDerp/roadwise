@@ -10,13 +10,15 @@ import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { AnalyticsView } from './AnalyticsView';
 import type { Range } from './model';
 import { useAnalytics } from './useAnalytics';
+import { useCommute } from './useCommute';
 
 /**
  * The Analytics tab: local drives through `useAnalytics` (the radar's centre is their 90-day
- * Safety Rating), the problem spots this phone found (`useSpots`) and the month's passenger rides
- * (the server's count, `usePassengerRides`). Each time the tab gains focus again (a switch back to
- * it included) `focusCount` goes up, which takes the All trips map back to the view framing every
- * route. The first focus leaves it be: the map opens on that view.
+ * Safety Rating), the commute legs among them (`useCommute`), the problem spots this phone found
+ * (`useSpots`) and the month's passenger rides (the server's count, `usePassengerRides`). Each
+ * time the tab gains focus again (a switch back to it included) `focusCount` goes up, which takes
+ * the All trips map back to the view framing every route. The first focus leaves it be: the map
+ * opens on that view.
  */
 export function AnalyticsScreen() {
   const router = useRouter();
@@ -30,6 +32,7 @@ export function AnalyticsScreen() {
     }, [])
   );
   const data = useAnalytics(range);
+  const commute = useCommute(data.drives);
   const spots = useSpots();
   const passengerRides = passengerRidesShown(usePassengerRides(null));
   const { rating } = data.coaching;
@@ -40,6 +43,7 @@ export function AnalyticsScreen() {
       // Unranked (under 10 mi in 90 days) reads "—" here as it does on Home and Profile.
       rating={rating.ranked ? rating.rating : null}
       spots={spots.data ?? null}
+      commute={commute}
       range={range}
       onRange={setRange}
       onOpenDrive={(id) => router.push(driveSummaryHref(id))}

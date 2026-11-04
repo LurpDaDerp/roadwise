@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { SpotsView } from '@/data/queries/spots';
 import { Banner, Screen, Skeleton, useTheme } from '@/ui';
 
 import { AllTimeCard } from './AllTimeCard';
 import { CategorySheet } from './CategorySheet';
+import { CommuteCard } from './CommuteCard';
+import type { CommuteRow } from './commuteModel';
+import { CommuteSheet } from './CommuteSheet';
 import { analyticsCopy } from './copy';
 import { DrivesCard } from './DrivesCard';
 import { MetricsCards } from './MetricsCards';
@@ -43,6 +46,8 @@ export interface AnalyticsViewProps {
   rating: number | null;
   /** The problem spots (`useSpots`); null while they load. */
   spots?: SpotsView | null;
+  /** The commute legs with enough drives (`useCommute`); none hides the card. */
+  commute?: readonly CommuteRow[];
   range: Range;
   onRange: (range: Range) => void;
   onOpenDrive: (clientTripId: string) => void;
@@ -61,11 +66,14 @@ export interface AnalyticsViewProps {
  * the all-time totals (the longest clean drive and the clean drives), then the range group (an
  * outline holding the range toggle and the only two cards it moves: Driving and Trends), then,
  * all time, when you drive and a comment on it, the all-trips map with the problem spots on it,
- * the spots to watch and the drives list. Every card is paper. Each radar category opens a sheet
- * with that behaviour's own numbers over the range, and each spot its own sheet; the page keeps
- * only general ones.
+ * the spots to watch, your commute and the drives list. Every card is paper. Each radar category
+ * opens a sheet with that behaviour's own numbers over the range, each spot its own sheet, and each
+ * commute leg one with its spots on the way (which open the spot's sheet once the leg's has gone)
+ * and its newest drives; the page keeps only general ones.
  */
-export function AnalyticsView({ data, rating, spots = null, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal, passengerRides = null, focusCount = 0 }: AnalyticsViewProps) {
+const NO_COMMUTE: readonly CommuteRow[] = [];
+
+export function AnalyticsView({ data, rating, spots = null, commute = NO_COMMUTE, range, onRange, onOpenDrive, dashpalPaired, onPairDashpal, passengerRides = null, focusCount = 0 }: AnalyticsViewProps) {
   // The axis stays set while the sheet slides away, so its content doesn't blank on the way out.
   const [sheet, setSheet] = useState<{ axis: AxisKey; open: boolean }>({ axis: 'speed', open: false });
   const close = () => setSheet((s) => ({ ...s, open: false }));
@@ -74,6 +82,12 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
   const closeSpot = () => setSpotSheet((s) => ({ ...s, open: false }));
   // A spot that leaves the list (cleared, or gone in a recompute) closes its sheet.
   const spot = spots?.active.find((s) => s.id === spotSheet.id) ?? null;
+  const [legSheet, setLegSheet] = useState<{ id: CommuteRow['id'] | null; open: boolean }>({ id: null, open: false });
+  const closeLeg = () => setLegSheet((s) => ({ ...s, open: false }));
+  // A leg that leaves the card (too few drives now, a place removed) closes its sheet.
+  const leg = commute.find((l) => l.id === legSheet.id) ?? null;
+  // A spot tapped in a leg's sheet opens once that sheet has gone (iOS shows one modal at a time).
+  const spotNext = useRef<string | null>(null);
   const first = data.loading && data.drives.length === 0;
   return (
     <Screen sky scroll bottomInset={false} title={analyticsCopy.title} testID="analytics-screen">
@@ -90,6 +104,7 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
           <TimeOfDayCard grid={data.grid} nightPct={data.allTime.nightPct} />
           <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} focusCount={focusCount} />
           <SpotsCard view={spots} onOpen={openSpot} />
+          <CommuteCard rows={commute} onOpen={(id) => setLegSheet({ id, open: true })} />
           <DrivesCard drives={data.drives} onOpen={onOpenDrive} archived={data.archivedDrives} passengerRides={passengerRides} />
           <CategorySheet
             axis={sheet.axis}
@@ -104,6 +119,28 @@ export function AnalyticsView({ data, rating, spots = null, range, onRange, onOp
             onPairDashpal={() => {
               close();
               onPairDashpal();
+            }}
+          />
+          <CommuteSheet
+            row={leg}
+            visible={legSheet.open && leg !== null}
+            onClose={closeLeg}
+            onDismiss={() => {
+              // Gone from the screen (closed, or its leg left the card), the leg is let go: a closed sheet does no
+              // work, and a leg that comes back to the card doesn't pop it open. A sheet shown again never sends this.
+              setLegSheet({ id: null, open: false });
+              const id = spotNext.current;
+              spotNext.current = null;
+              if (id !== null) openSpot(id);
+            }}
+            spots={spots?.active}
+            onOpenSpot={(id: string) => {
+              spotNext.current = id;
+              closeLeg();
+            }}
+            onOpenDrive={(id: string) => {
+              closeLeg();
+              onOpenDrive(id);
             }}
           />
           <SpotSheet

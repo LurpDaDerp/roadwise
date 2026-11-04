@@ -3,7 +3,7 @@ import { Component, type ComponentType, type ReactNode } from 'react';
 import { View } from 'react-native';
 import type { ReactTestInstance } from 'react-test-renderer';
 
-import { draw, EXPOSURE, press } from '@/features/drives/__fixtures__/drives';
+import { draw, EXPOSURE, press, ROUTE } from '@/features/drives/__fixtures__/drives';
 import { driveSummaryHref } from '@/features/drives/routes';
 import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
@@ -11,6 +11,7 @@ import { ThemeProvider } from '@/ui/theme';
 
 import { analytics as mockAnalytics, drives as mockDrives, empty as mockEmpty, SCORES_RATING } from '../__fixtures__/analytics';
 import { AnalyticsScreen } from '../AnalyticsScreen';
+import type { CommuteRow } from '../commuteModel';
 import type { AnalyticsData } from '../useAnalytics';
 
 const mockRouter = { push: jest.fn(), navigate: jest.fn() };
@@ -28,7 +29,8 @@ jest.mock('expo-router', () => {
 });
 
 // The problem spots: the data layer's view, and the spots package's card and sheet (their own tests cover them).
-const SPOT = { id: 's1', kind: 'speeding', state: 'active', lastHitTrip: 'd5' };
+// On the fixture drives' route (it runs north), heading its way: a spot on the commute's way too.
+const SPOT = { id: 's1', kind: 'speeding', state: 'active', lastHitTrip: 'd5', pin: ROUTE[10], headingDeg: 0, label: 'Main St', recentHits: 2, recentPasses: 5 };
 let mockSpots: unknown = { computed: true, eligible: true, active: [SPOT], clearedRecently: 0 };
 jest.mock('@/data/queries/spots', () => ({ useSpots: () => ({ data: mockSpots, isLoading: false, isError: false }) }));
 // This month's passenger rides: the server's count (its hook has its own tests).
@@ -69,11 +71,29 @@ const mockList = () => mockDrives(10, 30, { exposure: { ...EXPOSURE, phoneS: 120
 let mockData: (range: MockRange) => AnalyticsData = (range) => mockAnalytics(mockList(), range);
 const mockUseAnalytics = jest.fn((range: MockRange) => mockData(range));
 jest.mock('../useAnalytics', () => ({ useAnalytics: (range: MockRange) => mockUseAnalytics(range) }));
+// The commute legs (the hook's own test reads them from a database): one leg, Home → School, over
+// the fixture's first four drives (they run Home to School).
+const mockLeg = (over: Partial<CommuteRow> = {}): CommuteRow => ({
+  id: 'home-school',
+  from: { id: 'home', kind: 'home', name: 'Home', lat: 40.7, lng: -74 },
+  to: { id: 'school', kind: 'school', name: 'School', lat: 40.758, lng: -74 },
+  drives: mockList().slice(0, 4),
+  usualS: 24 * 60,
+  departure: { minuteOfDay: 7 * 60 + 40, drives: 4 },
+  score: 84,
+  change: null,
+  scored: 4,
+  ...over,
+});
+let mockCommute: CommuteRow[] = [mockLeg()];
+const mockUseCommute = jest.fn((_drives: unknown) => mockCommute);
+jest.mock('../useCommute', () => ({ useCommute: (drives: unknown) => mockUseCommute(drives) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockSpots = { computed: true, eligible: true, active: [SPOT], clearedRecently: 0 };
   mockData = (range) => mockAnalytics(mockList(), range);
+  mockCommute = [mockLeg()];
 });
 
 /** The fixture's analytics with this 90-day rating. */
@@ -92,6 +112,7 @@ const SECTIONS = [
   'analytics-time-of-day',
   'analytics-map',
   'analytics-spots',
+  'analytics-commute',
   'analytics-drives',
 ];
 
@@ -108,10 +129,89 @@ function order(): string[] {
   return out;
 }
 
-test('top to bottom: radar, summary, all time, the range group (its toggle at the top), when you drive, time of day, map, spots to watch, drives', async () => {
+test('top to bottom: radar, summary, all time, the range group (its toggle at the top), when you drive, time of day, map, spots to watch, your commute, drives', async () => {
   await draw(<AnalyticsScreen />);
   expect(screen.getByRole('header', { name: 'Analytics' })).toBeOnTheScreen();
   expect(order()).toEqual(SECTIONS);
+});
+
+test('your commute reads the tab’s drives, and is gone with no leg to show', async () => {
+  await draw(<AnalyticsScreen />);
+  expect(mockUseCommute).toHaveBeenCalledWith(mockUseAnalytics.mock.results.at(-1)!.value.drives);
+  expect(within(screen.getByTestId('analytics-commute')).getByText('Home → School')).toBeOnTheScreen();
+  mockCommute = [];
+  await draw(<AnalyticsScreen />);
+  expect(screen.queryByTestId('analytics-commute')).toBeNull();
+  expect(order()).toEqual(SECTIONS.filter((id) => id !== 'analytics-commute'));
+});
+
+test('a commute leg opens its sheet; a drive there closes it and opens the drive', async () => {
+  await draw(<AnalyticsScreen />);
+  expect(screen.queryByTestId('commute-sheet')).toBeNull();
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  const sheet = screen.getByTestId('commute-sheet');
+  expect(within(sheet).getByRole('header', { name: 'Home → School' })).toBeOnTheScreen();
+  await press(within(sheet).getByTestId('commute-drive-d1'));
+  expect(mockRouter.push).toHaveBeenCalledWith(driveSummaryHref('d1'));
+  await waitFor(() => expect(screen.queryByTestId('commute-sheet')).toBeNull());
+});
+
+test('a spot on the commute’s way opens its own sheet once the commute’s has gone', async () => {
+  await draw(<AnalyticsScreen />);
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  await press(within(screen.getByTestId('commute-sheet')).getByTestId('commute-spot-s1'));
+  // One sheet at a time: the spot's waits for the commute's to leave.
+  expect(screen.queryByTestId('spot-sheet')).toBeNull();
+  await waitFor(() => expect(screen.queryByTestId('commute-sheet')).toBeNull());
+  await waitFor(() => expect(screen.getByTestId('spot-sheet')).toBeOnTheScreen(), { timeout: 3000 });
+  await press(screen.getByTestId('spot-open-drive'));
+  expect(mockRouter.push).toHaveBeenCalledWith(driveSummaryHref('d5'));
+});
+
+test('closing the commute sheet opens no spot sheet', async () => {
+  await draw(<AnalyticsScreen />);
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  await press(within(screen.getByTestId('commute-sheet')).getAllByRole('button', { name: 'Close' }).at(-1)!);
+  await waitFor(() => expect(screen.queryByTestId('commute-sheet')).toBeNull());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 900)));
+  expect(screen.queryByTestId('spot-sheet')).toBeNull();
+});
+
+test('a commute leg that leaves the card closes its sheet', async () => {
+  const view = await draw(<AnalyticsScreen />);
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  expect(screen.getByTestId('commute-sheet')).toBeOnTheScreen();
+  mockCommute = [];
+  await view.rerender(
+    <ThemeProvider scheme="light" reduceMotion>
+      <AnalyticsScreen />
+    </ThemeProvider>
+  );
+  await waitFor(() => expect(screen.queryByTestId('commute-sheet')).toBeNull());
+});
+
+test('a commute leg that leaves the card and comes back does not open its sheet by itself', async () => {
+  const view = await draw(<AnalyticsScreen />);
+  const redraw = () =>
+    view.rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <AnalyticsScreen />
+      </ThemeProvider>
+    );
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  expect(screen.getByTestId('commute-sheet')).toBeOnTheScreen();
+  mockCommute = [];
+  await redraw();
+  await waitFor(() => expect(screen.queryByTestId('commute-sheet')).toBeNull());
+  // Past the sheet's dismissal, the leg qualifies again (a new drive kept, the places back).
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 900)));
+  mockCommute = [mockLeg()];
+  await redraw();
+  expect(screen.getByTestId('analytics-commute-home-school')).toBeOnTheScreen();
+  expect(screen.queryByTestId('commute-sheet')).toBeNull();
+  // A tap still opens it.
+  await press(screen.getByTestId('analytics-commute-home-school'));
+  expect(screen.getByTestId('commute-sheet')).toBeOnTheScreen();
 });
 
 test('the month’s passenger rides show under the drives’ header when there are any, and nothing when none', async () => {

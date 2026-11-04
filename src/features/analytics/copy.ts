@@ -195,4 +195,38 @@ export const analyticsCopy = {
     noEvents: 'No events',
     hint: 'Opens the drive summary',
   },
+  commute: {
+    title: 'Your commute',
+    caption: 'Last 4 months',
+    /** A leg's title, "Home → Work", and the same for a screen reader (which reads "→" as "right arrow"). */
+    leg: (from: string, to: string) => `${from} → ${to}`,
+    spokenLeg: (from: string, to: string) => `${from} to ${to}`,
+    /** The usual drive time: "Usually 24 min". */
+    usually: (time: string) => `Usually ${time}`,
+    /** The usual departure: "Leave around 7:40 AM". */
+    leave: (clock: string) => `Leave around ${clock}`,
+    score: (n: number) => `Score ${n}`,
+    change: {
+      up: (n: number) => `Up ${n}`,
+      down: (n: number) => `Down ${n}`,
+      steady: 'Steady',
+    },
+    rowHint: 'Opens this commute',
+    sheet: {
+      /** Under the usual drive time: how many drives it comes from. */
+      usualLine: (n: number) => `From ${n} ${n === 1 ? 'drive' : 'drives'} in the last 4 months`,
+      leaveLine: 'On weekdays',
+      /** Under the score: what it is the mean of, and how it moved against the drives before. */
+      scoreLine: (recent: number, before: number, change: 'up' | 'down' | 'steady' | null, by: number) => {
+        const last = `Your last ${recent} ${recent === 1 ? 'drive' : 'drives'}`;
+        if (change === null) return last;
+        if (change === 'steady') return `${last}, about the same as the ${before} before`;
+        return `${last}, ${change} ${Math.abs(by)} from the ${before} before`;
+      },
+      spots: 'Spots on the way',
+      spotHint: 'Opens the spot',
+      recent: 'Recent drives',
+      driveHint: 'Opens the drive summary',
+    },
+  },
 } as const;
