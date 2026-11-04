@@ -155,6 +155,14 @@ describe('Bluetooth (paired DashPal only)', () => {
     expect(state('bluetooth', board({ platform: 'android' }, { androidApi: 31, paired: true, bluetooth: 'undetermined' }))).toEqual(missing('denied', false));
     expect(state('bluetooth', board({ platform: 'ios' }, { paired: true, bluetooth: 'undetermined' }))).toEqual({ kind: 'unknown' });
   });
+
+  it('a paired car (iPhone, no DashPal) puts it in use: On, Off (Settings only), or not in use before the phone answered', () => {
+    expect(state('bluetooth', board({ platform: 'ios' }, { carPaired: true, bluetooth: 'granted' }))).toEqual({ kind: 'granted' });
+    expect(state('bluetooth', board({ platform: 'ios' }, { carPaired: true, bluetooth: 'denied' }))).toEqual(missing('denied', false));
+    expect(state('bluetooth', board({ platform: 'ios' }, { carPaired: true, bluetooth: 'undetermined' }))).toEqual({ kind: 'idle' });
+    expect(state('bluetooth', board({ platform: 'ios' }, { carPaired: true, bluetooth: null }))).toEqual({ kind: 'unknown' });
+    expect(state('bluetooth', board({ platform: 'ios' }, { carPaired: false, bluetooth: 'denied' }))).toEqual({ kind: 'idle' });
+  });
 });
 
 describe('camera (never on Home, never requested here)', () => {

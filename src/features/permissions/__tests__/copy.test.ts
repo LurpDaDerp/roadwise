@@ -7,7 +7,9 @@ import { PERMISSION_IDS, type MissingReason, type MissingState, type PermState, 
 const IOS: CopyCtx = { platform: 'ios', androidApi: null };
 const ANDROID: CopyCtx = { platform: 'android', androidApi: 34 };
 const ANDROID_11: CopyCtx = { platform: 'android', androidApi: 30 };
-const CTXS = [IOS, ANDROID, ANDROID_11];
+const IOS_CAR: CopyCtx = { platform: 'ios', androidApi: null, car: true };
+const IOS_BOTH: CopyCtx = { platform: 'ios', androidApi: null, car: true, dashpal: true };
+const CTXS = [IOS, ANDROID, ANDROID_11, IOS_CAR, IOS_BOTH];
 
 const m = (reason: MissingReason, canAsk = false, target: SettingsTarget = 'app'): MissingState => ({ kind: 'missing', reason, canAsk, target });
 const ALL_STATES: PermState[] = [{ kind: 'granted' }, { kind: 'idle' }, { kind: 'unknown' }, m('notYet', true), m('denied'), m('servicesOff', true, 'locationServices')];
@@ -38,6 +40,8 @@ test('Home lines', () => {
   expect(homeLine('notifications', m('denied'), ANDROID)).toBe('Notifications are off. You\'ll miss your drive recaps.');
   expect(homeLine('notifications', m('notYet', true), IOS)).toBe('Allow Notifications to get your drive recaps.');
   expect(homeLine('bluetooth', m('denied'), IOS)).toBe("Bluetooth isn't allowed. DashPal can't connect.");
+  expect(homeLine('bluetooth', m('denied'), IOS_CAR)).toBe("Bluetooth isn't allowed, so passenger rides aren't spotted.");
+  expect(homeLine('bluetooth', m('denied'), IOS_BOTH)).toBe("Bluetooth isn't allowed. DashPal can't connect.");
   expect(homeLine('bluetooth', m('denied'), ANDROID)).toBe("Nearby devices isn't allowed. DashPal can't connect.");
 });
 
@@ -81,7 +85,12 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('location', m('servicesOff', true, 'locationServices'), ANDROID)).toBe("Location Services are off, so drives can't record.");
   expect(rowDetail('precise', m('denied'), IOS)).toBe('Approximate location is too rough to record a drive.');
   expect(rowDetail('precise', { kind: 'unknown' }, IOS)).toBe("RoadWise couldn't check this on this phone.");
-  expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired DashPal.');
+  expect(rowDetail('bluetooth', { kind: 'idle' }, IOS)).toBe('Used only with a paired car or DashPal.');
+  expect(rowDetail('bluetooth', { kind: 'idle' }, IOS_CAR)).toBe('RoadWise asks for it in Settings › Your car.');
+  expect(rowDetail('bluetooth', { kind: 'granted' }, IOS_CAR)).toBe("RoadWise can tell when you're riding as a passenger.");
+  expect(rowDetail('bluetooth', m('denied'), IOS_CAR)).toBe("Without it, RoadWise can't tell when you're riding as a passenger.");
+  expect(rowDetail('bluetooth', { kind: 'granted' }, IOS_BOTH)).toBe("Your DashPal can connect, and RoadWise can tell when you're a passenger.");
+  expect(rowDetail('bluetooth', m('denied'), IOS_BOTH)).toBe("Your DashPal can't connect, and RoadWise can't tell when you're a passenger.");
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
   expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so it plays its alerts itself.");

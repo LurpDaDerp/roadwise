@@ -10,11 +10,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { AppState, Platform } from 'react-native';
 
-import type { PermissionsAdapter } from '@/core/permissions';
+import type { BluetoothPermission, PermissionsAdapter } from '@/core/permissions';
+import { lazyBluetooth } from '@/core/permissions/adapters';
+import { carRadioState } from '@/core/permissions/carBluetooth';
 import { asPaired, PAIRED_KEY } from '@/dashcam/keys';
 import { activeDashcam, subscribeActiveDashcam } from '@/dashcam/registry';
 import { requestDeviceSync } from '@/data/devices/events';
-import { createSettingsRepo } from '@/data/db/settings';
+import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
@@ -68,12 +70,33 @@ const defaultAndroidApi = (): number | null => {
   return Number.isFinite(v) ? v : null;
 };
 
+/** iPhone: a car is paired on the car link (Bluetooth then serves "Are you driving?"). */
+async function defaultCarPaired(): Promise<boolean> {
+  if (Platform.OS !== 'ios') return false;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the drive detector
+  const { readCarLink } = require('@/features/carLink/port') as typeof import('@/features/carLink/port');
+  return ((await readCarLink())?.cars.length ?? 0) > 0;
+}
+
+/**
+ * The Bluetooth permission for a paired car: read from the shared manager, created (with no prompt)
+ * only once the phone has answered; not answered yet reads undetermined.
+ */
+async function readCarBluetooth(settings: Pick<SettingsRepo, 'get' | 'set'>): Promise<BluetoothPermission> {
+  const radio = await carRadioState({ platform: 'ios', settings, radio: lazyBluetooth });
+  if (radio === null) return 'undetermined';
+  if (radio === 'unauthorized') return 'denied';
+  return radio === 'unsupported' ? 'unavailable' : 'granted';
+}
+
 const defaultEnsureChannels = async () => (await import('@/features/notifications/channels')).ensureAndroidChannels();
 
 export interface PermissionBoardDeps {
   adapter?: PermissionsAdapter;
   appState?: AppStateLike;
   androidApi?: number | null;
+  /** iPhone: a car is paired on the car link. Default: the car link's paired cars. */
+  carPaired?: () => Promise<boolean>;
   /** Default: the live DashPal runtime (`watchDashcamPermissions`). */
   watchDashcam?: (onChange: () => void) => () => void;
   ensureChannels?: () => Promise<void>;
@@ -101,6 +124,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   const androidApi = deps.androidApi === undefined ? defaultAndroidApi() : deps.androidApi;
   const watch = deps.watchDashcam ?? watchDashcamPermissions;
   const now = deps.now ?? Date.now;
+  const carPaired = deps.carPaired ?? defaultCarPaired;
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const userId = useSession().session?.user.id ?? null;
@@ -126,12 +150,14 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
         androidApi,
         paired: async () => asPaired(await settings.get<unknown>(PAIRED_KEY)) !== null,
         bluetoothPermission: () => adapter.bluetoothPermission(),
+        carPaired,
+        carBluetooth: () => readCarBluetooth(settings),
         camera: () => adapter.camera(),
       });
     } catch {
       return null;
     }
-  }, [queryClient, userId, adapter, androidApi, settings]);
+  }, [queryClient, userId, adapter, androidApi, settings, carPaired]);
 
   const board = useQuery({ queryKey: boardKey, queryFn: readBoard, staleTime: SHARED_READ_MS, retry: false });
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => readHomePrefs(settings), staleTime: Infinity, retry: false });

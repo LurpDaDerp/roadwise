@@ -1,7 +1,8 @@
 /**
  * The permission board: one read of the phone (`readPermissionBoard`) and the pure rules that turn
  * it into Home's single row and Settings › Permissions' list. A read never prompts and never starts
- * the BLE manager; the Bluetooth permission is read only for a phone with a DashPal paired.
+ * the BLE manager unprompted; the Bluetooth permission is read only for a phone with a DashPal or
+ * (iPhone) a car paired.
  */
 import type { BluetoothPermission, CameraAccess, PermissionPlatform, PermissionSnapshot } from '@/core/permissions';
 
@@ -15,6 +16,10 @@ export interface BoardReadDeps {
   /** A DashPal pairing is stored. */
   paired(): Promise<boolean>;
   bluetoothPermission(): Promise<BluetoothPermission>;
+  /** iPhone: a car is paired on the car link. Default: none. */
+  carPaired?(): Promise<boolean>;
+  /** The Bluetooth permission for a car without a DashPal (`carRadioState`). Default: `bluetoothPermission`. */
+  carBluetooth?(): Promise<BluetoothPermission>;
   camera(): Promise<CameraAccess>;
 }
 
@@ -28,9 +33,18 @@ const orNull = async <T>(read: () => Promise<T>): Promise<T | null> => {
 
 /** One read of the phone. Throws only when the snapshot cannot be read; any other failed read nulls its own field. */
 export async function readPermissionBoard(deps: BoardReadDeps): Promise<PermissionBoardRead> {
-  const [snapshot, paired, camera] = await Promise.all([deps.snapshot(), deps.paired().catch(() => false), orNull(deps.camera)]);
-  const bluetooth = paired ? await orNull(deps.bluetoothPermission) : null;
-  return { snapshot, androidApi: snapshot.platform === 'android' ? deps.androidApi : null, paired, bluetooth, camera };
+  const [snapshot, paired, carPaired, camera] = await Promise.all([
+    deps.snapshot(),
+    deps.paired().catch(() => false),
+    deps.carPaired ? deps.carPaired().catch(() => false) : Promise.resolve(false),
+    orNull(deps.camera),
+  ]);
+  const bluetooth = paired
+    ? await orNull(deps.bluetoothPermission)
+    : carPaired
+      ? await orNull(deps.carBluetooth ?? deps.bluetoothPermission)
+      : null;
+  return { snapshot, androidApi: snapshot.platform === 'android' ? deps.androidApi : null, paired, carPaired, bluetooth, camera };
 }
 
 export interface BoardRow {

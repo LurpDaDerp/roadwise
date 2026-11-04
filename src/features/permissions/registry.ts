@@ -4,7 +4,7 @@
  * phone (`PermissionBoardRead`) into a state. Pure: nothing here touches the OS.
  *
  * Bluetooth and the camera are never requested from here (their `canAsk` is always false): the OS
- * asks for them only where the spec puts them, the DashPal setup and a QR scanner. Location Always
+ * asks for them only where the spec puts them: the DashPal setup, pairing a car and a QR scanner. Location Always
  * and Background App Refresh are iPhone rows: automatic drives need them.
  */
 import type { BluetoothPermission, CameraAccess, PermissionPlatform, PermissionSnapshot } from '@/core/permissions';
@@ -39,7 +39,9 @@ export interface PermissionBoardRead {
   androidApi: number | null;
   /** A DashPal pairing is stored on this phone. */
   paired: boolean;
-  /** null: not read (no pairing) or the read failed. */
+  /** iPhone: a car is paired on the car link (Bluetooth lets "Are you driving?" check the radio). */
+  carPaired?: boolean;
+  /** null: not read (no DashPal or car paired) or the read failed. */
   bluetooth: BluetoothPermission | null;
   /** null: the read failed. */
   camera: CameraAccess | null;
@@ -136,7 +138,7 @@ function backgroundRefreshState(read: PermissionBoardRead): PermState {
 }
 
 function bluetoothState(read: PermissionBoardRead): PermState {
-  if (!read.paired || oldAndroid(read)) return IDLE;
+  if ((!read.paired && read.carPaired !== true) || oldAndroid(read)) return IDLE;
   switch (read.bluetooth) {
     case null:
     case 'unavailable':
@@ -147,8 +149,10 @@ function bluetoothState(read: PermissionBoardRead): PermState {
       return missing('denied', false);
     case 'undetermined':
       // Android: a paired phone allowed Nearby devices before, so not granted now is a revoke. iOS:
-      // the DashPal manager has not started yet (the board reads again when its link changes).
-      return read.snapshot.platform === 'android' ? missing('denied', false) : UNKNOWN;
+      // the DashPal manager has not started yet (the board reads again when its link changes); with
+      // only a car paired, the phone has not answered yet (Settings › Your car asks once): not in use.
+      if (read.snapshot.platform === 'android') return missing('denied', false);
+      return read.paired ? UNKNOWN : IDLE;
   }
 }
 

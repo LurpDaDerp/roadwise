@@ -68,7 +68,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
     );
   } else {
     const read = board.read;
-    const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi };
+    const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi, dashpal: read.paired, car: read.carPaired === true };
     const rows = settingsRows(read, board.prefs, autoDisabled);
     body = (
       <>

@@ -48,7 +48,7 @@ export function PermissionCard({
 
 function PermissionCardBody({ board, read, row, more, onSeeAll }: { board: PermissionBoard; read: PermissionBoardRead; row: BoardRow; more: number; onSeeAll: () => void }) {
   const t = useTheme();
-  const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi };
+  const ctx: CopyCtx = { platform: read.snapshot.platform, androidApi: read.androidApi, dashpal: read.paired, car: read.carPaired === true };
   return (
     <Card padded={false} testID="home-permissions">
       <Animated.View

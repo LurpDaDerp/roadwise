@@ -197,7 +197,17 @@ describe('readPermissionBoard', () => {
     expect(calls).toContain('bluetoothPermission');
   });
 
-  it('each extra read failing alone nulls only its own field', async () => {
+  it('a car paired and no DashPal: the car read answers; a DashPal pairing keeps the DashPal read', async () => {
+    const car = deps({ carPaired: async () => true, carBluetooth: async () => 'denied' });
+    expect(await readPermissionBoard(car.d)).toMatchObject({ paired: false, carPaired: true, bluetooth: 'denied' });
+    expect(car.calls).not.toContain('bluetoothPermission');
+    const both = deps({ paired: async () => true, carPaired: async () => true, carBluetooth: async () => 'denied' });
+    expect((await readPermissionBoard(both.d)).bluetooth).toBe('granted');
+    const failing = deps({ carPaired: async () => Promise.reject(new Error('no link')) });
+    expect(await readPermissionBoard(failing.d)).toMatchObject({ carPaired: false, bluetooth: null });
+  });
+
+    it('each extra read failing alone nulls only its own field', async () => {
     const boom = () => Promise.reject(new Error('x'));
     expect(await readPermissionBoard(deps({ camera: boom }).d)).toMatchObject({ camera: null });
     expect(await readPermissionBoard(deps({ paired: boom }).d)).toMatchObject({ paired: false, bluetooth: null });
