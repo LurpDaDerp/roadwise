@@ -2,6 +2,11 @@
 // "Driving screen · Navigation", "Settings").
 export const navCopy = {
   pickerTitle: 'Choose your navigation app',
+  /** The list of saved places a tap shows (when the saved app can take directions). */
+  placesTitle: 'Where to?',
+  /** A place row, for the screen reader: its name, then its address when it has one. */
+  placeLabel: (name: string, address: string) => (address === '' ? `Directions to ${name}` : `Directions to ${name}, ${address}`),
+  placeHint: (app: string) => `Opens directions in ${app}.`,
   /** Under the title, on the driving screen only. */
   driveLine: 'Your drive keeps recording while you navigate.',
   gone: (app: string) => `${app} isn't on this phone anymore.`,
@@ -14,6 +19,9 @@ export const navCopy = {
   /** The button's caption with no app saved (12 characters at most, like every caption). */
   button: 'Navigate',
   openLabel: (app: string) => `Open ${app}`,
+  /** The button when a tap shows "Where to?" (places saved, and the app takes a destination). */
+  placesLabel: (app: string) => `Navigate with ${app}`,
+  placesHint: 'Shows your saved places first.',
   chooseLabel: 'Choose a navigation app',
   /** The long press, and the screen reader's action for it (once an app is saved). */
   changeLabel: 'Change navigation app',

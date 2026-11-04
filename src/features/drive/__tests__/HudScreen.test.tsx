@@ -91,6 +91,8 @@ async function swipeEnd(end = screen.getByRole('button', { name: hudCopy.endLabe
 let mockUnits: 'mi' | 'km' | null = null;
 // The saved navigation app (`navigation.app`), or null.
 let mockNavApp: string | null = null;
+// The saved places (`places.saved`), or null for none.
+let mockPlaces: unknown[] | null = null;
 const mockDb = {
   execute: jest.fn(async (_sql: string, params: unknown[]) => ({
     rows:
@@ -98,7 +100,9 @@ const mockDb = {
         ? [{ value_json: JSON.stringify(mockUnits) }]
         : params[0] === 'navigation.app' && mockNavApp !== null
           ? [{ value_json: JSON.stringify(mockNavApp) }]
-          : [],
+          : params[0] === 'places.saved' && mockPlaces !== null
+            ? [{ value_json: JSON.stringify(mockPlaces) }]
+            : [],
   })),
 };
 jest.mock('@/data/queries/context', () => ({ useDb: () => mockDb, useOptionalDb: () => mockDb }));
@@ -241,6 +245,7 @@ beforeEach(() => {
   mockStill = false;
   mockUnits = null;
   mockNavApp = null;
+  mockPlaces = null;
   mockLastRowTs = null;
   mockStartedAt = T;
   mockHostListeners.clear();
@@ -1710,6 +1715,181 @@ describe('the navigation button (design §7.4, §8)', () => {
       expect(screen.queryByTestId('hud-nav-highlight')).toBeNull();
       await h.update({ speedMph: 20 });
       expect(screen.getByTestId('hud-nav-highlight')).toBeOnTheScreen();
+    });
+  });
+
+  describe('"Where to?": the saved places (round 14)', () => {
+    const home = { id: 'home', kind: 'home', name: 'Home', address: '12 Oak St', area: 'Seattle, WA 98104', lat: 47.6062104, lng: -122.3320708 };
+    const work = { id: 'work', kind: 'work', name: 'Work', address: '400 Pine St', area: 'Seattle, WA 98101', lat: 47.611, lng: -122.336 };
+    const gym = { id: 'place-k1', kind: 'custom', name: 'Gym', address: '', area: '', lat: 47.62, lng: -122.33 };
+    beforeEach(() => {
+      mockNavApp = 'waze';
+      mockPlaces = [gym, work, home];
+    });
+
+    test('with places and Waze saved, a tap at 25 mph shows the places in order, then "Open Waze"; nothing opens yet', async () => {
+      await renderHud({ speedMph: 25 });
+      await act(async () => {});
+      // the screen reader is told the tap shows places first; only the list's last row is "Open Waze"
+      const button = screen.getByTestId('hud-nav');
+      expect(button).toHaveProp('accessibilityLabel', 'Navigate with Waze');
+      expect(button).toHaveProp('accessibilityHint', 'Shows your saved places first. Touch and hold to change the navigation app.');
+      expect(screen.queryByRole('button', { name: 'Open Waze' })).toBeNull();
+      await fireEvent.press(button);
+      await act(async () => {});
+      expect(Linking.openURL).not.toHaveBeenCalled();
+      const panel = screen.getByTestId('hud-nav-panel');
+      expect(within(panel).getByRole('header')).toHaveTextContent('Where to?');
+      expect(
+        within(panel)
+          .getAllByRole('button')
+          .map((b) => b.props.testID)
+      ).toEqual(['nav-picker-place-home', 'nav-picker-place-work', 'nav-picker-place-place-k1', 'nav-picker-open-app', 'nav-picker-close']);
+      expect(screen.getByRole('button', { name: 'Directions to Home, 12 Oak St' })).toBeOnTheScreen();
+      // the screen does not dim under it
+      await act(() => jest.advanceTimersByTime(DIM_AFTER_MS + 1000));
+      expect(screen.queryByTestId('hud-dim')).toBeNull();
+    });
+
+    test('a place opens Waze with the route to it and closes the list', async () => {
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      await fireEvent.press(screen.getByTestId('nav-picker-place-work'));
+      await act(async () => {});
+      expect(Linking.openURL).toHaveBeenCalledTimes(1);
+      expect(Linking.openURL).toHaveBeenCalledWith('waze://?ll=47.611000,-122.336000&navigate=yes');
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Navigate with Waze' })).toBeOnTheScreen();
+    });
+
+    test('"Open Waze" opens it bare, the route in progress kept', async () => {
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      await fireEvent.press(screen.getByTestId('nav-picker-open-app'));
+      await act(async () => {});
+      expect(Linking.openURL).toHaveBeenCalledTimes(1);
+      expect(Linking.openURL).toHaveBeenCalledWith('waze://');
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+    });
+
+    test('Apple Maps gets its own route URL', async () => {
+      mockNavApp = 'apple_maps';
+      await renderHud({ speedMph: 8 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      await fireEvent.press(screen.getByTestId('nav-picker-place-home'));
+      await act(async () => {});
+      expect(Linking.openURL).toHaveBeenCalledWith('maps://?daddr=47.606210,-122.332071&dirflg=d');
+    });
+
+    test('no places: the tap opens the saved app directly, as before', async () => {
+      mockPlaces = [];
+      await renderHud({ speedMph: 25 });
+      await act(async () => {});
+      expect(screen.getByTestId('hud-nav')).toHaveProp('accessibilityLabel', 'Open Waze');
+      expect(screen.getByTestId('hud-nav')).toHaveProp('accessibilityHint', 'Touch and hold to change the navigation app.');
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      expect(Linking.openURL).toHaveBeenCalledWith('waze://');
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+    });
+
+    test('no app saved: the first tap is the list of apps, with no places in it', async () => {
+      mockNavApp = null;
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
+      expect(screen.queryByTestId('nav-picker-place-home')).toBeNull();
+      expect(screen.queryByTestId('nav-picker-open-app')).toBeNull();
+    });
+
+    test('the long press is the list of apps (Waze marked), with no places in it', async () => {
+      await renderHud({ speedMph: 25 });
+      await fireEvent(screen.getByTestId('hud-nav'), 'longPress');
+      await act(async () => {});
+      expect(screen.getByText('Choose your navigation app')).toBeOnTheScreen();
+      expect(screen.getByTestId('nav-picker-row-waze')).toHaveProp('accessibilityState', { selected: true });
+      expect(screen.queryByTestId('nav-picker-place-home')).toBeNull();
+    });
+
+    test("a place that doesn't open: the list of apps, saying Waze didn't open", async () => {
+      (Linking.openURL as jest.Mock).mockRejectedValueOnce(new Error('no'));
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      await fireEvent.press(screen.getByTestId('nav-picker-place-home'));
+      await act(async () => {});
+      expect(screen.getByTestId('nav-picker-notice')).toHaveTextContent("Waze didn't open.");
+      expect(screen.getByTestId('nav-picker-row-waze')).toBeOnTheScreen();
+    });
+
+    test('at 35 mph the open list closes, and no place opens', async () => {
+      const h = await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      const row = screen.getByTestId('nav-picker-place-home');
+      await h.update({ speedMph: 40 });
+      await act(async () => {});
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      // a tap that lands on the row as it goes
+      await fireEvent.press(row);
+      await act(async () => {});
+      expect(Linking.openURL).not.toHaveBeenCalled();
+    });
+
+    test('the emergency button takes the slot, closing the list; a navigation press closes the panel and shows it again', async () => {
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      expect(screen.getByTestId('nav-picker-place-home')).toBeOnTheScreen();
+      await fireEvent.press(screen.getByRole('button', { name: hudCopy.sos.label }));
+      expect(screen.getByTestId('hud-sos-sheet')).toBeOnTheScreen();
+      expect(screen.queryByTestId('nav-picker')).toBeNull();
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      expect(screen.queryByTestId('hud-sos-panel')).toBeNull();
+      expect(screen.getByTestId('nav-picker-place-home')).toBeOnTheScreen();
+    });
+
+    test('Android back closes it', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- the RN module, after the mocks
+      const { BackHandler } = require('react-native') as typeof import('react-native');
+      const handlers: (() => boolean)[] = [];
+      const spy = jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, fn) => {
+        handlers.push(fn as () => boolean);
+        return { remove: () => handlers.splice(handlers.indexOf(fn as () => boolean), 1) };
+      });
+      try {
+        await renderHud({ speedMph: 25 });
+        await fireEvent.press(screen.getByTestId('hud-nav'));
+        await act(async () => {});
+        expect(screen.getByTestId('nav-picker')).toBeOnTheScreen();
+        await act(async () => {
+          expect(handlers.at(-1)!()).toBe(true);
+        });
+        expect(screen.queryByTestId('nav-picker')).toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('while the list is up, its rows are the only new controls', async () => {
+      await renderHud({ speedMph: 25 });
+      await fireEvent.press(screen.getByTestId('hud-nav'));
+      await act(async () => {});
+      expect(screen.getAllByRole('button').map((b) => b.props.testID).sort()).toEqual([
+        'hud-end',
+        'hud-nav',
+        'hud-sos',
+        'nav-picker-close',
+        'nav-picker-open-app',
+        'nav-picker-place-home',
+        'nav-picker-place-place-k1',
+        'nav-picker-place-work',
+      ]);
     });
   });
 });

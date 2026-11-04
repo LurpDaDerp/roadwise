@@ -7,7 +7,7 @@ import type { ExpoConfig, ConfigContext } from 'expo/config';
 import appConfig from '../../../../app.config';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, type Db } from '@/data/db';
-import { findInstalledNavApp, listInstalledNavApps, openNavApp, type NavAppsPort } from '@/features/navigation/apps';
+import { findInstalledNavApp, listInstalledNavApps, openDirections, openNavApp, openWalkingDirections, type NavAppsPort } from '@/features/navigation/apps';
 import { NAV_ANDROID_PACKAGES, NAV_APPS, NAV_IOS_SCHEMES, navAppById } from '@/features/navigation/catalog';
 import { clearNavApp, NAV_APP_KEY, readNavApp, writeNavApp } from '@/features/navigation/prefs';
 
@@ -148,5 +148,66 @@ describe('the saved choice', () => {
     expect(await readNavApp(db)).toBeNull();
     await createSettingsRepo(db).set(NAV_APP_KEY, { id: 'waze' });
     expect(await readNavApp(db)).toBeNull();
+  });
+});
+
+describe('directions (round 14)', () => {
+  const spot = { lat: 47.6062104, lng: -122.3320708 };
+  /** A port whose openURL records every try and rejects the URLs that start with one of `fails`. */
+  function tries(platform: 'ios' | 'android', fails: string[] = []) {
+    const tried: string[] = [];
+    const p = port({
+      platform,
+      openURL: async (url) => {
+        tried.push(url);
+        if (fails.some((f) => url.startsWith(f))) throw new Error('no handler');
+      },
+    });
+    return { p, tried };
+  }
+
+  test('openDirections: true when the phone opens it, false (never a throw) when it rejects', async () => {
+    const ok = tries('ios');
+    await expect(openDirections('waze://?ll=1.000000,2.000000&navigate=yes', ok.p)).resolves.toBe(true);
+    expect(ok.tried).toEqual(['waze://?ll=1.000000,2.000000&navigate=yes']);
+    const bad = tries('android', ['waze://']);
+    await expect(openDirections('waze://?ll=1.000000,2.000000&navigate=yes', bad.p)).resolves.toBe(false);
+  });
+
+  test('walking: the saved app opens on the first try', async () => {
+    const { p, tried } = tries('ios');
+    await expect(openWalkingDirections('google_maps', spot, p)).resolves.toBe(true);
+    expect(tried).toEqual(['comgooglemaps://?daddr=47.606210,-122.332071&directionsmode=walking']);
+  });
+
+  test('walking on iPhone: Google Maps rejects, then Apple Maps opens', async () => {
+    const { p, tried } = tries('ios', ['comgooglemaps://']);
+    await expect(openWalkingDirections('google_maps', spot, p)).resolves.toBe(true);
+    expect(tried).toEqual(['comgooglemaps://?daddr=47.606210,-122.332071&directionsmode=walking', 'maps://?daddr=47.606210,-122.332071&dirflg=w']);
+  });
+
+  test('walking on Android: Google Maps is the fallback', async () => {
+    const { p, tried } = tries('android');
+    await expect(openWalkingDirections('waze', spot, p)).resolves.toBe(true);
+    expect(tried).toEqual(['google.navigation:q=47.606210,-122.332071&mode=w']);
+  });
+
+  test('Waze on iPhone goes straight to Apple Maps, and is not tried twice when that rejects', async () => {
+    const { p, tried } = tries('ios', ['maps://']);
+    await expect(openWalkingDirections('waze', spot, p)).resolves.toBe(false);
+    expect(tried).toEqual(['maps://?daddr=47.606210,-122.332071&dirflg=w']);
+  });
+
+  test('no app saved: the platform app, once', async () => {
+    const { p, tried } = tries('ios', ['maps://']);
+    await expect(openWalkingDirections(null, spot, p)).resolves.toBe(false);
+    expect(tried).toEqual(['maps://?daddr=47.606210,-122.332071&dirflg=w']);
+  });
+
+  test('a point that is not real opens nothing', async () => {
+    const { p, tried } = tries('ios');
+    await expect(openWalkingDirections('apple_maps', { lat: Number.NaN, lng: 0 }, p)).resolves.toBe(false);
+    await expect(openWalkingDirections('google_maps', { lat: 91, lng: 0 }, p)).resolves.toBe(false);
+    expect(tried).toEqual([]);
   });
 });

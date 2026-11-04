@@ -5,7 +5,8 @@
 // accent when an app is saved (never while greyed out), so a driver who came from the navigation app
 // goes back through it. A tap opens the saved app, or the list when none is saved. A long press
 // (500 ms) always opens the list: to change the saved app, or to pick one; screen readers get the
-// change as the "Change navigation app" action once an app is saved.
+// change as the "Change navigation app" action once an app is saved. When a tap shows the saved
+// places first (`places`), the screen reader hears "Navigate with {app}" instead of "Open {app}".
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { memo } from 'react';
@@ -70,6 +71,7 @@ export const NavigationButton = memo(function NavigationButton({
   appLabel,
   highlight,
   disabled,
+  places = false,
   locked = false,
   units = 'mi',
   palette,
@@ -85,6 +87,8 @@ export const NavigationButton = memo(function NavigationButton({
   appLabel: string | null;
   highlight: boolean;
   disabled: boolean;
+  /** A tap shows "Where to?" (the saved places) before the app: the screen reader is told so. */
+  places?: boolean;
   /** Greyed out for speed (`nextNavLock`): no touch, no highlight, a hint saying when it comes back. */
   locked?: boolean;
   /** The driver's units, for that hint. */
@@ -105,14 +109,16 @@ export const NavigationButton = memo(function NavigationButton({
   const canChange = canHold && appLabel !== null;
   const face = locked ? mix(greyOf(colors.paper), palette.ground, LOCKED_TOWARD_GROUND) : colors.paper;
   const d = Math.min(HUD_NAV_BUTTON_PT, width, height - CAPTION_PT);
+  const label = appLabel === null ? navCopy.chooseLabel : places ? navCopy.placesLabel(appLabel) : navCopy.openLabel(appLabel);
+  const hint = locked ? navCopy.lockedHint(units) : [places && appLabel !== null ? navCopy.placesHint : null, canChange ? navCopy.changeHint : null].filter((h) => h !== null).join(' ') || undefined;
   const buzz = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   return (
     <View style={[styles.slot, { width }]}>
       <Pressable
         testID="hud-nav"
         accessibilityRole="button"
-        accessibilityLabel={appLabel === null ? navCopy.chooseLabel : navCopy.openLabel(appLabel)}
-        accessibilityHint={locked ? navCopy.lockedHint(units) : canChange ? navCopy.changeHint : undefined}
+        accessibilityLabel={label}
+        accessibilityHint={hint}
         accessibilityActions={canChange ? [{ name: 'change', label: navCopy.changeLabel }] : undefined}
         onAccessibilityAction={(e) => {
           if (canChange && e.nativeEvent.actionName === 'change') onLongPress?.();

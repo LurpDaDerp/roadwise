@@ -5,12 +5,17 @@
 //   `openURL('<scheme>://')` and no path, so a route in progress is shown, not replaced.
 // - Android: drive-sense `listInstalledApps` / `launchApp` (a launcher-style intent: a route in
 //   progress is resumed). The label is the installed app's own.
+// - Directions to a point (a saved place, the parked car): the URL from `destinations.ts`, opened
+//   with `openURL` on both platforms (no native code), which replaces any route in progress.
 // Every failure reads as "not installed" or "did not open"; nothing here throws.
 import { Linking, Platform } from 'react-native';
 
 import DriveSense, { type InstalledApp } from '@drive-sense';
 
+import type { LatLng } from '@/lib/geo';
+
 import { NAV_ANDROID_PACKAGES, NAV_APPS, navAppById, type NavAppId } from './catalog';
+import { walkingUrl, WALKING_FALLBACK } from './destinations';
 
 export interface InstalledNavApp {
   id: NavAppId;
@@ -87,4 +92,29 @@ export async function openNavApp(app: InstalledNavApp, port: NavAppsPort = defau
   } catch {
     return false;
   }
+}
+
+/**
+ * Opens a directions URL (`destinations.ts`) with the phone's own URL handling, on both platforms;
+ * true when the phone says it opened. Never throws.
+ */
+export async function openDirections(url: string, port: NavAppsPort = defaultNavAppsPort): Promise<boolean> {
+  try {
+    await port.openURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Walking directions to `point`: in the saved app when it walks, else (or when that one does not
+ * open) in Apple Maps on iPhone, Google Maps on Android. True when one opened.
+ */
+export async function openWalkingDirections(appId: NavAppId | null, point: LatLng, port: NavAppsPort = defaultNavAppsPort): Promise<boolean> {
+  const first = walkingUrl(appId, port.platform, point);
+  if (first === null) return false;
+  if (await openDirections(first, port)) return true;
+  const fallback = walkingUrl(WALKING_FALLBACK[port.platform], port.platform, point);
+  return fallback !== null && fallback !== first && (await openDirections(fallback, port));
 }

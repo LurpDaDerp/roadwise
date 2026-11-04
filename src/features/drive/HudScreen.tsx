@@ -13,6 +13,7 @@ import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts'
 import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { navAppById } from '@/features/navigation/catalog';
 import { NavAppPicker } from '@/features/navigation/NavAppPicker';
+import { NavPlacesPicker } from '@/features/navigation/NavPlacesPicker';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { sunIsDown } from '@/lib/time';
 import { fontFamilies } from '@/ui/fonts';
@@ -153,8 +154,10 @@ export type HudScreenProps = {
  * - Top row: the speed-limit sign (US "SPEED LIMIT" in miles, round red-ringed in kilometres) on
  *   the left with the emergency button under it, and the navigation button on the right. The
  *   navigation button's list of apps shows in a panel under the row, never a route: on a tap while
- *   no app is saved, or on a long press (to change the saved app, or to pick one). At 35 mph and
- *   over the button greys out and takes no touch (its list closes) until the car is back under 30 mph.
+ *   no app is saved, or on a long press (to change the saved app, or to pick one). With places saved
+ *   and a saved app that takes a destination, a tap shows "Where to?" there instead: the places,
+ *   each opening directions to it, then the app itself. At 35 mph and over the button greys out and
+ *   takes no touch (its list closes) until the car is back under 30 mph.
  * - The emergency button (a red call glyph on the buttons' sky-tinted face, a 64 pt target): always
  *   live, at any speed, dimmed, waiting or saving, and never covered (`hudLayout` keeps every panel
  *   off it, and it draws above the "Welcome" line). A tap opens the emergency panel in the panel
@@ -663,6 +666,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           caption={savedApp?.short ?? null}
           appLabel={savedApp?.label ?? null}
           highlight={navLit && !nextLocked}
+          places={nav.hasPlaces}
           disabled={busy || (live.status !== 'recording' && !isWaiting)}
           locked={nextLocked}
           units={units}
@@ -738,16 +742,27 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             },
           ]}
         >
-          <NavAppPicker
-            apps={nav.picker.apps}
-            mode={nav.picker.mode}
-            missingLabel={nav.picker.missingLabel}
-            selected={nav.picker.mode === 'change' ? nav.saved : null}
-            driveLine
-            colors={sheet}
-            onChoose={(app) => void nav.choose(app)}
-            onClose={nav.close}
-          />
+          {nav.picker.mode === 'places' ? (
+            <NavPlacesPicker
+              app={nav.picker.app}
+              places={nav.picker.places}
+              colors={sheet}
+              onGo={(place) => void nav.goTo(place)}
+              onOpenApp={() => void nav.openApp()}
+              onClose={nav.close}
+            />
+          ) : (
+            <NavAppPicker
+              apps={nav.picker.apps}
+              mode={nav.picker.mode}
+              missingLabel={nav.picker.missingLabel}
+              selected={nav.picker.mode === 'change' ? nav.saved : null}
+              driveLine
+              colors={sheet}
+              onChoose={(app) => void nav.choose(app)}
+              onClose={nav.close}
+            />
+          )}
         </View>
       ) : null}
 
