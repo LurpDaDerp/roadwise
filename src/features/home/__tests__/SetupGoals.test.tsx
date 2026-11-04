@@ -11,7 +11,7 @@ import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtu
 import { PLACES_KEY } from '@/features/places/model';
 
 import { homeCopy } from '../copy';
-import { HomeSetupGoals, orderGoals, SETUP_GOALS_DISMISSED_KEY } from '../SetupGoals';
+import { HomeSetupGoals, orderGoals } from '../SetupGoals';
 
 const mockPush = jest.fn();
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
@@ -149,26 +149,18 @@ describe('when the row is gone', () => {
     expect(screen.getByTestId('home-setup')).toBeOnTheScreen();
   });
 
-  it('for good after its ✕, until a sign-out', async () => {
-    const w = await appWorld();
+  it('has no ✕: it stays until every goal is done, even for a driver who closed it before', async () => {
+    const w = await appWorld({ settings: { 'home.setupGoalsDismissed': true } });
     await w.render(<HomeSetupGoals hidden={false} />);
-    await tap('home-setup-dismiss');
-    expect(screen.queryByTestId('home-setup')).toBeNull();
-    await waitFor(async () => expect(await w.settings.get(SETUP_GOALS_DISMISSED_KEY)).toBe(true));
-    expect(SIGN_OUT_SETTINGS).toContain(SETUP_GOALS_DISMISSED_KEY);
-  });
-
-  it('stays closed when it was closed before', async () => {
-    const w = await appWorld({ settings: { [SETUP_GOALS_DISMISSED_KEY]: true } });
-    await w.render(<HomeSetupGoals hidden={false} />);
-    await waitFor(async () => expect(await w.settings.get(SETUP_GOALS_DISMISSED_KEY)).toBe(true));
-    expect(screen.queryByTestId('home-setup')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('home-setup')).toBeOnTheScreen());
+    expect(screen.queryByTestId('home-setup-dismiss')).toBeNull();
+    expect(SIGN_OUT_SETTINGS).not.toContain('home.setupGoalsDismissed');
   });
 
   it('during a drive', async () => {
     const w = await appWorld();
     await w.render(<HomeSetupGoals hidden />);
-    await waitFor(async () => expect(await w.settings.get(SETUP_GOALS_DISMISSED_KEY)).toBeNull());
+    await waitFor(async () => expect(await w.settings.get(PLACES_KEY)).toBeNull());
     expect(screen.queryByTestId('home-setup')).toBeNull();
   });
 

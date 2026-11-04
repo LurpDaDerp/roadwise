@@ -52,7 +52,6 @@ export const homeCopy = {
     title: 'Get set up',
     progress: (done: number, total: number) => `${done} of ${total}`,
     progressSpoken: (done: number, total: number) => `${done} of ${total} done`,
-    dismiss: 'Hide Get set up',
     spokenDone: (title: string, line: string) => `${title}, done. ${line}`,
     spokenOpen: (title: string, line: string) => `${title}. ${line}`,
     goals: {

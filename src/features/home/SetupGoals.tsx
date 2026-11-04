@@ -2,32 +2,27 @@
  * Home's "Get set up" row: a few one-time things, each a tile in a row that scrolls sideways
  * (emergency contacts, your places, your car on an iPhone with the car link, DashPal, a first
  * friend). A tile shows a check once done and moves to the end; a tap opens its screen. The row
- * goes once every goal is done or after its ✕ (for good), and never shows during a drive.
+ * goes once every goal is done, and never shows during a drive.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useRouter, type Href } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, type ComponentProps } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import type { DashcamState } from '@/dashcam/runtime';
 import { useDashcamSelector } from '@/dashcam/ui/useDashcam';
-import { createSettingsRepo } from '@/data/db/settings';
-import { useDb } from '@/data/queries/context';
 import { useCarLink } from '@/features/carLink/useCarLink';
 import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts';
 import { FRIENDS_ADD_HREF } from '@/features/leagues/routes';
 import { PLACES_QUERY, usePlaces } from '@/features/places/usePlaces';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 import { useFriends } from '@/features/social/api';
-import { Card, IconButton, ProgressRing, Text, useFontScale, useTheme } from '@/ui';
+import { Card, ProgressRing, Text, useFontScale, useTheme } from '@/ui';
 
 import { homeCopy } from './copy';
 
 const copy = homeCopy.setup;
-
-/** The row was closed with its ✕ (cleared at sign-out, `SIGN_OUT_SETTINGS`). */
-export const SETUP_GOALS_DISMISSED_KEY = 'home.setupGoalsDismissed';
 
 export type SetupGoalId = 'emergency' | 'places' | 'car' | 'dashpal' | 'friend';
 export interface SetupGoal {
@@ -97,8 +92,8 @@ function GoalTile({ goal, onPress }: { goal: SetupGoal; onPress: () => void }) {
   );
 }
 
-/** The row itself: "Get set up" with how many are done and the ✕, then the tiles, open ones first. */
-export function SetupGoalsView({ goals, onOpen, onDismiss }: { goals: readonly SetupGoal[]; onOpen: (id: SetupGoalId) => void; onDismiss: () => void }) {
+/** The row itself: "Get set up" with how many are done, then the tiles, open ones first. */
+export function SetupGoalsView({ goals, onOpen }: { goals: readonly SetupGoal[]; onOpen: (id: SetupGoalId) => void }) {
   const t = useTheme();
   const done = goals.filter((g) => g.done).length;
   return (
@@ -112,7 +107,6 @@ export function SetupGoalsView({ goals, onOpen, onDismiss }: { goals: readonly S
             {copy.progress(done, goals.length)}
           </Text>
         </View>
-        <IconButton icon="close" accessibilityLabel={copy.dismiss} onPress={onDismiss} variant="surface" testID="home-setup-dismiss" />
       </View>
       <ScrollView
         horizontal
@@ -130,29 +124,15 @@ export function SetupGoalsView({ goals, onOpen, onDismiss }: { goals: readonly S
   );
 }
 
-/** Home's slot: renders nothing during a drive, until what it needs is read, once all is done, or once closed. */
+/** Home's slot: renders nothing during a drive, until what it needs is read, or once all is done. */
 export function HomeSetupGoals({ hidden }: { hidden: boolean }) {
   const router = useRouter();
-  const db = useDb();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
   const { contacts, refetch: refetchContacts } = useEmergencyContacts();
   const { places } = usePlaces();
   const client = useQueryClient();
   const car = useCarLink();
   const dashpal = useDashcamSelector(selectDashpalPaired);
   const friends = useFriends();
-  // null: not read yet (no flash of a row closed earlier).
-  const [dismissed, setDismissed] = useState<boolean | null>(null);
-  useEffect(() => {
-    let live = true;
-    void settings
-      .get<boolean>(SETUP_GOALS_DISMISSED_KEY)
-      .then((v) => live && setDismissed(v === true))
-      .catch(() => live && setDismissed(false));
-    return () => {
-      live = false;
-    };
-  }, [settings]);
   // Something set up a screen deeper shows as done on the way back (the car link and friends read again on focus themselves).
   useFocusEffect(
     useCallback(() => {
@@ -163,7 +143,7 @@ export function HomeSetupGoals({ hidden }: { hidden: boolean }) {
 
   // Wait for every goal that can still be read, so a finished driver never sees the row flash in.
   const friendsLoading = friends.data === undefined && friends.status === 'pending' && friends.fetchStatus === 'fetching';
-  if (hidden || dismissed !== false || contacts === undefined || places === undefined) return null;
+  if (hidden || contacts === undefined || places === undefined) return null;
   if (car.view.status === 'loading' || dashpal === null || friendsLoading) return null;
   const goals: SetupGoal[] = [
     { id: 'emergency', done: contacts.length > 0 },
@@ -174,14 +154,5 @@ export function HomeSetupGoals({ hidden }: { hidden: boolean }) {
     ...(friends.data ? [{ id: 'friend' as const, done: friends.data.friends.length >= 1 }] : []),
   ];
   if (goals.every((g) => g.done)) return null;
-  return (
-    <SetupGoalsView
-      goals={goals}
-      onOpen={(id) => router.push(HREFS[id])}
-      onDismiss={() => {
-        setDismissed(true);
-        void settings.set(SETUP_GOALS_DISMISSED_KEY, true).catch(() => {});
-      }}
-    />
-  );
+  return <SetupGoalsView goals={goals} onOpen={(id) => router.push(HREFS[id])} />;
 }

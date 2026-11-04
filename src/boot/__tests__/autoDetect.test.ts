@@ -166,12 +166,11 @@ test('both wipes disarm automatic drives (iPhone) and wipe native’s drive stat
   expect(await createSettingsRepo(db).get(DRIVE_SCREEN_ENTERED_KEY)).toBeNull();
 });
 
-test('a sign-out takes the emergency contacts and the closed setup goals with it', async () => {
-  const keys = [EMERGENCY_CONTACTS_KEY, 'home.setupGoalsDismissed'];
+test('a sign-out takes the emergency contacts with it', async () => {
+  const keys = [EMERGENCY_CONTACTS_KEY];
   expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining(keys));
   const settings = createSettingsRepo(db);
   await settings.set(EMERGENCY_CONTACTS_KEY, [{ id: 'contact-1', name: 'Mom', phone: '5551234567' }]);
-  await settings.set('home.setupGoalsDismissed', true);
   await wipeForSignOut(db);
   for (const key of keys) expect(await settings.get(key)).toBeNull();
 });
