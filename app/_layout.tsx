@@ -25,6 +25,7 @@ import { registerAfterSignOut, registerBeforeSignOut, SessionProvider } from '@/
 import { setDisplayLook } from '@/drive/displayLook';
 import { DriveProvider } from '@/drive/DriveProvider';
 import { AuthGate } from '@/features/auth/AuthGate';
+import { clearHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
 import { LockoutGate } from '@/features/drive/LockoutGate';
 import { NotificationsHost } from '@/features/notifications';
 import { withCrashReporting } from '@/lib/crashReport';
@@ -103,7 +104,8 @@ function RootTheme({ choice, loaded, children }: { choice: AppearanceChoice; loa
  *   U3's summary notifier stays attached by the runtime itself (bootstrap), not here. A tap on the
  *   iPhone's recording note or a recap held mid-drive opens the driving screen
  *   only while the engine records (`isDriveRecording`, never while a drive only finalizes); no tap
- *   starts a drive.
+ *   starts a drive. A tap on "Are you driving?" stops its drive as "Not driving?" does
+ *   (`onPassengerCheck`), only while that drive records and "Not driving?" can still be used.
  */
 function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean }) {
   const host = runtime.drive;
@@ -114,10 +116,27 @@ function RuntimeHosts({ runtime, ready }: { runtime: AppRuntime; ready: boolean 
     (userId: string) => syncNotificationPrefs(userId, { db: runtime.db }),
     [runtime]
   );
+  // "Are you driving?" tapped: the same as the driving screen's "Not driving?" when that drive is the
+  // one recording (Home says it won't count, then the drive goes; refused: the line comes down).
+  const onPassengerCheck = useCallback(
+    async (clientTripId: string) => {
+      const s = host.snapshot();
+      if (s.status !== 'recording' || s.clientTripId !== clientTripId || !s.notDrivingAvailable) return;
+      showHomeNotice('notDriving');
+      let ok = false;
+      try {
+        ok = await host.cancelDrive();
+      } catch {
+        ok = false;
+      }
+      if (!ok) clearHomeNotice();
+    },
+    [host]
+  );
   return (
     <>
       <DeviceHost onForeground={onForeground} />
-      <NotificationsHost isRecording={isBusy} isDriveRecording={isDriveRecording} isBusy={isBusy} subscribeBusy={subscribeBusy} ready={ready} />
+      <NotificationsHost isRecording={isBusy} isDriveRecording={isDriveRecording} isBusy={isBusy} subscribeBusy={subscribeBusy} ready={ready} onPassengerCheck={onPassengerCheck} />
     </>
   );
 }

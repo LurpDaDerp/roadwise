@@ -108,7 +108,7 @@ function CarLinkBody({ state, failed, onPair, onForget }: { state: CarLinkState;
 
 /** `/settings/car`: Your car. */
 export function CarScreen() {
-  const link = useCarLink();
+  const link = useCarLink({ askIfPaired: true });
   const { view } = link;
   return (
     <Screen scroll testID="car-screen">

@@ -16,10 +16,10 @@ export function createBluetoothPort(transport: () => DashcamTransport): Bluetoot
       const t = transport();
       return t.started() ? (t.bluetoothState() as RadioState) : null;
     },
-    async startRadio() {
+    async startRadio(settleMs = PROMPT_SETTLE_MS) {
       const t = transport();
       await t.start();
-      return (await t.settledBluetoothState(PROMPT_SETTLE_MS)) as RadioState;
+      return (await t.settledBluetoothState(settleMs)) as RadioState;
     },
   };
 }

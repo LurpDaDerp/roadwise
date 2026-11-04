@@ -12,7 +12,7 @@ import { useCarLink } from './useCarLink';
 
 export function CarSettingRow() {
   const router = useRouter();
-  const { view } = useCarLink();
+  const { view } = useCarLink({ askIfPaired: true });
   if (view.status === 'unsupported') return null;
   return (
     <LinkRow

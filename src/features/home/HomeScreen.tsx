@@ -19,6 +19,7 @@ import { useDriveScores } from '@/features/drives/useDriveScores';
 import { homeCard } from '@/features/permissions/board';
 import { HomeDashpal } from '@/dashcam/ui/HomeDashpal';
 import { HomeCarCard } from '@/features/carLink/PairCarCard';
+import { HomeParkedCard } from '@/features/parked/ParkedCard';
 import { PermissionCard } from '@/features/permissions/PermissionCard';
 import { usePermissionBoard } from '@/features/permissions/usePermissionBoard';
 import {
@@ -214,6 +215,7 @@ export function HomeScreen() {
         recording={recording}
         inProgress={<DriveInProgressBanner />}
         weather={<WeatherAlertSlot feed={weather} />}
+        parked={<HomeParkedCard hidden={recording} />}
         conditions={weather.conditions}
         coaching={coaching}
         permissions={<PermissionCard board={board} recording={recording} autoDisabled={autoDisabled} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}

@@ -83,7 +83,8 @@ export interface LinkingPort {
 export type RadioState = 'unknown' | 'resetting' | 'unsupported' | 'unauthorized' | 'off' | 'on' | 'turning_on' | 'turning_off';
 export interface BluetoothPort {
   radio(): Promise<RadioState | null>;
-  startRadio(): Promise<RadioState>;
+  /** `settleMs`: how long to wait for the state to settle (default: long enough for the driver to answer the prompt). */
+  startRadio(settleMs?: number): Promise<RadioState>;
 }
 
 /** Android's runtime permission calls, narrowed (React Native's `PermissionsAndroid`). */
@@ -239,16 +240,16 @@ const rnLinking: LinkingPort = {
   },
 };
 
-const lazyBluetooth: BluetoothPort = {
+export const lazyBluetooth: BluetoothPort = {
   radio: async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
     const { dashpalRadio } = require('@/dashcam/bluetoothPort') as typeof import('@/dashcam/bluetoothPort');
     return dashpalRadio.radio();
   },
-  startRadio: async () => {
+  startRadio: async (settleMs) => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
     const { dashpalRadio } = require('@/dashcam/bluetoothPort') as typeof import('@/dashcam/bluetoothPort');
-    return dashpalRadio.startRadio();
+    return dashpalRadio.startRadio(settleMs);
   },
 };
 

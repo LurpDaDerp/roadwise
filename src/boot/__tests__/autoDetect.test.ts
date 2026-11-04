@@ -20,7 +20,10 @@ import {
 import { SIGN_OUT_SETTINGS, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSettingsRepo, migrate, SPOTS_META_KEY, type Db } from '@/data/db';
+import { BLUETOOTH_ANSWERED_KEY } from '@/core/permissions/carBluetooth';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
+import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
+import { PARKED_KEY } from '@/features/parked/model';
 import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 
@@ -171,6 +174,20 @@ test('a sign-out takes the emergency contacts and the closed setup goals with it
   await settings.set('home.setupGoalsDismissed', true);
   await wipeForSignOut(db);
   for (const key of keys) expect(await settings.get(key)).toBeNull();
+});
+
+test('a sign-out takes the parked spot and the asked "Are you driving?"; any wipe keeps the Bluetooth answer of the phone', async () => {
+  const settings = createSettingsRepo(db);
+  await settings.set(PARKED_KEY, { lat: 1, lng: 2, parkedAt: 3, label: null, driveId: 'x' });
+  await settings.set(PASSENGER_ASKED_KEY, 'x');
+  await settings.set(BLUETOOTH_ANSWERED_KEY, true);
+  await wipeForSignOut(db);
+  expect(await settings.get(PARKED_KEY)).toBeNull();
+  expect(await settings.get(PASSENGER_ASKED_KEY)).toBeNull();
+  expect(await settings.get(BLUETOOTH_ANSWERED_KEY)).toBe(true);
+  setAutoDetectRuntime(null);
+  await wipeDevice(db, { detect: createFakeDriveDetect() });
+  expect(await settings.get(BLUETOOTH_ANSWERED_KEY)).toBe(true);
 });
 
 describe('the Automatic drives switch', () => {

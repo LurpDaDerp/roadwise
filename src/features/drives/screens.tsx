@@ -10,9 +10,11 @@ import { View } from 'react-native';
 
 import { useDataSource, useDb, useDriveDetail, useDriveHistory } from '@/data/queries';
 import { useArchivedKinds } from '@/data/queries/archived';
+import { carFilterUid } from '@/data/queries/keys';
 import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
+import { usePairedCarLabels } from '@/features/carLink/usePairedCars';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
@@ -32,7 +34,13 @@ export function DriveHistoryScreen() {
   const router = useRouter();
   const back = useBack();
   const { now } = useDataSource();
-  const [filter, setFilter] = useState<HistoryFilter>('all');
+  const [picked, setFilter] = useState<HistoryFilter>('all');
+  const cars = usePairedCarLabels();
+  // A car filter lasts while its chip shows: a car forgotten (or fewer than 2 paired) goes back to
+  // all, for good (pairing it again leaves the filter off).
+  const pickedCar = carFilterUid(picked);
+  const filter: HistoryFilter = pickedCar !== null && !cars.some((c) => c.uid === pickedCar) ? 'all' : picked;
+  if (filter !== picked) setFilter(filter);
   const q = useDriveHistory(filter);
   const scores = useDriveScores(q.data);
   const archived = useArchivedKinds();
@@ -54,6 +62,7 @@ export function DriveHistoryScreen() {
         scores={scores}
         autoDrives={autoDrivesOn(auto)}
         {...(archived.data ? { archived: archived.data } : {})}
+        cars={cars}
       />
     </Screen>
   );

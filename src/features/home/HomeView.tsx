@@ -65,6 +65,8 @@ export type HomeViewProps = {
   inProgress?: ReactNode;
   /** The dangerous-weather card: the first action item under the drive card (it renders nothing when all is well). */
   weather?: ReactNode;
+  /** "Where you parked" (iPhone with the car link), right after the weather card (it renders nothing without a spot, or during a drive). */
+  parked?: ReactNode;
   /** The weather now (°F, icon, words), shown on the drive card above Start drive. */
   conditions?: Conditions | null;
   /** The permission card, an action item under the weather card (never while a drive records). */
@@ -89,7 +91,7 @@ export type HomeViewProps = {
  * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, this week's
  * drives, distance and goals in three pills (the goals pill scrolls to the goals section), then the drive card, the screen's hero, with the Safety Rating in
  * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
- * weather, a permission to fix, DashPal, a coaching tip, a car seen on recent drives. Then the
+ * weather, where you parked, a permission to fix, DashPal, a coaching tip, a car seen on recent drives. Then the
  * "Get set up" row of one-time goals (emergency contacts, places, your car, DashPal, a friend), then the detail (stats, recent drives,
  * this week's goals; until 3 scored drives the first-drive prompt and the recent drives come first,
  * then the goals) and How it works, always last.
@@ -171,6 +173,7 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
         </View>
 
         {p.weather}
+        {p.recording ? null : p.parked}
         {p.recording ? null : p.permissions}
         {p.dashpal}
         {tip ? <CoachTipCard coaching={tip} onOpen={p.onAnalytics} /> : null}

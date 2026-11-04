@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
+import { driveCarLabel, usePairedCarLabels } from '@/features/carLink/usePairedCars';
 import { formatDistance } from '@/lib/units';
 import { Text, useTheme } from '@/ui';
 
@@ -35,6 +36,7 @@ export function eventTally(counts: DriveCounts): { type: EventType; n: number }[
  * One drive in a list: when, where, a route sketch, distance, time and its events, with its score
  * at the right in its merit tier's colour (no icon; "not synced" under it when the recap has a sync
  * line: an upload that has failed, or one the server turned down), or the word for why it has none.
+ * With 2 or more cars paired (iPhone), a small chip names the car it was made in (`driveCarLabel`).
  * `score` is the drive's (`useDriveScores`); absent while it loads.
  */
 export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive; score?: number | null; onPress: () => void; testID?: string }) {
@@ -49,10 +51,13 @@ export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive;
   const ink = tier === null ? t.colors.text : meritInk(tier, [t.colors.surface, t.colors.surfaceRaised]);
   const tally = eventTally(drive.counts);
   const clean = drive.clean === true && tally.length === 0 && scorable;
+  const carLabels = usePairedCarLabels();
+  const car = driveCarLabel(drive, carLabels);
 
   const spoken = [
     formatWhen(drive.startedAt),
     spokenRoute(drive),
+    car !== null ? `in ${car}` : null,
     formatDistance(drive.miles, units, { spoken: true }),
     value !== null ? `drive score ${value}${kind.kind === 'scorable' && kind.sync !== null ? ', not synced' : ''}` : word,
     clean ? 'clean drive' : tally.map((x) => `${x.n} ${EVENT_LABEL[x.type].toLowerCase()}`).join(', ') || null,
@@ -106,6 +111,26 @@ export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive;
               </View>
             ))
           )}
+          {car !== null ? (
+            <View
+              testID={`${testID ?? 'row'}-car`}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 3,
+                maxWidth: 160,
+                paddingHorizontal: t.space.sm,
+                paddingVertical: 1,
+                borderRadius: t.radius.pill,
+                backgroundColor: t.colors.surfaceRaised,
+              }}
+            >
+              <Ionicons name="car-outline" size={12} color={t.colors.textMuted} />
+              <Text variant="footnote" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
+                {car}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
       <View style={{ alignItems: 'flex-end' }}>

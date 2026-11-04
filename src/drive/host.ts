@@ -42,7 +42,7 @@
 // - **Background (Android).** Each row first pumps the process's timers (`src/lib/timers.ts`): with
 //   the app in the Android background JS timers are paused, and the rows are what keeps the alert
 //   player, the waiting clock and the DashPal link moving.
-import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type EndCauseNative, type JournaledDrive } from '@drive-sense';
+import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type CarLinkState, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type EndCauseNative, type JournaledDrive, type MotionActivity } from '@drive-sense';
 import type { LiveDriveState } from '@live-drive';
 import { MERGE_GAP_S } from '@scoring';
 import { Platform } from 'react-native';
@@ -50,9 +50,9 @@ import { Platform } from 'react-native';
 import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
-import { knownSpeed, ROW_MS } from '@/core/detectors/common';
+import { knownSpeed, ROW_MS, speedTrusted } from '@/core/detectors/common';
 import type { AdoptedTrip, AlertEvent, DriveOrigin, EndCause, EngineSnapshot, EngineStatus, PlaceSpot, StartSource, TripSession } from '@/core/engine/engine.types';
-import { closeDrive, dropTrip, isDropped, type DropReason } from '@/core/engine/finalize';
+import { closeDrive, dropTrip, isDropped, type DropReason, type FinalizeDeps } from '@/core/engine/finalize';
 import { createEngine } from '@/core/engine/machine';
 import { createRecorder } from '@/core/engine/recorder';
 import { rebuildFromSamples, type RebuildDeps } from '@/core/engine/replay';
@@ -62,11 +62,12 @@ import { NUDGE_AFTER_ALERT_MS } from '@/core/spots/constants';
 import type { WatchSpot } from '@/core/spots/types';
 import { createSpotWatcher, type SpotNudge, type SpotWatcher } from '@/core/spots/watcher';
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
-import { createSettingsRepo, createTripsRepo, type Db, type TripStatus } from '@/data/db';
+import { createSettingsRepo, createTripsRepo, type Db, type TripRow, type TripStatus } from '@/data/db';
 import { emitDataChanged } from '@/data/events';
 import { enqueuePassengerRide } from '@/data/sync/queue';
 import type { AppStateLike } from '@/data/foreground';
 import { readWatchSpots } from '@/data/queries/spots';
+import { clearParkedSpot, readParkedSpot, writeParkedSpot } from '@/features/parked/model';
 import { WEATHER_TITLES } from '@/features/weather/copy';
 import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
 import { processTimers } from '@/lib/timers';
@@ -78,8 +79,12 @@ import { displayLook } from './displayLook';
 import { speedTintOf } from './displayTint';
 import { clearDropNotice, writeDropNotice } from './dropNotice';
 import { clearCancelMarker, readCancelMarker, writeCancelMarker } from './cancel';
+import { createCarTally, nativeCarTag, type CarTag, type CarTally } from './carTally';
 import { budgetFor, NOT_DRIVING_KEY, NOT_DRIVING_PERSIST_EVERY_MS, spend, writeBudget, type NotDrivingBudget } from './notDriving';
+import { createParkedWatch, createRowTrail, PARKED_LEAVE_GRACE_MS, spotQualifies, type ParkedOutcome, type ParkedWatch } from './parkedWatch';
 import { readParkingSpots, readPlaceSpots } from './parkingSpots';
+import { PASSENGER_ASKED_KEY, PASSENGER_READ_EVERY_MS, passengerDue, passengerReady, readProvenCars, type PassengerFacts } from './passengerCheck';
+import { createPassengerNotePort, type PassengerNotePort } from './passengerNote';
 import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, realScheduler, type Scheduler } from './ticks';
@@ -313,6 +318,11 @@ export interface DriveHostDeps {
   spots?: { readWatchSpots(): Promise<WatchSpot[]> };
   /** The weather at a place (default Open-Meteo). */
   weather?: WeatherLookup;
+  /**
+   * iPhone with the car link: what "Are you driving?" needs of the phone (Bluetooth, the notification
+   * permission, the note). Default: the phone's own on such a build; null turns the check off.
+   */
+  passengerNote?: PassengerNotePort | null;
   /** The phone recording the drives (default `Platform.OS`): the phone detector reads it (on iPhone a row with a call is never phone use). */
   platform?: 'ios' | 'android';
   /**
@@ -340,6 +350,9 @@ export const JOURNAL_LINK_KEY = 'drive.journalLink';
 export const MAX_JOURNAL_REPLAY_ROWS = 1800;
 /** Rows read from the journal per call. */
 export const JOURNAL_READ_ROWS = 300;
+/** Motion reports kept for a parked watch that starts in the past (at most this many, this old). */
+export const PARKED_ACTIVITY_KEEP = 100;
+export const PARKED_ACTIVITY_KEEP_MS = 10 * 60_000;
 /** The car counts as still driving at the end only when its latest speed reading is at most this old then. */
 export const DRIVING_AT_END_MS = 5_000;
 
@@ -484,6 +497,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const ios = detect !== null;
   const platform: 'ios' | 'android' = deps.platform ?? (Platform.OS === 'android' ? 'android' : 'ios');
   const scheduler = deps.scheduler ?? realScheduler;
+  /** An iPhone build with the car link (round 11): the car tally, "Are you driving?" and "Where you parked". */
+  const carLink = detect !== null && detect.carLinkAvailable === true;
+  const passengerNote: PassengerNotePort | null = carLink && persist ? (deps.passengerNote === undefined ? createPassengerNotePort(db) : deps.passengerNote) : null;
 
   function report(error: unknown, ctx: string): void {
     try {
@@ -532,6 +548,32 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let places: readonly PlaceSpot[] = [];
   /** iOS: native's car-link "gone since" for the live drive (`carLink`), or null. */
   let carGoneSince: number | null = null;
+  /**
+   * iPhone with the car link: what the route held over the open drive (`carTally.ts`), from the read
+   * as it opened; kept after it closes (the parked watch reads it) until the next drive opens. Null
+   * for a drive replayed at a launch (nobody saw its route), or when the link could not be read.
+   */
+  let carTally: CarTally | null = null;
+  /** The paired cars a kept drive of the last 30 days was in (read as the drive opens). */
+  let provenCars: ReadonlySet<string> = new Set();
+  /** The drive that asked "Are you driving?" (once per drive), and the one whose note shows now. */
+  let passengerAsked: string | null = null;
+  let passengerPosted: string | null = null;
+  let passengerBusy = false;
+  let passengerReadAt = 0;
+  /** The newest live row: its time and its known, trusted GPS speed. */
+  let lastLive: { ts: number; speed: number | null } | null = null;
+  /** When the open drive reached driving speed (it never changes after), once known; read once per drive. */
+  let passengerDroveAt: number | null = null;
+  /** The open drive's rows, for the parked checks (`parkedWatch.ts`). */
+  const trail = createRowTrail();
+  /** The latest motion reports, for a parked watch that begins when the car left (in the past). */
+  let recentActivity: MotionActivity[] = [];
+  /** A kept drive's parked spot, waiting for the paired car to leave (30 s at most) or for the walk away. */
+  /** `lastMovedAt`: the drive's cut (the car's last movement, row clock), or null when it was not cut. */
+  let parkedArm: { driveId: string; lat: number; lng: number; parkedAt: number; label: string | null; closedAt: number; lastMovedAt: number | null } | null = null;
+  let parkedWatch: ParkedWatch | null = null;
+  let parkedTimer: unknown = null;
   let hudFocused = false;
   /** `hudVisible()` as last settled (the budget counts while it holds). */
   let visibleNow = false;
@@ -576,6 +618,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const listeners = new Set<(s: DriveState) => void>();
 
   const appActive = (): boolean => (deps.appState?.currentState ?? 'active') === 'active';
+  /** RoadWise is behind (not merely inactive: Control Center or a call over it still shows it, and a note posted then is held by the foreground handler). */
+  const appBehind = (): boolean => deps.appState?.currentState === 'background';
   const hudVisible = (): boolean => hudFocused && appActive();
 
   // --- engine wiring -------------------------------------------------------------------------------
@@ -597,14 +641,18 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       } catch (e) {
         report(e, 'dashcam');
       }
-      const result = await closeDrive(session, {
+      const car = await carTagOf(session);
+      // The paired car it was in, stored on the trip (`car_uid`, `car_name`; local only).
+      const finalizeDeps: FinalizeDeps = {
         db,
         tz: tz(),
         now,
         appVersion: deps.appVersion,
         notDrivingExpired: budget !== null && budget.clientTripId === id && budget.expired,
+        carTag: () => car,
         ...dashcamFinalizeDeps(db),
-      });
+      };
+      const result = await closeDrive(session, finalizeDeps);
       const endCause = session.endCause ?? 'manual';
       if (isDropped(result)) {
         captureEnd = captureEndOf(session, closedAt, false);
@@ -623,6 +671,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           miles: result.trip.miles,
           endedAt: result.trip.ended_at ?? session.endedAt ?? null,
         };
+        // Beside the drive: a failure here never fails its finalize.
+        await afterKept(session, result.trip, closedAt).catch((e: unknown) => report(e, 'parked'));
       }
       finalizedPending = true;
       if (unfinalized?.clientTripId === id) unfinalized = null;
@@ -632,6 +682,252 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       unfinalized = session;
       throw error;
     }
+  }
+
+  // --- the car link: the drive's car, "Are you driving?", "Where you parked" (iPhone) -------------
+
+  /**
+   * The drive's car (`carTally.ts`): the link read once more as it closes, then the paired car
+   * connected for most of it. A drive no tally saw (an ended journal taken in at a launch): the car
+   * native itself kept for it. Null without the car link, or when unreadable.
+   */
+  async function carTagOf(session: Readonly<TripSession>): Promise<CarTag | null> {
+    if (!carLink || detect === null) return null;
+    const fresh = await detect.carLinkState().catch(() => null);
+    try {
+      if (carTally !== null) {
+        if (fresh !== null) onCarLinkState(fresh);
+        return carTally.tag(session.startedAt, session.endedAt ?? now());
+      }
+      const ids = liveDrive !== null && liveDrive.clientTripId === session.clientTripId ? [session.clientTripId, liveDrive.driveId] : [session.clientTripId];
+      return fresh === null ? null : nativeCarTag(fresh, ids);
+    } catch (e) {
+      report(e, 'carTag');
+      return null;
+    }
+  }
+
+  /** A report of the car link (a live `carLink` event, or a fresh read): the tally, the note, the parked watch. */
+  function onCarLinkState(c: CarLinkState): void {
+    carGoneSince = c.goneSince;
+    const t = carTally;
+    if (t === null) return;
+    t.observe(c, now());
+    // The car (or CarPlay) is on the route after all: "Are you driving?" no longer stands.
+    if (passengerPosted !== null && (t.pairedNow() || t.linkedNow())) removePassenger();
+    if (parkedArm === null) return;
+    if (t.pairedNow()) {
+      // Back in the car before the walk was confirmed: no parked spot.
+      if (parkedWatch !== null) dropParked();
+      return;
+    }
+    const left = t.pairedLeftAt();
+    if (parkedWatch === null && left !== null) {
+      if (left - parkedArm.closedAt <= PARKED_LEAVE_GRACE_MS) startParkedWatch(left);
+      else dropParked();
+    }
+  }
+
+  /** The link read afresh (RoadWise back in front: events are live only, so one may have been missed). */
+  async function rereadCarLink(): Promise<void> {
+    if (!carLink || detect === null || carTally === null) return;
+    const fresh = await detect.carLinkState().catch(() => null);
+    if (fresh !== null) onCarLinkState(fresh);
+  }
+
+  /** A note (and its stored trip id) of a drive that is no longer recording: taken down, the key gone. */
+  function dropStalePassenger(id: string): void {
+    if (passengerNote === null) return;
+    passengerNote.remove(id).catch((e: unknown) => report(e, 'passengerCheck'));
+    void createSettingsRepo(db)
+      .remove(PASSENGER_ASKED_KEY)
+      .catch((e: unknown) => report(e, 'passengerCheck'));
+  }
+
+  /** After the boot took native's drives in: a note left for a drive that is not recording now goes (its drive ended while RoadWise was away). */
+  async function sweepPassenger(): Promise<void> {
+    if (passengerNote === null) return;
+    const asked = await createSettingsRepo(db)
+      .get<unknown>(PASSENGER_ASKED_KEY)
+      .catch(() => null);
+    if (typeof asked !== 'string') return;
+    const s = engine.snapshot();
+    if (s.status !== 'recording' || s.clientTripId !== asked) dropStalePassenger(asked);
+  }
+
+  function removePassenger(): void {
+    const id = passengerPosted;
+    if (id === null || passengerNote === null) return;
+    passengerPosted = null;
+    passengerNote.remove(id).catch((e: unknown) => report(e, 'passengerCheck'));
+  }
+
+  /** "Are you driving?" for the open drive as it stands now (`passengerCheck.ts`), or null when it cannot apply. */
+  function passengerFacts(): PassengerFacts | null {
+    const s = engine.snapshot();
+    const t = carTally;
+    if (passengerNote === null || t === null || s.clientTripId === null || lastLive === null) return null;
+    // `engine.session()` copies the whole drive: read once, when the drive first reaches driving speed.
+    if (passengerDroveAt === null && s.drove) passengerDroveAt = engine.session()?.droveAt ?? null;
+    return {
+      carLink: true,
+      origin: s.origin,
+      recording: s.status === 'recording',
+      waiting: waiting !== null,
+      notDrivingAvailable: notDrivingAvailable(),
+      pairedCars: t.cars().length,
+      linkProven: t.cars().some((c) => provenCars.has(c.uid)),
+      linkKnown: true,
+      pairedEver: t.pairedEver() || t.linkedBefore(),
+      carPlayEver: t.carPlayEver(),
+      audioEver: t.audioEver(),
+      audioNow: t.audioNow(),
+      droveAt: passengerDroveAt,
+      rowTs: lastLive.ts,
+      rowSpeedMps: lastLive.speed,
+      appActive: !appBehind(),
+      asked: passengerAsked === s.clientTripId,
+    };
+  }
+
+  /**
+   * After a live row: once every other rule holds, Bluetooth and the notification permission are
+   * read (at most every 30 s), the rules checked again, and the note posted, once per drive.
+   */
+  function checkPassenger(): void {
+    const port = passengerNote;
+    // The cheap rules first: this runs on every live row.
+    if (port === null || carTally === null || passengerBusy || !appBehind() || now() - passengerReadAt < PASSENGER_READ_EVERY_MS) return;
+    const open = engine.snapshot();
+    if (open.origin !== 'auto' || open.clientTripId === null || passengerAsked === open.clientTripId) return;
+    const f = passengerFacts();
+    if (f === null || !passengerDue(f)) return;
+    const id = engine.snapshot().clientTripId;
+    if (id === null) return;
+    passengerBusy = true;
+    passengerReadAt = now();
+    void (async () => {
+      try {
+        const bluetooth = await port.bluetooth();
+        const allowed = await port.notificationsAllowed();
+        const again = passengerFacts();
+        if (again === null || engine.snapshot().clientTripId !== id || !passengerReady(again, bluetooth, allowed)) return;
+        passengerAsked = id;
+        passengerPosted = id;
+        await createSettingsRepo(db)
+          .set(PASSENGER_ASKED_KEY, id)
+          .catch((e: unknown) => report(e, 'passengerCheck'));
+        await port.post(id);
+        // The drive closed (or the car came on) while it was posted: down again.
+        const s = engine.snapshot();
+        if (s.clientTripId !== id || s.status !== 'recording' || carTally?.linkedNow() === true || carTally?.pairedNow() === true) {
+          if (passengerPosted === id) removePassenger();
+          else port.remove(id).catch((e: unknown) => report(e, 'passengerCheck'));
+        }
+      } catch (e) {
+        report(e, 'passengerCheck');
+      } finally {
+        passengerBusy = false;
+      }
+    })();
+  }
+
+  /**
+   * A kept drive closed: an earlier drive's parked spot goes (the car has moved since), and this
+   * drive's end may become one (`parkedWatch.ts`): armed when a paired car was on the route and the
+   * end point is good and away from the saved places, then watched once the car has left.
+   */
+  async function afterKept(session: Readonly<TripSession>, trip: TripRow, closedAt: number): Promise<void> {
+    if (!carLink) return;
+    try {
+      const old = await readParkedSpot(db);
+      if (old !== null && old.driveId !== trip.client_trip_id && trip.started_at > old.parkedAt) await clearParkedSpot(db);
+    } catch (e) {
+      report(e, 'parked');
+    }
+    dropParked();
+    const t = carTally;
+    const point = session.lastFix;
+    if (t === null || point === null || !t.pairedEver()) return;
+    if (!spotQualifies(point, trail.accuracyAt(point.ts), places)) return;
+    parkedArm = {
+      driveId: trip.client_trip_id,
+      lat: point.lat,
+      lng: point.lng,
+      parkedAt: trip.ended_at ?? session.endedAt ?? point.ts,
+      label: trip.to_label,
+      closedAt,
+      lastMovedAt: session.cut ? session.lastRowTs : null,
+    };
+    // Still on the route: it has 30 s to leave (`onCarLinkState`).
+    if (t.pairedNow()) return;
+    const left = t.pairedLeftAt();
+    if (left === null) dropParked();
+    else startParkedWatch(left);
+  }
+
+  /** The paired car left the route at `leftAt`: the watch for the walk away begins, if the car stood still then. */
+  function startParkedWatch(leftAt: number): void {
+    const arm = parkedArm;
+    if (arm === null) return;
+    if (!trail.stoppedAt(leftAt, arm.closedAt, arm.lastMovedAt)) {
+      dropParked();
+      return;
+    }
+    const w = createParkedWatch(leftAt);
+    parkedWatch = w;
+    // The reports since the car left (and the one standing as it left) are taken in their own order.
+    for (const a of [...recentActivity].sort((x, y) => x.ts - y.ts)) w.activity(a, Math.max(a.ts, leftAt));
+    settleParked(w, w.tick(now()));
+  }
+
+  function settleParked(w: ParkedWatch, outcome: ParkedOutcome): void {
+    if (parkedWatch !== w) return;
+    if (parkedTimer !== null) scheduler.clearTimeout(parkedTimer);
+    parkedTimer = null;
+    if (outcome === 'dropped') {
+      dropParked();
+      return;
+    }
+    if (outcome === 'confirmed') {
+      const arm = parkedArm;
+      dropParked();
+      if (arm !== null && persist) {
+        void writeParkedSpot(db, { lat: arm.lat, lng: arm.lng, parkedAt: arm.parkedAt, label: arm.label, driveId: arm.driveId }).catch((e: unknown) => report(e, 'parked'));
+      }
+      return;
+    }
+    const due = w.dueAt();
+    if (due === null) return;
+    parkedTimer = scheduler.setTimeout(
+      () => {
+        parkedTimer = null;
+        void run(() => {
+          if (parkedWatch === w) settleParked(w, w.tick(now()));
+        }, 'parked');
+      },
+      Math.max(ROW_MS, due - now())
+    );
+  }
+
+  function dropParked(): void {
+    if (parkedTimer !== null) scheduler.clearTimeout(parkedTimer);
+    parkedTimer = null;
+    parkedWatch = null;
+    parkedArm = null;
+  }
+
+  /** A motion report (live): kept a while for a watch that starts in the past, and handed to the watch. */
+  function onParkedActivity(a: MotionActivity): void {
+    if (!carLink) return;
+    const at = now();
+    recentActivity.push(a);
+    const oldest = recentActivity[0];
+    if (recentActivity.length > PARKED_ACTIVITY_KEEP || (oldest !== undefined && at - oldest.ts > PARKED_ACTIVITY_KEEP_MS)) {
+      recentActivity = recentActivity.filter((x) => at - x.ts <= PARKED_ACTIVITY_KEEP_MS).slice(-PARKED_ACTIVITY_KEEP);
+    }
+    const w = parkedWatch;
+    if (w !== null) settleParked(w, w.activity(a, at));
   }
 
   /**
@@ -928,6 +1224,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     budget = null;
     lastCountedRowTs = null;
     persistedSpent = 0;
+    // "Are you driving?" goes with its drive, however it ended.
+    removePassenger();
+    if (passengerAsked !== null && persist) void createSettingsRepo(db).remove(PASSENGER_ASKED_KEY).catch((e: unknown) => report(e, 'passengerCheck'));
     spotWatcher = null;
     spotNudge = null;
     spotsLoad += 1;
@@ -977,11 +1276,47 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     places = persist ? await readPlaceSpots(db, (e) => report(e, 'parkingSpots')) : [];
     // A drive opens with the link as native has it now; the live `carLink` keeps it from here.
     carGoneSince = null;
+    // The last drive's car tally, its note and its parked watch go: a new drive is under way.
+    carTally = null;
+    provenCars = new Set();
+    passengerAsked = null;
+    passengerPosted = null;
+    passengerReadAt = 0;
+    passengerDroveAt = null;
+    lastLive = null;
+    trail.reset();
+    parkedWatch?.driveStarted();
+    dropParked();
     if (ios && detect !== null && detect.available) {
-      carGoneSince = await detect
-        .carLinkState()
-        .then((c) => c.goneSince)
+      const link = await detect.carLinkState().catch(() => null);
+      carGoneSince = link?.goneSince ?? null;
+      // A drive replayed at a launch (`quiet`) was not seen live: no tally (its car comes from native's own record).
+      if (carLink && link !== null && !opts.quiet) {
+        try {
+          // A drive that just began had its route since its start; one taken up after a relaunch, only from now.
+          // Native's "gone since" in this drive: a paired car or CarPlay was on the route before the tally saw it.
+          const linkedBefore = link.goneSince !== null && link.goneSince >= (s.startedAt ?? 0);
+          carTally = createCarTally(link, now(), opts.adopted ? now() : (s.startedAt ?? now()), linkedBefore);
+        } catch (e) {
+          report(e, 'carLink');
+        }
+        if (persist && link.cars.length > 0) {
+          provenCars = await readProvenCars(
+            db,
+            link.cars.map((c) => c.uid),
+            now()
+          );
+        }
+      }
+    }
+    // Asked before a relaunch: never again on this drive, and its note goes when the drive does. A
+    // note left by another drive (or by this one, replayed after it ended) goes now.
+    if (passengerNote !== null) {
+      const asked = await createSettingsRepo(db)
+        .get<unknown>(PASSENGER_ASKED_KEY)
         .catch(() => null);
+      if (asked === id && !opts.quiet) passengerAsked = passengerPosted = id;
+      else if (typeof asked === 'string') dropStalePassenger(asked);
     }
     persistedSpent = budget.spentMs;
     lastCountedRowTs = null;
@@ -1161,6 +1496,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           })
           .catch((e: unknown) => report(e, 'notDriving'));
       }
+      // Its tap could no longer stop the drive.
+      removePassenger();
       publish();
       refreshDisplay();
     } else if (budget.spentMs - persistedSpent >= NOT_DRIVING_PERSIST_EVERY_MS) {
@@ -1438,6 +1775,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const recording = snap.status === 'recording';
     if (recording) {
       if (row.gnssValid) lastFixAt = { lat: row.lat, lng: row.lng, ts: row.ts };
+      if (carLink) {
+        trail.push(row);
+        if (!opts.replay) {
+          const speed = knownSpeed(row);
+          lastLive = { ts: row.ts, speed: speed !== null && speedTrusted(row) ? speed : null };
+          checkPassenger();
+        }
+      }
       weatherWatch?.onRow(row, snap.distanceM);
       if (!opts.replay && spotWatcher !== null) {
         const nudge = spotWatcher.push({
@@ -1794,7 +2139,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         source.addListener('activity', (raw) => {
           const activity = parseActivity(raw);
           if (activity === null) return;
-          void run(() => engine.dispatch({ type: 'motion', activity, ts: now() }), 'activity');
+          void run(async () => {
+            await engine.dispatch({ type: 'motion', activity, ts: now() });
+            // After a drive's end: the walk away from the parked car (iPhone with the car link).
+            onParkedActivity(activity);
+          }, 'activity');
         })
       ),
       remover(
@@ -1825,10 +2174,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       subscriptions.push(
         remover(detect.addListener('driveStarted', (e) => void run(() => onDriveStarted(e), 'driveStarted'))),
         remover(detect.addListener('driveEnded', (e) => void run(() => onDriveEnded(e), 'driveEnded'))),
-        // The car link's "gone since" (live only): the engine's car-link end reads it at each row.
+        // The car link (live only): its "gone since" for the engine's car-link end at each row, and
+        // the drive's tally (its car, "Are you driving?", the parked watch).
         remover(
           detect.addListener('carLink', (c) => {
-            carGoneSince = c.goneSince;
+            try {
+              onCarLinkState(c);
+            } catch (e) {
+              carGoneSince = c.goneSince;
+              report(e, 'carLink');
+            }
           })
         )
       );
@@ -1849,6 +2204,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
               clearPush();
               deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
             }
+            if (s.status === 'recording') await rereadCarLink();
             await evaluateWaiting();
           }, 'foreground');
         }
@@ -2001,8 +2357,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           captureOn = false;
           journalsOwed = true;
           deferredAdopt = opts.adopt ?? null;
-        } else if (ios) await bootIos(opts.adopt ?? null);
-        else if (opts.adopt) await adoptTrip(opts.adopt);
+        } else if (ios) {
+          await bootIos(opts.adopt ?? null);
+          await sweepPassenger();
+        } else if (opts.adopt) await adoptTrip(opts.adopt);
       }, 'boot');
       attachNative();
       await work;
@@ -2125,6 +2483,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       subscriptions = [];
       ticker.stop();
       clearPush();
+      dropParked();
       if (waiting?.timer != null) scheduler.clearTimeout(waiting.timer);
       weatherWatch?.stop();
       booted = false;

@@ -7,6 +7,7 @@ export {
   readPromptHistory,
   recordPrompt,
 } from './policy';
+export { askBluetoothForCar, BLUETOOTH_ANSWERED_KEY, CAR_RADIO_SETTLE_MS, carRadioState, type CarBluetoothDeps } from './carBluetooth';
 export { createDriveSenseResolver, resolveDriveDetect, resolveDriveSense } from './driveSensePort';
 export type { DriveDetectPort, DriveSenseLoaders, DriveSensePort } from './driveSensePort';
 export {

@@ -11,6 +11,7 @@
  */
 import type { DriveDetectApi } from '@drive-sense';
 
+import { BLUETOOTH_ANSWERED_KEY } from '@/core/permissions/carBluetooth';
 import { activeDashcam } from '@/dashcam/registry';
 import { createSettingsRepo, REFUSED_NEVER, SPOTS_META_KEY, type Db } from '@/data/db';
 import { clearAppAttest } from '@/data/devices/appAttest';
@@ -21,10 +22,15 @@ import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
+import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
+import { PARKED_KEY } from '@/features/parked/model';
 import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 import { PLACE_NAMES_KEY, PLACES_KEY, PROMPT_DECLINED_KEY, PROMPT_OFF_KEY } from '@/features/places/model';
+import { QUIET_HOURS_KEY } from '@/features/settings/notifications/quietHours';
+import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
+import { COMMUTE_HEADS_UP_KEY } from '@/features/weather/commuteSetting';
 
 import { autoDetectOff } from './autoDetect';
 
@@ -53,11 +59,15 @@ export const DEVICE_TABLES: readonly string[] = [
 ];
 
 /**
- * The one setting the handover wipe keeps: this install's device id (`src/data/devices/installId.ts`).
- * A random id that identifies nothing outside the app; keeping it is what ties every account on one
+ * The settings the handover wipe keeps: this install's device id (`src/data/devices/installId.ts`),
+ * and whether the phone answered the Bluetooth prompt. The id is a random id that identifies nothing outside the app; keeping it is what ties every account on one
  * phone to one `device_id` (its push and Live Activity tokens) across a sign-out and sign-in.
  */
-export const WIPE_KEEPS_SETTINGS: readonly string[] = ['device.installId'];
+export const WIPE_KEEPS_SETTINGS: readonly string[] = [
+  'device.installId',
+  // The phone answered the Bluetooth prompt (a fact about the phone, not a driver's; `carBluetooth.ts`).
+  BLUETOOTH_ANSWERED_KEY,
+];
 
 /**
  * The phone's DashPal pairing and preferences (`dashcam.*`: the paired dashcam, "Also beep on
@@ -91,6 +101,12 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   'home.setupGoalsDismissed',
   DROP_NOTICE_KEY,
   NOT_DRIVING_KEY,
+  // The drive that asked "Are you driving?", and where the car was parked (iPhone with the car link).
+  PASSENGER_ASKED_KEY,
+  PARKED_KEY,
+  // The weather heads-up switch, and this phone's copy of the driver's quiet hours.
+  COMMUTE_HEADS_UP_KEY,
+  QUIET_HOURS_KEY,
   SPOTS_META_KEY,
   RESTORED_AT_KEY,
   RESTORE_CURSOR_KEY,
@@ -119,8 +135,8 @@ async function cancelSummariesBounded(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
     const { cancelDriveSummaries } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
     await Promise.race([
-      // The drive recaps were the leaving driver's.
-      cancelDriveSummaries().catch(() => {}),
+      // The drive recaps and the weather heads-ups before the commute were the leaving driver's.
+      Promise.all([cancelDriveSummaries().catch(() => {}), cancelCommuteHeadsUpsLazily()]),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, CANCEL_SUMMARIES_TIMEOUT_MS);
       }),

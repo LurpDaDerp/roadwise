@@ -25,6 +25,8 @@ jest.mock('../port', () => ({
     return () => sub.remove();
   },
 }));
+const mockAskBluetooth = jest.fn(async () => {});
+jest.mock('../bluetoothAsk', () => ({ askBluetoothOnPair: () => mockAskBluetooth() }));
 let mockAuto: { state: string } = { state: 'on' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({
   useAutoDrives: () => mockAuto,
@@ -51,6 +53,8 @@ beforeEach(() => {
   mockDetect = createFakeDriveDetect();
   mockAuto = { state: 'on' };
   mockPush.mockClear();
+  mockAskBluetooth.mockReset();
+  mockAskBluetooth.mockImplementation(async () => {});
 });
 afterEach(() => clearQueryClients());
 
@@ -140,6 +144,55 @@ describe('the pairing screen', () => {
     expect(mockDetect.carLink.cars).toEqual([]);
   });
 
+  it('asks for Bluetooth once a car is paired; a denial or a failure leaves the car paired', async () => {
+    mockAskBluetooth.mockImplementation(async () => {
+      throw new Error('denied');
+    });
+    mockDetect.setCarRoute([civic]);
+    const w = await appWorld();
+    await w.render(<CarScreen />);
+    await waitFor(() => expect(screen.getByTestId('car-use')).toBeTruthy());
+    expect(mockAskBluetooth).not.toHaveBeenCalled();
+    await tap('car-use');
+    await waitFor(() => expect(screen.getByTestId('car-paired-0')).toHaveTextContent(/Civic/));
+    expect(mockAskBluetooth).toHaveBeenCalledTimes(1);
+    expect(mockDetect.carLink.cars.map((c) => c.uid)).toEqual([civic.uid]);
+    expect(screen.queryByTestId('car-failed')).toBeNull();
+    // Forgetting asks nothing.
+    await tap('car-forget-0');
+    await waitFor(() => expect(screen.queryByTestId('car-paired')).toBeNull());
+    expect(mockAskBluetooth).toHaveBeenCalledTimes(1);
+  });
+
+  it('a car paired before pairing asked (an earlier build): Your car asks for Bluetooth once as it shows', async () => {
+    mockDetect.setCarRoute([civic]);
+    await mockDetect.pairCar(civic.uid);
+    const w = await appWorld();
+    await w.render(<CarScreen />);
+    await waitFor(() => expect(screen.getByTestId('car-paired-0')).toHaveTextContent(/Civic/));
+    await waitFor(() => expect(mockAskBluetooth).toHaveBeenCalledTimes(1));
+    // Read again (back in front, a live event): no second ask from this screen.
+    await act(async () => mockDetect.setCarRoute([]));
+    await act(async () => {});
+    expect(mockAskBluetooth).toHaveBeenCalledTimes(1);
+  });
+
+  it("the Settings row asks too; Home's car card does not, and nothing asks with no paired car", async () => {
+    mockDetect.setCarRoute([civic]);
+    const w = await appWorld();
+    await w.render(<CarSettingRow />);
+    await waitFor(() => expect(screen.getByTestId('settings-car')).toBeTruthy());
+    await act(async () => {});
+    expect(mockAskBluetooth).not.toHaveBeenCalled();
+    await act(async () => {
+      await mockDetect.pairCar(civic.uid);
+    });
+    await waitFor(() => expect(mockAskBluetooth).toHaveBeenCalledTimes(1));
+    await w.render(<HomeCarCard hidden={false} />);
+    await act(async () => {});
+    expect(mockAskBluetooth).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses headphones or a hearing aid (Use this car greyed out); with several outputs each can be chosen', async () => {
     mockDetect.setCarRoute([pods, civic]);
     const w = await appWorld();
@@ -170,7 +223,7 @@ describe('the pairing screen', () => {
     await act(async () => mockDetect.setCarRoute([civic]));
     await waitFor(() => expect(screen.getByText(carCopy.screen.full)).toBeTruthy());
     expect(screen.getByTestId('car-use')).toBeDisabled();
-    expect(screen.getByTestId('car-note')).toHaveTextContent(/can’t wake your iPhone on its own/);
+    expect(screen.getByTestId('car-note')).toHaveTextContent(carCopy.screen.note);
   });
 });
 

@@ -183,7 +183,7 @@ describe('permissions', () => {
 // string and the `bluetooth-central` background mode; Android takes its permissions from the
 // library's manifest, which must never put a maxSdkVersion on fine location (drive location on
 // Android 12+ depends on it).
-describe('Bluetooth (DashPal)', () => {
+describe('Bluetooth (DashPal and the car check)', () => {
   const ROOT_DIR = path.join(__dirname, '..', '..');
   const manifest = (rel: string) => fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8');
 
@@ -191,7 +191,7 @@ describe('Bluetooth (DashPal)', () => {
     const plist = build().ios?.infoPlist ?? {};
     expect(plist.NSBluetoothAlwaysUsageDescription).toBe(PERMISSION_COPY.bluetooth);
     expect(PERMISSION_COPY.bluetooth).toBe(
-      'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.'
+      "RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts and add its events to your drives. It also checks that Bluetooth is on before asking whether you're driving."
     );
     expect(plist.UIBackgroundModes).toEqual(['bluetooth-central']);
   });

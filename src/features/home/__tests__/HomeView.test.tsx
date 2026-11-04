@@ -279,11 +279,12 @@ describe('the action items', () => {
   const weather = <Text testID="weather-slot">Dense fog</Text>;
   const dashpal = <Text testID="dashpal-slot">A new phone was paired</Text>;
   const car = <Text testID="car-slot">Is Civic your car?</Text>;
+  const parked = <Text testID="parked-slot">Where you parked</Text>;
   const setupGoals = <Text testID="setup-slot">Get set up</Text>;
   const fair = { level: 'fair' as const, axis: 'speed' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
 
-  test('directly under the drive card, in order: weather, permission, DashPal, tip, a car seen on recent drives; then Get set up, stats, drives, goals, and How it works last', async () => {
-    await draw(<HomeView {...props({ weather, permissions: card, dashpal, coaching: fair, car, setupGoals })} />);
+  test('directly under the drive card, in order: weather, where you parked, permission, DashPal, tip, a car seen on recent drives; then Get set up, stats, drives, goals, and How it works last', async () => {
+    await draw(<HomeView {...props({ weather, parked, permissions: card, dashpal, coaching: fair, car, setupGoals })} />);
     const tree = treeJson();
     const at = (s: string) => {
       const i = tree.indexOf(s);
@@ -296,6 +297,7 @@ describe('the action items', () => {
       at('Safety Rating'),
       at('Start drive'),
       at('Dense fog'),
+      at('Where you parked'),
       at("Location is off. Drives can't record."),
       at('A new phone was paired'),
       at('Watch your speed'),
@@ -309,9 +311,10 @@ describe('the action items', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  test('the permission card is not shown while a drive records (the in-progress strip shows under the greeting)', async () => {
-    await draw(<HomeView {...props({ permissions: card, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
+  test('the permission card and where you parked are not shown while a drive records (the in-progress strip shows under the greeting)', async () => {
+    await draw(<HomeView {...props({ permissions: card, parked, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
     expect(screen.queryByTestId('perm-card')).toBeNull();
+    expect(screen.queryByTestId('parked-slot')).toBeNull();
     expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
     const tree = treeJson();
     expect(tree.indexOf('Drive in progress')).toBeGreaterThan(tree.indexOf('Hey, lurp'));

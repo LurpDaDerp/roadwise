@@ -25,13 +25,14 @@ export function googleServicesFile(
 /**
  * The permission strings, in plain words. Location measures the drive and reads the rough area for
  * the weather; Motion & Fitness tells driving from parking and walking away (iOS: drives start and
- * end on their own with it).
+ * end on their own with it); Bluetooth links DashPal and lets "Are you driving?" know Bluetooth is on.
  */
 export const PERMISSION_COPY = {
   location: 'RoadWise measures speed and distance on your drives and checks the local weather.',
   motion: "RoadWise uses motion to tell when you're driving and when you've parked and walked away.",
   camera: "RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.",
-  bluetooth: 'RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts on your phone and add its events to your drives.',
+  bluetooth:
+    "RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts and add its events to your drives. It also checks that Bluetooth is on before asking whether you're driving.",
 } as const;
 
 /**

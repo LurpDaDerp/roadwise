@@ -1,4 +1,7 @@
-import { screen } from '@testing-library/react-native';
+import { act, screen } from '@testing-library/react-native';
+
+import { createFakeDriveDetect, type CarLinkState, type CarOutput } from '@drive-sense';
+import { resetPairedCars } from '@/features/carLink/usePairedCars';
 
 import { draw, drive as mockDrive, event as mockEvent, press, summary as mockSummary } from '../__fixtures__/drives';
 import { HOME_HREF } from '../routes';
@@ -20,7 +23,10 @@ jest.mock('@/data/queries', () => ({
   useDataSource: () => ({ now: () => mockNow }),
   useDb: () => 'db',
   useDriveDetail: () => (mockDetail === undefined ? { data: undefined, isLoading: true, isError: false } : mockOk(mockDetail)),
-  useDriveHistory: () => mockOk(mockHistory),
+  useDriveHistory: (filter: string) => {
+    mockHistoryFilters.push(filter);
+    return mockOk(mockHistory);
+  },
   useRecentDrives: () => mockOk([mockDrive()]),
   useStatSums: () => mockOk(undefined),
 }));
@@ -35,6 +41,15 @@ jest.mock('../useDriveScores', () => ({ useDriveScores: () => mockScores }));
 let mockAuto: { state: string } = { state: 'unsupported' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
 let mockHistory: unknown[] = [];
+let mockHistoryFilters: string[] = [];
+let mockDetect = createFakeDriveDetect();
+jest.mock('@/features/carLink/port', () => ({
+  readCarLink: () => mockDetect.carLinkState().catch(() => null),
+  onCarLink: (fn: (s: CarLinkState) => void) => {
+    const sub = mockDetect.addListener('carLink', fn);
+    return () => sub.remove();
+  },
+}));
 let mockArchived: unknown = undefined;
 jest.mock('@/data/queries/archived', () => ({ useArchivedKinds: () => ({ data: mockArchived }) }));
 
@@ -45,7 +60,10 @@ beforeEach(() => {
   mockScores = new Map();
   mockAuto = { state: 'unsupported' };
   mockHistory = [];
+  mockHistoryFilters = [];
   mockArchived = undefined;
+  resetPairedCars();
+  mockDetect = createFakeDriveDetect();
 });
 
 test('the summary reads the drive and the uses left, and reports through the drive actions', async () => {
@@ -98,4 +116,54 @@ test('the history shows each drive with its score, and the empty list words foll
   mockArchived = { all: true, clean: false, passenger: false };
   await draw(<DriveHistoryScreen />);
   expect(screen.getByText('No drives in the last 6 months')).toBeOnTheScreen();
+});
+
+const civic: CarOutput = { uid: '00:11:22:33:44:55-tacl', name: 'Civic', type: 'bluetoothA2DP' };
+const volvo: CarOutput = { uid: '66:77:88:99:AA:BB-tacl', name: 'Volvo XC60', type: 'bluetoothA2DP' };
+async function pairAll(...outputs: CarOutput[]) {
+  for (const o of outputs) {
+    mockDetect.setCarRoute([o]);
+    await mockDetect.pairCar(o.uid);
+  }
+  mockDetect.setCarRoute([]);
+}
+const lastFilter = () => mockHistoryFilters[mockHistoryFilters.length - 1];
+
+test('with 2 cars paired, the history filters by car: the chip asks for that car’s drives and a second tap all of them', async () => {
+  await pairAll(civic, volvo);
+  await draw(<DriveHistoryScreen />);
+  await act(async () => {});
+  await press(screen.getByTestId(`filter-car:${volvo.uid}`));
+  expect(lastFilter()).toBe(`car:${volvo.uid}`);
+  expect(screen.getByTestId(`filter-car:${volvo.uid}`)).toBeSelected();
+  await press(screen.getByTestId(`filter-car:${volvo.uid}`));
+  expect(lastFilter()).toBe('all');
+});
+
+test('a car filter on screen goes back to all when that car is forgotten, or fewer than 2 stay paired, and stays off when it is paired again', async () => {
+  await pairAll(civic, volvo);
+  await draw(<DriveHistoryScreen />);
+  await act(async () => {});
+  await press(screen.getByTestId(`filter-car:${volvo.uid}`));
+  expect(lastFilter()).toBe(`car:${volvo.uid}`);
+  await act(async () => {
+    await mockDetect.forgetCar(volvo.uid);
+  });
+  expect(lastFilter()).toBe('all');
+  expect(screen.queryByTestId(`filter-car:${volvo.uid}`)).toBeNull();
+  expect(screen.queryByTestId(`filter-car:${civic.uid}`)).toBeNull();
+  await act(async () => {
+    mockDetect.setCarRoute([volvo]);
+    await mockDetect.pairCar(volvo.uid);
+  });
+  expect(screen.getByTestId(`filter-car:${volvo.uid}`)).not.toBeSelected();
+  expect(lastFilter()).toBe('all');
+});
+
+test('one car paired: no car chips, and the list is never asked for a car', async () => {
+  await pairAll(civic);
+  await draw(<DriveHistoryScreen />);
+  await act(async () => {});
+  expect(screen.queryByTestId(`filter-car:${civic.uid}`)).toBeNull();
+  expect(mockHistoryFilters.every((f) => f === 'all')).toBe(true);
 });

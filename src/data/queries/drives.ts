@@ -146,7 +146,7 @@ export function useRecentDrives(limit: number): UseQueryResult<LocalDrive[]> {
   return useQuery({ queryKey: queryKeys.recentDrives(limit), queryFn: () => readRecentDrives(db, limit) });
 }
 
-/** History, newest first; `passenger` = "wasn't driving". */
+/** History, newest first; `passenger` = "wasn't driving"; `car:{uid}` = the drives made in that paired car. */
 export function useDriveHistory(filter: DriveHistoryFilter): UseQueryResult<LocalDrive[]> {
   const { db } = useDataSource();
   return useQuery({ queryKey: queryKeys.driveHistory(filter), queryFn: () => readDriveHistory(db, filter) });

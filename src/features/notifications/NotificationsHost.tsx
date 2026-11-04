@@ -21,6 +21,12 @@
  * drive on "Mark as passenger"; otherwise it opens the recap, as a tap on the notification does
  * (held like one during a drive).
  *
+ * "Are you driving?" (`kind: 'passengerCheck'`, an automatic drive whose route never held the car):
+ * handed at once to `onPassengerCheck` with its drive (the root layout stops that drive as the driving
+ * screen's "Not driving?" does, when it is the one recording), never held for the drive; then Home,
+ * once the navigator is up, unless the driving screen shows (it leaves for Home by itself when its
+ * drive goes).
+ *
  * Any other tap (or a held one's replay) opens its route, except a drive's summary already on
  * screen: the driving screen opened it as the drive ended, so its "Drive ended" note opens nothing more.
  * A drive recap held because a drive records (the recap of the drive before) opens the driving
@@ -45,7 +51,8 @@ import { ensureNotificationSetup } from './categories';
 import { installForegroundHandler } from './handler';
 import { DRIVE_HREF, drivingHrefOf, SUMMARY_HREF } from './hrefs';
 import { confirmPassenger, passengerOffered, passengerTapOf } from './passenger';
-import { handleResponse, replayPendingHref, type ResponseDeps } from './responses';
+import { passengerCheckOf } from './passengerCheck';
+import { FALLBACK_HREF, handleResponse, replayPendingHref, type ResponseDeps } from './responses';
 
 export interface NotificationsHostProps {
   /**
@@ -68,6 +75,11 @@ export interface NotificationsHostProps {
   navigate?: (href: string) => void;
   /** The passenger confirm; resolves true for "Mark as passenger". Defaults to the system alert. */
   confirmPassenger?: () => Promise<boolean>;
+  /**
+   * A tap on "Are you driving?" for this drive: the app stops it when it is the one recording (the
+   * root layout injects it; this plumbing reaches nothing of the drive). Home opens after it settles.
+   */
+  onPassengerCheck?: (clientTripId: string) => Promise<void>;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -119,6 +131,8 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const driveTap = useRef(false);
   /** A recap's "I wasn't driving" waiting for the navigator: its drive and the response itself. */
   const passengerTap = useRef<{ clientTripId: string; response: Notifications.NotificationResponse } | null>(null);
+  /** An "Are you driving?" tap whose Home waits for the navigator (its drive already handed on). */
+  const checkTap = useRef(false);
   /** Hands a response to `handleResponse` (set by the listener effect). */
   const route = useRef<(r: Notifications.NotificationResponse) => void>(() => {});
 
@@ -160,6 +174,15 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     (l.props.navigate ?? defaultDriveNavigate)(DRIVE_HREF);
   });
 
+  /** Home for an "Are you driving?" tap, once the navigator is up; not over the driving screen (it leaves by itself). */
+  const openCheckHome = useRef(() => {
+    if (!checkTap.current || !latest.current.ready) return;
+    checkTap.current = false;
+    const l = latest.current;
+    if (l.pathname === DRIVE_HREF || l.pathname === FALLBACK_HREF) return;
+    tapRoute.current(FALLBACK_HREF);
+  });
+
   useEffect(() => {
     const report = (e: unknown, ctx: string) => latest.current.props.onError?.(e, ctx);
     const deps = (): ResponseDeps => {
@@ -194,6 +217,18 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       if (drivingHrefOf(dataOf(r)) !== null) {
         driveTap.current = true;
         openDrive.current();
+        return;
+      }
+      // "Are you driving?": its drive goes to the app now (never held for the drive), then Home.
+      const checkTrip = passengerCheckOf(dataOf(r));
+      if (checkTrip !== null) {
+        const handler = latest.current.props.onPassengerCheck;
+        void (handler ? handler(checkTrip) : Promise.resolve())
+          .catch((e: unknown) => report(e, 'notifications.passengerCheck'))
+          .finally(() => {
+            checkTap.current = true;
+            openCheckHome.current();
+          });
         return;
       }
       // The recap's "I wasn't driving", with no drive under way: the confirm, once the navigator is up.
@@ -236,9 +271,10 @@ export function NotificationsHost(props: NotificationsHostProps): null {
   const { subscribeBusy } = props;
   useEffect(() => {
     if (!ready) return;
-    // A recording-note tap, or a recap's "I wasn't driving", that came before the navigator.
+    // A recording-note tap, a recap's "I wasn't driving" or an "Are you driving?", that came before the navigator.
     openDrive.current();
     openPassenger.current();
+    openCheckHome.current();
     let replaying = false;
     const tryReplay = () => {
       if (replaying || !mayHavePending.current) return;

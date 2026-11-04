@@ -1,4 +1,5 @@
-// The car link's words (iPhone only): Settings › Your car, the pairing screen and Home's card.
+// The car link's words (iPhone only): Settings › Your car, the pairing screen, Home's card and the
+// "Are you driving?" note.
 import type { CarPortType } from '@drive-sense';
 
 const KIND: Record<CarPortType, string> = {
@@ -32,9 +33,13 @@ export const carCopy = {
     connected: 'Connected',
     forget: 'Forget car',
     forgetLabel: (name: string) => `Forget ${name}`,
-    note:
-      'Pairing starts drives sooner and ends a drive soon after the car disconnects. It can’t wake your iPhone on its own, so RoadWise still notices a drive when you leave where you parked or open the app. RoadWise only checks which Bluetooth or CarPlay audio is connected and never changes your audio or connections. A car that connects only for calls may not show up here.',
+    note: 'Pairing your car starts and ends drives on time, helps RoadWise tell when you’re riding as a passenger, and remembers where you parked. RoadWise only checks what’s connected and never changes your audio.',
     failed: 'That didn’t work. Try again.',
+  },
+  /** "Are you driving?": the note on an automatic drive whose route never held the car (`src/drive/passengerCheck.ts`). */
+  passenger: {
+    title: 'Are you driving?',
+    body: 'Your car isn’t connected. If you’re a passenger, tap to stop this drive.',
   },
   card: {
     dismiss: 'Close',

@@ -2,7 +2,8 @@
  * Which kinds of drive the phone holds archived (183 days after they ended: in no list, still in
  * every total). Drive history reads it so an empty list says "in the last 6 months" rather than
  * "yet" when older drives exist: any drive (All), a clean one (Clean), a "Wasn't driving" one
- * (Passenger), the same kinds its filters list.
+ * (Passenger), the same kinds its filters list. A car filter has no archived kind: the archive
+ * clears the car a drive was in, so whether older drives were made in it is not known.
  */
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
