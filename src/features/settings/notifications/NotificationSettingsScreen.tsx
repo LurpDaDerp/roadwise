@@ -1,18 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Pressable, View } from 'react-native';
 
 import type { NotificationAccess, PermissionsAdapter } from '@/core/permissions';
+import { createSettingsRepo } from '@/data/db/settings';
 import type { AppStateLike } from '@/data/foreground';
+import { useDb } from '@/data/queries/context';
 import { SERVER_SLOW_STALE_MS, serverKey, useServerQuery } from '@/data/server/useServerQuery';
 import { useSession } from '@/data/supabase/session';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
+import { readCommuteHeadsUp, writeCommuteHeadsUp } from '@/features/weather/commuteSetting';
 import { Banner, Card, Divider, Screen, Skeleton, Text, ToggleRow, useTheme } from '@/ui';
 
 import { TopBar } from '../parts';
 import { currentZone, PREFS_KEY, savePrefs, type NotificationPrefs, type PrefsPatch } from './api';
 import { notificationSettingsCopy as copy } from './copy';
+import { quietOf, rememberQuietHours } from './quietHours';
 
 /** The OS side: whether RoadWise may notify at all, and the two ways to fix it. */
 export interface OsNotificationsPort {
@@ -21,10 +25,30 @@ export interface OsNotificationsPort {
   openSettings(): Promise<void>;
 }
 
+/** The weather heads-up before the commute, as the switch drives it. */
+export interface CommuteHeadsUpPort {
+  /** Take every heads-up down (switched off). */
+  cancel(): Promise<void>;
+  /** Plan them now (switched on). */
+  replan(): void;
+}
+
 export interface NotificationSettingsDeps {
   os?: OsNotificationsPort;
   appState?: AppStateLike;
   zone?: () => string;
+  headsUp?: CommuteHeadsUpPort;
+}
+
+/** The live planner, loaded on first use (it brings the notifications native module). */
+function defaultHeadsUp(): CommuteHeadsUpPort {
+  const load = () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+    require('@/features/weather/commuteHeadsUp') as typeof import('@/features/weather/commuteHeadsUp');
+  return {
+    cancel: () => load().cancelCommuteHeadsUps(),
+    replan: () => load().requestCommuteReplan(),
+  };
 }
 
 function adapterPort(adapter: PermissionsAdapter): OsNotificationsPort {
@@ -55,6 +79,44 @@ export function stepHour(hhmm: string, dir: -1 | 1): string {
 }
 
 const KINDS = ['weekly_recap', 'social'] as const;
+
+/** "Weather before your commute": this phone's own switch, read and written in the local settings. */
+function useCommuteSwitch(headsUp: CommuteHeadsUpPort) {
+  const db = useDb();
+  const settings = useMemo(() => createSettingsRepo(db), [db]);
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void readCommuteHeadsUp(settings).then(
+      (v) => live && setOn(v),
+      () => live && setOn(true)
+    );
+    return () => {
+      live = false;
+    };
+  }, [settings]);
+  const change = useCallback(
+    (next: boolean) => {
+      setOn(next);
+      // Off takes them down at once, and again once stored (a plan that read the switch before it
+      // changed schedules nothing after that); on plans them once the switch is stored.
+      if (!next) void headsUp.cancel().catch(() => undefined);
+      void writeCommuteHeadsUp(settings, next).then(
+        () => {
+          if (next) headsUp.replan();
+          else void headsUp.cancel().catch(() => undefined);
+        },
+        () => {
+          // Not stored: the switch is as it was, and so is the plan.
+          setOn(!next);
+          if (!next) headsUp.replan();
+        }
+      );
+    },
+    [settings, headsUp]
+  );
+  return { on, change, settings };
+}
 
 function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
   const [access, setAccess] = useState<NotificationAccess | null>(null);
@@ -88,6 +150,22 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
   const [os] = useState(() => deps.os ?? adapterPort(defaultPermissionsAdapter()));
   const { access, read } = useOsAccess(os, deps.appState ?? AppState);
   const zone = (deps.zone ?? currentZone)();
+  const [headsUp] = useState(() => deps.headsUp ?? defaultHeadsUp());
+  const commute = useCommuteSwitch(headsUp);
+  // This phone keeps a copy of the quiet hours: the heads-up it schedules itself keeps to them.
+  const loaded = query.data;
+  // A copy that changes plans the heads-ups again (a scheduled one may now fall in quiet hours).
+  const remember = useCallback(
+    (prefs: NotificationPrefs) =>
+      void rememberQuietHours(commute.settings, quietOf(prefs)).then(
+        (changed) => changed && headsUp.replan(),
+        () => undefined
+      ),
+    [commute.settings, headsUp]
+  );
+  useEffect(() => {
+    if (loaded) remember(loaded);
+  }, [loaded, remember]);
 
   const save = async (patch: PrefsPatch) => {
     if (pending) return;
@@ -95,6 +173,7 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
     setSaveFailed(false);
     try {
       const next = await savePrefs(patch, zone);
+      // The copy of the quiet hours follows through the loaded prefs.
       qc.setQueryData(serverKey(uid, ...PREFS_KEY), next);
     } catch {
       setSaveFailed(true);
@@ -105,6 +184,16 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
 
   const prefs = query.data ? { ...query.data, ...pending } : null;
   const saving = pending !== null;
+  const commuteRow =
+    commute.on === null ? null : (
+      <ToggleRow
+        testID="prefs-weather-commute"
+        title={copy.commute.title}
+        subtitle={commute.on ? copy.commute.on : copy.commute.off}
+        value={commute.on}
+        onValueChange={commute.change}
+      />
+    );
 
   let body;
   if (!prefs) {
@@ -121,6 +210,17 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
         <Skeleton width="80%" height={14} />
       </Card>
     );
+    // The local switch doesn't wait for the server.
+    if (commuteRow) {
+      body = (
+        <>
+          {body}
+          <Card padded={false} testID="prefs-kinds-local">
+            {commuteRow}
+          </Card>
+        </>
+      );
+    }
   } else {
     const quietOff = prefs.quiet_start === prefs.quiet_end;
     body = (
@@ -143,6 +243,12 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
                 />
               </View>
             ))}
+            {commuteRow ? (
+              <>
+                <Divider inset={th.space.lg} />
+                {commuteRow}
+              </>
+            ) : null}
           </Card>
         </View>
 

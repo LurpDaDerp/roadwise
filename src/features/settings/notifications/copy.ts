@@ -14,6 +14,12 @@ export const notificationSettingsCopy = {
       off: 'No friend request alerts. Requests still show in Friends.',
     },
   },
+  /** The weather heads-up before the commute: this phone's own switch. */
+  commute: {
+    title: 'Weather before your commute',
+    on: 'A heads-up when bad weather is due around the time you usually leave.',
+    off: 'No weather heads-ups before your commute.',
+  },
   quiet: {
     title: 'Quiet hours',
     on: (start: string, end: string) => `Anything sent between ${start} and ${end} waits until ${end}.`,

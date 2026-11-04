@@ -6,11 +6,13 @@
 import { screen, waitFor } from '@testing-library/react-native';
 
 import { RpcError } from '@/data/server/rpc';
+import { COMMUTE_HEADS_UP_KEY } from '@/features/weather/commuteSetting';
 import { answerRpc, appWorld, clearQueryClients, fakeAppState, tap } from '@/features/permissions/__fixtures__/harness';
 
 import { prefsArgs, type NotificationPrefs } from '../api';
 import { notificationSettingsCopy as copy } from '../copy';
-import { NotificationSettingsScreen, type OsNotificationsPort } from '../NotificationSettingsScreen';
+import { NotificationSettingsScreen, type CommuteHeadsUpPort, type OsNotificationsPort } from '../NotificationSettingsScreen';
+import { QUIET_HOURS_KEY } from '../quietHours';
 import { syncNotificationPrefs, TZ_SENT_KEY } from '../sync';
 
 const mockRpc = jest.fn();
@@ -43,9 +45,13 @@ const os = (access: 'granted' | 'denied' = 'granted'): OsNotificationsPort => ({
   openSettings: jest.fn(async () => {}),
 });
 
-async function show(access: 'granted' | 'denied' = 'granted') {
-  const w = await appWorld();
-  await w.render(<NotificationSettingsScreen deps={{ os: os(access), appState: fakeAppState(), zone: () => 'America/Chicago' }} />);
+const headsUpPort = (): CommuteHeadsUpPort & { cancel: jest.Mock; replan: jest.Mock } => ({ cancel: jest.fn(async () => {}), replan: jest.fn() });
+
+async function show(access: 'granted' | 'denied' = 'granted', opts: { headsUp?: CommuteHeadsUpPort; settings?: Record<string, unknown> } = {}) {
+  const w = await appWorld({ settings: opts.settings });
+  await w.render(
+    <NotificationSettingsScreen deps={{ os: os(access), appState: fakeAppState(), zone: () => 'America/Chicago', headsUp: opts.headsUp ?? headsUpPort() }} />
+  );
   return w;
 }
 
@@ -136,5 +142,114 @@ describe('the foreground zone sync', () => {
     expect(await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save: fail, onError })).toBe('error');
     expect(onError).toHaveBeenCalled();
     expect(await w.settings.get(TZ_SENT_KEY)).toBeNull();
+  });
+});
+
+describe('weather before your commute', () => {
+  it('is on until switched off; off takes the heads-ups down, on plans them', async () => {
+    answerRpc(mockRpc, { get_notification_prefs: DEFAULTS });
+    const headsUp = headsUpPort();
+    const w = await show('granted', { headsUp });
+    const row = await screen.findByTestId('prefs-weather-commute');
+    expect(row.props.value).toBe(true);
+    expect(screen.getByLabelText(`${copy.commute.title}, ${copy.commute.on}`)).toBeOnTheScreen();
+
+    await tap('prefs-weather-commute');
+    await waitFor(async () => expect(await w.settings.get(COMMUTE_HEADS_UP_KEY)).toBe(false));
+    await waitFor(() => expect(headsUp.cancel).toHaveBeenCalled());
+    expect(screen.getByTestId('prefs-weather-commute').props.value).toBe(false);
+    expect(screen.getByLabelText(`${copy.commute.title}, ${copy.commute.off}`)).toBeOnTheScreen();
+    expect(headsUp.replan).not.toHaveBeenCalled();
+
+    await tap('prefs-weather-commute');
+    await waitFor(async () => expect(await w.settings.get(COMMUTE_HEADS_UP_KEY)).toBe(true));
+    await waitFor(() => expect(headsUp.replan).toHaveBeenCalledTimes(1));
+    // The server is never asked: the switch is this phone's own.
+    expect(mockRpc).not.toHaveBeenCalledWith('set_notification_prefs', expect.anything());
+  });
+
+  it('shows as stored, without waiting for the server prefs', async () => {
+    answerRpc(mockRpc, { get_notification_prefs: new RpcError('down', '500') });
+    await show('granted', { settings: { [COMMUTE_HEADS_UP_KEY]: false } });
+    expect((await screen.findByTestId('prefs-weather-commute')).props.value).toBe(false);
+    expect(screen.queryByTestId('prefs-weekly_recap')).toBeNull();
+  });
+
+  it('this phone keeps a copy of the quiet hours, as loaded and as saved; a change plans the heads-ups again', async () => {
+    let stored = { ...DEFAULTS };
+    answerRpc(mockRpc, {
+      get_notification_prefs: () => stored,
+      set_notification_prefs: (args) => {
+        stored = { ...stored, quiet_enabled: args?.p_quiet_enabled as boolean };
+        return stored;
+      },
+    });
+    const headsUp = headsUpPort();
+    const w = await show('granted', { headsUp });
+    await waitFor(async () => expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: true, start: '22:00', end: '07:00' }));
+    // The default was in force already: nothing to plan again.
+    expect(headsUp.replan).not.toHaveBeenCalled();
+    await tap('prefs-quiet-toggle');
+    await waitFor(async () => expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: false, start: '22:00', end: '07:00' }));
+    await waitFor(() => expect(headsUp.replan).toHaveBeenCalledTimes(1));
+  });
+
+  it('prefs that differ from the copy held plan the heads-ups again as they load', async () => {
+    answerRpc(mockRpc, { get_notification_prefs: { ...DEFAULTS, quiet_end: '08:00' } });
+    const headsUp = headsUpPort();
+    const w = await show('granted', { headsUp, settings: { [QUIET_HOURS_KEY]: { enabled: true, start: '22:00', end: '07:00' } } });
+    await waitFor(async () => expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: true, start: '22:00', end: '08:00' }));
+    await waitFor(() => expect(headsUp.replan).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('the zone sync and the quiet hours', () => {
+  it('the server’s answer refreshes this phone’s copy', async () => {
+    const w = await appWorld();
+    const save = jest.fn(async () => ({ ...DEFAULTS, quiet_start: '23:00' }));
+    await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save, onQuietHours: jest.fn() });
+    expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: true, start: '23:00', end: '07:00' });
+  });
+
+  it('an answer of another shape leaves it', async () => {
+    const w = await appWorld();
+    await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save: async () => null, onQuietHours: jest.fn() });
+    expect(await w.settings.get(QUIET_HOURS_KEY)).toBeNull();
+  });
+
+  it('with no copy and the zone already sent, the prefs are read once to make it, and the heads-ups planned again', async () => {
+    const w = await appWorld({ settings: { [TZ_SENT_KEY]: { uid: 'me', tz: 'UTC' } } });
+    const save = jest.fn(async () => DEFAULTS);
+    const read = jest.fn(async () => ({ ...DEFAULTS, quiet_start: '21:00', quiet_end: '08:00' }));
+    const onQuietHours = jest.fn();
+    expect(await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save, read, onQuietHours })).toBe('unchanged');
+    expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: true, start: '21:00', end: '08:00' });
+    expect(onQuietHours).toHaveBeenCalledTimes(1);
+    expect(await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save, read, onQuietHours })).toBe('unchanged');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('the server’s own default read: stored, nothing to plan again', async () => {
+    const w = await appWorld({ settings: { [TZ_SENT_KEY]: { uid: 'me', tz: 'UTC' } } });
+    const onQuietHours = jest.fn();
+    await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', read: async () => DEFAULTS, onQuietHours });
+    expect(await w.settings.get(QUIET_HOURS_KEY)).toEqual({ enabled: true, start: '22:00', end: '07:00' });
+    expect(onQuietHours).not.toHaveBeenCalled();
+  });
+
+  it('a read that fails is reported and tried again next time', async () => {
+    const w = await appWorld({ settings: { [TZ_SENT_KEY]: { uid: 'me', tz: 'UTC' } } });
+    const onError = jest.fn();
+    expect(await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', read: async () => Promise.reject(new Error('offline')), onError })).toBe('error');
+    expect(onError).toHaveBeenCalled();
+    expect(await w.settings.get(QUIET_HOURS_KEY)).toBeNull();
+  });
+
+  it('a zone answer with new quiet hours plans the heads-ups again', async () => {
+    const w = await appWorld();
+    const onQuietHours = jest.fn();
+    await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save: async () => ({ ...DEFAULTS, quiet_enabled: false }), onQuietHours });
+    expect(onQuietHours).toHaveBeenCalledTimes(1);
   });
 });

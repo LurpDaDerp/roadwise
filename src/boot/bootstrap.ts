@@ -53,6 +53,7 @@ import type { DriveDetectApi } from '@drive-sense';
 import { autoDetectForeground, autoDetectOff, autoDetectSync, setAutoDetectRuntime } from './autoDetect';
 import { ensureDeviceOwner, PENDING_OWNER_KEY, readDeviceOwner, type DeviceOwnerOutcome } from './device';
 import { drainPolicy, launchProfile, type LaunchProfile } from './launchProfile';
+import { defaultWeatherHeadsUp, type LaunchWeatherHeadsUp, type WeatherHeadsUpArgs } from './weatherHeadsUp';
 
 export const DB_NAME = 'roadwise.db';
 export const BOOTSTRAP_TIMEOUT_MS = 20_000;
@@ -131,6 +132,8 @@ export interface BootstrapDeps {
   lastPosition?: () => Promise<{ lat: number; lng: number } | null>;
   voiceEnabled?: () => boolean;
   attachSummaryNotifier?: ((host: DriveHost, db: Db) => LaunchSummaryNotifier) | null;
+  /** The weather heads-up before the commute (`weatherHeadsUp.ts`). Default: `defaultWeatherHeadsUp`. `null`: none. */
+  attachWeatherHeadsUp?: ((host: DriveHost, db: Db, args: WeatherHeadsUpArgs) => LaunchWeatherHeadsUp) | null;
   /**
    * The DashPal dashcam runtime (plan §7). Default: `createDashcamRuntime` over the process BLE
    * transport, which is only created once a dashcam is paired or setup runs. `null`: none.
@@ -502,6 +505,25 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         onError(error, 'summary notifier');
       }
     }
+    // Before the boot too: a drive taken in at this launch takes every weather heads-up down.
+    const attachHeadsUp = deps.attachWeatherHeadsUp === undefined ? defaultWeatherHeadsUp : deps.attachWeatherHeadsUp;
+    let headsUp: LaunchWeatherHeadsUp | null = null;
+    if (attachHeadsUp) {
+      try {
+        headsUp = attachHeadsUp(drive, db, {
+          signedIn: async () => {
+            const read = await identity.supabase.auth.getSession();
+            if (sessionUnknown(read)) throw new Error('the session could not be read');
+            return read.data.session !== null;
+          },
+          appState,
+          now,
+          onError,
+        });
+      } catch (error) {
+        onError(error, 'weather heads-up');
+      }
+    }
     // The drive the driving screen is first shown for is written down, so a relaunch in the middle
     // of it keeps it entered (the lockout, and an automatic drive's way back to its screen).
     const screenMemory = createSettingsRepo(db);
@@ -514,6 +536,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     } catch (error) {
       // The launch fails with this host: nothing it would announce may post.
       notifier?.detach();
+      headsUp?.detach();
       unbindScreenMemory();
       throw error;
     }
@@ -550,6 +573,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       unbindScreenMemory();
       await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
       notifier?.detach();
+      headsUp?.detach();
+      await headsUp?.settled?.().catch((error: unknown) => onError(error, 'weather heads-up'));
       if (dc) {
         // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
         await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));

@@ -11,6 +11,7 @@ import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { requestSpotRecompute } from '@/features/spots/recompute';
 import { readZones, writeZones, ZONE_NAME_MAX, type PrivacyZone } from '@/features/settings/privacyZones';
+import { requestCommuteReplanLazily } from '@/features/weather/cancelHeadsUps';
 
 import { readPlaces, withPlace, writePlaces, type SavedPlace } from './model';
 
@@ -71,6 +72,8 @@ export function usePlaces() {
       client.setQueryData(PLACES_QUERY, places);
       void client.invalidateQueries({ queryKey: ['places', 'suggestions'] });
       void client.invalidateQueries({ queryKey: ['places', 'prompt'] });
+      // The weather heads-up before the commute follows the places.
+      requestCommuteReplanLazily();
     },
     [client]
   );

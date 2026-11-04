@@ -110,3 +110,24 @@ export const weatherCopy = {
   /** The driving screen's ✕: hidden for the rest of this drive. */
   dismissDriveHint: 'Hides it for the rest of this drive.',
 } as const;
+
+/** "7:40 AM", "12:05 PM": a minute of the day on a 12-hour clock. */
+export function clockOfMinute(minute: number): string {
+  const m = ((Math.round(minute) % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60);
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+/** Where the commute goes, as the heads-up says it: "head home", "leave for work". */
+const goingTo = (to: { kind: string; name: string }): string =>
+  to.kind === 'home' ? 'head home' : to.kind === 'work' ? 'leave for work' : to.kind === 'school' ? 'leave for school' : `leave for ${to.name}`;
+
+/**
+ * The weather heads-up before the usual commute (a notification): the danger's title, then when and
+ * what to do. "Expected around 7:40 AM, when you usually leave for work. Give yourself extra time."
+ */
+export const commuteHeadsUpCopy = {
+  title: (kind: DangerKind): string => WEATHER_TITLES[kind],
+  body: (kind: DangerKind, to: { kind: string; name: string }, clock: string): string =>
+    `Expected around ${clock}, when you usually ${goingTo(to)}. ${kind === 'blizzard' ? 'Stay off the road if you can.' : 'Give yourself extra time.'}`,
+} as const;

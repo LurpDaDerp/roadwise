@@ -6,6 +6,7 @@ import { useDb } from '@/data/queries/context';
 import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
+import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
 import { clearHomeNotice } from '@/features/home/homeNotice';
 
 import { supabase } from './client';
@@ -392,6 +393,8 @@ export function SessionProvider({
         await runBudgeted([...afterSignOut]);
         // A summary scheduled for this driver's last drive must not fire once they have left (U3).
         void cancelDriveSummaries().catch(() => {});
+        // So must a weather heads-up planned from their commute.
+        void cancelCommuteHeadsUpsLazily();
         // Home's notice line was this driver's: it goes with them.
         clearHomeNotice();
         // A Terms acceptance ticked on this device and not yet recorded belongs to the driver who

@@ -43,7 +43,8 @@ export type WeatherReading = {
 
 export const OPEN_METEO_TIMEOUT_MS = 5_000;
 
-const VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day';
+/** The variables every Open-Meteo call here asks for (current and hourly). */
+export const WEATHER_VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day';
 
 /** One decimal: about 11 km of latitude. */
 export function roundCoord(v: number): number {
@@ -55,20 +56,20 @@ export function weatherUrl(lat: number, lng: number): string {
   const lo = roundCoord(lng).toFixed(1);
   return (
     `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}` +
-    `&current=${VARS}&hourly=${VARS}&past_hours=${PAST_HOURS}&forecast_hours=${LOOKAHEAD_HOURS + 1}` +
+    `&current=${WEATHER_VARS}&hourly=${WEATHER_VARS}&past_hours=${PAST_HOURS}&forecast_hours=${LOOKAHEAD_HOURS + 1}` +
     '&wind_speed_unit=mph&timeformat=unixtime'
   );
 }
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const sum = (a: number | null, b: number | null): number | null => (a === null && b === null ? null : (a ?? 0) + (b ?? 0));
+export const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+export const sum = (a: number | null, b: number | null): number | null => (a === null && b === null ? null : (a ?? 0) + (b ?? 0));
 const scaled = (v: number | null, k: number): number | null => (v === null ? null : v * k);
 const day = (v: unknown): boolean | null => (v === 1 ? true : v === 0 ? false : null);
 
 type Block = Record<string, unknown>;
 
 /** A sample from one set of values; `perHour` turns the block's sums into hourly rates. */
-function sampleOf(time: number, at: (key: string) => unknown, perHour: number): WeatherSample {
+export function sampleOf(time: number, at: (key: string) => unknown, perHour: number): WeatherSample {
   return {
     time,
     code: num(at('weather_code')),
