@@ -5,26 +5,23 @@
 // handler), and the panel closes; Cancel ends the drive, nothing saved. Each panel opens with one
 // light haptic. It sits where the navigation list does (the two never show together) in the app's
 // own sheet colours, and shows only while the drive has not yet reached driving speed.
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { WAIT_TOTAL_MS, type WaitingPublic } from '@/drive/waiting';
+import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT, type PanelColors } from '@/ui/drive/panelLook';
 import { fontFamilies } from '@/ui/fonts';
 
 import { hudCopy } from './hudCopy';
 import { useAppActive } from './useHaloBurst';
 
-export interface WaitPanelColors {
-  surface: string;
-  ink: string;
-  muted: string;
-  edge: string;
-}
+/** The panel's colours (`PanelColors`): the app's sheet set. */
+export type WaitPanelColors = PanelColors;
 
 /** Below this height the panel puts its two buttons side by side and shrinks the countdown. */
 const TALL_PT = 260;
-const BUTTON_PT = 56;
 
 /** Minutes left of the wait, rounded up (at 2:00 in: 3). */
 export const waitMinutesLeft = (since: number, now: number): number => Math.max(1, Math.ceil((since + WAIT_TOTAL_MS - now) / 60_000));
@@ -45,7 +42,7 @@ function useSecondClock(): number {
 
 export function WaitPanel({
   waiting,
-  colors: c,
+  colors,
   height,
   onKeep,
   onCancel,
@@ -57,6 +54,7 @@ export function WaitPanel({
   onKeep(): void;
   onCancel(): void;
 }) {
+  const c = panelTones(colors);
   const now = useSecondClock();
   const active = useAppActive();
   const { phase, since } = waiting;
@@ -77,19 +75,26 @@ export function WaitPanel({
   }, [phase, since]);
 
   return (
-    <ScrollView testID="hud-wait-panel" style={styles.scroll} contentContainerStyle={[styles.body, { gap: tall ? 12 : 8 }]}>
-      <Text accessibilityRole="header" style={[styles.title, { color: c.ink }]}>
-        {countdown ? hudCopy.countdown.title : hudCopy.ask.title}
-      </Text>
+    <ScrollView testID="hud-wait-panel" style={styles.scroll} contentContainerStyle={[styles.body, { gap: tall ? 14 : 8 }]}>
+      <View style={styles.head}>
+        {tall ? (
+          <View style={[ps.badge, { backgroundColor: c.accentFaint }]}>
+            <Ionicons name={countdown ? 'hourglass-outline' : 'time-outline'} size={PANEL_ICON_PT} color={c.accent} />
+          </View>
+        ) : null}
+        <Text accessibilityRole="header" style={[ps.title, styles.headText, { color: c.ink }]}>
+          {countdown ? hudCopy.countdown.title : hudCopy.ask.title}
+        </Text>
+      </View>
       {countdown ? (
-        <View accessible accessibilityLabel={hudCopy.countdown.spoken(seconds)} accessibilityLiveRegion="polite">
-          <Text testID="hud-wait-countdown" allowFontScaling={false} style={[styles.count, { color: c.ink, fontSize: tall ? 44 : 32, lineHeight: tall ? 50 : 36 }]}>
+        <View accessible accessibilityLabel={hudCopy.countdown.spoken(seconds)} accessibilityLiveRegion="polite" style={styles.countBlock}>
+          <Text testID="hud-wait-countdown" allowFontScaling={false} style={[styles.count, { color: c.ink, fontSize: tall ? 48 : 32, lineHeight: tall ? 54 : 36 }]}>
             {countdownText(seconds)}
           </Text>
-          <Text style={[styles.body1, { color: c.muted }]}>{hudCopy.countdown.body}</Text>
+          <Text style={[ps.line, { color: c.muted }]}>{hudCopy.countdown.body}</Text>
         </View>
       ) : (
-        <Text testID="hud-wait-body" style={[styles.body1, { color: c.muted }]}>
+        <Text testID="hud-wait-body" style={[ps.line, { color: c.muted }]}>
           {hudCopy.ask.body(minutes)}
         </Text>
       )}
@@ -99,9 +104,9 @@ export function WaitPanel({
           accessibilityRole="button"
           accessibilityLabel={hudCopy.ask.keep}
           onPress={onKeep}
-          style={({ pressed }) => [styles.button, !tall && styles.half, { backgroundColor: c.ink, borderColor: c.ink, opacity: pressed ? 0.8 : 1 }]}
+          style={({ pressed }) => [ps.capsule, !tall && styles.half, { backgroundColor: c.ink, borderColor: c.ink }, pressedLook(pressed)]}
         >
-          <Text style={[styles.label, { color: c.surface }]}>{hudCopy.ask.keep}</Text>
+          <Text style={[ps.capsuleLabel, { color: c.surface }]}>{hudCopy.ask.keep}</Text>
         </Pressable>
         <Pressable
           testID="hud-wait-cancel"
@@ -110,9 +115,9 @@ export function WaitPanel({
           // Cancel is the one touch on this screen that is not a "keep waiting": it stops here.
           onTouchStart={(e) => e.stopPropagation()}
           onPress={onCancel}
-          style={({ pressed }) => [styles.button, !tall && styles.half, { borderColor: c.edge, opacity: pressed ? 0.7 : 1 }]}
+          style={({ pressed }) => [ps.capsule, !tall && styles.half, { borderColor: c.edge, backgroundColor: c.surface }, pressedLook(pressed)]}
         >
-          <Text style={[styles.label, { color: c.ink }]}>{hudCopy.ask.cancel}</Text>
+          <Text style={[ps.capsuleLabel, { color: c.ink }]}>{hudCopy.ask.cancel}</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -122,11 +127,10 @@ export function WaitPanel({
 const styles = StyleSheet.create({
   scroll: { flexGrow: 0, flexShrink: 1 },
   body: { flexGrow: 0 },
-  title: { fontFamily: fontFamilies.headline, fontSize: 22, lineHeight: 28 },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headText: { flex: 1 },
+  countBlock: { gap: 2 },
   count: { fontFamily: fontFamilies.numeralsBold, fontVariant: ['tabular-nums'] },
-  body1: { fontFamily: fontFamilies.ui, fontSize: 16, lineHeight: 22 },
   buttons: { gap: 8 },
-  button: { minHeight: BUTTON_PT, alignItems: 'center', justifyContent: 'center', borderRadius: BUTTON_PT / 2, borderWidth: 1, paddingHorizontal: 16 },
   half: { flex: 1 },
-  label: { fontFamily: fontFamilies.headline, fontSize: 18 },
 });

@@ -242,8 +242,16 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const sheet = useMemo(
     () =>
       theme === null
-        ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge }
-        : { surface: theme.colors.surface, ink: theme.colors.text, muted: theme.colors.textMuted, edge: theme.colors.border },
+        ? { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge, accent: p.haloCalm }
+        : {
+            surface: theme.colors.surface,
+            ink: theme.colors.text,
+            muted: theme.colors.textMuted,
+            edge: theme.colors.border,
+            raised: theme.colors.surfaceRaised,
+            accent: theme.colors.accent,
+            accentFaint: theme.colors.accentFaint,
+          },
     [theme, p]
   );
   const units = useHudUnits();
@@ -823,7 +831,7 @@ const styles = StyleSheet.create({
   abs: { position: 'absolute' },
   centred: { alignItems: 'center', justifyContent: 'center' },
   slot: { justifyContent: 'center' },
-  panel: { position: 'absolute', zIndex: 2, borderRadius: 20, borderWidth: 1, padding: 16 },
+  panel: { position: 'absolute', zIndex: 2, borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, padding: 16, boxShadow: '0px 12px 32px rgba(0, 0, 0, 0.28)' },
   // The emergency panel and button sit above the "Welcome" line (zIndex 3).
   sosPanel: { zIndex: 4 },
   sos: { zIndex: 5 },

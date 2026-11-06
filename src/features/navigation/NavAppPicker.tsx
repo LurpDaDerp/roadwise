@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { fontFamilies } from '@/ui/fonts';
+import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT, type PanelColors } from '@/ui/drive/panelLook';
 
 import type { InstalledNavApp } from './apps';
 import type { NavAppId } from './catalog';
@@ -14,12 +15,8 @@ import { navCopy } from './copy';
 /** A row of the list: at least this tall (64 pt: HUD touch targets). */
 export const NAV_ROW_MIN_PT = 64;
 
-export interface NavPickerColors {
-  surface: string;
-  ink: string;
-  muted: string;
-  edge: string;
-}
+/** The panel's colours (`PanelColors`): the caller's, so the HUD keeps its own palette. */
+export type NavPickerColors = PanelColors;
 
 export function NavAppPicker({
   apps,
@@ -44,19 +41,26 @@ export function NavAppPicker({
   onClose(): void;
 }) {
   const notice = missingLabel === undefined ? null : mode === 'gone' ? navCopy.gone(missingLabel) : mode === 'failed' ? navCopy.failed(missingLabel) : null;
+  const c = panelTones(colors);
+  const closeLabel = apps.length === 0 ? navCopy.close : navCopy.cancel;
   return (
     <View testID="nav-picker" style={styles.root}>
-      <Text accessibilityRole="header" style={[styles.title, { color: colors.ink }]}>
-        {navCopy.pickerTitle}
-      </Text>
-      {driveLine ? <Text style={[styles.line, { color: colors.muted }]}>{navCopy.driveLine}</Text> : null}
-      {notice !== null ? (
-        <Text testID="nav-picker-notice" accessibilityRole="alert" style={[styles.line, { color: colors.ink }]}>
-          {notice}
+      <View style={ps.header}>
+        <Text accessibilityRole="header" style={[ps.title, { color: c.ink }]}>
+          {navCopy.pickerTitle}
         </Text>
+        {driveLine ? <Text style={[ps.line, { color: c.muted }]}>{navCopy.driveLine}</Text> : null}
+      </View>
+      {notice !== null ? (
+        <View style={[styles.notice, { backgroundColor: c.accentFaint }]}>
+          <Ionicons name="information-circle" size={PANEL_ICON_PT} color={c.accent} />
+          <Text testID="nav-picker-notice" accessibilityRole="alert" style={[ps.line, styles.noticeText, { color: c.ink }]}>
+            {notice}
+          </Text>
+        </View>
       ) : null}
       {apps.length === 0 ? (
-        <Text testID="nav-picker-empty" style={[styles.line, { color: colors.ink }]}>
+        <Text testID="nav-picker-empty" style={[ps.line, { color: c.ink }]}>
           {navCopy.empty}
         </Text>
       ) : (
@@ -71,27 +75,38 @@ export function NavAppPicker({
                 accessibilityLabel={app.label}
                 accessibilityState={{ selected: isSelected }}
                 onPress={() => onChoose(app)}
-                style={({ pressed }) => [styles.row, { borderColor: colors.edge, opacity: pressed ? 0.7 : 1 }]}
+                style={({ pressed }) => [
+                  ps.row,
+                  styles.row,
+                  { backgroundColor: isSelected ? c.accentFaint : c.raised, borderColor: isSelected ? c.accent : c.raised },
+                  pressedLook(pressed),
+                ]}
               >
-                <Ionicons name="navigate" size={24} color={colors.ink} />
-                <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.ink }]}>
+                <View style={[ps.badge, { backgroundColor: isSelected ? c.surface : c.accentFaint }]}>
+                  <Ionicons name="navigate" size={PANEL_ICON_PT} color={c.accent} />
+                </View>
+                <Text numberOfLines={1} style={[ps.rowLabel, ps.rowText, { color: c.ink }]}>
                   {app.label}
                 </Text>
-                {isSelected ? <Ionicons name="checkmark" size={24} color={colors.ink} accessibilityLabel={navCopy.selected} /> : null}
+                {isSelected ? (
+                  <Ionicons name="checkmark-circle" size={26} color={c.accent} accessibilityLabel={navCopy.selected} />
+                ) : (
+                  <Ionicons name="chevron-forward" size={20} color={c.muted} accessibilityElementsHidden importantForAccessibility="no" />
+                )}
               </Pressable>
             );
           })}
         </ScrollView>
       )}
-      <Text style={[styles.footer, { color: colors.muted }]}>{navCopy.footer}</Text>
+      <Text style={[styles.footer, { color: c.muted }]}>{navCopy.footer}</Text>
       <Pressable
         testID="nav-picker-close"
         accessibilityRole="button"
-        accessibilityLabel={apps.length === 0 ? navCopy.close : navCopy.cancel}
+        accessibilityLabel={closeLabel}
         onPress={onClose}
-        style={({ pressed }) => [styles.close, { borderColor: colors.edge, opacity: pressed ? 0.7 : 1 }]}
+        style={({ pressed }) => [ps.capsule, { borderColor: c.edge, backgroundColor: c.surface }, pressedLook(pressed)]}
       >
-        <Text style={[styles.closeLabel, { color: colors.ink }]}>{apps.length === 0 ? navCopy.close : navCopy.cancel}</Text>
+        <Text style={[ps.capsuleLabel, { color: c.ink }]}>{closeLabel}</Text>
       </Pressable>
     </View>
   );
@@ -99,21 +114,10 @@ export function NavAppPicker({
 
 const styles = StyleSheet.create({
   root: { gap: 12, flexShrink: 1 },
-  title: { fontFamily: fontFamilies.headline, fontSize: 22, lineHeight: 28 },
-  line: { fontFamily: fontFamilies.ui, fontSize: 16, lineHeight: 22 },
+  notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderCurve: 'continuous' },
+  noticeText: { flex: 1 },
   list: { flexGrow: 0, flexShrink: 1 },
   listBody: { gap: 8 },
-  row: {
-    minHeight: NAV_ROW_MIN_PT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  rowLabel: { flex: 1, fontFamily: fontFamilies.headline, fontSize: 19 },
-  footer: { fontFamily: fontFamilies.ui, fontSize: 14, lineHeight: 20 },
-  close: { minHeight: 56, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1 },
-  closeLabel: { fontFamily: fontFamilies.headline, fontSize: 18 },
+  row: { minHeight: NAV_ROW_MIN_PT },
+  footer: { fontFamily: fontFamilies.ui, fontSize: 13, lineHeight: 18, textAlign: 'center' },
 });

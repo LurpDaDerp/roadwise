@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { PlaceKind, SavedPlace } from '@/features/places/model';
-import { fontFamilies } from '@/ui/fonts';
+import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT } from '@/ui/drive/panelLook';
 
 import type { InstalledNavApp } from './apps';
 import { navCopy } from './copy';
@@ -39,12 +39,16 @@ export function NavPlacesPicker({
   onClose(): void;
 }) {
   const hint = navCopy.placeHint(app.label);
+  const c = panelTones(colors);
+  const chevron = <Ionicons name="chevron-forward" size={20} color={c.muted} accessibilityElementsHidden importantForAccessibility="no" />;
   return (
     <View testID="nav-picker" style={styles.root}>
-      <Text accessibilityRole="header" style={[styles.title, { color: colors.ink }]}>
-        {navCopy.placesTitle}
-      </Text>
-      <Text style={[styles.line, { color: colors.muted }]}>{navCopy.driveLine}</Text>
+      <View style={ps.header}>
+        <Text accessibilityRole="header" style={[ps.title, { color: c.ink }]}>
+          {navCopy.placesTitle}
+        </Text>
+        <Text style={[ps.line, { color: c.muted }]}>{navCopy.driveLine}</Text>
+      </View>
       <ScrollView testID="nav-picker-places" style={styles.list} contentContainerStyle={styles.listBody}>
         {places.map((place) => {
           const sub = placeSubtitle(place);
@@ -56,19 +60,22 @@ export function NavPlacesPicker({
               accessibilityLabel={navCopy.placeLabel(place.name, sub)}
               accessibilityHint={hint}
               onPress={() => onGo(place)}
-              style={({ pressed }) => [styles.row, { borderColor: colors.edge, opacity: pressed ? 0.7 : 1 }]}
+              style={({ pressed }) => [ps.row, styles.row, { backgroundColor: c.raised, borderColor: c.raised }, pressedLook(pressed)]}
             >
-              <Ionicons name={PLACE_ICON[place.kind]} size={24} color={colors.ink} />
-              <View style={styles.rowText}>
-                <Text numberOfLines={1} style={[styles.rowLabel, { color: colors.ink }]}>
+              <View style={[ps.badge, { backgroundColor: c.accentFaint }]}>
+                <Ionicons name={PLACE_ICON[place.kind]} size={PANEL_ICON_PT} color={c.accent} />
+              </View>
+              <View style={ps.rowText}>
+                <Text numberOfLines={1} style={[ps.rowLabel, { color: c.ink }]}>
                   {place.name}
                 </Text>
                 {sub !== '' ? (
-                  <Text numberOfLines={1} style={[styles.rowSub, { color: colors.muted }]}>
+                  <Text numberOfLines={1} style={[ps.rowSub, { color: c.muted }]}>
                     {sub}
                   </Text>
                 ) : null}
               </View>
+              {chevron}
             </Pressable>
           );
         })}
@@ -77,12 +84,15 @@ export function NavPlacesPicker({
           accessibilityRole="button"
           accessibilityLabel={navCopy.openLabel(app.label)}
           onPress={onOpenApp}
-          style={({ pressed }) => [styles.row, { borderColor: colors.edge, opacity: pressed ? 0.7 : 1 }]}
+          style={({ pressed }) => [ps.row, styles.row, { backgroundColor: c.surface, borderColor: c.edge }, pressedLook(pressed)]}
         >
-          <Ionicons name="navigate" size={24} color={colors.ink} />
-          <Text numberOfLines={1} style={[styles.rowLabel, styles.rowText, { color: colors.ink }]}>
+          <View style={[ps.badge, { backgroundColor: c.accentFaint }]}>
+            <Ionicons name="navigate" size={PANEL_ICON_PT} color={c.accent} />
+          </View>
+          <Text numberOfLines={1} style={[ps.rowLabel, ps.rowText, { color: c.ink }]}>
             {navCopy.openLabel(app.label)}
           </Text>
+          {chevron}
         </Pressable>
       </ScrollView>
       <Pressable
@@ -90,9 +100,9 @@ export function NavPlacesPicker({
         accessibilityRole="button"
         accessibilityLabel={navCopy.cancel}
         onPress={onClose}
-        style={({ pressed }) => [styles.close, { borderColor: colors.edge, opacity: pressed ? 0.7 : 1 }]}
+        style={({ pressed }) => [ps.capsule, { borderColor: c.edge, backgroundColor: c.surface }, pressedLook(pressed)]}
       >
-        <Text style={[styles.closeLabel, { color: colors.ink }]}>{navCopy.cancel}</Text>
+        <Text style={[ps.capsuleLabel, { color: c.ink }]}>{navCopy.cancel}</Text>
       </Pressable>
     </View>
   );
@@ -100,23 +110,7 @@ export function NavPlacesPicker({
 
 const styles = StyleSheet.create({
   root: { gap: 12, flexShrink: 1 },
-  title: { fontFamily: fontFamilies.headline, fontSize: 22, lineHeight: 28 },
-  line: { fontFamily: fontFamilies.ui, fontSize: 16, lineHeight: 22 },
   list: { flexGrow: 0, flexShrink: 1 },
   listBody: { gap: 8 },
-  row: {
-    minHeight: NAV_ROW_MIN_PT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  rowText: { flex: 1, gap: 2 },
-  rowLabel: { fontFamily: fontFamilies.headline, fontSize: 19 },
-  rowSub: { fontFamily: fontFamilies.ui, fontSize: 15, lineHeight: 20 },
-  close: { minHeight: 56, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1 },
-  closeLabel: { fontFamily: fontFamilies.headline, fontSize: 18 },
+  row: { minHeight: NAV_ROW_MIN_PT },
 });

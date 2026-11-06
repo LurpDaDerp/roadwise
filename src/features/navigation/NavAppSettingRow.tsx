@@ -64,7 +64,15 @@ export function NavAppSettingRow({ db, port = defaultNavAppsPort }: { db: Db; po
           mode="settings"
           driveLine={false}
           selected={saved}
-          colors={{ surface: t.colors.surface, ink: t.colors.text, muted: t.colors.textMuted, edge: t.colors.border }}
+          colors={{
+            surface: t.colors.surface,
+            ink: t.colors.text,
+            muted: t.colors.textMuted,
+            edge: t.colors.border,
+            raised: t.colors.surfaceRaised,
+            accent: t.colors.accent,
+            accentFaint: t.colors.accentFaint,
+          }}
           onChoose={(app) => void choose(app)}
           onClose={() => setOpen(false)}
         />

@@ -15,6 +15,7 @@ import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from
 import { EMERGENCY_NUMBER, formatPhone, type EmergencyContact } from '@/features/emergency/model';
 import { ensureGround } from '@/ui';
 import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
+import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT } from '@/ui/drive/panelLook';
 import { fontFamilies } from '@/ui/fonts';
 
 import { hudCopy } from './hudCopy';
@@ -36,7 +37,7 @@ export function sosCallFace(p: HudPalette): string {
 export function EmergencyPanel({
   contacts,
   palette,
-  colors: c,
+  colors,
   height,
   onCall,
   onClose,
@@ -51,6 +52,7 @@ export function EmergencyPanel({
   onCall(phone: string): Promise<boolean>;
   onClose(): void;
 }) {
+  const c = panelTones(colors);
   const red = useMemo(() => sosCallFace(palette), [palette]);
   const [failed, setFailed] = useState(false);
   const call = (phone: string) => {
@@ -75,9 +77,11 @@ export function EmergencyPanel({
       accessibilityLabel={hudCopy.sos.call911}
       accessibilityHint={hudCopy.sos.call911Hint}
       onPress={() => call(EMERGENCY_NUMBER)}
-      style={({ pressed }) => [styles.call, { backgroundColor: red, opacity: pressed ? 0.8 : 1 }]}
+      style={({ pressed }) => [styles.call, { backgroundColor: red }, pressedLook(pressed)]}
     >
-      <Ionicons name="call" size={26} color={CALL_INK} />
+      <View style={styles.callBadge}>
+        <Ionicons name="call" size={24} color={CALL_INK} />
+      </View>
       <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5} style={[styles.callLabel, { color: CALL_INK }]}>
         {hudCopy.sos.call911}
       </Text>
@@ -86,12 +90,12 @@ export function EmergencyPanel({
   const rest = (
     <>
       {failed ? (
-        <Text testID="hud-sos-failed" accessibilityRole="alert" style={[styles.line, { color: c.ink }]}>
+        <Text testID="hud-sos-failed" accessibilityRole="alert" style={[ps.line, { color: c.ink }]}>
           {hudCopy.sos.failed}
         </Text>
       ) : null}
       {contacts === undefined ? null : contacts.length === 0 ? (
-        <Text testID="hud-sos-none" style={[styles.line, { color: c.muted }]}>
+        <Text testID="hud-sos-none" style={[ps.line, styles.none, { color: c.muted }]}>
           {hudCopy.sos.none}
         </Text>
       ) : (
@@ -104,14 +108,16 @@ export function EmergencyPanel({
               accessibilityRole="button"
               accessibilityLabel={hudCopy.sos.contactLabel(contact.name, number)}
               onPress={() => call(contact.phone)}
-              style={({ pressed }) => [styles.row, { borderColor: c.edge, opacity: pressed ? 0.7 : 1 }]}
+              style={({ pressed }) => [ps.row, styles.row, { backgroundColor: c.raised, borderColor: c.raised }, pressedLook(pressed)]}
             >
-              <Ionicons name="call-outline" size={24} color={c.ink} />
-              <View style={styles.rowText}>
-                <Text numberOfLines={1} style={[styles.name, { color: c.ink }]}>
+              <View style={[ps.badge, { backgroundColor: c.accentFaint }]}>
+                <Ionicons name="call-outline" size={PANEL_ICON_PT} color={c.accent} />
+              </View>
+              <View style={ps.rowText}>
+                <Text numberOfLines={1} style={[ps.rowLabel, { color: c.ink }]}>
                   {contact.name}
                 </Text>
-                <Text numberOfLines={1} style={[styles.number, { color: c.muted }]}>
+                <Text numberOfLines={1} style={[ps.rowSub, { color: c.muted }]}>
                   {number}
                 </Text>
               </View>
@@ -128,9 +134,9 @@ export function EmergencyPanel({
       accessibilityLabel={hudCopy.sos.close}
       accessibilityHint={hudCopy.sos.closeHint}
       onPress={onClose}
-      style={({ pressed }) => [styles.close, { borderColor: c.edge, opacity: pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [ps.capsule, { borderColor: c.edge, backgroundColor: c.surface }, pressedLook(pressed)]}
     >
-      <Text style={[styles.closeLabel, { color: c.ink }]}>{hudCopy.sos.close}</Text>
+      <Text style={[ps.capsuleLabel, { color: c.ink }]}>{hudCopy.sos.close}</Text>
     </Pressable>
   );
 
@@ -144,7 +150,7 @@ export function EmergencyPanel({
     );
   return (
     <View testID="hud-sos-panel" style={[styles.root, styles.tall]}>
-      <Text accessibilityRole="header" style={[styles.title, { color: c.ink }]}>
+      <Text accessibilityRole="header" style={[ps.title, { color: c.ink }]}>
         {hudCopy.sos.title}
       </Text>
       {call911}
@@ -159,7 +165,6 @@ export function EmergencyPanel({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   tall: { gap: 12 },
-  title: { fontFamily: fontFamilies.headline, fontSize: 22, lineHeight: 28 },
   list: { flexGrow: 0, flexShrink: 1 },
   listBody: { gap: 8 },
   call: {
@@ -168,25 +173,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-  },
-  callLabel: { flexShrink: 1, fontFamily: fontFamilies.headline, fontSize: 22 },
-  line: { fontFamily: fontFamilies.ui, fontSize: 16, lineHeight: 22 },
-  row: {
-    minHeight: HUD_MIN_TARGET_PT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
+    gap: 12,
+    borderRadius: 22,
+    borderCurve: 'continuous',
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 14,
-    borderWidth: 1,
   },
-  rowText: { flex: 1 },
-  name: { fontFamily: fontFamilies.headline, fontSize: 19, lineHeight: 24 },
-  number: { fontFamily: fontFamilies.ui, fontSize: 15, lineHeight: 20 },
-  close: { minHeight: 56, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1 },
-  closeLabel: { fontFamily: fontFamilies.headline, fontSize: 18 },
+  callBadge: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255, 255, 255, 0.18)' },
+  callLabel: { flexShrink: 1, fontFamily: fontFamilies.headline, fontSize: 22 },
+  none: { textAlign: 'center', paddingVertical: 4 },
+  row: { minHeight: HUD_MIN_TARGET_PT },
 });
