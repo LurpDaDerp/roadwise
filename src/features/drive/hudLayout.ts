@@ -322,7 +322,11 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       const dx = hx - (sosX + HUD_SOS_PT / 2);
       const deepest = hy - HUD_SOS_PT;
       const clearY = dx >= reach ? deepest : Math.floor(hy - Math.sqrt(reach * reach - dx * dx) - HUD_SOS_PT / 2);
-      const sos: Rect = { x: sosX, y: Math.max(bandLevel, Math.min(deepest, clearY)), w: HUD_SOS_PT, h: HUD_SOS_PT };
+      // Then moved up half the way to the sign's foot (never closer to it than a gap).
+      const lowestSosY = Math.max(bandLevel, Math.min(deepest, clearY));
+      const signFoot = items.sign.y + items.sign.h;
+      const sosY = Math.max(signFoot + GAP, Math.floor(signFoot + (lowestSosY - signFoot) / 2));
+      const sos: Rect = { x: sosX, y: Math.min(lowestSosY, sosY), w: HUD_SOS_PT, h: HUD_SOS_PT };
       const bandX = sos.x + sos.w + GAP;
       const band: Rect = { x: bandX, y: bandY, w: Math.max(0, left + frameW - bandX), h: HUD_BAND_PT };
       return {

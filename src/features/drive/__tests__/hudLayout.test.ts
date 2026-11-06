@@ -202,9 +202,9 @@ describe('worked phones (§3.1, §3.2)', () => {
       expect([l.sos.w, l.sos.h]).toEqual([64, 64]);
       expect(Math.abs(l.sos.x + l.sos.w / 2 - (l.sign.x + l.sign.w / 2))).toBeLessThanOrEqual(0.5);
       expect(l.sos.y).toBeGreaterThanOrEqual(l.sign.y + l.sign.h + 8);
-      // well under level with the band (an iPhone 15: 26 pt lower under a km/h sign, 34 under mph), over the halo box's corner
-      expect(l.sos.y).toBe(units === 'mi' ? 225 : 217);
-      expect(l.sos.y + l.sos.h / 2 - (l.band.y + l.band.h / 2)).toBeGreaterThanOrEqual(20);
+      // half the way up from its lowest spot (over the halo box's corner) to the sign's foot
+      expect(l.sos.y).toBe(units === 'mi' ? 204 : 200);
+      expect(l.sos.y + l.sos.h / 2 - (l.band.y + l.band.h / 2)).toBeGreaterThanOrEqual(0);
       expect(overlap(l.sos, l.halo)).toBe(true);
       expect(faceClearance(l.sos, l.halo)).toBeGreaterThanOrEqual(HUD_SOS_HALO_CLEAR_PT - 0.5);
       expect(l.band.x).toBe(l.sos.x + l.sos.w + 12);
