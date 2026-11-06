@@ -9,6 +9,7 @@ import {
   HUD_NAV_H_PT,
   HUD_NAV_W_PT,
   HUD_NOT_DRIVING_PT,
+  HUD_SOS_HALO_CLEAR_PT,
   HUD_SOS_PT,
   HUD_WEATHER_MIN_HALO_PT,
   HUD_WEATHER_PT,
@@ -28,6 +29,12 @@ const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w - 1e-9 && b.x < a.x + a.w 
 /** `r` grown by `d` on every side (a touch box with its slop). */
 const grow = (r: Rect, d: number): Rect => ({ x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d });
 /** A rect meets the halo's compass (its outer edge, around the lit ring). */
+/** How far the emergency button's round face is from the compass's outer edge. */
+function faceClearance(sos: Rect, halo: Rect): number {
+  const d = Math.hypot(sos.x + sos.w / 2 - (halo.x + halo.w / 2), sos.y + sos.h / 2 - (halo.y + halo.h / 2));
+  return d - sos.w / 2 - compassGeometry(halo.w).outer;
+}
+
 function hitsCircle(r: Rect, halo: Rect): boolean {
   const cx = halo.x + halo.w / 2;
   const cy = halo.y + halo.h / 2;
@@ -189,13 +196,17 @@ describe('worked phones (§3.1, §3.2)', () => {
     expect(L({ width: 700, height: 286 })).toMatchObject({ compact: true });
   });
 
-  test('portrait: the emergency button under the sign, centred on it and level with the band, 64 pt; the band starts a gap right of it', () => {
+  test('portrait: the emergency button under the sign, centred on it, 64 pt, dropped over the halo box’s corner with its face 20 pt clear of the compass; the band starts a gap right of it', () => {
     for (const units of ['mi', 'km'] as const) {
       const l = L({ width: 393, height: 852, insets: { ...ZERO, top: 59, bottom: 34 }, units });
       expect([l.sos.w, l.sos.h]).toEqual([64, 64]);
       expect(Math.abs(l.sos.x + l.sos.w / 2 - (l.sign.x + l.sign.w / 2))).toBeLessThanOrEqual(0.5);
       expect(l.sos.y).toBeGreaterThanOrEqual(l.sign.y + l.sign.h + 8);
-      expect(l.sos.y + l.sos.h / 2).toBe(l.band.y + l.band.h / 2);
+      // well under level with the band (an iPhone 15: 26 pt lower under a km/h sign, 34 under mph), over the halo box's corner
+      expect(l.sos.y).toBe(units === 'mi' ? 225 : 217);
+      expect(l.sos.y + l.sos.h / 2 - (l.band.y + l.band.h / 2)).toBeGreaterThanOrEqual(20);
+      expect(overlap(l.sos, l.halo)).toBe(true);
+      expect(faceClearance(l.sos, l.halo)).toBeGreaterThanOrEqual(HUD_SOS_HALO_CLEAR_PT - 0.5);
       expect(l.band.x).toBe(l.sos.x + l.sos.w + 12);
       expect(l.band.x + l.band.w).toBe(l.row.x + l.row.w);
       // the panels start under it: they never cover the button
@@ -398,7 +409,6 @@ describe('invariants across windows', () => {
         const others: [string, Rect][] = [
           ['panel', l.panel],
           ['sosPanel', l.sosPanel],
-          ['halo', l.halo],
           ['band', l.band],
           ['line', l.line],
           ['sign', l.sign],
@@ -406,6 +416,10 @@ describe('invariants across windows', () => {
         if (l.chip) others.push(['chip', l.chip]);
         if (l.notDriving !== 'line') others.push(['notDriving', grow(l.notDriving, 10)]);
         for (const [name, r] of others) if (overlap(l.sos, r)) throw new Error(`the emergency button meets ${name} at ${at}`);
+        // a portrait button may sit over the halo box's corner, its face 20 pt clear of the compass; elsewhere clear of the box
+        if (l.orientation === 'portrait' && !l.compact) {
+          if (faceClearance(l.sos, l.halo) < HUD_SOS_HALO_CLEAR_PT - 0.5) throw new Error(`the emergency button within 20 pt of the compass at ${at}`);
+        } else if (overlap(l.sos, l.halo)) throw new Error(`the emergency button meets halo at ${at}`);
         if (l.halo.ring && hitsCircle(l.sos, l.halo)) throw new Error(`the emergency button meets the ring at ${at}`);
         // the navigation button's 8 pt slop and End's swipe never reach it
         for (const [name, r] of [

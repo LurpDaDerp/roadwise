@@ -18,9 +18,9 @@ export const emergencyCopy = {
   sheet: {
     newTitle: 'New contact',
     name: 'Name',
-    namePlaceholder: 'Mom, Coach Lee…',
+    namePlaceholder: 'Name',
     phone: 'Phone number',
-    phonePlaceholder: '(555) 123-4567',
+    phonePlaceholder: 'Phone number',
     save: 'Save',
     remove: 'Remove',
     removeTitle: (name: string) => `Remove ${name}?`,

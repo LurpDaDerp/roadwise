@@ -35,7 +35,7 @@ export const placesCopy = {
     unnamed: 'Address not found',
     inZone: (zone: string) => `Inside your “${zone}” zone`,
     name: 'Name',
-    namePlaceholder: 'Gym, Grandma’s…',
+    namePlaceholder: 'Name',
     pinHint: 'Tap the map to move the pin.',
     save: 'Save',
     changeAddress: 'Change address',

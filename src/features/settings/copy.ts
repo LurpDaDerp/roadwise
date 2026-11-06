@@ -146,7 +146,7 @@ export const settingsCopy = {
     editTitle: 'Edit zone',
     newTitle: 'New zone',
     name: 'Name',
-    namePlaceholder: 'Home, School…',
+    namePlaceholder: 'Name',
     presets: ['Home', 'School'] as const,
     size: 'Size',
     smaller: 'Smaller',

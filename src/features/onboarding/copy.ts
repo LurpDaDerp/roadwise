@@ -36,7 +36,7 @@ export const onboardingCopy = {
     title: 'Pick a username',
     body: 'This is the name friends see, so leave your real name out of it.',
     label: 'Username',
-    placeholder: 'swift_fox',
+    placeholder: 'Username',
     rules: '3 to 20 letters, numbers or underscores.',
     checking: 'Checking…',
     available: (name: string) => `@${name} is free. It's yours if you want it.`,

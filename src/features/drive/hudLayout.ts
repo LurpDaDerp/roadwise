@@ -22,8 +22,9 @@
 //   everywhere except a compact window too short for it and a readable speed, where it gives back
 //   down to the 64 pt target.
 // - The emergency button (`sos`, a 64 pt circle) is on screen in every layout and meets nothing
-//   else: in portrait under the sign, level with the band (the band starts right of it, and the
-//   panels start under it); in landscape under the sign in the sign's column (the sign moves up
+//   else: in portrait under the sign, dropped over the halo box's top-left corner as far as its
+//   face stays 20 pt clear of the compass (the band starts right of it, and the panels start
+//   under it); in landscape under the sign in the sign's column (the sign moves up
 //   when the button would leave the frame, and the panel starts right of it); in a compact window
 //   the band's left end, or, where that would leave the band under 160 pt, the right end of End's
 //   row (End gives up the room).
@@ -132,6 +133,8 @@ export const HUD_ROW_MAX_PT = 144;
 export const HUD_LAND_RIGHT_MIN_PT = 160;
 /** The emergency button: the HUD's 64 pt target, a square its round face sits in. */
 export const HUD_SOS_PT = HUD_MIN_TARGET_PT;
+/** Portrait: the emergency button's round face stays at least this far from the compass's outer edge. */
+export const HUD_SOS_HALO_CLEAR_PT = 20;
 /**
  * A compact band keeps at least this much beside the emergency button, else the button goes by End.
  * The compact emergency panel takes the band's width, so this is also its narrowest there.
@@ -306,15 +309,20 @@ function layoutRects(i: HudLayoutInput): HudLayout {
       const rowH = Math.max(HUD_ROW_MIN_PT, Math.min(HUD_ROW_MAX_PT, Math.floor(haloY + B / 2 - edgeR - GAP - HUD_BAND_PT - GAP - top)));
       const row: Rect = { x: left, y: top, w: frameW, h: rowH };
       const items = rowItems(row, i.units);
-      // The emergency button under the sign (centred on it), level with the band; the band starts a
-      // gap right of it.
+      // The emergency button under the sign (centred on it), as low as its round face stays
+      // `HUD_SOS_HALO_CLEAR_PT` clear of the compass's outer edge (over the halo box's corner), never
+      // higher than level with the band nor lower than the halo's centre; the band starts a gap
+      // right of it.
       const bandY = top + rowH + GAP;
-      const sos: Rect = {
-        x: Math.max(left, items.sign.x + (items.sign.w - HUD_SOS_PT) / 2),
-        y: bandY + (HUD_BAND_PT - HUD_SOS_PT) / 2,
-        w: HUD_SOS_PT,
-        h: HUD_SOS_PT,
-      };
+      const sosX = Math.max(left, items.sign.x + (items.sign.w - HUD_SOS_PT) / 2);
+      const bandLevel = bandY + (HUD_BAND_PT - HUD_SOS_PT) / 2;
+      const hx = left + (frameW - B) / 2 + B / 2;
+      const hy = haloY + B / 2;
+      const reach = edgeR + HUD_SOS_PT / 2 + HUD_SOS_HALO_CLEAR_PT;
+      const dx = hx - (sosX + HUD_SOS_PT / 2);
+      const deepest = hy - HUD_SOS_PT;
+      const clearY = dx >= reach ? deepest : Math.floor(hy - Math.sqrt(reach * reach - dx * dx) - HUD_SOS_PT / 2);
+      const sos: Rect = { x: sosX, y: Math.max(bandLevel, Math.min(deepest, clearY)), w: HUD_SOS_PT, h: HUD_SOS_PT };
       const bandX = sos.x + sos.w + GAP;
       const band: Rect = { x: bandX, y: bandY, w: Math.max(0, left + frameW - bandX), h: HUD_BAND_PT };
       return {
