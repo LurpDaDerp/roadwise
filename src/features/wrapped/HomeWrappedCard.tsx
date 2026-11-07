@@ -23,7 +23,18 @@ export function WrappedCardView({ entry, onOpen, onDismiss }: { entry: WrappedAr
   const stops = archetypeStops(entry.archetype);
   const title = copy.home.title(monthName(entry.month));
   return (
-    <Card onPress={onOpen} accessibilityLabel={`${title}. ${copy.home.body}`} accessibilityHint={copy.home.hint} testID="home-wrapped">
+    <Card
+      onPress={onOpen}
+      accessibilityLabel={`${title}. ${copy.home.body}`}
+      accessibilityHint={copy.home.hint}
+      // VoiceOver reads the card as one button, so its ✕ is an action on it too.
+      accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.home.dismiss }]}
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'activate') onOpen();
+        else if (e.nativeEvent.actionName === 'dismiss') onDismiss();
+      }}
+      testID="home-wrapped"
+    >
       <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(stops[0], WASH_ALPHA[t.scheme]) }]} testID="home-wrapped-wash" />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
         <ArchetypeIcon pattern={archetypePattern(entry.archetype)} size={48} disc={stops[0]} testID="home-wrapped-icon" />

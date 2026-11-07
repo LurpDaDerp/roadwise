@@ -18,7 +18,7 @@ select plan(107);
 insert into auth.users (id, email)
   select ('00000000-0000-0000-0000-0000000000' || lpad(g::text, 2, '0'))::uuid, 'u' || g || '@example.com' from generate_series(1, 36) g;
 update public.profiles set username = 'ava' where id = '00000000-0000-0000-0000-000000000001';
-update public.profiles set username = 'bo' where id = '00000000-0000-0000-0000-000000000002';
+update public.profiles set username = 'bob' where id = '00000000-0000-0000-0000-000000000002';
 insert into public.notification_prefs (user_id, tz) values ('00000000-0000-0000-0000-000000000001', 'America/New_York'),
   ('00000000-0000-0000-0000-000000000032', 'Asia/Tokyo'), ('00000000-0000-0000-0000-000000000035', 'Pacific/Kiritimati'),
   ('00000000-0000-0000-0000-000000000036', 'Etc/GMT+12');

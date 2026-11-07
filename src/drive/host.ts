@@ -77,7 +77,7 @@ import { processTimers } from '@/lib/timers';
 import { dayKey, sunIsDown } from '@/lib/time';
 import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
 
-import { breakDecision, createBreakWatch, remindedHFor, writeBreakMark, type BreakReminder, type BreakWatch } from './breakWatch';
+import { breakDecision, breakMarkFor, createBreakWatch, writeBreakMark, type BreakReminder, type BreakWatch } from './breakWatch';
 import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
 import { displayLook } from './displayLook';
 import { speedTintOf } from './displayTint';
@@ -1444,15 +1444,16 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    */
   function startBreakWatch(id: string): void {
     const gen = (breakLoad += 1);
-    const read = persist ? remindedHFor(db, id) : Promise.resolve(0);
+    const none = { remindedH: 0, remindedAt: null };
+    const read = persist ? breakMarkFor(db, id) : Promise.resolve(none);
     read
       .catch((e: unknown) => {
         report(e, 'breakReminder');
-        return 0;
+        return none;
       })
-      .then((remindedH) => {
+      .then((mark) => {
         const open = engine.snapshot();
-        if (gen === breakLoad && open.status === 'recording' && open.clientTripId === id) breakWatch = createBreakWatch({ remindedH });
+        if (gen === breakLoad && open.status === 'recording' && open.clientTripId === id) breakWatch = createBreakWatch(mark);
       })
       .catch((e: unknown) => report(e, 'breakReminder'));
   }
@@ -1481,26 +1482,34 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   /**
    * The break reminder is due on this row: the driving screen flashes it and the player gives it.
-   * Its hour is stored for the drive only once it starts playing; dropped unplayed (RoadWise went
-   * behind before it started), the watcher gets it back, so the next stop in front gives it.
+   * Its hour is stored for the drive once it starts playing. Only one the player asked about and
+   * dropped unplayed (RoadWise went behind before it started) goes back to the watcher, so the next
+   * stop in front gives it; one the player never asked about (the stand-in player when the sounds
+   * failed to load, or a delivery that threw) counts as given: the band showed it.
    */
   function remindBreak(reminder: BreakReminder, id: string): void {
     const watch = breakWatch;
     const decision = breakDecision(reminder, id);
-    let started = false;
+    let asked = false;
+    let given = false;
+    const give = () => {
+      if (given) return;
+      given = true;
+      if (persist) void writeBreakMark(db, { clientTripId: id, remindedH: reminder.hours, remindedAt: reminder.at }).catch((e: unknown) => report(e, 'breakReminder'));
+    };
     decision.stillWanted = () => {
+      asked = true;
       if (!appActive()) return false;
-      if (!started) {
-        started = true;
-        if (persist) void writeBreakMark(db, { clientTripId: id, remindedH: reminder.hours }).catch((e: unknown) => report(e, 'breakReminder'));
-      }
+      give();
       return true;
     };
     player
       .deliver(decision)
       .catch((e: unknown) => report(e, 'player'))
       .finally(() => {
-        if (!started) watch?.release(reminder);
+        if (given) return;
+        if (asked) watch?.release(reminder);
+        else give();
       });
     breakReminder = reminder;
     publish();

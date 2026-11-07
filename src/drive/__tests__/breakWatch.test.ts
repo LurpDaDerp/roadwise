@@ -6,6 +6,7 @@ import {
   BREAK_KEY,
   BREAK_REMINDER_MS,
   breakDecision,
+  breakMarkFor,
   createBreakWatch,
   HOUR_MS,
   parseBreakMark,
@@ -68,15 +69,18 @@ test('past 2 h it fires on the second stopped row in a row, once; a moving row i
   expect(w.remindedH()).toBe(2);
 });
 
-test('then at 3 h and 4 h of driving (fixed hours from driving speed), each at its first stop', () => {
+test('then at 3 h and 4 h of driving (fixed hours from driving speed), each at its first stop an hour after the last at least', () => {
   const w = createBreakWatch();
-  expect(stop(w, DROVE + 2 * H + 5 * 60_000).map((r) => r.hours)).toEqual([2]);
+  expect(stop(w, DROVE + 2 * H).map((r) => r.hours)).toEqual([2]);
   // A stop before the 3 h mark gives nothing.
   expect(stop(w, DROVE + 3 * H - 60_000, 10)).toEqual([]);
   w.push(at(DROVE + 3 * H - 1000));
   expect(stop(w, DROVE + 3 * H + 10 * 60_000).map((r) => r.hours)).toEqual([3]);
   w.push(at(DROVE + 3 * H + 11 * 60_000));
-  expect(stop(w, DROVE + 4 * H).map((r) => r.hours)).toEqual([4]);
+  // Past 4 h but under an hour since the 3 h one: it waits.
+  expect(stop(w, DROVE + 4 * H, 5)).toEqual([]);
+  w.push(at(DROVE + 4 * H + 5000));
+  expect(stop(w, DROVE + 4 * H + 10 * 60_000).map((r) => r.hours)).toEqual([4]);
 });
 
 test('behind it waits: a mark passed behind fires at the next stop in front; a stop counted behind carries into the front', () => {
@@ -94,7 +98,29 @@ test('several marks passed at once make one reminder; the next is the first whol
   w.push(at(DROVE + 4 * H + 30 * 60_000));
   expect(stop(w, DROVE + 5 * H - 5000, 4)).toEqual([]);
   w.push(at(DROVE + 5 * H));
-  expect(stop(w, DROVE + 5 * H + 1000).map((x) => x.hours)).toEqual([5]);
+  expect(stop(w, DROVE + 5 * H + 20 * 60_000).map((x) => x.hours)).toEqual([5]);
+});
+
+test('never within an hour of the last one: a reminder at 2:58 and a red light at 3:01 make one; the 3 h one comes at the first stop from 3:58', () => {
+  const w = createBreakWatch();
+  const first = DROVE + 2 * H + 58 * 60_000;
+  expect(stop(w, first - 1000).map((r) => r.hours)).toEqual([2]);
+  expect(w.remindedAt()).toBe(first);
+  w.push(at(first + 60_000));
+  expect(stop(w, DROVE + 3 * H + 60_000, 10)).toEqual([]);
+  w.push(at(DROVE + 3 * H + 30 * 60_000));
+  expect(stop(w, first + H - 3000, 2)).toEqual([]);
+  w.push(at(first + H - 1000));
+  expect(stop(w, first + H - 1000).map((r) => r.hours)).toEqual([3]);
+  // Handed back, the time goes back too.
+  const v = createBreakWatch();
+  const [r] = stop(v, first - 1000);
+  v.release(r!);
+  expect(v.remindedAt()).toBeNull();
+  // After a relaunch the stored time holds it the same way; a time without an hour is ignored.
+  const u = createBreakWatch({ remindedH: 2, remindedAt: first });
+  expect(stop(u, DROVE + 3 * H + 60_000, 10)).toEqual([]);
+  expect(createBreakWatch({ remindedH: 0, remindedAt: first }).remindedAt()).toBeNull();
 });
 
 test('busy (an alert showing, a DashPal continuous alert) defers it without using it up', () => {
@@ -194,6 +220,11 @@ describe('the stored mark', () => {
     await writeBreakMark(db, { clientTripId: 'a', remindedH: 3 });
     expect(await remindedHFor(db, 'a')).toBe(3);
     expect(await remindedHFor(db, 'b')).toBe(0);
+    expect(await breakMarkFor(db, 'a')).toEqual({ remindedH: 3, remindedAt: null });
+    await writeBreakMark(db, { clientTripId: 'a', remindedH: 3, remindedAt: 1234 });
+    expect(await breakMarkFor(db, 'a')).toEqual({ remindedH: 3, remindedAt: 1234 });
+    expect(await breakMarkFor(db, 'b')).toEqual({ remindedH: 0, remindedAt: null });
+    expect(parseBreakMark({ clientTripId: 'a', remindedH: 3, remindedAt: 'x' })).toEqual({ clientTripId: 'a', remindedH: 3 });
     for (const bad of [null, 3, 'x', {}, { clientTripId: '', remindedH: 2 }, { clientTripId: 'a', remindedH: -1 }, { clientTripId: 'a', remindedH: 2.5 }, { clientTripId: 'a', remindedH: '2' }]) {
       expect(parseBreakMark(bad)).toBeNull();
     }

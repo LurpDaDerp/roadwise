@@ -1,6 +1,7 @@
 // The break reminder: after 2 hours of driving, at the first stop with RoadWise in front, a soft
 // tone and "Take a break soon" (spoken even with voice alerts off), and the driving screen's band
-// says the same for 4 s; then again at each whole hour after (3 h, 4 h, ...).
+// says the same for 4 s; then again at each whole hour after (3 h, 4 h, ...), never within an hour
+// of the last one.
 //
 // The watcher is pure (modelled on the spot nudge's, `src/core/spots/watcher.ts`): the host owns
 // the row clock, the foreground state and the drive's driving-speed mark, and feeds it every row of
@@ -9,7 +10,9 @@
 // - Driving time is row-clock time since the drive first reached driving speed (`droveAt`, the
 //   engine's `session.droveAt`), never the Start tap: a Start-card drive still waiting has none.
 // - The thresholds are fixed hours after `droveAt`: 2 h, then 3 h, 4 h, ... One is due once the row
-//   is past it and it has not been reminded yet.
+//   is past it, it has not been reminded yet, and the last reminder was an hour ago at least (row
+//   clock): a reminder at a stop at 2:58 and a red light at 3:01 never make two minutes apart; the
+//   3 h one waits for the first stop from 3:58.
 // - It fires on a row where the car has been stopped (`snap.stopped`: a known speed of 5 mph or
 //   less) for 2 rows in a row at least, a red light included; with RoadWise in front only, never
 //   while a Start-card drive waits, never while the screen is busy (a phone or DashPal alert showing
@@ -20,10 +23,11 @@
 // - A reminder the player drops unplayed (RoadWise went behind before it started) is handed back
 //   (`release`): its hours count again, and it comes at the next such stop.
 // - A threshold passed while RoadWise was behind fires at the next such stop in front. Several
-//   passed at once make one reminder, and the next one is the first whole hour after it.
+//   passed at once make one reminder, and the next one is the first whole hour after it (and an
+//   hour after it at least).
 //
-// The last reminded hour is kept per drive in a settings key (`BREAK_KEY`, wiped at sign-out), so a
-// drive taken up again after a relaunch does not repeat it.
+// The last reminded hour and when it was given are kept per drive in a settings key (`BREAK_KEY`,
+// wiped at sign-out), so a drive taken up again after a relaunch does not repeat it.
 import type { AlertDecision } from '@/core/alerts/types';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { t } from '@/i18n';
@@ -76,6 +80,8 @@ export interface BreakWatch {
   push(input: BreakInput): BreakReminder | null;
   /** The last whole hour reminded on this drive (0 before the first). */
   remindedH(): number;
+  /** When the last reminder on this drive was given (row clock), or null before the first. */
+  remindedAt(): number | null;
   /**
    * `reminder` was never given (the player dropped it unplayed): its hours count again, so it comes
    * at the next stop. Ignored unless it is the latest reminder.
@@ -83,13 +89,18 @@ export interface BreakWatch {
   release(reminder: BreakReminder): void;
 }
 
-/** A watcher over one drive; `remindedH`: the hour this drive was last reminded at (after a relaunch). */
-export function createBreakWatch(opts: { remindedH?: number } = {}): BreakWatch {
+/**
+ * A watcher over one drive; `remindedH` and `remindedAt`: the hour this drive was last reminded at,
+ * and when (after a relaunch).
+ */
+export function createBreakWatch(opts: { remindedH?: number; remindedAt?: number | null } = {}): BreakWatch {
   let reminded = validHours(opts.remindedH) ?? 0;
+  let lastAt = reminded > 0 ? validAt(opts.remindedAt) : null;
   let stoppedRows = 0;
-  /** The latest reminder's key, and the hour reminded before it (what `release` goes back to). */
+  /** The latest reminder's key, and the hour and time reminded before it (what `release` goes back to). */
   let lastKey: string | null = null;
   let before = reminded;
+  let beforeAt = lastAt;
 
   return {
     push(input) {
@@ -102,20 +113,27 @@ export function createBreakWatch(opts: { remindedH?: number } = {}): BreakWatch 
       const driven = input.ts - input.droveAt;
       const next = Math.max(BREAK_FIRST_H, reminded + 1);
       if (!(driven >= next * HOUR_MS)) return null;
+      // An hour at least since the last reminder (a clock read behind it never holds it back).
+      const since = lastAt === null ? null : input.ts - lastAt;
+      if (since !== null && since >= 0 && since < HOUR_MS) return null;
       if (stoppedRows < BREAK_STOP_ROWS || !input.foreground || input.busy || input.ending) return null;
       const drowsy = input.drowsyAgoMs;
       if (drowsy !== null && drowsy >= 0 && drowsy < BREAK_AFTER_DROWSY_MS) return null;
       // Every hour passed is covered by this one reminder; the next is the first whole hour after now.
       before = reminded;
+      beforeAt = lastAt;
       reminded = Math.floor(driven / HOUR_MS);
+      lastAt = input.ts;
       lastKey = `break@${input.ts}`;
       return { key: lastKey, at: input.ts, hours: reminded };
     },
     remindedH: () => reminded,
+    remindedAt: () => lastAt,
     release(reminder) {
       if (reminder.key !== lastKey) return;
       lastKey = null;
       reminded = before;
+      lastAt = beforeAt;
     },
   };
 }
@@ -143,27 +161,44 @@ export interface BreakMark {
   clientTripId: string;
   /** The last whole hour reminded on that drive. */
   remindedH: number;
+  /** When it was given (row clock); absent in a mark written without it. */
+  remindedAt?: number;
 }
 
 function validHours(h: unknown): number | null {
   return typeof h === 'number' && Number.isInteger(h) && h >= 0 ? h : null;
 }
 
-/** A stored mark, or null when absent or not one. */
+function validAt(at: unknown): number | null {
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;
+}
+
+/** A stored mark, or null when absent or not one (a bad `remindedAt` alone is dropped). */
 export function parseBreakMark(raw: unknown): BreakMark | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.clientTripId !== 'string' || r.clientTripId.length === 0) return null;
   const h = validHours(r.remindedH);
-  return h === null ? null : { clientTripId: r.clientTripId, remindedH: h };
+  if (h === null) return null;
+  const at = validAt(r.remindedAt);
+  return at === null ? { clientTripId: r.clientTripId, remindedH: h } : { clientTripId: r.clientTripId, remindedH: h, remindedAt: at };
 }
 
 export async function writeBreakMark(db: Db, mark: BreakMark): Promise<void> {
   await createSettingsRepo(db).set(BREAK_KEY, mark);
 }
 
+/**
+ * The hour `clientTripId` was last reminded at and when (another drive's mark is ignored), or 0
+ * and null.
+ */
+export async function breakMarkFor(db: Db, clientTripId: string): Promise<{ remindedH: number; remindedAt: number | null }> {
+  const mark = parseBreakMark(await createSettingsRepo(db).get<unknown>(BREAK_KEY));
+  if (mark === null || mark.clientTripId !== clientTripId) return { remindedH: 0, remindedAt: null };
+  return { remindedH: mark.remindedH, remindedAt: mark.remindedAt ?? null };
+}
+
 /** The hour `clientTripId` was last reminded at (another drive's mark is ignored), or 0. */
 export async function remindedHFor(db: Db, clientTripId: string): Promise<number> {
-  const mark = parseBreakMark(await createSettingsRepo(db).get<unknown>(BREAK_KEY));
-  return mark !== null && mark.clientTripId === clientTripId ? mark.remindedH : 0;
+  return (await breakMarkFor(db, clientTripId)).remindedH;
 }

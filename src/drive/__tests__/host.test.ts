@@ -1142,7 +1142,7 @@ describe('the break reminder', () => {
     expect(breaks(h)[0]!.stillWanted!()).toBe(false);
     h.appState.set('active');
     expect(h.host.snapshot().breakReminder).toEqual({ key: `break@${stopAt + 1000}`, at: stopAt + 1000, hours: 2 });
-    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2 });
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2, remindedAt: stopAt + 1000 });
     // More stops before 3 h: nothing more.
     await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 20 * 60_000, speedMps: 15 }));
     await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 20 * 60_000 + 3000, speedMps: 0 }));
@@ -1239,7 +1239,29 @@ describe('the break reminder', () => {
     await feed(h, rows(2, { t0: DROVE + 2 * HOUR + 63_000, speedMps: 0 }));
     await h.host.settled();
     expect(breaks(h).map((d) => d.id)).toEqual([`break:${id}:2`, `break:${id}:2`]);
-    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2 });
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2, remindedAt: DROVE + 2 * HOUR + 64_000 });
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a player that never asks about it (the stand-in when the sounds failed to load) still counts it as given: once per stop, the hour stored', async () => {
+    const h = build();
+    // Like the stand-in player: plays nothing and never reads stillWanted.
+    h.player.deliver = async (d) => {
+      h.player.delivered.push(d);
+    };
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    const id = h.host.snapshot().clientTripId!;
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15 }));
+    const stopAt = DROVE + 2 * HOUR + 3000;
+    await feed(h, rows(2, { t0: stopAt, speedMps: 0 }));
+    await h.host.settled();
+    // The whole stop: one reminder, one band.
+    await feed(h, rows(20, { t0: stopAt + 2000, speedMps: 0 }));
+    await h.host.settled();
+    expect(breaks(h)).toHaveLength(1);
+    expect(h.host.snapshot().breakReminder).toMatchObject({ key: `break@${stopAt + 1000}`, hours: 2 });
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2, remindedAt: stopAt + 1000 });
     await h.host.stop({ endOpenTrip: true });
   });
 

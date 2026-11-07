@@ -41,6 +41,18 @@ jest.mock('../data', () => ({
   readPracticeCandidates: () => (mockHold ? new Promise(() => {}) : Promise.resolve(mockDrives)),
 }));
 
+// The clock is pinned to noon today (only Date is faked; timers stay real, so waitFor and the
+// queries run as usual): the fixture drives, an hour or three before now, then always fall on the
+// log's start day (today), whenever the suite runs. Unpinned, a run soon after midnight put them on
+// yesterday, before the start day, and out of the log.
+const NOON = new Date();
+NOON.setHours(12, 0, 0, 0);
+jest.useFakeTimers({
+  now: NOON,
+  doNotFake: ['hrtime', 'nextTick', 'performance', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame', 'requestIdleCallback', 'cancelIdleCallback', 'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+});
+afterAll(() => jest.useRealTimers());
+
 const NOW = Date.now();
 const TODAY = dayKey(new Date(NOW));
 const ON = { [PERMIT_KEYS.enabled]: true, [PERMIT_KEYS.startDay]: TODAY };

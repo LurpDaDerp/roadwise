@@ -2,7 +2,7 @@
  * Home's Wrapped card: last month's Wrapped from the 1st through the 7th (local), once the driver
  * has one, until its ✕ closes it for that month; never during a drive.
  */
-import { screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import { SIGN_OUT_SETTINGS } from '@/boot/device';
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
@@ -109,4 +109,17 @@ it('✕ closes it for that month (kept on the phone, wiped at sign-out); next mo
   const w3 = await appWorld({ settings: { [WRAPPED_CARD_DISMISSED_KEY]: '2026-10' } });
   await w3.render(<HomeWrappedCard hidden={false} />);
   expect(await screen.findByText('Your November Wrapped')).toBeOnTheScreen();
+});
+
+it('with VoiceOver: the card is one button whose actions open it and close it (the ✕ inside cannot be reached)', async () => {
+  at(nov(2));
+  const w = await appWorld();
+  await w.render(<HomeWrappedCard hidden={false} />);
+  const card = await screen.findByTestId('home-wrapped');
+  expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Close' }]);
+  await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } }));
+  expect(mockRouter.push).toHaveBeenCalledWith('/wrapped/2026-10');
+  await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } }));
+  expect(screen.queryByTestId('home-wrapped')).toBeNull();
+  await waitFor(async () => expect(await w.settings.get(WRAPPED_CARD_DISMISSED_KEY)).toBe('2026-10'));
 });

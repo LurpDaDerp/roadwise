@@ -22,6 +22,13 @@ async function show(opts: { still?: boolean; onClose?: () => void } = {}) {
 const tapAt = (x: number) => fireEvent.press(screen.getByTestId('wrapped-story-slide'), { nativeEvent: { pageX: x, pageY: 400 } });
 const showing = () => screen.getByTestId(/^wrapped-slide-/).props.testID as string;
 
+/** React Native's jest setup already mocks it with a jest.fn that keeps calls across tests: cleared here. */
+function focusSpy() {
+  const spy = jest.spyOn(AccessibilityInfo, 'sendAccessibilityEvent').mockImplementation(() => {});
+  spy.mockClear();
+  return spy;
+}
+
 let reader = false;
 beforeEach(() => {
   jest.useFakeTimers();
@@ -131,6 +138,39 @@ test('with a screen reader on: no playing on its own, and Back and Next buttons'
   expect(showing()).toBe('wrapped-slide-two');
   await fireEvent.press(screen.getByTestId('wrapped-story-back'));
   expect(showing()).toBe('wrapped-slide-one');
+});
+
+test('with a screen reader on, each move puts its focus on the bars ("Slide 2 of 3"), above the new slide; opening does not', async () => {
+  reader = true;
+  const focus = focusSpy();
+  await show();
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(0);
+  });
+  expect(focus).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByTestId('wrapped-story-next'));
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(0);
+  });
+  expect(focus).toHaveBeenCalledTimes(1);
+  expect(focus.mock.calls[0]![1]).toBe('focus');
+  expect(screen.getByTestId('wrapped-story-progress').props.accessibilityLabel).toBe('Slide 2 of 3');
+  await fireEvent.press(screen.getByTestId('wrapped-story-back'));
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(0);
+  });
+  expect(focus).toHaveBeenCalledTimes(2);
+});
+
+test('without a screen reader a move leaves the focus alone', async () => {
+  const focus = focusSpy();
+  await show({ still: true });
+  await tapAt(WIDTH - 20);
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(0);
+  });
+  expect(showing()).toBe('wrapped-slide-two');
+  expect(focus).not.toHaveBeenCalled();
 });
 
 test('✕ closes it, and so does a swipe down (a short one does not)', async () => {

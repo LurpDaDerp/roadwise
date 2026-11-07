@@ -59,7 +59,8 @@ function Segment({ state, fill }: { state: 'done' | 'current' | 'todo'; fill: Sh
  * header and ✕. A tap on the right half goes on, on the left half back; holding pauses; a swipe down
  * or ✕ closes. It plays on its own (`SLIDE_MS` a slide, the last slide stays) except under Reduce
  * Motion or with a screen reader on: then only taps (and the Back and Next buttons a screen reader
- * gets) move it. During a drive the drive's hold on the app (`LockoutGate`) keeps it off screen.
+ * gets) move it, and each move puts the screen reader's focus on the bars ("Slide 3 of 10"), just
+ * above the new slide. During a drive the drive's hold on the app (`LockoutGate`) keeps it off screen.
  */
 export function WrappedStory({
   slides,
@@ -100,6 +101,17 @@ export function WrappedStory({
   );
   const next = useCallback(() => goTo(at + 1), [goTo, at]);
   const back = useCallback(() => goTo(at - 1), [goTo, at]);
+
+  // With a screen reader on, a move puts its focus on the bars ("Slide 3 of 10"), just above the new
+  // slide, so the move is heard and the slide reads on from there (not on opening: the screen's own
+  // focus rules then).
+  const progress = useRef<View>(null);
+  const focusedAt = useRef(at);
+  useEffect(() => {
+    if (focusedAt.current === at) return;
+    focusedAt.current = at;
+    if (reader && progress.current) AccessibilityInfo.sendAccessibilityEvent(progress.current, 'focus');
+  }, [at, reader]);
 
   const playing = auto && !held && at < last;
   useEffect(() => {
@@ -155,7 +167,7 @@ export function WrappedStory({
       <LinearGradient colors={stops} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'bottom', 'left', 'right']}>
         <View style={{ paddingHorizontal: t.space.md, paddingTop: t.space.sm, gap: t.space.sm }}>
-          <View style={{ flexDirection: 'row', gap: 4 }} accessible accessibilityLabel={copy.slideOf(at + 1, slides.length)} testID={`${testID}-progress`}>
+          <View ref={progress} style={{ flexDirection: 'row', gap: 4 }} accessible accessibilityLabel={copy.slideOf(at + 1, slides.length)} testID={`${testID}-progress`}>
             {slides.map((s, i) => (
               <Segment key={s.id} state={i < at ? 'done' : i === at ? 'current' : 'todo'} fill={i === at && auto && at < last ? fill : null} />
             ))}
