@@ -86,7 +86,7 @@ select ok(not has_function_privilege('authenticated', 'private.archive_old_route
   and not has_function_privilege('anon', 'private.archive_old_routes_run()', 'EXECUTE')
   and not has_function_privilege('authenticated', 'private.archive_old_routes_run()', 'EXECUTE'), 'no API role runs the job');
 select is((select array[schedule, command] from cron.job where jobname = 'route-archive'),
-  array['*/10 4 * * *', 'select private.archive_old_routes_run()'], 'the job runs every 10 minutes from 04:00 to 04:50 UTC, each run its own transaction');
+  array['*/5 3-5 * * *', 'select private.archive_old_routes_run()'], 'the job runs every 5 minutes from 03:00 to 05:55 UTC (0039), each run its own transaction');
 select ok(has_function_privilege('authenticated', 'public.list_my_route_pool(uuid, int)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.list_my_route_pool(uuid, int)', 'EXECUTE'), 'a signed-in driver reads their own pool; anon cannot');
 select throws_ok($$ select private.archive_old_routes(0) $$, '22023', 'batch must be between 1 and 5000', 'the batch is bounded');

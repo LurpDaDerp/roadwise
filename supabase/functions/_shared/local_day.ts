@@ -1,6 +1,8 @@
 // The device's local day, derived on the server from the zone it named and the start instant, so
 // the daily cap and "earlier today" can never be moved by a mislabelled `localDay`.
 const formatters = new Map<string, Intl.DateTimeFormat>();
+/** A hard cap on the cache (there are ~600 zone names); past it the Map starts over. */
+const MAX_FORMATTERS = 1000;
 
 /** A zone NAME (the payload contract's TZ_NAME_PATTERN): never an offset such as `+05:00`, which
  * newer Intl accepts but Postgres reads with the opposite sign. */
@@ -13,12 +15,21 @@ function formatterFor(tz: string): Intl.DateTimeFormat | null {
   if (!NAME_PATTERN.test(tz) || /^(posix|right)\//i.test(tz)) return null;
   try {
     const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-    formatters.set(tz, f);
+    // Cache under the zone's canonical name, never the raw string: Intl reads names in any case,
+    // so keying on the input would let case variants grow the Map without bound.
+    const key = f.resolvedOptions().timeZone;
+    const hit = formatters.get(key);
+    if (hit) return hit;
+    if (formatters.size >= MAX_FORMATTERS) formatters.clear();
+    formatters.set(key, f);
     return f;
   } catch {
     return null;
   }
 }
+
+/** Test seam: how many formatters are held. */
+export const cachedFormatterCount = (): number => formatters.size;
 
 /** An IANA zone name Intl can place a date in. */
 export const isKnownTz = (tz: string): boolean => formatterFor(tz) !== null;

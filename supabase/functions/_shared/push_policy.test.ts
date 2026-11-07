@@ -19,6 +19,15 @@ Deno.test('a weekly recap is sent to every token with its words and the home url
   assertEquals(d.message.channelId, 'updates');
 });
 
+Deno.test('a token held by two device rows of one account is sent to once, in the claim order', () => {
+  const a = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
+  const b = 'ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]';
+  const d = decide(item({}, { tokens: [a, b, a] }), NOW);
+  assertEquals(d.kind, 'send');
+  if (d.kind !== 'send') return;
+  assertEquals(d.tokens, [a, b]);
+});
+
 Deno.test('no league result is ever sent: the kind is gone, so a queued one is skipped', () => {
   const league = item({ kind: 'league_result', payload: { week: '2026-W40', result: 'promoted', final_rank: 3, tier: 'bronze', new_tier: 'silver', week_points: 410 } });
   assertEquals(decide(league, NOW), { kind: 'skip', reason: 'unknown_type' });

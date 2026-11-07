@@ -148,7 +148,10 @@ export function decide(item: PushItem, now: number): Decision {
   const copy = renderPush(item.kind, item.payload);
   if (!copy) return { kind: 'fail', reason: 'bad_payload' };
   if (!item.ctx.enabled) return { kind: 'skip', reason: 'category_off' };
-  if (item.ctx.tokens.length === 0) return { kind: 'skip', reason: 'no_device' };
+  // One account can hold two device rows with the same token (an iOS reinstall keeps the Expo
+  // token but mints a new install id): send to each token once, in the claim's order.
+  const tokens = [...new Set(item.ctx.tokens)];
+  if (tokens.length === 0) return { kind: 'skip', reason: 'no_device' };
   if (now - item.createdAt > TTL_MS[item.kind]) return { kind: 'skip', reason: 'stale' };
   const tz = resolveTz(item.ctx.tz);
   if (inQuietHours(now, tz, item.ctx.quiet)) {
@@ -156,7 +159,7 @@ export function decide(item: PushItem, now: number): Decision {
   }
   return {
     kind: 'send',
-    tokens: item.ctx.tokens,
+    tokens,
     message: {
       title: copy.title,
       body: copy.body,

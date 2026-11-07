@@ -17,7 +17,9 @@
 //     beyond `MAX_LAT` (Web Mercator's edge, where longitude maths explodes) is refused outright;
 //     and each cell a user's request wins the claim for is charged to that user's own budget
 //     (`CLAIM_BUDGET`, `take_rate_limit`) before any Overpass work — spent, the claim is released
-//     at once, so no one user can drain the shared Overpass budget for everyone.
+//     at once, so no one user can drain the shared Overpass budget for everyone. A paid claim that
+//     was released without a query is re-claimed free for the budget's window (per isolate), so
+//     the user's budget is spent on queries, not on waiting out a busy app-wide minute.
 //   * Memo: a cell known `done` is not asked about again for `DONE_MEMO_MS` in this isolate, and one
 //     known `filling` not for `FILLING_MEMO_MS`, so steady-state tile requests cost no claim RPC.
 //   * The fill streams the cell's ways from Overpass (overpass.ts) and upserts them in batches of
@@ -58,6 +60,9 @@ export const OVERPASS_BUDGET = { key: 'overpass_fill', window: '1 minute', max: 
  * unloaded country and still leaves the shared budget to everyone else.
  */
 export const CLAIM_BUDGET = { key: 'overpass_claim', window: '1 hour', max: 40 } as const;
+/** How long a paid claim stays paid in this isolate (CLAIM_BUDGET's window), and how many are held. */
+export const CLAIM_PAID_MS = 3_600_000;
+const MAX_PAID_MEMO = 5000;
 /**
  * overpass-api.de's usage policy (wiki.openstreetmap.org/wiki/Overpass_API) asks an app in regular
  * use for about 1/100 of its 10,000 queries and 1 GB a day, and no two queries at once. As the last
@@ -241,6 +246,13 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
   /** Cells known loaded, by the instant that knowledge expires; and cells known in progress. */
   const done = new Map<string, number>();
   const filling = new Map<string, number>();
+  /**
+   * Claims a user has paid for (`userId|cell`), by when the payment lapses: a paid cell that was
+   * released without an Overpass query (app-wide budget spent, every mirror held back) is
+   * re-claimed free until then, so the user's hourly budget meters queries, not claims. A fill
+   * that did ask Overpass (done or failed) spends the payment.
+   */
+  const paid = new Map<string, number>();
   /** One fill at a time in this isolate. */
   let queue: Promise<void> = Promise.resolve();
   /** Mirrors that refused, by when they may be asked again. */
@@ -285,10 +297,18 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
     }
   }
 
-  async function fill(cell: Cell): Promise<void> {
+  async function fill(cell: Cell, payment: string): Promise<void> {
     const started = now();
     let outcome: FillOutcome = 'failed';
     let ways = 0;
+    // Whether any mirror was actually sent a query: a release after one (refused mirrors, then the
+    // rest held back) still spends the payment.
+    let asked = false;
+    const send = deps.fetch ?? fetch;
+    const counted: Fetch = (input, init) => {
+      asked = true;
+      return send(input, init);
+    };
     try {
       const { key, window, max } = OVERPASS_BUDGET;
       if (!(await db.takeGlobalRateLimit(key, window, max))) {
@@ -297,7 +317,7 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
         let batch: WayRow[] = [];
         let streamError: unknown = null;
         try {
-          for await (const way of fetchWays(cellBounds(cell), { fetch: deps.fetch, gate, contact: deps.contact, endpoints: deps.endpoints })) {
+          for await (const way of fetchWays(cellBounds(cell), { fetch: counted, gate, contact: deps.contact, endpoints: deps.endpoints })) {
             batch.push(way);
             if (batch.length >= UPSERT_BATCH) {
               ways += await db.upsertWays(batch);
@@ -318,6 +338,7 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
       if (err instanceof OverpassHeldBack && ways === 0) outcome = 'released';
       else log.error('speed-limits osm fill failed', { error: errorText(err), ways });
     }
+    if (outcome !== 'released' || asked) paid.delete(payment);
     await finish(cell, outcome, ways);
     log.info('speed-limits osm fill', { outcome: outcome === 'done' ? 'filled' : outcome === 'released' ? 'budget_spent' : 'failed', ways, ms: now() - started });
   }
@@ -343,19 +364,29 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
     }
     filling.set(key, t + FILLING_MEMO_MS);
     if (s !== 'claimed') return s;
-    // The claim is this user's to pay for: refused, it goes straight back.
-    let afford = false;
-    try {
-      const { key: bk, window, max } = CLAIM_BUDGET;
-      afford = await db.takeRateLimit(userId, bk, window, max);
-    } catch (err) {
-      log.error('speed-limits osm fill budget check failed', { error: errorText(err) });
+    // The claim is this user's to pay for, unless they already paid for this cell and no query was
+    // made with it: refused, it goes straight back.
+    const payment = `${userId}|${key}`;
+    const until = paid.get(payment);
+    let afford = until !== undefined && until > t;
+    if (!afford) {
+      try {
+        const { key: bk, window, max } = CLAIM_BUDGET;
+        afford = await db.takeRateLimit(userId, bk, window, max);
+      } catch (err) {
+        log.error('speed-limits osm fill budget check failed', { error: errorText(err) });
+      }
+      if (afford) {
+        if (paid.size >= MAX_PAID_MEMO) for (const [k, u] of paid) if (u <= t) paid.delete(k);
+        if (paid.size >= MAX_PAID_MEMO) paid.clear();
+        paid.set(payment, t + CLAIM_PAID_MS);
+      }
     }
     if (!afford) {
       await finish(cell, 'released', 0);
       return 'filling';
     }
-    queue = queue.then(() => fill(cell));
+    queue = queue.then(() => fill(cell, payment));
     deps.background(queue);
     return s;
   }

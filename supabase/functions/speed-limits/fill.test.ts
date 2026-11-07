@@ -386,6 +386,44 @@ Deno.test("a user whose claim budget is spent: the claim is released at once, no
   assertEquals(h.claims.length, 2, 'remembered as filling: no second claim within FILLING_MEMO_MS');
 });
 
+Deno.test('a paid cell released without a query is re-claimed free; once a query is made (done or failed) the next claim is paid again', async () => {
+  let global = false;
+  const h = harness({ global: () => global, claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
+  // the app-wide budget is spent: three re-claims of the same released cell cost one token
+  for (let i = 0; i < 3; i++) {
+    assertEquals(await h.fill.ensure([TILE], UID), [true]);
+    await h.fill.settled();
+    h.clock.now += FILLING_MEMO_MS;
+  }
+  assertEquals(h.claims.filter((c) => c.y === SEATTLE.y).length, 3);
+  assertEquals(h.finishes.map((f) => f.outcome), ['released', 'released', 'released']);
+  assertEquals(h.fetches.length, 0);
+  assertEquals(h.userBudgets.length, 1, 'charged once, for the first claim');
+  // another user re-claiming the released cell pays for it themselves
+  await h.fill.ensure([TILE], '99999999-9999-4999-8999-999999999999');
+  await h.fill.settled();
+  assertEquals(h.userBudgets.length, 2);
+  h.clock.now += FILLING_MEMO_MS;
+  // budget back: the free re-claim fetches, and that query spends the payment
+  global = true;
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.userBudgets.length, 2, 'the re-claim that fetched was still free');
+  assertEquals(h.finishes.at(-1)?.outcome, 'done');
+  h.clock.now += DONE_MEMO_MS;
+  await h.fill.ensure([TILE], UID);
+  assertEquals(h.userBudgets.length, 3, 'the next claim is paid again');
+
+  // a failed fill asked Overpass too: it spends the payment
+  const down = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done'), answers: [() => new Response('', { status: 504 })] });
+  await down.fill.ensure([TILE], UID);
+  await down.fill.settled();
+  assertEquals(down.finishes.map((f) => f.outcome), ['failed']);
+  down.clock.now += FILLING_MEMO_MS;
+  await down.fill.ensure([TILE], UID);
+  assertEquals(down.userBudgets.length, 2);
+});
+
 Deno.test('a failing user budget check counts as refused: released, logged without the user', async () => {
   const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'claimed' : 'done') });
   h.db.takeRateLimit = () => Promise.reject(new Error('connection refused'));
@@ -509,6 +547,12 @@ Deno.test('with private.coffee and VK Maps refusing and the main instance over i
   assertEquals(h.fetches.map((f) => f.url), [PRIVATE_COFFEE, VK_MAPS]);
   assertEquals(h.finishes, [{ cell: SEATTLE, outcome: 'released', ways: 0 }]);
   assertEquals(h.logs.filter((l) => l.level === 'error').length, 0);
+  // mirrors were asked before the release, so the payment is spent: the re-claim is paid again
+  assertEquals(h.userBudgets.length, 1);
+  h.clock.now += FILLING_MEMO_MS;
+  await h.fill.ensure([TILE], UID);
+  await h.fill.settled();
+  assertEquals(h.userBudgets.length, 2, 'a release after real queries is not a free re-claim');
 });
 
 Deno.test("the operator's instances (OVERPASS_URL) are asked first at no budget; refusing, one rests 60 s like any mirror", async () => {
