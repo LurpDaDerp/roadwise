@@ -2,6 +2,8 @@ import { PHONE_PICKUP_MIN_MPH, PHONE_PUTDOWN_QUIET_S } from '@scoring';
 
 import { distanceIn, type Units } from '@/lib/units';
 
+import type { PickupMoment, PickupSpeed, RoadKind, WeatherView } from './insights';
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** "10 mph" or "16 km/h": a speed in the driver's units, whole. */
@@ -41,6 +43,33 @@ function eventsRate(n: number, opps: number, event: [string, string], chance: [s
   const k = Math.round(o / n);
   return `1 ${event[0]} per ${plural(k, chance[0], chance[1])}`;
 }
+
+/** "2×", "1.6×": a ratio to 1 decimal, a whole one without it. */
+const times = (r: number) => `${Number.isInteger(r) ? r : r.toFixed(1)}×`;
+
+/** The road kinds by their limits (buckets of 27 and 48 mph): the km rows at the matching posted km/h limits. */
+const ROAD_LABEL: Record<Units, Record<RoadKind, string>> = {
+  mi: { low: 'Streets, 25 mph and under', mid: 'Main roads, 30–45 mph', high: 'Highways, 50 mph and up' },
+  km: { low: 'Streets, 40 km/h and under', mid: 'Main roads, 50–70 km/h', high: 'Highways, 80 km/h and up' },
+};
+const ROAD_WORDS: Record<RoadKind, string> = { low: 'streets', mid: 'main roads', high: 'highways' };
+
+const PICKUP_SPEED_LABEL: Record<Units, Record<PickupSpeed, string>> = {
+  mi: { low: '10–25 mph', mid: '25–45 mph', high: '45+ mph' },
+  km: { low: '16–40 km/h', mid: '40–70 km/h', high: '70+ km/h' },
+};
+const PICKUP_MOMENT_LABEL: Record<PickupMoment, string> = { first: 'First 5 min', middle: 'In between', last: 'Last 5 min' };
+/** The 3-hour bands in a sentence ("Your pickups happen most between 6 and 9pm"). */
+const BAND_PHRASES = [
+  'between midnight and 3am',
+  'between 3 and 6am',
+  'between 6 and 9am',
+  'between 9am and noon',
+  'between noon and 3pm',
+  'between 3 and 6pm',
+  'between 6 and 9pm',
+  'between 9pm and midnight',
+] as const;
 
 /** Every string the Analytics tab shows. Captions stay at one to three words. */
 export const analyticsCopy = {
@@ -109,6 +138,53 @@ export const analyticsCopy = {
       /** While the range holds drives recorded before the chances were counted. */
       estimated: (line: string) => `${line} (estimated)`,
     },
+    /** Speed's "Where you speed": its speeding time by kind of road, against its driving there. */
+    roads: {
+      title: 'Where you speed',
+      /** A row's road kind, with its limits in the driver's units. */
+      label: (kind: RoadKind, units: Units): string => ROAD_LABEL[units][kind],
+      speeding: (pct: number) => `${pct}% of your speeding`,
+      driving: (pct: number) => `${pct}% of your driving`,
+      /** When one kind holds half the speeding or more; `onlyPct` when its driving share is 15 points or more under that. */
+      headline: (kind: RoadKind, onlyPct: number | null) =>
+        onlyPct === null
+          ? `Most of your speeding is on ${ROAD_WORDS[kind]}.`
+          : `Most of your speeding is on ${ROAD_WORDS[kind]}, even though only ${onlyPct}% of your driving is there.`,
+    },
+    /** Phone use's "When pickups happen": the range's pickups by speed, moment in the drive and time of day. */
+    pickupTiming: {
+      title: 'When pickups happen',
+      first: 'Most of your pickups happen in the first 5 minutes. Set your music and route before you go.',
+      last: 'Most of your pickups happen near the end of a drive. The message can wait until you park.',
+      highway: 'Most of your pickups happen at highway speeds.',
+      /** The busiest 3-hour band (0 = midnight to 3am). */
+      band: (band: number) => `Your pickups happen most ${BAND_PHRASES[band] ?? BAND_PHRASES[0]}.`,
+      speedRow: 'Speed',
+      momentRow: 'In the drive',
+      timeRow: 'Time of day',
+      speed: (key: PickupSpeed, units: Units): string => PICKUP_SPEED_LABEL[units][key],
+      moment: (key: PickupMoment): string => PICKUP_MOMENT_LABEL[key],
+      share: (pct: number) => `${pct}% of pickups`,
+    },
+  },
+  /** The weather card under Time of day: the drives in rain or snow against the dry, all time. */
+  weather: {
+    title: 'Weather',
+    text: (v: WeatherView, units: Units): string => {
+      const per = units === 'km' ? 'kilometer' : 'mile';
+      switch (v.kind) {
+        case 'worse':
+          return v.ratio === null
+            ? `In rain or snow you have more events per ${per}. Slow down and leave more room.`
+            : `In rain or snow you have ${times(v.ratio)} the events per ${per}. Slow down and leave more room.`;
+        case 'smooth':
+          return 'You drive as smoothly in rain or snow as in the dry. Nice.';
+        case 'bumpier':
+          return 'Rain and snow make your drives a little bumpier. Give yourself extra time.';
+      }
+    },
+    /** Under the comment: "4 drives in rain or snow · 38 mi". */
+    detail: (drives: number, distance: string) => `${plural(drives, 'drive', 'drives')} in rain or snow · ${distance}`,
   },
   allTime: {
     title: 'All time',

@@ -7,6 +7,8 @@ import { EmptyState, SegmentedControl, Sheet, Text, useFontScale, useTheme } fro
 
 import { analyticsCopy } from './copy';
 import { countMetric, distanceMetric, timeMetric } from './format';
+import type { PickupTiming, SpeedingByRoad } from './insights';
+import { PickupSection, RoadSection } from './InsightSections';
 import { metricsLayout, metricsText, NumberCard, type MetricGroup } from './MetricsCards';
 import {
   AXIS_LABEL,
@@ -118,6 +120,10 @@ export interface CategorySheetProps {
   /** A DashPal is paired: without one Attention is locked and offers to set one up. */
   dashpalPaired: boolean;
   onPairDashpal: () => void;
+  /** The range's speeding by kind of road: Speed's "Where you speed" (null or absent hides it). */
+  roads?: SpeedingByRoad | null;
+  /** The range's pickups by speed, moment and time of day: Phone use's "When pickups happen" (null or absent hides it). */
+  pickupTiming?: PickupTiming | null;
 }
 
 /**
@@ -126,12 +132,14 @@ export interface CategorySheetProps {
  * line on how often it slipped per chance. The numbers follow the metrics block's rule: never more than three
  * quarters of the window's height. A range with no drives shows "No data yet" in their place (and
  * no verdict either when the 30 days have no score), so the sheet always opens to something.
+ * Speed adds where its speeding happens by kind of road, and Phone use when its pickups happen
+ * (both over the range, comments only, hidden with too little to say).
  * Attention without a paired DashPal says where it comes from and offers to set one up; with one
  * but no watched drives in the range, it says so. Phone use says how a pickup is judged under its
  * numbers, and with drives in the range but none watched for pickups, it says its numbers come with
  * the next drive.
  */
-export function CategorySheet({ axis, visible, onClose, score, last90, sums, range, onRange, dashpalPaired, onPairDashpal }: CategorySheetProps) {
+export function CategorySheet({ axis, visible, onClose, score, last90, sums, range, onRange, dashpalPaired, onPairDashpal, roads = null, pickupTiming = null }: CategorySheetProps) {
   const t = useTheme();
   const units = useUnits();
   const { height } = useWindowDimensions();
@@ -182,6 +190,8 @@ export function CategorySheet({ axis, visible, onClose, score, last90, sums, ran
               {rate}
             </Text>
           ) : null}
+          {axis === 'speed' && roads ? <RoadSection roads={roads} /> : null}
+          {phone && pickupTiming ? <PickupSection timing={pickupTiming} /> : null}
         </>
       )}
       {phone ? (

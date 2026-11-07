@@ -154,6 +154,34 @@ test('the range’s time over the limit reads its own speeding events', async ()
   expect(result.current.sums.speedingS).toBeLessThanOrEqual(40);
 });
 
+test("the sheets' comments read the range's events and the drives' road split; the weather card every drive's weather", async () => {
+  await seedTrips(db, [
+    {
+      client_trip_id: uuid(7),
+      started_at: NOW - 2 * DAY,
+      tz: 'UTC',
+      status: 'scored',
+      miles: 12,
+      duration_s: 1200,
+      limit_s: 900,
+      moving_s: 1100,
+      limit_buckets_json: JSON.stringify({ low: { s: 100, m: 500 }, mid: { s: 200, m: 2000 }, high: { s: 600, m: 15000 } }),
+      weather: 'rain',
+    },
+    { client_trip_id: uuid(8), started_at: NOW - 200 * DAY, tz: 'UTC', status: 'scored', miles: 15, duration_s: 1200, weather: 'clear' },
+  ]);
+  const at = NOW - 2 * DAY;
+  await seedEvents(db, [
+    { id: uuid(31), client_trip_id: uuid(7), type: 'speeding', tier: 'minor', started_at: at + 60_000, duration_s: 30, measured_json: JSON.stringify({ speedMph: 75, limitMph: 65 }) },
+    ...[2, 3, 4].map((m) => ({ id: uuid(30 + m * 2), client_trip_id: uuid(7), type: 'phone_pickup' as const, tier: 'moderate' as const, started_at: at + m * 60_000, duration_s: 3, measured_json: JSON.stringify({ speedMph: 30 }) })),
+  ]);
+  const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+  await waitFor(() => expect(result.current.roads).not.toBeNull());
+  expect(result.current.roads).toEqual({ speedingS: 30, speeding: { low: 0, mid: 0, high: 30 }, driving: { low: 100, mid: 200, high: 600 } });
+  expect(result.current.pickupTiming).toMatchObject({ pickups: 3, speed: { low: 0, mid: 3, high: 0 }, moment: { first: 3, middle: 0, last: 0 } });
+  expect(result.current.weather).toEqual({ wet: { drives: 1, miles: 12, events: 0 }, dry: { drives: 1, miles: 15, events: 0 } });
+});
+
 test('every range reads the same year and 90 days of events: a wider range scores its older drives with their own at once', async () => {
   await seedEvents(db, [{ id: uuid(23), client_trip_id: uuid(4), type: 'hard_brake', tier: 'severe', started_at: NOW - 100 * DAY + 1 }]);
   // 374 days ago, before the year: 12 mi with a severe speeding, inside October 2025's 90 days.

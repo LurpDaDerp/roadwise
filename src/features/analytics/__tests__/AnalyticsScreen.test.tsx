@@ -66,8 +66,8 @@ jest.mock('../spots', () => {
 
 type MockRange = 'day' | 'week' | 'month' | 'year';
 // Ten drives, one every 30 hours: 6 in the last week, all 10 in the last month, each watched for
-// phone pickups for 20 minutes at driving speed.
-const mockList = () => mockDrives(10, 30, { exposure: { ...EXPOSURE, phoneS: 1200 } });
+// phone pickups for 20 minutes at driving speed; every other one in the rain (60 mi wet, 60 mi dry).
+const mockList = () => mockDrives(10, 30, { exposure: { ...EXPOSURE, phoneS: 1200 } }).map((d, i) => ({ ...d, weather: i % 2 === 1 ? ('rain' as const) : ('clear' as const) }));
 let mockData: (range: MockRange) => AnalyticsData = (range) => mockAnalytics(mockList(), range);
 const mockUseAnalytics = jest.fn((range: MockRange) => mockData(range));
 jest.mock('../useAnalytics', () => ({ useAnalytics: (range: MockRange) => mockUseAnalytics(range) }));
@@ -110,6 +110,7 @@ const SECTIONS = [
   'analytics-range',
   'analytics-grid',
   'analytics-time-of-day',
+  'analytics-weather',
   'analytics-map',
   'analytics-spots',
   'analytics-commute',
@@ -129,7 +130,7 @@ function order(): string[] {
   return out;
 }
 
-test('top to bottom: radar, summary, all time, the range group (its toggle at the top), when you drive, time of day, map, spots to watch, your commute, drives', async () => {
+test('top to bottom: radar, summary, all time, the range group (its toggle at the top), when you drive, time of day, weather, map, spots to watch, your commute, drives', async () => {
   await draw(<AnalyticsScreen />);
   expect(screen.getByRole('header', { name: 'Analytics' })).toBeOnTheScreen();
   expect(order()).toEqual(SECTIONS);
@@ -391,6 +392,40 @@ test('the time-of-day card comments on when the drives start and scores nothing'
   expect(within(card).getByText('Time of day')).toBeOnTheScreen();
   expect(within(card).getByTestId('analytics-time-of-day-text').props.children).toMatch(/\.$/);
   expect(within(card).queryByText(/pts|points|score/i)).toBeNull();
+});
+
+test('the weather card: all time, rain against the dry, gone without enough of both', async () => {
+  await draw(<AnalyticsScreen />);
+  const card = screen.getByTestId('analytics-weather');
+  expect(within(card).getByText('Weather')).toBeOnTheScreen();
+  // A hard brake on every drive, rain or dry: as smooth in both.
+  expect(within(card).getByTestId('analytics-weather-text')).toHaveTextContent('You drive as smoothly in rain or snow as in the dry. Nice.');
+  expect(within(card).getByTestId('analytics-weather-detail')).toHaveTextContent('5 drives in rain or snow · 60 mi');
+  // The range never moves it.
+  await press(screen.getByRole('tab', { name: 'Day' }));
+  expect(screen.getByTestId('analytics-weather-detail')).toHaveTextContent('5 drives in rain or snow · 60 mi');
+  mockData = (range) => mockAnalytics(mockDrives(10, 30), range);
+  await draw(<AnalyticsScreen />);
+  expect(screen.queryByTestId('analytics-weather')).toBeNull();
+});
+
+test("Speed's sheet says where the speeding happens and Phone use's when the pickups do, from the page's data", async () => {
+  mockData = (range) => ({
+    ...mockAnalytics(mockList(), range),
+    roads: { speedingS: 60, speeding: { low: 0, mid: 15, high: 45 }, driving: null },
+    pickupTiming: { pickups: 3, speed: { low: 0, mid: 1, high: 2 }, moment: { first: 0, middle: 1, last: 2 }, bands: [0, 0, 1, 0, 0, 2, 0, 0] },
+  });
+  await draw(<AnalyticsScreen />);
+  await press(screen.getByTestId('radar-axis-speed'));
+  let sheet = screen.getByTestId('category-sheet');
+  expect(within(sheet).getByTestId('category-roads-headline')).toHaveTextContent('Most of your speeding is on highways.');
+  expect(within(sheet).queryByTestId('category-pickups')).toBeNull();
+  await press(within(sheet).getAllByRole('button', { name: 'Close' }).at(-1)!);
+  await waitFor(() => expect(screen.queryByTestId('category-sheet')).toBeNull());
+  await press(screen.getByTestId('radar-axis-phone'));
+  sheet = screen.getByTestId('category-sheet');
+  expect(within(sheet).getByTestId('category-pickups-headline')).toHaveTextContent('Most of your pickups happen near the end of a drive. The message can wait until you park.');
+  expect(within(sheet).queryByTestId('category-roads')).toBeNull();
 });
 
 test("the sheet's range is the page's: switching it there re-reads the page too", async () => {

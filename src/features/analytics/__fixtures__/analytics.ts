@@ -3,6 +3,7 @@ import { weightedScore } from '@scoring';
 import { drive, NOW } from '@/features/drives/__fixtures__/drives';
 import type { LocalDrive } from '@/features/drives/model';
 
+import { pickupTiming, speedingByRoad, weatherSums } from '../insights';
 import { allTimeTotals, coach, driveGrid, fitLines, rangeStart, scoredSince, trend, windowSums, type AxisScores, type Range } from '../model';
 import type { AnalyticsData } from '../useAnalytics';
 
@@ -43,6 +44,10 @@ export function analytics(list: readonly LocalDrive[], range: Range = 'week', ov
     coaching: { scores: SCORES, rating: { rating: SCORES_RATING, ranked: true }, totals, coaching: coach(SCORES, totals) },
     allTime: allTimeTotals(list),
     sums: windowSums(list, sinceMs),
+    // No events: no speeding or pickups to split.
+    roads: speedingByRoad(list, [], sinceMs),
+    pickupTiming: pickupTiming(list, [], sinceMs, 'mi'),
+    weather: weatherSums(list),
     grid: driveGrid(list, null),
     // No events: every Score point reads 100.
     trend: trend(list, [], range, NOW),

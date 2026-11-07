@@ -10,8 +10,10 @@ import type { LocalDrive } from '@/data/queries/rows';
 import { useDataSource } from '@/data/queries/context';
 import { useScoredDrives, useWindowEvents } from '@/data/queries/analytics';
 import { useRoutePool } from '@/data/queries/drives';
+import { useUnits } from '@/data/queries/units';
 import type { Region } from '@/features/settings/maps';
 
+import { pickupTiming, speedingByRoad, weatherSums, type PickupTiming, type SpeedingByRoad, type WeatherSums } from './insights';
 import {
   allTimeTotals,
   coachWindow,
@@ -79,6 +81,12 @@ export interface AnalyticsData {
   allTime: AllTimeTotals;
   /** The range's metric sums (the Driving card, Trends' clean share, the category sheets). */
   sums: WindowSums;
+  /** The range's speeding by kind of road (Speed's sheet, "Where you speed"); null with no speeding in the range. */
+  roads: SpeedingByRoad | null;
+  /** The range's pickups by speed, moment and time of day (Phone use's sheet, "When pickups happen"); null under 3 pickups. */
+  pickupTiming: PickupTiming | null;
+  /** Every scored drive in rain or snow against the dry, all time (the Weather card). */
+  weather: WeatherSums;
   /** Every scored drive, all time, by weekday × 3-hour band (When you drive and the time-of-day comment). */
   grid: DriveGrid;
   /** The range's Score and Events over time (the Trends card). */
@@ -102,12 +110,13 @@ export interface AnalyticsData {
 
 /**
  * Everything the Analytics tab draws. The range drives only the sums (the Driving card, Trends'
- * clean share, the category sheets) and the trend; the grid, the map and the all-time card read
- * every scored drive, archived ones included (the map draws theirs from the route pool), and the
+ * clean share, the category sheets), the sheets' road and pickup comments, and the trend; the grid,
+ * the weather card, the map and the all-time card read every scored drive, archived ones included (the map draws theirs from the route pool), and the
  * drive list every scored drive not archived.
  */
 export function useAnalytics(range: Range): AnalyticsData {
   const { now } = useDataSource();
+  const units = useUnits();
   const at = now();
   const coachSince = windowStart(at, COACH_DAYS);
   const sinceMs = rangeStart(at, range);
@@ -143,6 +152,12 @@ export function useAnalytics(range: Range): AnalyticsData {
   // The range's time over the limit reads its speeding events (the year and 90 days' read holds every range's).
   const rangeEventList = rangeEvents.data;
   const sums = useMemo(() => windowSums(drives ?? [], sinceMs, rangeEventList ?? []), [drives, sinceMs, rangeEventList]);
+  // The sheets' comments read the same range and events as their numbers; the weather card is all time.
+  const insights = useMemo(
+    () => ({ roads: speedingByRoad(drives ?? [], rangeEventList ?? [], sinceMs), pickupTiming: pickupTiming(drives ?? [], rangeEventList ?? [], sinceMs, units) }),
+    [drives, sinceMs, rangeEventList, units]
+  );
+  const weather = useMemo(() => weatherSums(drives ?? []), [drives]);
   const trendData = useMemo(() => trend(drives ?? [], trendEvents, range, hourEnd), [drives, trendEvents, range, hourEnd]);
   // The map draws the same drives as every other card: scored ones, not "Wasn't driving", an
   // archived one's route from the pool (only scored drives' routes are pooled). Simplified (the
@@ -174,6 +189,8 @@ export function useAnalytics(range: Range): AnalyticsData {
     coaching,
     ...lifetime,
     sums,
+    ...insights,
+    weather,
     trend: trendData,
     ...map,
     loading: all.isLoading || pool.isLoading || events.isLoading || rangeEvents.isLoading,

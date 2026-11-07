@@ -17,6 +17,7 @@ import { SpotSheet, SpotsCard } from './spots';
 import { SummaryCard } from './SummaryCard';
 import { TimeOfDayCard } from './TimeOfDayCard';
 import { TripsMapCard } from './TripsMapCard';
+import { WeatherCard } from './WeatherCard';
 import type { AnalyticsData } from './useAnalytics';
 import { WhenYouDriveCard } from './WhenYouDriveCard';
 
@@ -65,7 +66,8 @@ export interface AnalyticsViewProps {
  * The Analytics tab, top to bottom: the 90-day radar with the Safety Rating, the coaching line,
  * the all-time totals (the longest clean drive and the clean drives), then the range group (an
  * outline holding the range toggle and the only two cards it moves: Driving and Trends), then,
- * all time, when you drive and a comment on it, the all-trips map with the problem spots on it,
+ * all time, when you drive and a comment on it, a comment on driving in rain or snow (once there is
+ * enough of it), the all-trips map with the problem spots on it,
  * the spots to watch, your commute and the drives list. Every card is paper. Each radar category
  * opens a sheet with that behaviour's own numbers over the range, each spot its own sheet, and each
  * commute leg one with its spots on the way (which open the spot's sheet once the leg's has gone)
@@ -102,6 +104,7 @@ export function AnalyticsView({ data, rating, spots = null, commute = NO_COMMUTE
           <MetricsCards sums={data.sums} trend={data.trend} range={range} onRange={onRange} />
           <WhenYouDriveCard grid={data.grid} />
           <TimeOfDayCard grid={data.grid} nightPct={data.allTime.nightPct} />
+          <WeatherCard sums={data.weather} />
           <TripsMapCard routes={data.routes} region={data.region} spots={spots?.active ?? []} onSpot={openSpot} focusCount={focusCount} />
           <SpotsCard view={spots} onOpen={openSpot} />
           <CommuteCard rows={commute} onOpen={(id) => setLegSheet({ id, open: true })} />
@@ -113,6 +116,8 @@ export function AnalyticsView({ data, rating, spots = null, commute = NO_COMMUTE
             score={data.coaching.scores[sheet.axis]}
             last90={data.coaching.totals}
             sums={data.sums}
+            roads={data.roads}
+            pickupTiming={data.pickupTiming}
             range={range}
             onRange={onRange}
             dashpalPaired={dashpalPaired}

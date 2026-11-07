@@ -15,6 +15,7 @@ import { drives, NO_SCORES, SCORES } from '../__fixtures__/analytics';
 import { AllTimeCard } from '../AllTimeCard';
 import { categoryGroup, CategorySheet, categoryTitle, rateLine } from '../CategorySheet';
 import { analyticsCopy } from '../copy';
+import type { PickupTiming, SpeedingByRoad, WeatherSums } from '../insights';
 import { DRIVES_PAGE, DrivesCard, driveLine } from '../DrivesCard';
 import {
   drivingGroup,
@@ -64,6 +65,7 @@ import {
   visibleTicks,
 } from '../TrendCard';
 import { TripsMapCard } from '../TripsMapCard';
+import { WeatherCard } from '../WeatherCard';
 import { bandSpan, busiest, cellLevel, HEAT_RAMP, WhenYouDriveCard } from '../WhenYouDriveCard';
 
 const light = tokens.color.light;
@@ -927,6 +929,133 @@ describe('CategorySheet', () => {
     const card = flat(screen.getByTestId('metrics-speed'));
     expect(card.padding).toBe(l.pad);
     expect(Number(flat(screen.getByTestId('metrics-speed-title')).lineHeight)).toBeCloseTo(Number(metricsText(l).title.lineHeight), 5);
+  });
+});
+
+/** The testIDs among `ids` in the order they are drawn inside `root`. */
+function drawnOrder(root: El, ids: readonly string[]): string[] {
+  const out: string[] = [];
+  const walk = (n: El | string) => {
+    if (typeof n === 'string') return;
+    const id = n.props.testID as unknown;
+    if (typeof id === 'string' && ids.includes(id) && !out.includes(id)) out.push(id);
+    (n.children as (El | string)[]).forEach(walk);
+  };
+  walk(root);
+  return out;
+}
+
+describe('CategorySheet comments', () => {
+  const list = drives(4);
+  const sums = { ...windowSums(list, null), speedingS: 100, limitS: 2000, pickups: 4, inHandS: 20, phoneS: 7200 };
+  const props = {
+    visible: true,
+    onClose: jest.fn(),
+    last90: { drives: 4, miles: 48 },
+    sums,
+    range: 'week' as const,
+    onRange: jest.fn(),
+    dashpalPaired: true,
+    onPairDashpal: jest.fn(),
+  };
+  const roads: SpeedingByRoad = { speedingS: 100, speeding: { low: 10, mid: 70, high: 20 }, driving: { low: 500, mid: 400, high: 100 } };
+  const timing: PickupTiming = { pickups: 4, speed: { low: 1, mid: 2, high: 1 }, moment: { first: 3, middle: 1, last: 0 }, bands: [0, 0, 0, 0, 0, 0, 3, 1] };
+
+  test('Speed: "Where you speed" under the rate line, three road rows with their shares and a headline, never a score', async () => {
+    await draw(<CategorySheet {...props} axis="speed" score={88} roads={roads} pickupTiming={timing} />);
+    const section = screen.getByTestId('category-roads');
+    expect(within(section).getByRole('header', { name: 'Where you speed' })).toBeOnTheScreen();
+    expect(screen.getByTestId('category-roads-headline')).toHaveTextContent('Most of your speeding is on main roads, even though only 40% of your driving is there.');
+    expect(screen.getByLabelText('Streets, 25 miles per hour and under, 10% of your speeding, 50% of your driving')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-roads-mid-line')).toHaveTextContent('70% of your speeding · 40% of your driving');
+    expect(screen.getByTestId('category-roads-high-line')).toHaveTextContent('20% of your speeding · 10% of your driving');
+    expect(within(section).queryByText(/pts|points|score/i)).toBeNull();
+    expect(screen.queryByTestId('category-pickups')).toBeNull();
+    expect(drawnOrder(screen.getByTestId('category-sheet'), ['category-rate', 'category-roads'])).toEqual(['category-rate', 'category-roads']);
+  });
+
+  test('Speed in kilometres, with no driving split and no kind holding half: rows only', async () => {
+    publishUnits('km');
+    await draw(<CategorySheet {...props} axis="speed" score={88} roads={{ speedingS: 100, speeding: { low: 40, mid: 30, high: 30 }, driving: null }} />);
+    expect(screen.queryByTestId('category-roads-headline')).toBeNull();
+    expect(screen.getByText('Streets, 40 km/h and under')).toBeOnTheScreen();
+    expect(screen.getByText('Main roads, 50–70 km/h')).toBeOnTheScreen();
+    expect(screen.getByText('Highways, 80 km/h and up')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-roads-low-line')).toHaveTextContent(/^40% of your speeding$/);
+  });
+
+  test('no speeding in the range (null): no section; other categories never show either', async () => {
+    await draw(<CategorySheet {...props} axis="speed" score={88} roads={null} />);
+    expect(screen.queryByTestId('category-roads')).toBeNull();
+    await draw(<CategorySheet {...props} axis="braking" score={72} roads={roads} pickupTiming={timing} />);
+    expect(screen.queryByTestId('category-roads')).toBeNull();
+    expect(screen.queryByTestId('category-pickups')).toBeNull();
+  });
+
+  test('Phone use: "When pickups happen" above how a pickup is judged, its headline and three rows', async () => {
+    await draw(<CategorySheet {...props} axis="phone" score={64} roads={roads} pickupTiming={timing} />);
+    const section = screen.getByTestId('category-pickups');
+    expect(within(section).getByRole('header', { name: 'When pickups happen' })).toBeOnTheScreen();
+    expect(screen.getByTestId('category-pickups-headline')).toHaveTextContent('Most of your pickups happen in the first 5 minutes. Set your music and route before you go.');
+    expect(screen.getByLabelText('Speed, 25 to 45 miles per hour, 50% of pickups')).toBeOnTheScreen();
+    expect(screen.getByTestId('category-pickups-moment-line')).toHaveTextContent('First 5 min · 75% of pickups');
+    expect(screen.getByTestId('category-pickups-time-line')).toHaveTextContent('6–9pm · 75% of pickups');
+    expect(screen.getByLabelText('In the drive, First 5 minutes, 75% of pickups')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Time of day, 6 to 9pm, 75% of pickups')).toBeOnTheScreen();
+    expect(screen.queryByTestId('category-roads')).toBeNull();
+    const ids = ['category-rate', 'category-pickups', 'category-phone-how'];
+    expect(drawnOrder(screen.getByTestId('category-sheet'), ids)).toEqual(ids);
+  });
+
+  test('Phone use in kilometres, the busiest band as the headline, no speed row without speeds; under 3 pickups nothing', async () => {
+    publishUnits('km');
+    await draw(<CategorySheet {...props} axis="phone" score={64} pickupTiming={{ ...timing, speed: { low: 0, mid: 0, high: 0 }, moment: { first: 1, middle: 2, last: 1 } }} />);
+    expect(screen.getByTestId('category-pickups-headline')).toHaveTextContent('Your pickups happen most between 6 and 9pm.');
+    expect(screen.queryByTestId('category-pickups-speed')).toBeNull();
+    await draw(<CategorySheet {...props} axis="phone" score={64} pickupTiming={{ ...timing, speed: { low: 0, mid: 0, high: 3 }, moment: { first: 1, middle: 2, last: 1 } }} />);
+    expect(screen.getByTestId('category-pickups-headline')).toHaveTextContent('Most of your pickups happen at highway speeds.');
+    expect(screen.getByTestId('category-pickups-speed-line')).toHaveTextContent('70+ km/h · 100% of pickups');
+    expect(screen.getByLabelText('Speed, 70 kilometers per hour and up, 100% of pickups')).toBeOnTheScreen();
+    await draw(<CategorySheet {...props} axis="phone" score={64} pickupTiming={null} />);
+    expect(screen.queryByTestId('category-pickups')).toBeNull();
+  });
+});
+
+describe('WeatherCard', () => {
+  const sums = (wetMiles: number, wetEvents: number, dryMiles: number, dryEvents: number): WeatherSums => ({
+    wet: { drives: 3, miles: wetMiles, events: wetEvents },
+    dry: { drives: 9, miles: dryMiles, events: dryEvents },
+  });
+
+  test('compares rain or snow with the dry, says how much of it there was, and scores nothing', async () => {
+    await draw(<WeatherCard sums={sums(20, 6, 60, 9)} />);
+    const card = screen.getByTestId('analytics-weather');
+    expect(within(card).getByText('Weather')).toBeOnTheScreen();
+    expect(screen.getByTestId('analytics-weather-text')).toHaveTextContent('In rain or snow you have 2× the events per mile. Slow down and leave more room.');
+    expect(screen.getByTestId('analytics-weather-detail')).toHaveTextContent('3 drives in rain or snow · 20 mi');
+    expect(
+      screen.getByLabelText('Weather. In rain or snow you have 2× the events per mile. Slow down and leave more room. 3 drives in rain or snow, 20 miles.')
+    ).toBeOnTheScreen();
+    expect(within(card).queryByText(/pts|points|score/i)).toBeNull();
+  });
+
+  test('the smooth line', async () => {
+    await draw(<WeatherCard sums={sums(20, 1, 60, 9)} />);
+    expect(screen.getByTestId('analytics-weather-text')).toHaveTextContent('You drive as smoothly in rain or snow as in the dry. Nice.');
+  });
+
+  test('the bumpier line, in kilometres', async () => {
+    publishUnits('km');
+    await draw(<WeatherCard sums={sums(20, 4, 60, 9)} />);
+    expect(screen.getByTestId('analytics-weather-text')).toHaveTextContent('Rain and snow make your drives a little bumpier. Give yourself extra time.');
+    expect(screen.getByTestId('analytics-weather-detail')).toHaveTextContent('3 drives in rain or snow · 32 km');
+  });
+
+  test('hidden until both the wet and the dry drives reach 10 mi', async () => {
+    await draw(<WeatherCard sums={sums(9, 6, 60, 9)} />);
+    expect(screen.queryByTestId('analytics-weather')).toBeNull();
+    await draw(<WeatherCard sums={sums(20, 6, 0, 0)} />);
+    expect(screen.queryByTestId('analytics-weather')).toBeNull();
   });
 });
 
