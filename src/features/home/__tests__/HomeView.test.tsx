@@ -281,10 +281,11 @@ describe('the action items', () => {
   const car = <Text testID="car-slot">Is Civic your car?</Text>;
   const parked = <Text testID="parked-slot">Where you parked</Text>;
   const setupGoals = <Text testID="setup-slot">Get set up</Text>;
+  const wrapped = <Text testID="wrapped-slot">Your October Wrapped</Text>;
   const fair = { level: 'fair' as const, axis: 'speed' as const, title: 'Watch your speed', tip: 'Ease off a little over the limit.', also: [] };
 
-  test('directly under the drive card, in order: weather, where you parked, permission, DashPal, tip, a car seen on recent drives; then Get set up, stats, drives, goals, and How it works last', async () => {
-    await draw(<HomeView {...props({ weather, parked, permissions: card, dashpal, coaching: fair, car, setupGoals })} />);
+  test("directly under the drive card, in order: weather, where you parked, permission, DashPal, tip, last month's Wrapped, a car seen on recent drives; then Get set up, stats, drives, goals, and How it works last", async () => {
+    await draw(<HomeView {...props({ weather, parked, permissions: card, dashpal, coaching: fair, wrapped, car, setupGoals })} />);
     const tree = treeJson();
     const at = (s: string) => {
       const i = tree.indexOf(s);
@@ -301,6 +302,7 @@ describe('the action items', () => {
       at("Location is off. Drives can't record."),
       at('A new phone was paired'),
       at('Watch your speed'),
+      at('Your October Wrapped'),
       at('Is Civic your car?'),
       at('Get set up'),
       at('Last 7 days'),

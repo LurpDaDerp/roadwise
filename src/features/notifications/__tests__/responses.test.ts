@@ -9,13 +9,21 @@ jest.mock('expo-notifications', () => ({ DEFAULT_ACTION_IDENTIFIER: 'expo.module
 const response = (data: unknown, action = 'expo.modules.notifications.actions.DEFAULT') =>
   ({ actionIdentifier: action, notification: { date: 1, request: { identifier: 'n1', content: { data } } } }) as never;
 
-test('the allowlist: the drive summary (with ?fresh=1), history, home, leagues, friends — nothing else, never a drive start', () => {
+test('the allowlist: the drive summary (with ?fresh=1), history, home, leagues, friends, the Wrapped — nothing else, never a drive start', () => {
   expect(isAllowedHref('/drives/00000000-0000-4000-8000-000000000001?fresh=1')).toBe(true);
   expect(isAllowedHref('/drives/abc')).toBe(true);
   expect(isAllowedHref('/drives')).toBe(true);
   expect(isAllowedHref('/home')).toBe(true);
   expect(isAllowedHref('/leagues')).toBe(true);
   expect(isAllowedHref('/friends')).toBe(true);
+  // The monthly Wrapped: the archive, a month (the push on the 1st opens it) and a shared copy.
+  expect(isAllowedHref('/wrapped')).toBe(true);
+  expect(isAllowedHref('/wrapped/2026-10')).toBe(true);
+  expect(isAllowedHref('/w/Ab3dEf7hJk9m')).toBe(true);
+  expect(isAllowedHref('/wrapped/2026-13')).toBe(false);
+  expect(isAllowedHref('/wrapped/2026-10?x=1')).toBe(false);
+  expect(isAllowedHref('/w/short')).toBe(false);
+  expect(isAllowedHref('/w/Ab3dEf7hJk9m/x')).toBe(false);
   expect(isAllowedHref('/drive')).toBe(false);
   expect(isAllowedHref('/drives/abc?fresh=2')).toBe(false);
   expect(isAllowedHref('https://evil.example/')).toBe(false);
@@ -25,6 +33,8 @@ test('the allowlist: the drive summary (with ?fresh=1), history, home, leagues, 
 test('routeForResponse: the url when allowed, Home otherwise; a dismissal opens nothing', () => {
   expect(routeForResponse(response({ url: '/drives/abc?fresh=1' }))).toEqual({ href: '/drives/abc?fresh=1', clientTripId: 'abc' });
   expect(routeForResponse(response({ url: '/leagues' }))).toEqual({ href: '/leagues' });
+  // The monthly Wrapped push.
+  expect(routeForResponse(response({ url: '/wrapped/2026-10' }))).toEqual({ href: '/wrapped/2026-10' });
   expect(routeForResponse(response({ url: '/settings/x' }))).toEqual({ href: '/home' });
   expect(routeForResponse(response({}))).toEqual({ href: '/home' });
   expect(routeForResponse(response({ url: '/home' }, 'dismiss'))).toBeNull();

@@ -133,7 +133,7 @@ export const onboardingCopy = {
   /** The examples are the app's own recap and the server's push copy (`supabase/functions/_shared/push_copy.ts`). */
   notifications: {
     title: 'Notifications',
-    body: 'Get a recap after each drive, your Sunday summary, and a heads-up when a friend adds you.',
+    body: 'Get a recap after each drive, your Sunday summary and monthly Wrapped, and a heads-up when a friend adds you.',
     examples: 'Examples',
     previews: [
       { id: 'drive_recap', title: 'Your drive recap is ready', body: '24 min · 12.0 mi. See how it went.' },

@@ -47,7 +47,28 @@ function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]
   return value === undefined ? {} : ({ [key]: value } as { [P in K]?: V });
 }
 
+/** A bare host name: `HOST_RE` in `src/lib/linkDomain.ts` (this file can't use the app's alias). */
+export const LINK_HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/**
+ * The web domain of RoadWise's share links (a shared monthly Wrapped's `https://<domain>/w/<id>`),
+ * from `ROADWISE_LINK_DOMAIN`: a bare host name, or nothing when unset or blank (any other value
+ * fails the config). None is set yet.
+ * When set, the app reads it as `extra.linkDomain` (`src/lib/linkDomain.ts`) and iOS opens those
+ * links in the app (`applinks:<domain>`, with `web/link-site/.well-known/apple-app-site-association`
+ * served at the domain's root). It changes the native fingerprint: a new build.
+ */
+export function linkDomainFrom(env: Record<string, string | undefined> = process.env): string | undefined {
+  const raw = env.ROADWISE_LINK_DOMAIN?.trim().toLowerCase();
+  if (!raw) return undefined;
+  // The same rule the app reads it with (`asLinkDomain`): a malformed value fails the build instead
+  // of shipping a broken applinks entry the app then ignores.
+  if (!LINK_HOST_RE.test(raw)) throw new Error(`ROADWISE_LINK_DOMAIN must be a bare host name like roadwise.app (no scheme, port or path), got "${raw}"`);
+  return raw;
+}
+
 export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
+  const linkDomain = linkDomainFrom();
   return {
     ...config,
     name: 'RoadWise',
@@ -105,6 +126,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // Signing for the widget extension target (@bacons/apple-targets reads it). Set
       // EXPO_APPLE_TEAM_ID (EAS: an environment variable) or replace it with the team ID from Xcode.
       ...optional('appleTeamId', process.env.EXPO_APPLE_TEAM_ID),
+      // A shared Wrapped's https link opens the app (universal links), only once a link domain is set.
+      ...optional('associatedDomains', linkDomain === undefined ? undefined : [`applinks:${linkDomain}`]),
       // The app's privacy manifest: the "required reason" APIs drive-sense's Swift calls
       // (UserDefaults.standard in CaptureController, DetectStateRecord and DriveDetectAccess, read and
       // written by this app only; ProcessInfo.systemUptime in TimeBase, to time events within the
@@ -162,7 +185,7 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         'android.permission.WRITE_EXTERNAL_STORAGE',
       ],
     },
-    extra: { eas: { projectId: EAS_PROJECT_ID } },
+    extra: { eas: { projectId: EAS_PROJECT_ID }, ...optional('linkDomain', linkDomain) },
     plugins: [
       'expo-router',
       'expo-apple-authentication',

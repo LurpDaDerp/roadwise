@@ -79,6 +79,8 @@ export type HomeViewProps = {
   dashpal?: ReactNode;
   /** The coaching; its tip card shows only for a Fair or Poor level. */
   coaching?: Coaching | null;
+  /** Last month's Wrapped (the 1st through the 7th, once the driver has one), right after the coaching tip (it renders nothing otherwise, or during a drive). */
+  wrapped?: ReactNode;
   /** "Is <name> your car?", the last action item (iPhone, automatic drives on, no car paired, a car seen on recent drives, not closed). */
   car?: ReactNode;
   /** The "Get set up" row, after the action items (it renders nothing once every goal is done, it was closed, or during a drive). */
@@ -91,7 +93,7 @@ export type HomeViewProps = {
  * Home, a dashboard in the travel-card mould: the greeting with your avatar on the sky, this week's
  * drives, distance and goals in three pills (the goals pill scrolls to the goals section), then the drive card, the screen's hero, with the Safety Rating in
  * its ring and Start drive. Right under it, the action items, each only when it applies: dangerous
- * weather, where you parked, a permission to fix, DashPal, a coaching tip, a car seen on recent drives. Then the
+ * weather, where you parked, a permission to fix, DashPal, a coaching tip, last month's Wrapped, a car seen on recent drives. Then the
  * "Get set up" row of one-time goals (emergency contacts, places, your car, DashPal, a friend), then the detail (stats, recent drives,
  * this week's goals; until 3 scored drives the first-drive prompt and the recent drives come first,
  * then the goals) and How it works, always last.
@@ -177,6 +179,7 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
         {p.recording ? null : p.permissions}
         {p.dashpal}
         {tip ? <CoachTipCard coaching={tip} onOpen={p.onAnalytics} /> : null}
+        {p.wrapped}
         {p.car}
         {p.setupGoals}
 

@@ -82,7 +82,7 @@ export const WIPE_KEEPS_SETTINGS_PREFIX = 'dashcam.';
 export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'dashcam_events', 'dashcam_boots', 'dashcam_coverage', 'problem_spots', 'route_pool', 'trips'];
 /**
  * The zones, the saved places (with the addresses looked up for learned ones and the recap's
- * "Save as …?" answers), the emergency contacts, whether Home's car card and setup goals were
+ * "Save as …?" answers), the emergency contacts, whether Home's car card, Wrapped card and setup goals were
  * closed, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the
  * last drive's "Not driving?" budget and the hour it was last reminded to take a break, the problem spots' bookkeeping, and the record of how far this
  * driver's restore ran: their drives just left the phone, so the next sign-in restores them again
@@ -96,6 +96,8 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   PROMPT_DECLINED_KEY,
   // Home's "Is <name> your car?" card was closed (the drive-path work owns the card).
   'home.carCardDismissed',
+  // The month whose Wrapped card Home's ✕ closed (`src/features/wrapped/month.ts`).
+  'home.wrappedCardDismissed',
   // The emergency contacts.
   EMERGENCY_CONTACTS_KEY,
   // The tiles removed from Home's "Get set up" row (`src/features/home/SetupGoals.tsx`).

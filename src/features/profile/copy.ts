@@ -29,6 +29,7 @@ export const profileCopy = {
   rows: {
     friends: { title: 'Friends', subtitle: 'Add by username or QR code' },
     requests: (n: number) => (n === 1 ? '1 request' : `${n} requests`),
+    wrapped: { title: 'Wrapped', subtitle: 'Your monthly recaps' },
     heatmap: { title: 'Heat map', subtitle: 'Who can see your routes' },
     how: { title: 'How scores work', subtitle: 'Drive scores and your Safety Rating' },
     settings: { title: 'Settings', subtitle: 'Privacy, alerts, notifications' },

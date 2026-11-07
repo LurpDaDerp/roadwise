@@ -87,6 +87,8 @@ jest.mock('@/features/drives/useDriveScores', () => ({ useDriveScores: () => new
 // The DashPal slot has its own tests.
 jest.mock('@/dashcam/ui/HomeDashpal', () => ({ HomeDashpal: () => null }));
 jest.mock('@/features/carLink/PairCarCard', () => ({ HomeCarCard: () => null }));
+// Home's Wrapped card has its own tests.
+jest.mock('@/features/wrapped/HomeWrappedCard', () => ({ HomeWrappedCard: () => null }));
 // "Where you parked" has its own tests.
 jest.mock('@/features/parked/ParkedCard', () => ({ HomeParkedCard: () => null }));
 jest.mock('../SetupGoals', () => ({ HomeSetupGoals: () => null }));

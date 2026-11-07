@@ -176,7 +176,7 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
     case 'backgroundRefresh':
       return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
     case 'notifications':
-      return on ? 'Drive recaps, your weekly recap and friend requests can reach you.' : "You won't get drive recaps, your weekly recap or friend requests.";
+      return on ? 'Drive recaps, your weekly and monthly recaps and friend requests can reach you.' : "You won't get drive recaps, your weekly and monthly recaps or friend requests.";
     case 'bluetooth':
       if (state.kind === 'idle') {
         if (c.car === true) return 'RoadWise asks for it in Settings › Your car.';

@@ -1,5 +1,12 @@
 import { redirectSystemPath } from '../+native-intent';
 
+// The link domain (`extra.linkDomain`): none by default, as now; a test sets one.
+let mockDomain: string | null = null;
+jest.mock('@/lib/linkDomain', () => ({ linkDomain: () => mockDomain }));
+beforeEach(() => {
+  mockDomain = null;
+});
+
 const go = (path: string) => redirectSystemPath({ path, initial: true });
 
 test.each([
@@ -10,6 +17,14 @@ test.each([
   // The Live Activity and the widget open the driving screen (it shows only a drive already recording).
   ['roadwise://drive', '/drive'],
   ['roadwise:///drive', '/drive'],
+  // A shared Wrapped, the archive and one month of it (the push on the 1st opens the month).
+  ['roadwise://w/Ab3dEf7hJk9m', '/w/Ab3dEf7hJk9m'],
+  ['roadwise:///w/Ab3dEf7hJk9m', '/w/Ab3dEf7hJk9m'],
+  // A trailing slash, query or fragment is dropped: the route is the id alone.
+  ['roadwise://w/Ab3dEf7hJk9m/', '/w/Ab3dEf7hJk9m'],
+  ['roadwise://w/Ab3dEf7hJk9m?x=1', '/w/Ab3dEf7hJk9m'],
+  ['roadwise://wrapped', '/wrapped'],
+  ['roadwise://wrapped/2026-10', '/wrapped/2026-10'],
 ])('%s passes as %s', async (path, expected) => expect(await go(path)).toBe(expected));
 
 test.each([
@@ -41,6 +56,16 @@ test.each([
   'roadwise://dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60',
   'https://pair.example.com/dashpal#d=f412fa0c9e01&k=000G40R40M30E209185GR38E1W60',
   'roadwise://dashpal/setup',
+  // Wrapped links of any other shape.
+  'roadwise://w/short',
+  'roadwise://w/Ab3dEf7hJk9m/extra',
+  'roadwise://w/Ab3dEf7hJk9-',
+  'roadwise://w/Ab3dEf7hJk9m%2F..',
+  'roadwise://wrapped/2026-13',
+  'roadwise://wrapped/2026-1',
+  'roadwise://wrapped/2026-10?start=1',
+  // No link domain is set: no web link opens anything, a Wrapped one included.
+  'https://roadwise.app/w/Ab3dEf7hJk9m',
 ])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
 
 test('the dev client launcher links pass untouched', async () => {
@@ -51,4 +76,33 @@ test('the Live Activity and Dynamic Island link reaches the driving screen on a 
   for (const initial of [true, false]) {
     expect(await redirectSystemPath({ path: 'roadwise://drive', initial })).toBe('/drive');
   }
+});
+
+describe('with a link domain set', () => {
+  beforeEach(() => {
+    mockDomain = 'roadwise.app';
+  });
+
+  test.each([
+    ['https://roadwise.app/w/Ab3dEf7hJk9m', '/w/Ab3dEf7hJk9m'],
+    ['https://RoadWise.app/w/Ab3dEf7hJk9m/', '/w/Ab3dEf7hJk9m'],
+    // Tracking parameters other apps add to a tapped link are dropped.
+    ['https://roadwise.app/w/Ab3dEf7hJk9m?utm_source=instagram&igshid=x', '/w/Ab3dEf7hJk9m'],
+    ['https://roadwise.app/w/Ab3dEf7hJk9m/?fbclid=IwAR0abc', '/w/Ab3dEf7hJk9m'],
+    ['https://roadwise.app/w/Ab3dEf7hJk9m#x', '/w/Ab3dEf7hJk9m'],
+  ])('%s passes as %s', async (path, expected) => expect(await go(path)).toBe(expected));
+
+  test.each([
+    // Only https, only that host, only a Wrapped path.
+    'http://roadwise.app/w/Ab3dEf7hJk9m',
+    'https://evil.test/w/Ab3dEf7hJk9m',
+    'https://roadwise.app.evil.test/w/Ab3dEf7hJk9m',
+    'https://evil.test/roadwise.app/w/Ab3dEf7hJk9m',
+    'https://roadwise.app/add/maya_16',
+    'https://roadwise.app/drives/abc',
+    'https://roadwise.app/w/Ab3dEf7hJk9m/extra',
+    'https://roadwise.app.evil.test/w/Ab3dEf7hJk9m?x=roadwise.app',
+    'https://roadwise.app/w/short',
+    'https://roadwise.app/wrapped/2026-10',
+  ])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
 });

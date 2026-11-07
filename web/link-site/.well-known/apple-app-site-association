@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["TEAMID.com.lurp.safedrive"],
+        "components": [{ "/": "/w/*", "comment": "A shared monthly Wrapped opens in RoadWise." }]
+      }
+    ]
+  }
+}

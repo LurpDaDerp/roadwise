@@ -47,6 +47,11 @@ const V3_ROUTES = [
   '(app)/settings/delete-account.tsx',
   '(app)/settings/blocked.tsx',
   '(app)/settings/permissions.tsx',
+  '(app)/settings/permit.tsx',
+  '(app)/settings/practice-drives.tsx',
+  '(app)/wrapped/index.tsx',
+  '(app)/wrapped/[month].tsx',
+  '(app)/w/[id].tsx',
 ];
 
 const REMOVED = [

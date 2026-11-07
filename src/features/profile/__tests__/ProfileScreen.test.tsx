@@ -95,11 +95,13 @@ it('the card: the Safety Rating with its week, your totals; six of the 13 achiev
   expect(await screen.findByText(profileCopy.rows.requests(1))).toBeOnTheScreen();
   expect(screen.queryByText(NO_POINTS)).toBeNull();
 
+  expect(screen.getByLabelText('Wrapped, Your monthly recaps')).toBeOnTheScreen();
   await tap('profile-friends');
+  await tap('profile-wrapped');
   await tap('profile-heatmap');
   await tap('profile-how');
   await tap('profile-blocked');
-  expect(mockRouter.push.mock.calls.map((c) => c[0])).toEqual([PROFILE_HREFS.friends, PROFILE_HREFS.heatmap, SETTINGS_HREFS.howScoresWork, '/settings/blocked']);
+  expect(mockRouter.push.mock.calls.map((c) => c[0])).toEqual([PROFILE_HREFS.friends, '/wrapped', PROFILE_HREFS.heatmap, SETTINGS_HREFS.howScoresWork, '/settings/blocked']);
   expect(screen.getByText('How scores work')).toBeOnTheScreen();
 });
 

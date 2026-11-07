@@ -8,6 +8,7 @@ import { useMySummary } from '@/data/server/summary';
 import { useFriends } from '@/features/social/api';
 import { LinkRow, Section } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
+import { WRAPPED_ARCHIVE_HREF } from '@/features/social/links';
 import { Banner, Card, Pill, ScreenTitle, SectionHeader, Skeleton, useSkyScrollHandler, useTheme } from '@/ui';
 
 import { AchievementBadges } from './AchievementBadges';
@@ -19,6 +20,7 @@ export const PROFILE_HREFS = {
   achievements: '/achievements' as Href,
   friends: '/friends' as Href,
   heatmap: '/heatmap' as Href,
+  wrapped: WRAPPED_ARCHIVE_HREF,
 } as const;
 
 /**
@@ -107,6 +109,7 @@ export function ProfileScreen() {
             onPress={() => router.push(PROFILE_HREFS.friends)}
             testID="profile-friends"
           />
+          <LinkRow icon="sparkles-outline" title={copy.rows.wrapped.title} subtitle={copy.rows.wrapped.subtitle} onPress={() => router.push(PROFILE_HREFS.wrapped)} testID="profile-wrapped" />
           <LinkRow icon="map-outline" title={copy.rows.heatmap.title} subtitle={copy.rows.heatmap.subtitle} onPress={() => router.push(PROFILE_HREFS.heatmap)} testID="profile-heatmap" />
           <LinkRow icon="help-circle-outline" title={copy.rows.how.title} subtitle={copy.rows.how.subtitle} onPress={() => router.push(SETTINGS_HREFS.howScoresWork)} testID="profile-how" />
         </Section>

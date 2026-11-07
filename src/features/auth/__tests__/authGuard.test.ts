@@ -213,6 +213,12 @@ describe('pendingHrefFor (the deep links a gate may hold)', () => {
     ['/clan/abcd2345', null],
     ['/clan/join?code=ABCD2345', null],
     ['/clan/join', null],
+    // The monthly Wrapped: a shared copy, a month and the archive are held for after setup.
+    ['/w/Ab3dEf7hJk9m', '/w/Ab3dEf7hJk9m'],
+    ['/wrapped/2026-10', '/wrapped/2026-10'],
+    ['/wrapped', '/wrapped'],
+    ['/w/short', null],
+    ['/wrapped/2026-00', null],
     // There is no DashPal link to hold.
     ['/dashpal', null],
     ['/dashpal?d=f412fa0c9e01', null],

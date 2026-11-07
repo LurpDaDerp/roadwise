@@ -5,7 +5,9 @@
  */
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-import appConfig, { ALWAYS_LOCATION_COPY, googleServicesFile, PERMISSION_COPY } from '../../app.config';
+import { HOST_RE } from '@/lib/linkDomain';
+
+import appConfig, { ALWAYS_LOCATION_COPY, googleServicesFile, LINK_HOST_RE, PERMISSION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -221,20 +223,51 @@ describe('Bluetooth (DashPal and the car check)', () => {
   });
 });
 
-// No DashPal link: the app declares no associated domain, no App Link and no link domain.
-describe('no DashPal link', () => {
-  test('no associated domain, no App Link intent filter, no extra.linkDomain, whatever the environment says', () => {
-    const saved = process.env.DASHPAL_LINK_DOMAIN;
-    process.env.DASHPAL_LINK_DOMAIN = 'pair.example.com';
-    try {
-      const c = build();
-      expect(c.ios).not.toHaveProperty('associatedDomains');
-      expect(c.android).not.toHaveProperty('intentFilters');
-      expect(c.extra).not.toHaveProperty('linkDomain');
-    } finally {
-      if (saved === undefined) delete process.env.DASHPAL_LINK_DOMAIN;
-      else process.env.DASHPAL_LINK_DOMAIN = saved;
+// No DashPal link: the app declares no App Link and no DashPal domain. The one link domain is the
+// share links' (`ROADWISE_LINK_DOMAIN`): unset, there is no associated domain and no extra.linkDomain;
+// set, both name it.
+describe('the link domain', () => {
+  const keys = ['DASHPAL_LINK_DOMAIN', 'ROADWISE_LINK_DOMAIN'] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
     }
+  });
+
+  test('unset: no associated domain, no App Link intent filter, no extra.linkDomain, whatever DASHPAL_LINK_DOMAIN says', () => {
+    delete process.env.ROADWISE_LINK_DOMAIN;
+    process.env.DASHPAL_LINK_DOMAIN = 'pair.example.com';
+    const c = build();
+    expect(c.ios).not.toHaveProperty('associatedDomains');
+    expect(c.android).not.toHaveProperty('intentFilters');
+    expect(c.extra).not.toHaveProperty('linkDomain');
+  });
+
+  test('blank counts as unset', () => {
+    process.env.ROADWISE_LINK_DOMAIN = '  ';
+    const c = build();
+    expect(c.ios).not.toHaveProperty('associatedDomains');
+    expect(c.extra).not.toHaveProperty('linkDomain');
+  });
+
+  test('set: iOS opens its links in the app (applinks) and the app reads it as extra.linkDomain; still no Android App Link', () => {
+    process.env.ROADWISE_LINK_DOMAIN = ' RoadWise.app ';
+    const c = build();
+    expect(c.ios?.associatedDomains).toEqual(['applinks:roadwise.app']);
+    expect(c.extra?.linkDomain).toBe('roadwise.app');
+    expect(c.extra?.eas).toEqual({ projectId: expect.any(String) });
+    expect(c.android).not.toHaveProperty('intentFilters');
+  });
+
+  test.each(['https://roadwise.app', 'roadwise.app/', 'roadwise.app:443', 'roadwise', 'road wise.app'])('a value that is not a bare host name (%s) fails the config', (v) => {
+    process.env.ROADWISE_LINK_DOMAIN = v;
+    expect(() => build()).toThrow(/ROADWISE_LINK_DOMAIN must be a bare host name/);
+  });
+
+  test('the config checks the host with the same rule the app reads it with', () => {
+    expect(LINK_HOST_RE.source).toBe(HOST_RE.source);
   });
 });
 

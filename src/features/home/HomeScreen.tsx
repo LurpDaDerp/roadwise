@@ -32,6 +32,7 @@ import {
   PROFILE_HREF,
 } from '@/features/drives/routes';
 import { useWeatherAlert } from '@/features/weather/useWeatherAlert';
+import { HomeWrappedCard } from '@/features/wrapped/HomeWrappedCard';
 import { WeatherAlertSlot } from '@/features/weather/HomeWeatherAlert';
 import { Screen } from '@/ui';
 
@@ -220,6 +221,7 @@ export function HomeScreen() {
         coaching={coaching}
         permissions={<PermissionCard board={board} recording={recording} autoDisabled={autoDisabled} onSeeAll={() => router.push(PERMISSIONS_HREF)} />}
         dashpal={<HomeDashpal hidden={recording} pull={pulls} />}
+        wrapped={<HomeWrappedCard hidden={recording} />}
         car={<HomeCarCard hidden={recording} />}
         setupGoals={<HomeSetupGoals hidden={recording} />}
         scrollRef={scrollRef}

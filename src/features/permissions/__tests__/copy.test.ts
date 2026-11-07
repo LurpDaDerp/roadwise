@@ -59,8 +59,8 @@ test('the automatic-drive rows and notifications say what they do', () => {
   expect(rowDetail('locationAlways', { kind: 'idle' }, IOS)).toBe('Allow Location first.');
   expect(rowDetail('backgroundRefresh', { kind: 'granted' }, IOS)).toBe('iOS can wake RoadWise when a drive starts.');
   expect(rowDetail('backgroundRefresh', m('denied'), IOS)).toBe('iOS can\'t wake RoadWise, so drives won\'t start on their own.');
-  expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, your weekly recap and friend requests can reach you.');
-  expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won\'t get drive recaps, your weekly recap or friend requests.');
+  expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, your weekly and monthly recaps and friend requests can reach you.');
+  expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won\'t get drive recaps, your weekly and monthly recaps or friend requests.');
   expect(requestLabel('locationAlways', m('notYet', true))).toBe('Allow Always');
   expect(requestLabel('backgroundRefresh', m('denied'))).toBe('Open Settings');
 });

@@ -10,7 +10,10 @@
 
 export const SUMMARY_HREF = /^\/drives\/([A-Za-z0-9-]{1,64})(?:\?fresh=1)?$/;
 
-export const ALLOWED_HREFS: readonly RegExp[] = [SUMMARY_HREF, /^\/drives$/, /^\/home$/, /^\/leagues$/, /^\/friends$/];
+/** The monthly Wrapped: the archive, one month's own story (the push on the 1st opens it), and a shared copy. */
+export const WRAPPED_HREFS: readonly RegExp[] = [/^\/wrapped$/, /^\/wrapped\/\d{4}-(0[1-9]|1[0-2])$/, /^\/w\/[A-Za-z0-9]{12}$/];
+
+export const ALLOWED_HREFS: readonly RegExp[] = [SUMMARY_HREF, /^\/drives$/, /^\/home$/, /^\/leagues$/, /^\/friends$/, ...WRAPPED_HREFS];
 
 /** Whether `url` is exactly one of the allowlisted routes. */
 export const isAllowedHref = (url: unknown): url is string => typeof url === 'string' && ALLOWED_HREFS.some((re) => re.test(url));

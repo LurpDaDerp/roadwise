@@ -84,6 +84,6 @@ describe('onboarding copy', () => {
     expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
     expect(onboardingCopy.location.android.body).toBe('RoadWise uses precise location to record the drives you start and to check the local weather.');
     expect(onboardingCopy.location.ios.approximate).toBe('Location is set to approximate, so drives can\'t record. Turn on Precise Location in Settings.');
-    expect(onboardingCopy.notifications.body).toBe('Get a recap after each drive, your Sunday summary, and a heads-up when a friend adds you.');
+    expect(onboardingCopy.notifications.body).toBe('Get a recap after each drive, your Sunday summary and monthly Wrapped, and a heads-up when a friend adds you.');
   });
 });
