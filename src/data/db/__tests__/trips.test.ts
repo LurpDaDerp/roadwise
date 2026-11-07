@@ -79,6 +79,24 @@ test('the saved places at each end and the car are written and read back; null u
   expect(await trips.get('a')).toMatchObject({ from_place: 'home', to_place: 'place-k3x-ab12', car_uid: 'AA:BB', car_name: 'Civic', end_lat_full: 47.60012, end_lng_full: -122.30034 });
 });
 
+test('the speed trace, limit buckets, weather and supervisor are written and read back; null until set', async () => {
+  const none = { speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null };
+  expect(await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'recording' }, T0)).toMatchObject(none);
+  const set = {
+    speed_trace_json: '{"w":5,"p":[[0,12.5,25]]}',
+    limit_buckets_json: '{"low":{"s":1,"m":9},"mid":{"s":0,"m":0},"high":{"s":0,"m":0}}',
+    weather: 'snow' as const,
+    practice_supervisor: 'Dad',
+  };
+  expect(await trips.update('a', set, T0 + 1)).toMatchObject(set);
+  expect(await trips.get('a')).toMatchObject(set);
+  // A supervisor reads back trimmed and clipped to 60 characters; a blank one is none.
+  await trips.update('a', { practice_supervisor: `  ${'x'.repeat(80)} ` }, T0 + 2);
+  expect((await trips.get('a'))?.practice_supervisor).toBe('x'.repeat(60));
+  await trips.update('a', { practice_supervisor: '   ' }, T0 + 3);
+  expect((await trips.get('a'))?.practice_supervisor).toBeNull();
+});
+
 test('list is newest first; listRecording picks the drives still recording', async () => {
   await trips.insert({ client_trip_id: 'old', started_at: T0, tz: 'UTC', status: 'scored' }, T0);
   await trips.insert({ client_trip_id: 'mid', started_at: T0 + 1000, tz: 'UTC', status: 'not_driving' }, T0);

@@ -160,6 +160,7 @@ function readyRuntime() {
     notDrivingAvailable: false,
     notDrivingSpentMs: 0,
     spotNudge: null,
+    breakReminder: null,
     weatherAlert: null,
     weather: null,
     origin: null,

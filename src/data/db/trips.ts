@@ -12,9 +12,12 @@ import {
 } from '@/data/db/row';
 import {
   DRIVE_ORIGINS,
+  DRIVE_WEATHERS,
+  PRACTICE_SUPERVISOR_MAX,
   START_SOURCES,
   TRIP_END_CAUSES,
   TRIP_STATUSES,
+  type DriveWeather,
   type Flag,
   type NewTrip,
   type StartSource,
@@ -75,6 +78,10 @@ const COLUMNS = [
   'car_name',
   'end_lat_full',
   'end_lng_full',
+  'speed_trace_json',
+  'limit_buckets_json',
+  'weather',
+  'practice_supervisor',
 ] as const;
 
 /** Every column except the primary key and `created_at`, which a patch must not move. */
@@ -90,6 +97,15 @@ const endCauseOf = (v: string | null): TripEndCause | null => (TRIP_END_CAUSES a
 
 /** A stored start source this build knows, else null (the column's CHECK keeps it so anyway). */
 const startSourceOf = (v: string | null): StartSource | null => (START_SOURCES as readonly string[]).includes(v ?? '') ? (v as StartSource) : null;
+
+/** A stored weather word this build knows, else null (the column's CHECK keeps it so anyway). */
+const weatherOf = (v: string | null): DriveWeather | null => ((DRIVE_WEATHERS as readonly string[]).includes(v ?? '') ? (v as DriveWeather) : null);
+
+/** A stored supervisor name, trimmed and clipped to `PRACTICE_SUPERVISOR_MAX`; empty is null. */
+const supervisorOf = (v: string | null): string | null => {
+  const t = v?.trim().slice(0, PRACTICE_SUPERVISOR_MAX) ?? '';
+  return t === '' ? null : t;
+};
 
 export function toTripRow(row: Record<string, unknown>): TripRow {
   return {
@@ -142,6 +158,10 @@ export function toTripRow(row: Record<string, unknown>): TripRow {
     car_name: asTextOrNull(row, 'car_name'),
     end_lat_full: asNumberOrNull(row, 'end_lat_full'),
     end_lng_full: asNumberOrNull(row, 'end_lng_full'),
+    speed_trace_json: asTextOrNull(row, 'speed_trace_json'),
+    limit_buckets_json: asTextOrNull(row, 'limit_buckets_json'),
+    weather: weatherOf(asTextOrNull(row, 'weather')),
+    practice_supervisor: supervisorOf(asTextOrNull(row, 'practice_supervisor')),
   };
 }
 

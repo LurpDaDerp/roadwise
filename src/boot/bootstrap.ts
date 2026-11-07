@@ -488,6 +488,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
             adopt: (id) => dc.adopt(id),
             beforeFinalize: (id, o) => dc.beforeFinalize(id, o),
             continuousAlertActive: () => dc.continuousAlertActive(),
+            lastDrowsyAt: () => dc.lastDrowsyAlertAt(),
+            lastAlertShownAt: () => dc.lastAlertShownAt(),
           }
         : undefined,
       onError: (error, context) => onError(error, `drive ${context}`),

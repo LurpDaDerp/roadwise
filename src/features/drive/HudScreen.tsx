@@ -31,6 +31,7 @@ import {
 } from '@/ui/drive';
 
 import { ArrivalOverlay, ARRIVAL_HOLD_MS } from './ArrivalOverlay';
+import { BreakReminderLine, useBreakFlash } from './BreakReminder';
 import { EmergencyButton } from './EmergencyButton';
 import { placeCall } from './emergencyCall';
 import { EmergencyPanel } from './EmergencyPanel';
@@ -173,7 +174,8 @@ export type HudScreenProps = {
  *   car is over the speeding line, "Slow down" in the episode's colour stays up from its alert until
  *   the first row back under the line (another event's chip takes the band for its 1.5 s); else a
  *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
- *   ("Watch your speed here"), and the dangerous-weather card where it has no slot of its own.
+ *   ("Watch your speed here"), for 4 s the break reminder ("Take a break soon" with a cup, at a
+ *   stop after 2 h of driving), and the dangerous-weather card where it has no slot of its own.
  *   With a DashPal paired, a small static chip top right.
  * - Weather (portrait): the dangerous-weather card in its own slot under the halo, above End (and
  *   the link's row), kept free whether it shows or not, so nothing moves when it appears: a yellow
@@ -298,6 +300,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const speedingHeld = useMemo<HudAlert | null>(() => (speedingTier === null ? null : { type: 'speeding', tier: speedingTier, at: 0 }), [speedingTier]);
   const chip = alert ?? speedingHeld;
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
+  const breakShown = useBreakFlash(live.breakReminder, live.rowTs);
   const dashpal = useDashpalFlash();
   const dashpalChip = useDashpalChip();
   const held = useDashpalHeld();
@@ -361,8 +364,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     },
     []
   );
-  // The dimmer stays off while an alert, a nudge, the list of apps, a waiting panel or the emergency panel shows.
-  const { dimmed, wake } = useDimmer(chip !== null || dashpal !== null || nudge !== null || nav.picker !== null || panelUp || sosOpen);
+  // The dimmer stays off while an alert, a nudge, the break reminder, the list of apps, a waiting panel or the emergency panel shows.
+  const { dimmed, wake } = useDimmer(chip !== null || dashpal !== null || nudge !== null || breakShown !== null || nav.picker !== null || panelUp || sosOpen);
   // Android back closes the list first (before the drive screen's own swallow).
   const pickerOpen = nav.picker !== null;
   const closePicker = nav.close;
@@ -627,6 +630,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             link
           ) : nudge !== null ? (
             <SpotNudgeLine nudge={nudge} palette={p} compact={compactBand} />
+          ) : breakShown !== null ? (
+            <BreakReminderLine palette={p} compact={compactBand} />
           ) : weather !== null && weatherSlot === null ? (
             <WeatherBanner alert={weather} units={units} palette={p} compact={compactBand} onDismiss={dismissWeather} />
           ) : null}

@@ -94,7 +94,10 @@ export const CAMERA_DISPUTE_AUTO_PER_WEEK = 3;
 export type AchievementId =
   | 'first_drive'
   | 'clean_100'
+  | 'clean_500'
+  | 'clean_1000'
   | 'perfect_week'
+  | 'rain_or_shine'
   | 'better_speed'
   | 'better_braking'
   | 'better_acceleration'
@@ -114,13 +117,17 @@ export const IMPROVEMENT_POINTS = 10;
 export const IMPROVEMENT_DAYS = 30;
 
 /**
- * The ten achievements (badges; they reward nothing), in the order the app lists them. The server
- * unlocks all but Spot Cleared, which the phone claims (spots never leave the phone).
+ * The 13 achievements (badges; they reward nothing), in the order the app lists them. The server
+ * unlocks all but Spot Cleared, which the phone claims (spots never leave the phone). Rain or Shine
+ * reads the weather the phone tagged the drive with (trips.weather).
  */
 export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: 'first_drive', title: 'First Drive', description: 'Complete a scored drive.' },
   { id: 'clean_100', title: 'Clean 100', description: 'Drive 100 clean miles.' },
+  { id: 'clean_500', title: 'Clean 500', description: 'Drive 500 clean miles.' },
+  { id: 'clean_1000', title: 'Clean 1,000', description: 'Drive 1,000 clean miles.' },
   { id: 'perfect_week', title: 'Perfect Week', description: 'Take 3 or more drives in a week, all with zero events.' },
+  { id: 'rain_or_shine', title: 'Rain or Shine', description: 'Finish a clean drive in rain or snow.' },
   { id: 'better_speed', title: 'Easing Off', description: 'Raise your Speed score by 10 in 30 days.' },
   { id: 'better_braking', title: 'Softer Stops', description: 'Raise your Braking score by 10 in 30 days.' },
   { id: 'better_acceleration', title: 'Gentle Starts', description: 'Raise your Acceleration score by 10 in 30 days.' },

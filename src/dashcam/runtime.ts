@@ -70,6 +70,10 @@ export interface DashcamRuntime {
   beforeFinalize(clientTripId: string, opts?: { dryRun?: boolean }): Promise<void>;
   facts(trip: { clientTripId: string; startedAt: number; endedAt: number }): Promise<DashcamTripFacts>;
   continuousAlertActive(): boolean;
+  /** When a DashPal drowsy alert last started, stepped up or ended (JS clock), or null. */
+  lastDrowsyAlertAt(): number | null;
+  /** When a DashPal alert last showed (JS clock): now while one sounds on the phone, else its last flash; or null. */
+  lastAlertShownAt(): number | null;
   playerUnavailable(): void;
   // ——— settings and pairing ———
   optIn(): Promise<void>;
@@ -641,6 +645,8 @@ export function createDashcamRuntime(deps: DashcamRuntimeDeps): DashcamRuntime {
 
     facts: (trip) => loadDashcamTripFacts(deps.db, trip),
     continuousAlertActive: () => link.continuousAlertActive(),
+    lastDrowsyAlertAt: () => link.lastDrowsyAlertAt(),
+    lastAlertShownAt: () => link.lastAlertShownAt(),
     playerUnavailable: () => link.playerUnavailable(),
 
     async optIn() {

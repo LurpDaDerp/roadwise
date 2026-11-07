@@ -1,7 +1,7 @@
 import { estimateExposure } from '@scoring';
 
 import type { EventRow, TripRow } from '@/data/db/types';
-import { exposureOf, isScoredDrive, parseResult, toLocalDrive, toLocalDriveEvent } from '@/data/queries/rows';
+import { exposureOf, isScoredDrive, parseResult, toListedDrive, toLocalDrive, toLocalDriveEvent } from '@/data/queries/rows';
 
 const row = (over: Partial<EventRow> = {}): EventRow => ({
   id: 'e1',
@@ -72,6 +72,10 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   car_name: null,
   end_lat_full: null,
   end_lng_full: null,
+  speed_trace_json: null,
+  limit_buckets_json: null,
+  weather: null,
+  practice_supervisor: null,
   ...over,
 });
 
@@ -180,4 +184,24 @@ test('a drive reads its saved places, its car, its zone and where it ended (loca
   expect(bare).toMatchObject({ fromPlace: null, toPlace: null, carUid: null, carName: null, tz: 'UTC' });
   expect(bare).not.toHaveProperty('end');
   expect(toLocalDrive(trip({ end_lat: 47.62 }))).not.toHaveProperty('end');
+});
+
+test('a drive reads its speed trace, limit buckets, weather and supervisor; bad JSON is null, and a list read leaves the trace unread', () => {
+  const stored = trip({
+    speed_trace_json: '{"w":5,"p":[[0,12.5,25],[5,null,null]]}',
+    limit_buckets_json: '{"low":{"s":10,"m":120},"mid":{"s":0,"m":0},"high":{"s":3,"m":90}}',
+    weather: 'rain',
+    practice_supervisor: 'Mom',
+  });
+  expect(toLocalDrive(stored)).toMatchObject({
+    speedTrace: { widthS: 5, points: [{ t: 0, v: 12.5, l: 25 }, { t: 5, v: null, l: null }] },
+    limitBuckets: { low: { s: 10, m: 120 }, mid: { s: 0, m: 0 }, high: { s: 3, m: 90 } },
+    weather: 'rain',
+    practiceSupervisor: 'Mom',
+  });
+  expect(toListedDrive(stored)).toMatchObject({ speedTrace: null, limitBuckets: { high: { s: 3, m: 90 } }, weather: 'rain' });
+  expect(toLocalDrive(trip())).toMatchObject({ speedTrace: null, limitBuckets: null, weather: null, practiceSupervisor: null });
+  const broken = toLocalDrive(trip({ speed_trace_json: 'not json', limit_buckets_json: '{"low":{"s":1}}' }));
+  expect(broken).toMatchObject({ speedTrace: null, limitBuckets: null });
+  expect(toLocalDrive(trip({ speed_trace_json: '{"w":5,"p":[[0,"fast",null]]}' })).speedTrace).toBeNull();
 });

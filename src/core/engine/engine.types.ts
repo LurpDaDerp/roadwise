@@ -8,6 +8,8 @@ import type { EventType, Tier } from '@scoring';
 
 import type { SpeedFix } from './displaySpeed';
 import type { ExposureState } from './exposure';
+import type { LimitBuckets } from './limitBuckets';
+import type { SpeedTraceState } from './speedTrace';
 import type { DetectedEvent, DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** idle → recording → finalizing → idle. Nothing starts a drive but `start` (or `adopt`). */
@@ -94,6 +96,10 @@ export interface MovementMark {
   trackLength: number;
   /** The opportunity counters right after the row (`exposure.ts`): a cut drive counts none of its tail. */
   exposure: Readonly<ExposureState>;
+  /** The limit time by kind of road right after the row (`limitBuckets.ts`), the same way. */
+  limitBuckets: LimitBuckets;
+  /** The speed trace right after the row (`speedTrace.ts`): a cut drive's holds only rows up to the cut. */
+  speedTrace: Readonly<SpeedTraceState>;
 }
 
 /** The movement rule's running state (`session.ts`). Replaced on every row, never mutated. */
@@ -172,6 +178,10 @@ export interface TripSession {
   warmup: Readonly<Warmup>;
   /** The drive's opportunity counters so far (`exposure.ts`): slowdowns, speed-ups, turns, limit time. */
   exposure: Readonly<ExposureState>;
+  /** The drive's limit time by kind of road so far (`limitBuckets.ts`). Frozen and replaced, never mutated. */
+  limitBuckets: LimitBuckets;
+  /** The drive's speed over time so far (`speedTrace.ts`). Frozen and replaced, never mutated. */
+  speedTrace: Readonly<SpeedTraceState>;
   /** The latest movement (`session.ts`), or null while the car has not moved. */
   moved: Readonly<MovementMark> | null;
   /**

@@ -11,6 +11,7 @@ import {
   dropTrip,
   boundExposure,
   carTagOf,
+  driveWeatherFor,
   exposureOf,
   finalizeTrip,
   INVALID_PAYLOAD_SYNC_ERROR,
@@ -18,8 +19,10 @@ import {
   normaliseZone,
   sanitizeEvent,
 } from '@/core/engine/finalize';
+import { parseLimitBuckets } from '@/core/engine/limitBuckets';
 import { PRIVACY_ZONES_KEY, roundCoord5 } from '@/core/engine/privacy';
 import { appendRow, closeAtLastMovement, closeSession, createSession, noteWarmup } from '@/core/engine/session';
+import { parseSpeedTrace, speedTraceOf } from '@/core/engine/speedTrace';
 import { createDetectors } from '@/core/detectors';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
@@ -349,6 +352,11 @@ describe('a drive closed at its last movement', () => {
     // The parked tail moves nothing at 5 mph: the mark's moving seconds, never the tail's.
     expect(payload.exposure!.movingS).toBe(open.moved!.movingRows);
     expect((await createEventsRepo(db).listByTrip(closed.clientTripId)).map((e) => [e.id, e.tier])).toEqual([[uuid(11), 'moderate']]);
+    // The speed trace ends at the cut too: 600 s of driving is 120 buckets of 5 s, none of the parked tail.
+    const trace = parseSpeedTrace(result.trip.speed_trace_json)!;
+    expect(trace).toEqual(speedTraceOf(open.moved!.speedTrace));
+    expect(trace.points).toHaveLength(120);
+    expect(trace.points.at(-1)!.t).toBe(595);
   });
 
   test('a drive that reached the 12 h bound (cause limit) is stored pending with a payload the contract takes', async () => {
@@ -364,6 +372,71 @@ describe('a drive closed at its last movement', () => {
     expect(result.trip.status).toBe('pending');
     expect(result.payload).not.toBeNull();
     expect(FinalizeTripPayloadV5Schema.safeParse(result.payload).success).toBe(true);
+  });
+});
+
+describe('the speed trace, the limit buckets and the weather', () => {
+  /** 600 rows at 15 m/s with a usable posted 35 mph limit after the first minute. */
+  function limitSession(id: string) {
+    const s = createSession({ clientTripId: id, startedAt: T0, origin: 'manual' });
+    rows(600).forEach((r, i) => appendRow(s, r, { unsafe: false, limitUsable: i >= 60, platform: 'ios', limitMph: i >= 60 ? 35 : null, signMph: 35 }));
+    return closeSession(s, T0 + 600_000, 'manual');
+  }
+
+  test('both are stored on the phone and never uploaded; the buckets sum to the limit time and stay within the distance', async () => {
+    const result = await finalizeTrip(limitSession(uuid(80)), deps());
+    const trace = parseSpeedTrace(result.trip.speed_trace_json)!;
+    expect(trace.widthS).toBe(5);
+    expect(trace.points).toHaveLength(120);
+    expect(trace.points.every((p) => p.l === 35 && p.v === 33.6)).toBe(true);
+    const buckets = parseLimitBuckets(result.trip.limit_buckets_json)!;
+    expect(buckets.mid.s).toBe(result.trip.limit_s);
+    expect(buckets.mid.s).toBe(540);
+    expect([buckets.low, buckets.high]).toEqual([
+      { s: 0, m: 0 },
+      { s: 0, m: 0 },
+    ]);
+    expect(Number.isInteger(buckets.mid.m)).toBe(true);
+    expect(buckets.mid.m).toBeGreaterThan(8000);
+    expect(buckets.mid.m).toBeLessThanOrEqual(result.trip.miles * 1609.344);
+    const sent = JSON.stringify(result.payload);
+    expect(sent).not.toMatch(/speedTrace|speed_trace|limitBuckets|limit_buckets|"mid"/);
+    expect(result.payload).not.toHaveProperty('weather');
+    expect(result.trip.weather).toBeNull();
+  });
+
+  test('a drive with no usable limit stores its trace and zero buckets', async () => {
+    const result = await finalizeTrip(closedSession(200), deps());
+    expect(parseSpeedTrace(result.trip.speed_trace_json)?.points).toHaveLength(40);
+    expect(parseLimitBuckets(result.trip.limit_buckets_json)).toEqual({ low: { s: 0, m: 0 }, mid: { s: 0, m: 0 }, high: { s: 0, m: 0 } });
+  });
+
+  test('the weather: the worse of the host tag and the trip row, stored and uploaded; none is left out of the payload', async () => {
+    const fromRow = closedSession(200, [], { clientTripId: uuid(81) });
+    await recorded(fromRow, rows(200));
+    await createTripsRepo(db).update(fromRow.clientTripId, { weather: 'rain' }, T0);
+    const a = await finalizeTrip(fromRow, deps());
+    expect(a.trip.weather).toBe('rain');
+    expect(a.payload).toMatchObject({ weather: 'rain' });
+    expect(FinalizeTripPayloadV5Schema.safeParse(a.payload).success).toBe(true);
+
+    const fromHost = closedSession(200, [], { clientTripId: uuid(82) });
+    await recorded(fromHost, rows(200));
+    await createTripsRepo(db).update(fromHost.clientTripId, { weather: 'rain' }, T0);
+    const b = await finalizeTrip(fromHost, deps({ weather: () => 'snow' }));
+    expect(b.trip.weather).toBe('snow');
+    expect(b.payload).toMatchObject({ weather: 'snow' });
+    expect((await findFinalize(db, fromHost.clientTripId))?.weather).toBe('snow');
+
+    expect(driveWeatherFor(() => 'clear', 'ice')).toBe('ice');
+    expect(driveWeatherFor(() => null, null)).toBeNull();
+    expect(driveWeatherFor(undefined, 'clear')).toBe('clear');
+    expect(driveWeatherFor(() => 'fog' as never, null)).toBeNull();
+    expect(
+      driveWeatherFor(() => {
+        throw new Error('watch');
+      }, 'rain')
+    ).toBe('rain');
   });
 });
 

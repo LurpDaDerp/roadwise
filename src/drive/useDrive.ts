@@ -12,6 +12,7 @@ import type { DangerAlert } from '@/features/weather/danger';
 import { mpsToMph } from '@/lib/units';
 import { speedingTint } from '@/ui/drive/halo';
 
+import type { BreakReminder } from './breakWatch';
 import { DriveContext, type DriveContextValue } from './DriveProvider';
 import type { DriveHost, DriveState, StartResult } from './host';
 import type { WaitingPublic } from './waiting';
@@ -100,6 +101,8 @@ export interface DriveLive {
   notDrivingAvailable: boolean;
   /** The spot nudge to flash ("Watch your speed here"), or null. */
   spotNudge: SpotNudge | null;
+  /** The break reminder to flash ("Take a break soon"), or null. */
+  breakReminder: BreakReminder | null;
 }
 
 /** The newest row's GPS speed as the driving screen reads it (mph, tenths), null when it had none. */
@@ -129,6 +132,7 @@ export const selectLive = (s: DriveState) => ({
   waitingDeadlineAt: s.waiting?.deadlineAt ?? null,
   notDrivingAvailable: s.notDrivingAvailable,
   spotNudge: s.spotNudge,
+  breakReminder: s.breakReminder,
 });
 
 /** The speed the driving screen shows, as of its last fix (`displaySpeed.ts`). */

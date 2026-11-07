@@ -203,6 +203,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     notDrivingAvailable: false,
     notDrivingSpentMs: 0,
     spotNudge: null,
+    breakReminder: null,
     weatherAlert: null,
     weather: null,
     origin: null,

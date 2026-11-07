@@ -3,10 +3,11 @@ import type { Href } from 'expo-router';
 
 import { EMERGENCY_NUMBER } from '@/features/emergency/model';
 import { spotsCopy } from '@/features/spots/copy';
+import { t } from '@/i18n';
 
 /**
  * The words on the driving screen. Anything a driver may see while moving is one to three words
- * (spec "Driving screen"); a place heads-up (a spot's nudge) may take four. Spoken-only strings
+ * (spec "Driving screen"); a place heads-up (a spot's nudge) and the break reminder may take four. Spoken-only strings
  * (screen-reader labels and hints) may be full sentences: they are heard, not read. The waiting
  * panels show only while a Start-card drive, recording from the tap, has not yet reached driving
  * speed.
@@ -47,6 +48,11 @@ export const hudCopy = {
   },
   /** A problem spot's nudge, one per kind (four words at most; the spot sheet quotes the same line). */
   spot: spotsCopy.nudge,
+  /**
+   * The break reminder at a stop after 2 h of driving (the words it speaks too): four words, the one
+   * spoken line over three (`alert.takeABreak`).
+   */
+  breakReminder: t('alert.takeABreak'),
   /**
    * The alert chip at the top, one per event type: what to do now. Speeding's says "Slow down" as
    * the car passes the speeding line (the recap, history and analytics still name the event

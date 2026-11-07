@@ -103,6 +103,6 @@ test('friends see the rating by default; the rest is private until shared', () =
 });
 
 test('the three badges, and goals that change no score', () => {
-  expect(section(true, 'goals')[1]).toBe('Badges mark milestones: First Drive, Clean 100 and Perfect Week.');
+  expect(section(true, 'goals')[1]).toBe('Badges mark milestones like First Drive, Clean 100, Clean 1,000 and Rain or Shine.');
   expect(section(true, 'goals')[0]).toMatch(/never change your scores/);
 });

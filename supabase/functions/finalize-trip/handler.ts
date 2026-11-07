@@ -216,6 +216,7 @@ export async function handleFinalizeTrip(req: Request, deps: FinalizeDeps): Prom
           origin: p.origin,
           notDrivingExpired: p.notDrivingExpired,
           exposure: p.exposure ? clampExposure(p.exposure) : null,
+          weather: p.weather ?? null,
         },
         scored,
         reason,

@@ -7,7 +7,8 @@
  *   dropped (no map draws it);
  * - the route (trimmed and whole), the start and end points, the from/to labels, the saved places
  *   it started and ended at, the car it was in and every event's place (uploaded and exact) are
- *   cleared;
+ *   cleared; its speed trace, limit buckets, weather and practice supervisor stay (none says where
+ *   it went);
  * - any samples left go, and so does a finalize upload the server refused for good (its payload
  *   holds the route and the places);
  * - `archived_at` is stamped: the drive leaves every list and its recap reads as not found.

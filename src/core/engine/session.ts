@@ -19,16 +19,23 @@
 // Opportunities: every row also goes through the exposure reducer (`exposure.ts`: slowdowns,
 // speed-ups, turns, limit time, phone time), and each movement mark keeps its counters, so a drive
 // cut back to its last movement counts none of its tail.
+//
+// Recap and analytics facts: every row also goes into the speed trace (`speedTrace.ts`: the mean
+// trusted speed and the sign's limit per bucket of time) and the limit buckets (`limitBuckets.ts`:
+// limit time and distance by kind of road). Each mark keeps both as they stood, so a cut drive's
+// trace and buckets hold nothing after the cut.
 import { END_CRAWL_MPH, IDLE_END_S, MAX_H_ACC_M, MOVING_MIN_MPH, NO_EVENTS_FIRST_S, phonePickupTier } from '@scoring';
 
-import { imuAbsent, knownSpeed, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
+import { imuAbsent, knownSpeed, limitMphFor, limitShownMph, MPS_PER_MPH, ROW_MS, speedTrusted } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 import { haversineMeters } from '@/lib/geo';
 import { sunIsDown } from '@/lib/time';
 
 import type { DriveOrigin, EndCause, Fix, MotionTrack, MovementMark, StartSource, TripSession } from './engine.types';
 import { EMPTY_EXPOSURE_STATE, noteExposure } from './exposure';
-import type { DetectedEvent, FeatureRow } from './types';
+import { EMPTY_LIMIT_BUCKETS, noteLimitBuckets } from './limitBuckets';
+import { EMPTY_SPEED_TRACE, noteSpeedTrace } from './speedTrace';
+import type { DetectedEvent, FeatureRow, LimitSample } from './types';
 
 /** Consecutive fixes implying a speed above this are GNSS noise, not distance. */
 export const GNSS_JUMP_MPS = 100;
@@ -204,6 +211,8 @@ export function createSession(start: SessionStart): TripSession {
       endsAt: continues ? start.startedAt : start.startedAt + NO_EVENTS_FIRST_S * 1000,
     }),
     exposure: EMPTY_EXPOSURE_STATE,
+    limitBuckets: EMPTY_LIMIT_BUCKETS,
+    speedTrace: EMPTY_SPEED_TRACE,
     moved: null,
     marks: NO_MARKS,
     droveAt: null,
@@ -250,6 +259,21 @@ export interface RowFlags {
   limitUsable: boolean;
   /** The phone that recorded the drive (`DetectorContext.platform`): on iPhone a call row is no phone time. */
   platform: 'ios' | 'android';
+  /**
+   * The scored limit for the row (`limitMphFor(row, limit)`, whole mph), or null: picks the row's
+   * limit bucket. Every production caller passes it, live and replay alike; absent reads as null.
+   */
+  limitMph?: number | null;
+  /** The sign's limit for the row (`limitShownMph(row, limit)`), or null: the speed trace's limit line. Absent reads as null. */
+  signMph?: number | null;
+}
+
+/**
+ * The row's two limits for `RowFlags`: the scored one (`limitMphFor`) and the sign's
+ * (`limitShownMph`). Every caller of `appendRow` takes them from here, so live and replay agree.
+ */
+export function limitFlags(row: FeatureRow, limit: LimitSample): Pick<RowFlags, 'limitMph' | 'signMph'> {
+  return { limitMph: limitMphFor(row, limit), signMph: limitShownMph(row, limit) };
 }
 
 /** The bridge-only journal sequence number a row may carry (iOS), or null. */
@@ -260,12 +284,15 @@ export function rowSeq(row: FeatureRow): number | null {
 
 /**
  * Append one row the machine has accepted. The accumulators first, then the opportunity counters,
- * then the movement step (whose mark keeps both), then the driving-speed step.
+ * the limit buckets and the speed trace, then the movement step (whose mark keeps them all), then
+ * the driving-speed step.
  */
 export function appendRow(session: TripSession, row: FeatureRow, flags: RowFlags): void {
   const prevFix = session.lastFix;
-  accumulate(session, row, flags.unsafe);
+  const d = accumulate(session, row, flags.unsafe);
   session.exposure = noteExposure(session.exposure, row, flags.limitUsable, flags.platform);
+  session.limitBuckets = noteLimitBuckets(session.limitBuckets, row, flags.limitUsable, flags.limitMph, d);
+  session.speedTrace = noteSpeedTrace(session.speedTrace, row, session.startedAt, flags.signMph);
   noteMovement(session, row, prevFix);
   noteDriving(session, row);
 }
@@ -286,7 +313,8 @@ function noteDriving(session: TripSession, row: FeatureRow): void {
   if (session.motion.prevDrive !== d) session.motion = Object.freeze({ ...session.motion, prevDrive: d });
 }
 
-function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): void {
+/** The row's accumulators. Returns the distance it added to the drive (metres; 0 for none). */
+function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): number {
   session.rowsCount += 1;
   session.lastRowTs = row.ts;
   session.pending.push(row);
@@ -304,16 +332,18 @@ function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): voi
       if (imuActive(row)) session.imuActiveRows += 1;
     }
   }
-  if (!validFix(row)) return;
+  if (!validFix(row)) return 0;
   session.validGnssRows += 1;
   const fix: Fix = { lat: row.lat, lng: row.lng, ts: row.ts };
   const prev = session.lastFix;
+  let added = 0;
   if (prev !== null) {
     const d = haversineMeters(prev, fix);
     const dtS = Math.max(1, (fix.ts - prev.ts) / 1000);
     // A jump faster than any car is a bad fix: skip the segment but still move on from it.
     if (d <= GNSS_JUMP_MPS * dtS) {
       session.distanceM += d;
+      added = d;
       if (!unsafe) session.safeDistanceM += d;
       if (sunIsDown(new Date(row.ts), row.lat, row.lng)) session.nightDistanceM += d;
     }
@@ -321,6 +351,7 @@ function accumulate(session: TripSession, row: FeatureRow, unsafe: boolean): voi
   if (session.firstFix === null) session.firstFix = fix;
   session.lastFix = fix;
   session.track.push({ ...fix, hAcc: row.hAcc });
+  return added;
 }
 
 const markOf = (session: TripSession, rowTs: number): Readonly<MovementMark> =>
@@ -338,6 +369,8 @@ const markOf = (session: TripSession, rowTs: number): Readonly<MovementMark> =>
     lastFix: session.lastFix,
     trackLength: session.track.length,
     exposure: session.exposure,
+    limitBuckets: session.limitBuckets,
+    speedTrace: session.speedTrace,
   });
 
 /**
@@ -487,8 +520,10 @@ function cutMark(session: TripSession, notAfter: number | undefined): Readonly<M
 
 /**
  * The drive closed where the car last moved (every automatic end, and a manual end after standing
- * still): the accumulators and the opportunity counters come back to the mark, the track ends there
- * and the events are cut (`cutEvents`), so the time standing still counts for nothing. A drive that
+ * still): the accumulators, the opportunity counters, the limit buckets and the speed trace come
+ * back to the mark (the trace as it stood after the mark's row: exactly the rows up to the cut, the
+ * bucket holding the cut included only so far), the track ends there and the events are cut
+ * (`cutEvents`), so the time standing still counts for nothing. A drive that
  * never moved keeps what it has and ends after its last row; it is dropped, never stored. The open
  * session is left as it was.
  *
@@ -521,6 +556,8 @@ export function closeAtLastMovement(session: TripSession, cause: EndCause, opts:
     lastFix: mark.lastFix,
     track: session.track.slice(0, mark.trackLength),
     exposure: mark.exposure,
+    limitBuckets: mark.limitBuckets,
+    speedTrace: mark.speedTrace,
     events: cutEvents(session.events, cutTs),
   });
 }

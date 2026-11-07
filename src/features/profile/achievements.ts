@@ -6,7 +6,10 @@ import { profileCopy } from './copy';
 export const ACHIEVEMENT_ICON: Record<AchievementId, keyof typeof Ionicons.glyphMap> = {
   first_drive: 'car-sport',
   clean_100: 'sparkles',
+  clean_500: 'ribbon',
+  clean_1000: 'trophy',
   perfect_week: 'calendar',
+  rain_or_shine: 'umbrella',
   better_speed: 'speedometer',
   better_braking: 'stop-circle',
   better_acceleration: 'leaf',

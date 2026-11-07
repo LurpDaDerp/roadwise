@@ -217,6 +217,85 @@ describe('the no-face alert (sound 6)', () => {
   });
 });
 
+test('lastDrowsyAt (the break reminder waits after it): a drowsy or wake alert starting, stepping up or leaving; never another sound', async () => {
+  let now = 1000;
+  const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
+  const c = createDashcamAlerts({ player, now: () => now, sendAck: () => {}, canPlay: () => true });
+  const alert = (alertId: number, sound: number, level = 0) => c.onAlert({ type: 'ALERT', alertId, sound, tier: 2, level, mode: 1, route: 1, uptimeMs: 0 });
+  expect(c.lastDrowsyAt()).toBeNull();
+  alert(1, 1);
+  alert(2, 6);
+  await c.settled();
+  c.onStop(1);
+  c.onStop(2);
+  expect(c.lastDrowsyAt()).toBeNull();
+  now = 2000;
+  alert(3, 2);
+  await c.settled();
+  expect(c.lastDrowsyAt()).toBe(2000);
+  now = 3000;
+  alert(3, 2, 1);
+  expect(c.lastDrowsyAt()).toBe(3000);
+  now = 9000;
+  c.onStop(3);
+  expect(c.lastDrowsyAt()).toBe(9000);
+  // "Wake up" counts too, and a clear ends it.
+  now = 10_000;
+  alert(4, 3);
+  await c.settled();
+  now = 12_000;
+  c.clear();
+  expect(c.lastDrowsyAt()).toBe(12_000);
+});
+
+test('lastDrowsyAt: a one-shot drowsy alert counts from when it left the table, once played', async () => {
+  let now = 1000;
+  let finish: () => void = () => {};
+  const player: AlertPlayer = {
+    deliver: () => new Promise<void>((resolve) => (finish = resolve)),
+    stopCurrent: async () => {},
+    announce: async () => {},
+  };
+  const c = createDashcamAlerts({ player, now: () => now, sendAck: () => {}, canPlay: () => true });
+  c.onAlert({ type: 'ALERT', alertId: 7, sound: 2, tier: 2, level: 0, mode: 0, route: 1, uptimeMs: 0 });
+  expect(c.lastDrowsyAt()).toBe(1000);
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  now = 4000;
+  finish();
+  await c.settled();
+  expect(c.continuing()).toEqual([]);
+  expect(c.lastDrowsyAt()).toBe(4000);
+});
+
+test('lastShownAt (the break reminder waits while it shows): now while one sounds or waits in the player, else the last flash', async () => {
+  let now = 1000;
+  let finish: () => void = () => {};
+  const player: AlertPlayer = {
+    deliver: () => new Promise<void>((resolve) => (finish = resolve)),
+    stopCurrent: async () => {},
+    announce: async () => {},
+  };
+  const c = createDashcamAlerts({ player, now: () => now, sendAck: () => {}, canPlay: () => true });
+  expect(c.lastShownAt()).toBeNull();
+  // A one-shot glance alert sounding: "now", however long it plays.
+  c.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 0, route: 1, uptimeMs: 0 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  now = 3000;
+  expect(c.lastShownAt()).toBe(3000);
+  finish();
+  await c.settled();
+  // Played and gone: its flash's time.
+  now = 5000;
+  expect(c.lastShownAt()).toBe(1000);
+  // A visual-only alert (route 0) never sounds: its flash.
+  c.onAlert({ type: 'ALERT', alertId: 2, sound: 1, tier: 2, level: 0, mode: 0, route: 0, uptimeMs: 0 });
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  finish(); // its haptic
+  await c.settled();
+  now = 6000;
+  expect(c.lastShownAt()).toBe(5000);
+});
+
 describe('held and since (the HUD halo, drive-screen design §5.3)', () => {
   const player: AlertPlayer = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
   const make = (now: () => number, visuals: import('../alerts').DashcamVisual[] = []) =>

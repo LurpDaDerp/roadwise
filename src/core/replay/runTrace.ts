@@ -7,7 +7,7 @@ import { NO_EVENTS_FIRST_S, type Exposure } from '@scoring';
 
 import { createDetectors } from '../detectors';
 import { closeExposure } from '../engine/exposure';
-import { appendRow, createSession } from '../engine/session';
+import { appendRow, createSession, limitFlags } from '../engine/session';
 import type { DetectedEvent, DetectorContext } from '../engine/types';
 import type { Expectation, Trace } from './trace';
 import { limitAt } from './trace';
@@ -68,8 +68,9 @@ export function runTrace(trace: Trace): TraceResult {
   const session = createSession({ clientTripId: trace.name, startedAt: base, origin: 'manual' });
   const events: DetectedEvent[] = [];
   for (const row of trace.rows) {
-    events.push(...suite.push(row, limitAt(trace.limits, row.ts), ctx));
-    appendRow(session, row, { unsafe: suite.unsafe(), limitUsable: suite.speedingNow() !== null, platform: ctx.platform });
+    const limit = limitAt(trace.limits, row.ts);
+    events.push(...suite.push(row, limit, ctx));
+    appendRow(session, row, { unsafe: suite.unsafe(), limitUsable: suite.speedingNow() !== null, platform: ctx.platform, ...limitFlags(row, limit) });
   }
   events.push(...suite.flush());
   const exposure = closeExposure(session.exposure, session.movingRows);

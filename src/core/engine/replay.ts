@@ -8,7 +8,7 @@ import { ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { AdoptedTrip } from './engine.types';
-import { appendRow, createSession, noteWarmup } from './session';
+import { appendRow, createSession, limitFlags, noteWarmup } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 export interface RebuildDeps {
@@ -56,7 +56,7 @@ export async function rebuildFromSamples(db: Db, trip: TripRow, deps: RebuildDep
     const ctx: DetectorContext = { warmupEndsAt: session.warmup.endsAt, platform: deps.platform };
     const closed = detectors.push(row, limit, ctx);
     session.events.push(...closed);
-    appendRow(session, row, { unsafe: detectors.unsafe(), limitUsable: detectors.speedingNow() !== null, platform: deps.platform });
+    appendRow(session, row, { unsafe: detectors.unsafe(), limitUsable: detectors.speedingNow() !== null, platform: deps.platform, ...limitFlags(row, limit) });
   }
   // Every replayed row is already durable.
   session.pending = [];

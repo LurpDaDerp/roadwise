@@ -4,10 +4,13 @@
  */
 import { clampExposure, estimateExposure, type EventType, type Exposure, type StatSums, type Tier } from '@scoring';
 
+import { parseLimitBuckets, type LimitBuckets } from '@/core/engine/limitBuckets';
+import { parseSpeedTrace, type SpeedTrace } from '@/core/engine/speedTrace';
+
 import { UPLOAD_FAILED_SQL } from '@/data/db/queue';
 import { asNumberOrNull } from '@/data/db/row';
 import { toTripRow } from '@/data/db/trips';
-import type { DriveOrigin, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
+import type { DriveOrigin, DriveWeather, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { carFilterUid, type DriveHistoryFilter } from '@/data/queries/keys';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
 import type { LatLng } from '@/lib/geo';
@@ -111,6 +114,23 @@ export interface LocalDrive {
    * Read with the drive by the lists and the recap. Absent: false.
    */
   uploadFailed?: boolean;
+  /**
+   * The drive's speed over time (`core/engine/speedTrace.ts`: buckets of `widthS` seconds, each its
+   * start `t` in seconds from the drive's start, mean speed `v` in mph and the sign's limit `l` in
+   * mph, either null). Read only by a drive's own read (`toLocalDrive`): a list read leaves it null.
+   * Null on a drive recorded before, a restored one, or stored JSON this build cannot read. Local only.
+   */
+  speedTrace?: SpeedTrace | null;
+  /**
+   * The drive's limit time and distance by kind of road (`core/engine/limitBuckets.ts`: `low` ≤ 27
+   * mph, `mid` 28 to 47, `high` ≥ 48; seconds `s`, metres `m`). Null on a drive recorded before or
+   * a restored one. Local only.
+   */
+  limitBuckets?: LimitBuckets | null;
+  /** The worst weather the drive saw (`clear`, `rain`, `snow`, `ice`); null when it had no reading, on an older or restored drive. */
+  weather?: DriveWeather | null;
+  /** Who supervised this practice drive (the permit log), as stored for it; null when not set. Local only. */
+  practiceSupervisor?: string | null;
 }
 
 /** A trip row as the drive reads select it: the row, and whether its upload has failed (`UPLOAD_FAILED_SQL`, 0 or 1). */
@@ -218,18 +238,18 @@ export function exposureOf(row: Pick<TripRow, 'slowdowns' | 'speedups' | 'turns'
 }
 
 export function toLocalDrive(row: TripView): LocalDrive {
-  return toDrive(row, parseResult(row.result_json));
+  return toDrive(row, parseResult(row.result_json), parseSpeedTrace(row.speed_trace_json));
 }
 
 /**
- * A row as a list reads it: the stored server answer left unread (`result` null), so a list of a
- * whole history spends no schema check per drive on a field it never shows.
+ * A row as a list reads it: the stored server answer and the speed trace left unread (`result` and
+ * `speedTrace` null), so a list of a whole history spends no parse per drive on a field it never shows.
  */
 export function toListedDrive(row: TripView): LocalDrive {
-  return toDrive(row, null);
+  return toDrive(row, null, null);
 }
 
-function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive {
+function toDrive(row: TripView, result: FinalizeTripResponse | null, speedTrace: SpeedTrace | null): LocalDrive {
   const { exposure, estimated } = exposureOf(row);
   return {
     clientTripId: row.client_trip_id,
@@ -259,6 +279,10 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null): LocalDrive
     startSource: row.start_source,
     exposure,
     exposureEstimated: estimated,
+    speedTrace,
+    limitBuckets: parseLimitBuckets(row.limit_buckets_json),
+    weather: row.weather,
+    practiceSupervisor: row.practice_supervisor,
     // Present only with the whole route; on an archived drive; on one whose upload has failed.
     ...(row.route_full !== null && row.start_lat !== null && row.start_lng !== null ? { start: { lat: row.start_lat, lng: row.start_lng } } : {}),
     ...(row.end_lat !== null && row.end_lng !== null ? { end: { lat: row.end_lat, lng: row.end_lng } } : {}),

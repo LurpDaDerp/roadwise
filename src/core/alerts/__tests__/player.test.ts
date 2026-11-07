@@ -930,6 +930,37 @@ describe("DashPal decisions (tone, stillWanted, voiceAlways, holdSession, silent
     expect(r.calls).toEqual(["haptic:4"]);
   });
 
+  it("the break reminder: a level-1 voiceAlways decision is the soft tone, its words with voice off, one light pulse; style and call rules as ever", async () => {
+    const r = rig();
+    r.flags.voice = false;
+    const player = createAlertPlayer(r.deps);
+    const brk = (id: string) => decision(1, { id, kind: "break", voice: "Take a break soon", voiceAlways: true, intensity: 1 });
+    await player.deliver(brk("b1"));
+    expect(r.calls).toEqual(["activate:playback", `play:1@${TONE_GAIN[1]}`, `speak:Take a break soon@${VOICE_GAIN}`, "deactivate", "haptic:1"]);
+    // A plain level-1 line never speaks, voice on or off.
+    r.calls.length = 0;
+    r.flags.voice = true;
+    await player.deliver(decision(1, { id: "plain" }));
+    expect(r.calls.some((c) => c.startsWith("speak"))).toBe(false);
+    // Sound only: the tone and the words, no pulse.
+    r.calls.length = 0;
+    r.flags.voice = false;
+    r.flags.style = "sound";
+    await player.deliver(brk("b2"));
+    expect(r.calls).toEqual(["activate:playback", `play:1@${TONE_GAIN[1]}`, `speak:Take a break soon@${VOICE_GAIN}`, "deactivate"]);
+    // Vibration only: the one light pulse alone.
+    r.calls.length = 0;
+    r.flags.style = "vibration";
+    await player.deliver(brk("b3"));
+    expect(r.calls).toEqual(["haptic:1"]);
+    // On a call: the tone at the call's gain, no words.
+    r.calls.length = 0;
+    r.flags.style = "both";
+    r.flags.call = true;
+    await player.deliver(brk("b4"));
+    expect(r.calls).toEqual(["activate:playback", `play:1@${TONE_GAIN_IN_CALL[1]}`, "deactivate", "haptic:1"]);
+  });
+
   it("holdSession keeps the session between repeats; the next plain item or stopCurrent releases it", async () => {
     const { r } = toneRig();
     const player = createAlertPlayer(r.deps);

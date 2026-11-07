@@ -4,6 +4,8 @@
  */
 import type { EventType, Tier } from '@scoring';
 
+import { DRIVE_WEATHERS } from '@/data/sync/payload';
+
 export type Flag = 0 | 1;
 
 /** `trips.status` (plan §10 `DriveStatus`). */
@@ -43,6 +45,13 @@ export type StartSource = (typeof START_SOURCES)[number];
 /** `EndCause` as stored: a manual end cut at the last movement is `manual_still`. */
 export const TRIP_END_CAUSES = ['manual', 'manual_still', 'stopped', 'walking', 'orphan', 'limit'] as const;
 export type TripEndCause = (typeof TRIP_END_CAUSES)[number];
+
+/** The weather a drive was driven in (`features/weather/driveWeather.ts`), mildest first: the upload contract's list. */
+export { DRIVE_WEATHERS };
+export type DriveWeather = (typeof DRIVE_WEATHERS)[number];
+
+/** The longest supervisor name a practice drive keeps. */
+export const PRACTICE_SUPERVISOR_MAX = 60;
 
 export interface TripRow {
   client_trip_id: string;
@@ -117,6 +126,17 @@ export interface TripRow {
   /** Where the drive ended, 5 dp (`end_lat`/`end_lng` are 4 dp); local only, null on a drive recorded before and once archived. */
   end_lat_full: number | null;
   end_lng_full: number | null;
+  /**
+   * The drive's speed over time (`core/engine/speedTrace.ts`), `{"w":..,"p":[[t,v,l],...]}`; local
+   * only. Null on a drive recorded before, a restored one, and one with no rows.
+   */
+  speed_trace_json: string | null;
+  /** The drive's limit time by kind of road (`core/engine/limitBuckets.ts`); local only. Null on a drive recorded before and a restored one. */
+  limit_buckets_json: string | null;
+  /** The worst weather the drive saw; null when it had no reading, on a drive recorded before and a restored one. */
+  weather: DriveWeather | null;
+  /** Who supervised this practice drive (permit log; at most `PRACTICE_SUPERVISOR_MAX` characters); local only, null when not set. */
+  practice_supervisor: string | null;
 }
 
 export type NewTrip = Pick<TripRow, 'client_trip_id' | 'started_at' | 'tz' | 'status'> &

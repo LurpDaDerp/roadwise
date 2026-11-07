@@ -1,5 +1,6 @@
-import { mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
-import { appendRow, closeAtLastMovement, closeSession, createSession, cutEvents, durationSOf, GNSS_JUMP_MPS, noteWarmup } from '@/core/engine/session';
+import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
+import { appendRow, closeAtLastMovement, closeSession, createSession, cutEvents, durationSOf, GNSS_JUMP_MPS, limitFlags, noteWarmup } from '@/core/engine/session';
+import { speedTraceOf } from '@/core/engine/speedTrace';
 import type { DetectedEvent } from '@/core/engine/types';
 
 const start = () => createSession({ clientTripId: 't1', startedAt: T0, origin: 'manual' });
@@ -237,6 +238,46 @@ describe('the cut at the last movement', () => {
     // Before every kept mark: the oldest kept one (the first movement, row 1).
     expect(closeAtLastMovement(s, 'walking', { notAfter: T0 - 5000 })).toMatchObject({ endedAt: T0 + 2000, lastRowTs: T0 + 1000 });
     expect(s.cut).toBe(false);
+  });
+
+  test('closeAtLastMovement: the speed trace and the limit buckets come back to the mark; the parked tail adds nothing', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
+    const drive = seq([60, (i) => ({ speed: mph(30), lng: -122.4194 + i * 0.00015, ts: T0 + i * 1000 })]);
+    const parked = seq([120, (i) => ({ speed: 0, lng: -122.4194 + 59 * 0.00015, ts: T0 + (60 + i) * 1000 })]);
+    for (const r of drive) appendRow(s, r, { unsafe: false, limitUsable: true, platform: 'ios', limitMph: 25, signMph: 25 });
+    for (const r of parked) appendRow(s, r, { unsafe: false, limitUsable: false, platform: 'ios', limitMph: 35, signMph: 35 });
+    const closed = closeAtLastMovement(s, 'stopped');
+    expect(closed.speedTrace).toBe(s.moved!.speedTrace);
+    expect(closed.limitBuckets).toBe(s.moved!.limitBuckets);
+    const points = speedTraceOf(closed.speedTrace)!.points;
+    expect(points).toHaveLength(12);
+    expect(points.every((p) => p.v === 30 && p.l === 25)).toBe(true);
+    expect(speedTraceOf(s.speedTrace)!.points).toHaveLength(36);
+    expect(closed.limitBuckets.low.s).toBe(60);
+    expect(closed.limitBuckets.low.m).toBeCloseTo(closed.distanceM, 6);
+    expect(closed.limitBuckets.mid.s).toBe(0);
+  });
+
+  test('closeAtLastMovement with notAfter: the bucket holding the cut keeps only its rows up to the cut', () => {
+    const s = createSession({ clientTripId: 'x', startedAt: T0, origin: 'manual' });
+    // Row i at 20 + i mph, so a bucket mean says exactly which rows it holds.
+    const drive = seq([60, (i) => ({ speed: mph(20 + i), lng: -122.4194 + i * 0.0002, ts: T0 + i * 1000 })]);
+    for (const r of drive) appendRow(s, r, { unsafe: false, limitUsable: true, platform: 'ios', limitMph: 50, signMph: 50 });
+    const mid = closeAtLastMovement(s, 'walking', { notAfter: T0 + 31_500 });
+    expect(mid.lastRowTs).toBe(T0 + 31_000);
+    const points = speedTraceOf(mid.speedTrace)!.points;
+    expect(points.map((p) => p.t)).toEqual([0, 5, 10, 15, 20, 25, 30]);
+    // Bucket 30 holds rows 30 and 31 only: (50 + 51) / 2.
+    expect(points.at(-1)).toEqual({ t: 30, v: 50.5, l: 50 });
+    expect(mid.limitBuckets.high.s).toBe(32);
+  });
+
+  test('limitFlags: the scored limit refuses a class default and a poor fix; the sign shows a confident default', () => {
+    const r = row({ hAcc: 5 });
+    expect(limitFlags(r, limit(mph(35)))).toEqual({ limitMph: 35, signMph: 35 });
+    expect(limitFlags(r, limit(mph(25), 'statutory'))).toEqual({ limitMph: null, signMph: 25 });
+    expect(limitFlags(row({ hAcc: 25 }), limit(mph(35)))).toEqual({ limitMph: null, signMph: 35 });
+    expect(limitFlags(r, limit(null, 'unknown', { matchConfidence: 0 }))).toEqual({ limitMph: null, signMph: null });
   });
 
   test('closeAtLastMovement with notAfter older than every kept mark falls back to the oldest kept (5 min behind the newest)', () => {

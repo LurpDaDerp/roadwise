@@ -92,6 +92,8 @@ export function createFakeDashcamRuntime(initial: Partial<Omit<DashcamState, 'li
     beforeFinalize: async () => {},
     facts: async () => ({ dashcamId: null, movingS: 0, coveredS: 0, synced: false, events: [] }),
     continuousAlertActive: () => false,
+    lastDrowsyAlertAt: () => null,
+    lastAlertShownAt: () => null,
     playerUnavailable: () => {},
     async optIn() {
       log.push('optIn');

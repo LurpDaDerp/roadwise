@@ -20,6 +20,7 @@ import { emitDataChanged } from '@/data/events';
 import { RESTORE_CURSOR_KEY, RESTORED_AT_KEY } from '@/data/hydrate/restore';
 import { publishUnits } from '@/data/queries/units';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
+import { BREAK_KEY } from '@/drive/breakWatch';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
@@ -83,7 +84,7 @@ export const SIGN_OUT_TABLES: readonly string[] = ['trip_events', 'samples', 'da
  * The zones, the saved places (with the addresses looked up for learned ones and the recap's
  * "Save as …?" answers), the emergency contacts, whether Home's car card and setup goals were
  * closed, the notice of a drive that was not kept (`src/drive/dropNotice.ts`), the
- * last drive's "Not driving?" budget, the problem spots' bookkeeping, and the record of how far this
+ * last drive's "Not driving?" budget and the hour it was last reminded to take a break, the problem spots' bookkeeping, and the record of how far this
  * driver's restore ran: their drives just left the phone, so the next sign-in restores them again
  * from the top.
  */
@@ -101,6 +102,7 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   'home.setupGoalsHidden',
   DROP_NOTICE_KEY,
   NOT_DRIVING_KEY,
+  BREAK_KEY,
   // The drive that asked "Are you driving?", and where the car was parked (iPhone with the car link).
   PASSENGER_ASKED_KEY,
   PARKED_KEY,

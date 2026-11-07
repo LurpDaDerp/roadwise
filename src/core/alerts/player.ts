@@ -3,14 +3,16 @@
 //
 // What it decides:
 // - Level mapping: each event type maps to a tone level (`ALERT_LEVEL` in policy.ts). Level 1 is
-//   the soft chime; levels 2 and 3 add the short voice line when voice is on. Every level vibrates,
+//   the soft chime; levels 2 and 3 add the short voice line when voice is on (a `voiceAlways`
+//   decision speaks at any level, voice on or off: the break reminder's words over its chime). Every level vibrates,
 //   at a strength the decision carries or the level implies (`HAPTIC_INTENSITY_FOR_LEVEL`). Audio
 //   first, haptic last (the visual is the HUD's, drawn from the same decision).
 // - Alert style (`alertStyle`, the Alerts and sounds setting): `vibration` plays no tone and no
 //   voice and never activates or ducks the audio session; `sound` never vibrates; `both` (the
 //   default) does both. The voice switch still governs speech under `both` and `sound`.
 // - DashPal alerts (`src/dashcam/alerts.ts`): a decision may carry its own `tone`, a `stillWanted`
-//   read (dropped unstarted once the dashcam stopped the alert), `voiceAlways` (the wake line),
+//   read (dropped unstarted once the dashcam stopped the alert), `voiceAlways` (the wake line; also
+//   the break reminder's, which speaks over its level-1 tone),
 //   `holdSession` (the session stays active between a continuous alert's repeats), `silent`
 //   (haptic only: a routed-elsewhere alert, or a phone alert during a DashPal continuous one) and
 //   `startWithinMs` (a DashPal critical: an audio session not active by then, or then a tone not
@@ -201,7 +203,7 @@ interface Playable {
   level: AlertLevel;
   /** The decision's kind (none for a feedback): who holds the session after a `holdSession` item. */
   kind?: AlertKind;
-  /** Spoken (L2 and up, voice on — or `voiceAlways` — and no call) when present. */
+  /** Spoken (L2 and up with voice on, or any level with `voiceAlways`; never on a call) when present. */
   voice?: AlertVoiceKey;
   intensity: HapticIntensity;
   tone?: AlertTone;
@@ -406,8 +408,9 @@ export function createAlertPlayer(deps: AlertPlayerDeps): AlertPlayer {
           if (!activated || !played) unavailable();
           else if (!run.stopped) available();
           const key = item.voice;
+          // Level 1 never speaks, unless the decision must (`voiceAlways`: the break reminder).
           if (
-            level >= 2 &&
+            (level >= 2 || item.voiceAlways === true) &&
             key &&
             !onCall &&
             (item.voiceAlways === true || read(() => deps.voiceEnabled(), true))

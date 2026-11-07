@@ -5,8 +5,8 @@ import type { EventType } from '@scoring';
 /** The three tones: 1 the soft chime, 2 the warning, 3 the urgent one. */
 export type AlertLevel = 1 | 2 | 3;
 
-/** A phone-engine event, or an alert the DashPal dashcam routed to the phone. */
-export type AlertKind = EventType | 'dashpal';
+/** A phone-engine event, an alert the DashPal dashcam routed to the phone, or the break reminder (`src/drive/breakWatch.ts`). */
+export type AlertKind = EventType | 'dashpal' | 'break';
 
 /**
  * A tone other than the three levels (scripts/make-tones.js): the DashPal sounds, glance (eyes on
@@ -32,7 +32,7 @@ export interface AlertDecision {
   kind: AlertKind;
   /** epoch ms — the `ts` of the row that produced it, never wall-clock. */
   ts: number;
-  /** Spoken when the voice setting is on and no call is active. */
+  /** Spoken when the voice setting is on and no call is active (level 2 and up, or any level with `voiceAlways`). */
   voice?: AlertVoiceKey;
   /** How hard this alert vibrates; absent, the player maps it from the level. */
   intensity?: HapticIntensity;
@@ -45,7 +45,10 @@ export interface AlertDecision {
    * (a DashPal repeat whose alert the dashcam has since stopped).
    */
   stillWanted?: () => boolean;
-  /** Speak the voice line even with the voice setting off (never on a call or vibration-only). */
+  /**
+   * Speak the voice line even with the voice setting off, at any level (never on a call or
+   * vibration-only): the DashPal wake line, and the break reminder's soft tone and words.
+   */
   voiceAlways?: true;
   /**
    * Keep the audio session active after this item: a continuous DashPal alert keeps music ducked

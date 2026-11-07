@@ -101,6 +101,8 @@ export interface ApplyDriveEnvelope {
      * (with no phone seconds).
      */
     exposure: Exposure | null;
+    /** The worst weather the phone saw (0037); null when the upload had none (apply_drive stores null then). */
+    weather: NonNullable<FinalizeTripPayloadV5['weather']> | null;
   };
   scored: boolean;
   reason: 'too_short' | 'spoofed' | 'implausible' | null;

@@ -216,6 +216,9 @@ const dayNumber = (s: string): number | null => {
   return t / DAY_MS;
 };
 
+/** The weather words a drive can carry, mildest first (the phone's `features/weather/driveWeather.ts`). */
+export const DRIVE_WEATHERS = ['clear', 'rain', 'snow', 'ice'] as const;
+
 /** The facts every upload version shares. */
 const driveFields = {
   clientTripId: z.uuid(),
@@ -304,6 +307,11 @@ export const FinalizeTripPayloadV5Schema = z
     ...lifecycleFields,
     /** The drive's opportunity counters (`ExposureSchema`). Optional: an upgraded v3 drive has none. */
     exposure: ExposureSchema.optional(),
+    /**
+     * The worst weather the drive saw (`DRIVE_WEATHERS`). Optional: left out when the drive had no
+     * reading, and by every build from before it was kept.
+     */
+    weather: z.enum(DRIVE_WEATHERS).optional(),
   })
   .strict()
   .superRefine((p, ctx) => {

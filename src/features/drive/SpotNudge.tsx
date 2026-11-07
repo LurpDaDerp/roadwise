@@ -4,7 +4,7 @@
 // most 3 a drive); this draws it. A static bar with a place-pin glyph in the screen's ink, never a
 // tier colour: it is advice about a place, not an event. No sound, no haptic, no touch target.
 import { Ionicons } from '@expo/vector-icons';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type ComponentProps } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { SPOT_NUDGE_MS } from '@/core/spots/constants';
@@ -37,19 +37,21 @@ export function useSpotNudgeFlash(nudge: SpotNudge | null, rowTs: number | null,
   return useMemo(() => (f === null || nudge === null ? null : { ...nudge, until: f.until }), [f, nudge]);
 }
 
-/** The nudge's line: the place pin and up to four words, read out as an alert. */
-function SpotNudgeLineView({ nudge, palette: p, compact }: { nudge: SpotNudge; palette: HudPalette; compact: boolean }) {
-  const words = hudCopy.spot[nudge.kind];
+/**
+ * A band line's bar (a spot's nudge, the break reminder): a glyph and up to four words in the
+ * screen's ink on its chrome, read out as an alert.
+ */
+export function NudgeBar({ testID, icon, words, palette: p, compact }: { testID: string; icon: ComponentProps<typeof Ionicons>['name']; words: string; palette: HudPalette; compact: boolean }) {
   const t = TYPE[compact ? 'compact' : 'full'];
   return (
     <View
-      testID="hud-spot"
+      testID={testID}
       accessible
       accessibilityRole="alert"
       accessibilityLabel={words}
       style={[styles.bar, { backgroundColor: p.chrome, borderColor: p.chromeEdge }]}
     >
-      <Ionicons testID="hud-spot-icon" name="location" size={22} color={p.ink} />
+      <Ionicons testID={`${testID}-icon`} name={icon} size={22} color={p.ink} />
       <Text
         allowFontScaling={false}
         numberOfLines={1}
@@ -59,6 +61,11 @@ function SpotNudgeLineView({ nudge, palette: p, compact }: { nudge: SpotNudge; p
       </Text>
     </View>
   );
+}
+
+/** The nudge's line: the place pin and up to four words, read out as an alert. */
+function SpotNudgeLineView({ nudge, palette, compact }: { nudge: SpotNudge; palette: HudPalette; compact: boolean }) {
+  return <NudgeBar testID="hud-spot" icon="location" words={hudCopy.spot[nudge.kind]} palette={palette} compact={compact} />;
 }
 
 export const SpotNudgeLine = memo(SpotNudgeLineView);

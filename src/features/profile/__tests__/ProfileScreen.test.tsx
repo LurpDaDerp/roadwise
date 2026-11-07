@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 afterEach(() => clearQueryClients());
 
-it('the card: the Safety Rating with its week, your totals; six of the ten achievements, unlocked first; a badge for friend requests; no points', async () => {
+it('the card: the Safety Rating with its week, your totals; six of the 13 achievements, unlocked first; a badge for friend requests; no points', async () => {
   answerRpc(mockRpc, {
     get_my_summary: summary(),
     list_friends: { friends: [], incoming: [{ user_id: 'x', username: 'newbie' }], outgoing: [] },
@@ -138,7 +138,10 @@ it('achievement hints say how to get each one', () => {
   expect(views.map((v) => v.id)).toEqual([
     'first_drive',
     'clean_100',
+    'clean_500',
+    'clean_1000',
     'perfect_week',
+    'rain_or_shine',
     'better_speed',
     'better_braking',
     'better_acceleration',
@@ -148,6 +151,13 @@ it('achievement hints say how to get each one', () => {
     'spot_cleared',
   ]);
   expect(views.find((v) => v.id === 'clean_100')).toMatchObject({ unlocked: false, hint: 'Drive 100 miles with no events.' });
+  expect(views.find((v) => v.id === 'clean_500')).toMatchObject({ unlocked: false, hint: 'Drive 500 miles with no events.', title: 'Clean 500' });
+  expect(views.find((v) => v.id === 'clean_1000')).toMatchObject({ unlocked: false, hint: 'Drive 1,000 miles with no events.', title: 'Clean 1,000' });
+  expect(views.find((v) => v.id === 'rain_or_shine')).toMatchObject({
+    unlocked: false,
+    hint: 'Finish a drive with no events in rain or snow.',
+    title: 'Rain or Shine',
+  });
   expect(views.find((v) => v.id === 'perfect_week')).toMatchObject({ unlocked: false, hint: 'Take 3 or more drives in one week, all with no events.' });
   expect(views.find((v) => v.id === 'better_braking')).toMatchObject({ unlocked: false, hint: 'Get your Braking score 10 higher than it was 30 days ago.' });
   expect(views.find((v) => v.id === 'better_phone')).toMatchObject({ unlocked: false, hint: 'Get your Phone use score 10 higher than it was 30 days ago.' });
@@ -155,6 +165,10 @@ it('achievement hints say how to get each one', () => {
   expect(views.find((v) => v.id === 'first_drive')).toMatchObject({ unlocked: true });
   // An unlocked badge says what it was for.
   expect(achievementViews(['spot_cleared']).find((v) => v.id === 'spot_cleared')).toMatchObject({ unlocked: true, hint: 'Clear a spot to watch.' });
+  expect(achievementViews(['rain_or_shine']).find((v) => v.id === 'rain_or_shine')).toMatchObject({
+    unlocked: true,
+    hint: 'Finish a clean drive in rain or snow.',
+  });
   // Every badge has its own icon and a hint (no copy is shared by two).
   expect(new Set(views.map((v) => v.hint)).size).toBe(views.length);
   expect(new Set(Object.values(ACHIEVEMENT_ICON)).size).toBe(views.length);
@@ -166,19 +180,21 @@ it('a badge row puts unlocked badges first and caps at the limit', () => {
     'spot_cleared',
     'first_drive',
     'clean_100',
-    'perfect_week',
-    'better_speed',
+    'clean_500',
+    'clean_1000',
   ]);
-  expect(badgeOrder([])).toHaveLength(10);
+  expect(badgeOrder([])).toHaveLength(13);
 });
 
-it('the achievements screen lists all ten with their state', async () => {
+it('the achievements screen lists all 13 with their state', async () => {
   answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive', 'spot_cleared'] }) });
   const w = await appWorld();
   await w.render(<AchievementsScreen />);
-  expect(await screen.findByText(profileCopy.achievements.count(2, 10))).toBeOnTheScreen();
-  expect(screen.getAllByTestId(/^achievement-row-/)).toHaveLength(10);
+  expect(await screen.findByText(profileCopy.achievements.count(2, 13))).toBeOnTheScreen();
+  expect(screen.getAllByTestId(/^achievement-row-/)).toHaveLength(13);
   expect(screen.getByTestId('achievement-hint-clean_100')).toHaveTextContent('Drive 100 miles with no events.');
+  expect(screen.getByTestId('achievement-hint-clean_1000')).toHaveTextContent('Drive 1,000 miles with no events.');
+  expect(screen.getByTestId('achievement-hint-rain_or_shine')).toHaveTextContent('Finish a drive with no events in rain or snow.');
   expect(screen.getByTestId('achievement-hint-better_attention')).toHaveTextContent('Get your Attention score 10 higher than it was 30 days ago.');
   expect(screen.getByTestId('achievement-hint-spot_cleared')).toHaveTextContent('Clear a spot to watch.');
 });
@@ -190,7 +206,7 @@ it('the achievements screen shows nothing as locked while the summary loads', as
   const w = await appWorld();
   await w.render(<AchievementsScreen />);
   expect(await screen.findByTestId('achievement-loading-first_drive', { includeHiddenElements: true })).toBeOnTheScreen();
-  expect(screen.queryByText(profileCopy.achievements.count(0, 10))).toBeNull();
+  expect(screen.queryByText(profileCopy.achievements.count(0, 13))).toBeNull();
   expect(screen.queryByTestId('achievement-row-first_drive')).toBeNull();
   expect(screen.queryByText(profileCopy.achievements.locked)).toBeNull();
 });
@@ -201,12 +217,12 @@ it('the achievements screen that cannot load says so, and Try again loads it', a
   await w.render(<AchievementsScreen />);
   // The query tries once more (after about a second) before it fails.
   expect(await screen.findByTestId('achievements-load-error', {}, { timeout: 4000 })).toHaveTextContent(new RegExp(profileCopy.loadError));
-  expect(screen.queryByText(profileCopy.achievements.count(0, 10))).toBeNull();
+  expect(screen.queryByText(profileCopy.achievements.count(0, 13))).toBeNull();
   answerRpc(mockRpc, { get_my_summary: summary({ achievements: ['first_drive'] }) });
   await act(async () => {
     fireEvent.press(screen.getByText(profileCopy.retry));
   });
-  expect(await screen.findByText(profileCopy.achievements.count(1, 10))).toBeOnTheScreen();
+  expect(await screen.findByText(profileCopy.achievements.count(1, 13))).toBeOnTheScreen();
 });
 
 it("the Profile card's badges wait for the summary instead of showing every one locked", async () => {

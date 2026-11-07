@@ -50,7 +50,10 @@ export const profileCopy = {
   achievementHints: {
     first_drive: 'Finish a drive of half a mile or more.',
     clean_100: 'Drive 100 miles with no events.',
+    clean_500: 'Drive 500 miles with no events.',
+    clean_1000: 'Drive 1,000 miles with no events.',
     perfect_week: 'Take 3 or more drives in one week, all with no events.',
+    rain_or_shine: 'Finish a drive with no events in rain or snow.',
     better_speed: 'Get your Speed score 10 higher than it was 30 days ago.',
     better_braking: 'Get your Braking score 10 higher than it was 30 days ago.',
     better_acceleration: 'Get your Acceleration score 10 higher than it was 30 days ago.',

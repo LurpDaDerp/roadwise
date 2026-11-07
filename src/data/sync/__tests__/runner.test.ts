@@ -188,6 +188,16 @@ test('a server older than the upload (a 400 that refuses the contract version) i
   await r.stop();
 });
 
+test('a server from before the weather field (it refuses the key as unknown) is retried the same way: the drive stays pending', async () => {
+  await finalized(uuid(10));
+  const r = runner(createFakeSupabase({ invoke: () => functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: '', message: 'Unrecognized key: "weather"' }] }) }));
+  await r.start();
+  expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+  expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+  expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'server_behind' });
+  await r.stop();
+});
+
 test('an upload that ran out of retries on server answers is still owed: the drive stays pending and a sign-out would not take it as nothing left', async () => {
   await finalized(uuid(10));
   const behind = functionsHttpError(400, { code: 'invalid_payload', issues: [{ path: 'v', message: 'Invalid input: expected 5' }] });

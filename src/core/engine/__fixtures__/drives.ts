@@ -3,7 +3,7 @@
 import { createDetectors } from '@/core/detectors';
 import { row, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { TripSession } from '@/core/engine/engine.types';
-import { appendRow, closeSession, createSession } from '@/core/engine/session';
+import { appendRow, closeSession, createSession, limitFlags } from '@/core/engine/session';
 import type { DetectedEvent, FeatureRow } from '@/core/engine/types';
 
 export const TZ = 'America/Los_Angeles';
@@ -55,8 +55,9 @@ export function closedSession(
   const list = rows(n, opts);
   const det = createDetectors(() => 'x');
   list.forEach((r, i) => {
-    det.push(r, { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false }, { warmupEndsAt: t0 + 30_000, platform: 'ios' });
-    appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null, platform: 'ios' });
+    const limit = { limitMps: null, source: 'unknown', matchConfidence: 0, parallelRoads: false } as const;
+    det.push(r, limit, { warmupEndsAt: t0 + 30_000, platform: 'ios' });
+    appendRow(session, r, { unsafe: opts.unsafeRows?.(i) ?? false, limitUsable: det.speedingNow() !== null, platform: 'ios', ...limitFlags(r, limit) });
   });
   session.events.push(...events);
   session.pending = [];

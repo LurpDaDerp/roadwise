@@ -15,6 +15,11 @@
 // A drive that never moved, or never reached driving speed, and a Start-card drive too short to
 // score, is not finalized at all: `closeDrive` drops it (nothing stored or queued).
 //
+// Recap and analytics facts (local only): the speed trace and the limit buckets come from the
+// session (its mark's for a cut drive), the buckets held to the drive's limit time and distance. The
+// weather (the worst the drive saw: the host's tag, or what it wrote to the trip row) is stored and
+// uploaded when the drive had a reading.
+//
 // DashPal: before any of that, the dashcam's facts for the drive are read once. Its candidates
 // become severe `eyes_off` / `drowsy` events under the scoring rules (inside the drive, at 10 mph or
 // more on a good fix; every such episode counts), and its seconds become the payload's `dashcam`
@@ -35,7 +40,18 @@ import type { DashcamCandidate, DashcamTripFacts } from '@/dashcam/facts';
 
 import { readAnchoredPlaces } from '@/core/places/store';
 
-import { createEventsRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, type Db, type EventRow, type NewEvent, type TripRow } from '@/data/db';
+import {
+  createEventsRepo,
+  createSamplesRepo,
+  createSettingsRepo,
+  createTripsRepo,
+  DRIVE_WEATHERS,
+  type Db,
+  type DriveWeather,
+  type EventRow,
+  type NewEvent,
+  type TripRow,
+} from '@/data/db';
 import { deviceTrimSeed } from '@/data/devices/deviceSecret';
 import { countEvents } from '@/data/queries/rows';
 import {
@@ -56,9 +72,11 @@ import { dayKey } from '@/lib/time';
 import type { TripSession } from './engine.types';
 import { closeExposure } from './exposure';
 import { fullRoute, placeOnTrack } from './fullRoute';
+import { boundLimitBuckets, limitBucketsJson } from './limitBuckets';
 import { endLabel, expoGeocoder, startPoint, type Geocoder, type LabelPlace } from './labels';
 import { parseZones, PRIVACY_ZONES_KEY, roundCoord5, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
+import { speedTraceJson } from './speedTrace';
 import type { DetectedEvent } from './types';
 
 export interface FinalizeDeps {
@@ -82,6 +100,12 @@ export interface FinalizeDeps {
    * phone only (`car_uid`, `car_name`). Absent, null or failing: no car.
    */
   carTag?: () => { uid: string; name: string } | null;
+  /**
+   * The worst weather the drive saw so far (the host's tag). Also read from the trip row
+   * (`weather`, written each time it got worse); the worse of the two is kept. Absent, null,
+   * unknown or failing: the row's alone.
+   */
+  weather?: () => DriveWeather | null;
   /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
   trimSeed?: (clientTripId: string) => Promise<string>;
   /**
@@ -306,6 +330,23 @@ export function carTagOf(tag: FinalizeDeps['carTag']): { uid: string; name: stri
   return { uid, name: n === '' ? null : n };
 }
 
+const weatherRank = (w: unknown): number => (DRIVE_WEATHERS as readonly unknown[]).indexOf(w);
+
+/**
+ * The drive's weather: the worse of the host's tag and the trip row's (`DRIVE_WEATHERS` runs mildest
+ * first); null when neither holds a word this build knows (a throw reads as none).
+ */
+export function driveWeatherFor(tag: FinalizeDeps['weather'], stored: DriveWeather | null | undefined): DriveWeather | null {
+  let held: unknown = null;
+  try {
+    held = tag?.() ?? null;
+  } catch {
+    held = null;
+  }
+  const best = Math.max(weatherRank(held), weatherRank(stored));
+  return best < 0 ? null : (DRIVE_WEATHERS[best] as DriveWeather);
+}
+
 async function readZones(db: Db): Promise<PrivacyZone[]> {
   try {
     return parseZones(await createSettingsRepo(db).get<unknown>(PRIVACY_ZONES_KEY));
@@ -447,6 +488,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const from = startPoint(session);
   const [fromEnd, toEnd] = await Promise.all([endLabel(from, zones, places, geocode), endLabel(session.lastFix, zones, places, geocode)]);
   const car = carTagOf(deps.carTag);
+  const weather = driveWeatherFor(deps.weather, existing?.weather);
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
@@ -502,6 +544,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     notDrivingExpired,
     exposure,
     ...(dashcam === null ? {} : { dashcam }),
+    ...(weather === null ? {} : { weather }),
   };
   const parsed = FinalizeTripPayloadV5Schema.safeParse(candidate);
 
@@ -553,6 +596,10 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     limit_s: exposure.limitS,
     moving_s: exposure.movingS,
     phone_s: exposure.phoneS,
+    // Local only: the recap's speed chart and the analytics' split by kind of road.
+    speed_trace_json: speedTraceJson(session.speedTrace),
+    limit_buckets_json: limitBucketsJson(boundLimitBuckets(session.limitBuckets, exposure.limitS, finite(session.distanceM))),
+    weather,
     // Local only (the summary's end note); a manual end cut at the last movement is `manual_still`.
     end_cause: session.endCause === null ? null : session.endCause === 'manual' && session.cut ? 'manual_still' : session.endCause,
   } as const;

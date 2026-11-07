@@ -71,15 +71,43 @@ const MAX_ISSUES = 50;
 export const SERVER_BEHIND_CODE = 'server_behind';
 
 /**
- * Whether an `invalid_payload` refusal names the contract version (`path: 'v'`): an older server that
- * does not know this version yet. Such a refusal is not about the drive, and the same bytes go
- * through once the server is updated, so it is retried rather than failed.
+ * The optional upload fields added after the contract version itself (`weather`): a server from
+ * before one refuses it as an unknown key, which says the server is behind, not that the drive is bad.
+ */
+export const NEWER_PAYLOAD_KEYS: readonly string[] = ['weather'];
+
+type Issue = { path?: unknown; message?: unknown };
+
+/**
+ * The keys an unknown-key issue names: the server reports one at path '' with zod's message
+ * (`Unrecognized key: "weather"`, `Unrecognized keys: "a", "b"`). Null for any other issue.
+ */
+function unknownKeys(issue: Issue): string[] | null {
+  if (issue.path !== '' || typeof issue.message !== 'string' || !/^Unrecognized keys?: /.test(issue.message)) return null;
+  const keys = [...issue.message.matchAll(/"([^"]*)"/g)].map((m) => m[1] ?? '');
+  return keys.length > 0 ? keys : null;
+}
+
+/** An issue that only says the server does not know a newer optional field: an unknown key, or the field's own path. */
+function newerFieldIssue(issue: Issue): boolean {
+  if (typeof issue.path === 'string' && NEWER_PAYLOAD_KEYS.includes(issue.path)) return true;
+  const keys = unknownKeys(issue);
+  return keys !== null && keys.every((k) => NEWER_PAYLOAD_KEYS.includes(k));
+}
+
+/**
+ * Whether an `invalid_payload` refusal says the server is older than the upload: it names the
+ * contract version (`path: 'v'`, a version it does not know yet), or every issue it names is a
+ * newer optional field it does not know (`NEWER_PAYLOAD_KEYS`). Such a refusal is not about the
+ * drive, and the same bytes go through once the server is updated, so it is retried rather than failed.
  */
 function refusesVersion(body: unknown): boolean {
   if (typeof body !== 'object' || body === null) return false;
-  const issues = (body as { issues?: unknown }).issues;
-  if (!Array.isArray(issues)) return false;
-  return issues.slice(0, MAX_ISSUES).some((issue) => typeof issue === 'object' && issue !== null && (issue as { path?: unknown }).path === 'v');
+  const raw = (body as { issues?: unknown }).issues;
+  if (!Array.isArray(raw)) return false;
+  const issues = raw.slice(0, MAX_ISSUES).filter((issue): issue is Issue => typeof issue === 'object' && issue !== null);
+  if (issues.some((issue) => issue.path === 'v')) return true;
+  return issues.length > 0 && issues.length === raw.slice(0, MAX_ISSUES).length && issues.every(newerFieldIssue);
 }
 
 async function readBody(context: Record<string, unknown>): Promise<unknown> {

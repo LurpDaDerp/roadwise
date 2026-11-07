@@ -31,7 +31,8 @@
 //   starts a capture: native owns it, and `stopCapture` tells native the JS end and its cut).
 // - **In front only.** Alert sounds, voice and haptics play only while RoadWise is active, and
 //   never for a replayed row (a journal drained: old news, which the engine never shows or shakes
-//   either); the spot nudge shows only then. A phone pickup's
+//   either); the spot nudge shows only then, and the break reminder (`breakWatch.ts`: after 2 h of
+//   driving, at the first stop in front, then every hour) is given only then. A phone pickup's
 //   alert plays only while the driving screen shows
 //   (focused, RoadWise active) and never for a replayed row; with RoadWise not active nothing plays
 //   or is posted. The drive records the same either way.
@@ -70,10 +71,12 @@ import { readWatchSpots } from '@/data/queries/spots';
 import { clearParkedSpot, readParkedSpot, writeParkedSpot } from '@/features/parked/model';
 import { WEATHER_TITLES } from '@/features/weather/copy';
 import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
+import { worseWeather, type DriveWeather } from '@/features/weather/driveWeather';
 import { processTimers } from '@/lib/timers';
 import { dayKey, sunIsDown } from '@/lib/time';
 import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
 
+import { breakDecision, createBreakWatch, remindedHFor, writeBreakMark, type BreakReminder, type BreakWatch } from './breakWatch';
 import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
 import { displayLook } from './displayLook';
 import { speedTintOf } from './displayTint';
@@ -89,7 +92,7 @@ import { isBusyStatus } from './policy';
 import type { DriveSource } from './source';
 import { createTicker, realScheduler, type Scheduler } from './ticks';
 import { nextWaitingChange, WAIT_TOTAL_MS, waitingDeadline, waitingPhaseAt, type WaitingPublic } from './waiting';
-import { createWeatherWatch, type WeatherLookup, type WeatherWatch } from './weatherWatch';
+import { createWeatherWatch, type WeatherLookup, type WeatherReadingLookup, type WeatherWatch } from './weatherWatch';
 
 export type { DriveSource } from './source';
 
@@ -152,6 +155,8 @@ export interface DriveState extends EngineSnapshot {
   notDrivingSpentMs: number;
   /** The driving screen's "Watch your speed here" line (shown once per key), or null. */
   spotNudge: SpotNudge | null;
+  /** The driving screen's "Take a break soon" line (shown once per key), the latest of the open drive, or null. */
+  breakReminder: BreakReminder | null;
   /** The dangerous-weather alert at the car, unless dismissed this drive (a more severe kind shows again); null with no drive. */
   weatherAlert: DangerAlert | null;
   /** The same alert as the Live Activity carries it: its kind and title. */
@@ -254,6 +259,13 @@ export interface DriveHostDashcam {
   beforeFinalize(clientTripId: string, opts: { dryRun: boolean }): Promise<void>;
   /** A DashPal continuous alert is active: phone alerts are then haptic + visual only. */
   continuousAlertActive(): boolean;
+  /** When a DashPal drowsy alert last started, stepped up or ended (host clock), or null: no break reminder for 10 min after. */
+  lastDrowsyAt?(): number | null;
+  /**
+   * When a DashPal alert last showed (host clock): now while one sounds on the phone, else its last
+   * flash; or null. The break reminder waits while it shows, one-shots included.
+   */
+  lastAlertShownAt?(): number | null;
 }
 
 /**
@@ -316,8 +328,10 @@ export interface DriveHostDeps {
   pushToStart?: (req: PushToStartRequest) => Promise<boolean | PushToStartOutcome>;
   /** The spots the driving screen nudges about (default `readWatchSpots` over `db`). */
   spots?: { readWatchSpots(): Promise<WatchSpot[]> };
-  /** The weather at a place (default Open-Meteo). */
+  /** The weather alert at a place, alone (a test seam: no weather tag then). */
   weather?: WeatherLookup;
+  /** The weather reading at a place (default Open-Meteo): the alert and the drive's weather tag. Wins over `weather`. */
+  weatherReading?: WeatherReadingLookup;
   /**
    * iPhone with the car link: what "Are you driving?" needs of the phone (Bluetooth, the notification
    * permission, the note). Default: the phone's own on such a build; null turns the check off.
@@ -605,9 +619,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let spotWatcher: SpotWatcher | null = null;
   let spotNudge: SpotNudge | null = null;
   let spotsLoad = 0;
+  /** The open drive's break reminder (`breakWatch.ts`), once its stored mark is read; the latest reminder given. */
+  let breakWatch: BreakWatch | null = null;
+  let breakReminder: BreakReminder | null = null;
+  let breakLoad = 0;
+  /** When the open drive reached driving speed (row clock), read once it has (`engine.session()` copies the whole drive). */
+  let breakDroveAt: number | null = null;
   let weatherWatch: WeatherWatch | null = null;
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
+  /** The open (or last) drive's worst weather so far (`driveWeather.ts`), kept by trip id; written to its trip row as it worsens. */
+  let driveWeather: { clientTripId: string; tag: DriveWeather | null } | null = null;
+  /** The weather row writes, in order. */
+  let weatherWrites: Promise<void> = Promise.resolve();
   let lastFixAt: { lat: number; lng: number; ts: number } | null = null;
   /** The place-arrival end of the drive closing or last closed (published as `DriveState.arrival`). */
   let arrival: DriveArrival | null = null;
@@ -642,6 +666,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         report(e, 'dashcam');
       }
       const car = await carTagOf(session);
+      // The weather it saw: the host's tag (the trip row holds it too, written as it worsened). The
+      // tag is frozen from the end (`onTag`); its last row write lands before the finalize patch.
+      await weatherWrites;
+      const weather = driveWeather !== null && driveWeather.clientTripId === id ? driveWeather.tag : null;
       // The paired car it was in, stored on the trip (`car_uid`, `car_name`; local only).
       const finalizeDeps: FinalizeDeps = {
         db,
@@ -650,6 +678,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         appVersion: deps.appVersion,
         notDrivingExpired: budget !== null && budget.clientTripId === id && budget.expired,
         carTag: () => car,
+        weather: () => weather,
         ...dashcamFinalizeDeps(db),
       };
       const result = await closeDrive(session, finalizeDeps);
@@ -1079,6 +1108,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       notDrivingAvailable: notDrivingAvailable(),
       notDrivingSpentMs: budget?.spentMs ?? 0,
       spotNudge,
+      breakReminder,
       weatherAlert: alertNow,
       weather: alertNow === null ? null : { kind: alertNow.kind, text: WEATHER_TITLES[alertNow.kind] },
     });
@@ -1198,6 +1228,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       soundFailedThisDrive = false;
       startTripPending = true;
       spotNudge = null;
+      breakReminder = null;
+      breakDroveAt = null;
     }
     display(s);
     // The car is back under the speeding line (or the drive ended): its alert's held session goes.
@@ -1230,6 +1262,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     spotWatcher = null;
     spotNudge = null;
     spotsLoad += 1;
+    breakWatch = null;
+    breakReminder = null;
+    breakLoad += 1;
+    breakDroveAt = null;
     weatherWatch?.stop();
     weatherWatch = null;
     weatherRaw = null;
@@ -1335,12 +1371,43 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         report(e, 'display');
       }
     }
+    startBreakWatch(id);
     if (persist) {
+      // A drive taken up after a relaunch keeps the weather it already saw (its trip row).
+      const stored = await createTripsRepo(db)
+        .get(id)
+        .then((row) => row?.weather ?? null)
+        .catch((e: unknown) => {
+          report(e, 'weather');
+          return null;
+        });
+      // The drive ended while its row was read: its surfaces are already gone, so none start now.
+      const open = engine.snapshot();
+      if (open.status !== 'recording' || open.clientTripId !== id) return;
+      driveWeather = { clientTripId: id, tag: stored };
       try {
         weatherWatch = createWeatherWatch({
           now,
+          read: deps.weatherReading,
           lookup: deps.weather,
           lastPosition: deps.lastPosition,
+          onTag: (tag) => {
+            // Frozen once the drive ends: finalize stores and uploads the tag it reads, so a check
+            // still in flight then (it can outlast the end by seconds) changes nothing.
+            const live = engine.snapshot();
+            if (live.status !== 'recording' || live.clientTripId !== id) return;
+            const held = driveWeather;
+            if (held === null || held.clientTripId !== id) return;
+            const worst = worseWeather(held.tag, tag);
+            if (worst === held.tag) return;
+            driveWeather = { clientTripId: id, tag: worst };
+            // Written at once, so a relaunch mid-drive keeps it.
+            weatherWrites = weatherWrites
+              .then(async () => {
+                await createTripsRepo(db).update(id, { weather: worst }, now());
+              })
+              .catch((e: unknown) => report(e, 'weather'));
+          },
           onAlert: (a) => {
             const before = shownWeather();
             weatherRaw = a;
@@ -1366,6 +1433,74 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         report(e, 'spots');
       }
     }
+  }
+
+  /**
+   * The open drive's break reminder starts once the hour it was last reminded at is read (a drive
+   * taken up after a relaunch keeps it; a dry run starts from none). Rows before then give none.
+   */
+  function startBreakWatch(id: string): void {
+    const gen = (breakLoad += 1);
+    const read = persist ? remindedHFor(db, id) : Promise.resolve(0);
+    read
+      .catch((e: unknown) => {
+        report(e, 'breakReminder');
+        return 0;
+      })
+      .then((remindedH) => {
+        const open = engine.snapshot();
+        if (gen === breakLoad && open.status === 'recording' && open.clientTripId === id) breakWatch = createBreakWatch({ remindedH });
+      })
+      .catch((e: unknown) => report(e, 'breakReminder'));
+  }
+
+  /** How long ago DashPal's drowsy alert last showed (host clock), or null. */
+  function drowsyAgoMs(): number | null {
+    try {
+      const at = deps.dashcam?.lastDrowsyAt?.() ?? null;
+      return at === null ? null : now() - at;
+    } catch (e) {
+      report(e, 'dashcam');
+      return null;
+    }
+  }
+
+  /** A DashPal alert sounds on the phone or showed within the phone alert's busy window (banner + 1 s). */
+  function dashpalShowing(): boolean {
+    try {
+      const at = deps.dashcam?.lastAlertShownAt?.() ?? null;
+      return at !== null && now() - at < ALERT_GLOW_MS + NUDGE_AFTER_ALERT_MS;
+    } catch (e) {
+      report(e, 'dashcam');
+      return false;
+    }
+  }
+
+  /**
+   * The break reminder is due on this row: the driving screen flashes it and the player gives it.
+   * Its hour is stored for the drive only once it starts playing; dropped unplayed (RoadWise went
+   * behind before it started), the watcher gets it back, so the next stop in front gives it.
+   */
+  function remindBreak(reminder: BreakReminder, id: string): void {
+    const watch = breakWatch;
+    const decision = breakDecision(reminder, id);
+    let started = false;
+    decision.stillWanted = () => {
+      if (!appActive()) return false;
+      if (!started) {
+        started = true;
+        if (persist) void writeBreakMark(db, { clientTripId: id, remindedH: reminder.hours }).catch((e: unknown) => report(e, 'breakReminder'));
+      }
+      return true;
+    };
+    player
+      .deliver(decision)
+      .catch((e: unknown) => report(e, 'player'))
+      .finally(() => {
+        if (!started) watch?.release(reminder);
+      });
+    breakReminder = reminder;
+    publish();
   }
 
   // --- the push-to-start (iOS, RoadWise behind) ---------------------------------------------------
@@ -1802,6 +1937,21 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           spotNudge = nudge;
           publish();
         }
+      }
+      if (breakWatch !== null && snap.clientTripId !== null) {
+        if (breakDroveAt === null && snap.drove) breakDroveAt = engine.session()?.droveAt ?? null;
+        const due = breakWatch.push({
+          ts: row.ts,
+          droveAt: breakDroveAt,
+          stopped: snap.stopped,
+          replay: opts.replay === true,
+          foreground: appActive(),
+          waiting: waiting !== null,
+          busy: (snap.lastAlert !== null && row.ts - snap.lastAlert.at < ALERT_GLOW_MS + NUDGE_AFTER_ALERT_MS) || dashcamAlertActive() || dashpalShowing(),
+          ending: snap.arriveAt !== null,
+          drowsyAgoMs: drowsyAgoMs(),
+        });
+        if (due !== null) remindBreak(due, snap.clientTripId);
       }
     }
     if (deps.dashcam) {

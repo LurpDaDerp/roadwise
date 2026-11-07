@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 
@@ -216,6 +217,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     waiting: null,
     notDrivingAvailable: false,
     spotNudge: null,
+    breakReminder: null,
     ...over,
   };
 }
@@ -2462,9 +2464,47 @@ describe('the band: a spot nudge, the weather, a failed end', () => {
     expect(screen.getByTestId('hud-dim')).toBeTruthy();
   });
 
-  test('a moving line is three words at most, a nudge four', () => {
+  test('a moving line is three words at most, a nudge and the break reminder four', () => {
     for (const words of [...Object.values(hudCopy.alert), hudCopy.endFailed, hudCopy.notDriving]) expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(3);
-    for (const words of Object.values(hudCopy.spot)) expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(4);
+    for (const words of [...Object.values(hudCopy.spot), hudCopy.breakReminder]) expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(4);
+  });
+
+  const brk = (at: number) => ({ key: `break@${at}`, at, hours: 2 });
+
+  test('the break reminder: "Take a break soon" with a cup in the band for 4 s, the screen undimmed meanwhile', async () => {
+    mockDefaultMph = 0;
+    const h = await renderHud({ rowTs: T });
+    await act(() => jest.advanceTimersByTime(DIM_AFTER_MS - 500));
+    await h.update({ rowTs: T + 1000, breakReminder: brk(T + 1000) });
+    expect(screen.getByTestId('hud-break')).toHaveProp('accessibilityLabel', 'Take a break soon');
+    expect(screen.getByTestId('hud-break-icon', { includeHiddenElements: true })).toHaveTextContent(String.fromCodePoint(Number(Ionicons.glyphMap['cafe-outline'])));
+    await act(() => jest.advanceTimersByTime(3999));
+    expect(screen.getByTestId('hud-break')).toBeTruthy();
+    expect(screen.queryByTestId('hud-dim')).toBeNull();
+    await act(() => jest.advanceTimersByTime(1));
+    expect(screen.queryByTestId('hud-break')).toBeNull();
+    expect(screen.getByTestId('hud-dim')).toBeTruthy();
+  });
+
+  test('an event chip pre-empts the break reminder', async () => {
+    mockDefaultMph = 0;
+    const h = await renderHud({ rowTs: T });
+    await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'severe', at: T + 1000 }, breakReminder: brk(T + 1000) });
+    expect(screen.getByTestId('hud-alert')).toBeTruthy();
+    expect(screen.queryByTestId('hud-break')).toBeNull();
+  });
+
+  test('in a compact window the break reminder covers the weather card for its 4 s', async () => {
+    mockDefaultMph = 0;
+    compactWindow();
+    const c = await renderHud({ rowTs: T, weatherAlert: ICE });
+    await c.update({ rowTs: T + 1000, breakReminder: brk(T + 1000) });
+    expect(screen.getByTestId('hud-break')).toBeTruthy();
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+    await act(() => jest.advanceTimersByTime(4000));
+    expect(screen.queryByTestId('hud-break')).toBeNull();
+    expect(screen.getByTestId('hud-weather')).toBeTruthy();
+    jest.restoreAllMocks();
   });
 });
 

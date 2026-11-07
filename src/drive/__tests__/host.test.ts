@@ -28,12 +28,14 @@ import {
   type PushToStartOutcome,
   type PushToStartRequest,
 } from '@/drive/host';
+import { BREAK_KEY } from '@/drive/breakWatch';
 import { CANCEL_KEY } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
 import { PLACES_KEY } from '@/features/places/model';
 import type { DangerAlert } from '@/features/weather/danger';
+import type { WeatherReading } from '@/features/weather/openMeteo';
 import { attachSummaryNotifier, type SummaryNotificationPort, type SummaryRequest } from '@/features/drive/summaryNotifier';
 
 jest.mock('expo-notifications', () => ({}));
@@ -54,14 +56,37 @@ function fakeLimits(limitMps: number | null = 35 * 0.44704): SpeedLimitClient {
   } as unknown as SpeedLimitClient;
 }
 
-function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: string[] } {
+/**
+ * Records every decision and, like the real player, reads `stillWanted` as the item starts. While
+ * `paused`, items wait (a sound still playing ahead of them) until `resume()`.
+ */
+function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: string[]; paused: boolean; resume(): void } {
   const delivered: AlertDecision[] = [];
   const releases: string[] = [];
-  return {
+  const waiting: (() => void)[] = [];
+  const start = (d: AlertDecision) => {
+    if (!d.suppressed) d.stillWanted?.();
+  };
+  const self: AlertPlayer & { delivered: AlertDecision[]; releases: string[]; paused: boolean; resume(): void } = {
     delivered,
     releases,
-    deliver: async (d) => {
+    paused: false,
+    resume() {
+      self.paused = false;
+      for (const go of waiting.splice(0)) go();
+    },
+    deliver(d) {
       delivered.push(d);
+      if (!self.paused) {
+        start(d);
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) =>
+        waiting.push(() => {
+          start(d);
+          resolve();
+        }),
+      );
     },
     stopCurrent: async () => {},
     announce: async () => {},
@@ -69,6 +94,7 @@ function fakePlayer(): AlertPlayer & { delivered: AlertDecision[]; releases: str
       releases.push(kind);
     },
   };
+  return self;
 }
 
 function fakeDisplay(running = false): DriveDisplay & { log: string[]; states: DriveDisplayState[]; carries: (SpeedCarry | null | undefined)[]; fronts: boolean[]; running: boolean } {
@@ -975,6 +1001,96 @@ describe('the weather at the car', () => {
     expect(h.host.snapshot().weather).toBeNull();
     await h.host.stop({ endOpenTrip: false });
   });
+
+  /** A reading whose conditions now carry this WMO code (and freezing air for the freezing codes). */
+  const reading = (code: number): WeatherReading => ({
+    samples: [{ time: 0, code, tempC: code === 66 ? -2 : 8, rainMmH: 0, precipMmH: 0, snowCmH: 0, windMph: 5, gustMph: 8, visibilityM: 16000, isDay: true }],
+    recentRainMm: 0,
+    recentSnowCm: 0,
+  });
+
+  test('one reading feeds the alert and the drive weather; the worst word is written to the trip row as it worsens, then stored and uploaded', async () => {
+    const answers = [reading(61), reading(3), reading(71)];
+    const h = build({ weatherReading: async () => answers.shift() ?? null });
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    const id = h.host.snapshot().clientTripId!;
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('rain');
+    // A clear reading 15 min on never makes it milder.
+    await feed(h, rows(2, { t0: T0 + 20_000 + 15 * 60_000, speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('rain');
+    // Snow 15 min after that: worse, written at once.
+    await feed(h, rows(2, { t0: T0 + 20_000 + 30 * 60_000, speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('snow');
+    await h.host.end();
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('snow');
+    expect(JSON.parse((await createQueueRepo(db).byKey(`trip:${id}`))!.payload_json)).toMatchObject({ weather: 'snow' });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the tag is frozen at the end: a check still out then changes neither the trip row nor the upload', async () => {
+    let late: (r: WeatherReading) => void = () => {};
+    const answers: (() => Promise<WeatherReading | null>)[] = [async () => reading(61), () => new Promise<WeatherReading>((r) => (late = r))];
+    const dashcam: DriveHostDashcam = {
+      row: () => {},
+      adopt: async () => {},
+      // The end waits on the dashcam (≤ 3 s): the snow check answers meanwhile.
+      beforeFinalize: async () => {
+        late(reading(71));
+        await new Promise((r) => setTimeout(r, 0));
+      },
+      continuousAlertActive: () => false,
+    };
+    const h = build({ weatherReading: () => (answers.shift() ?? (async () => null))(), dashcam });
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    const id = h.host.snapshot().clientTripId!;
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('rain');
+    // 15 min on a check goes out, still unanswered when the drive ends.
+    await feed(h, rows(2, { t0: T0 + 20_000 + 15 * 60_000, speedMps: 15 }));
+    await h.host.end();
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    expect((await createTripsRepo(db).get(id))?.weather).toBe('rain');
+    expect(JSON.parse((await createQueueRepo(db).byKey(`trip:${id}`))!.payload_json)).toMatchObject({ weather: 'rain' });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a drive taken up after a relaunch keeps the weather its row holds; with no reading at all a drive has none', async () => {
+    const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
+    for (const r of rows(60, { speedMps: 15 })) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
+    session.pending = [];
+    await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording', weather: 'ice' }, T0);
+    await createSamplesRepo(db).appendMany(uuid(9), rows(60, { speedMps: 15 }).map((r) => ({ ts: r.ts, row: r })));
+    const h = build({ weatherReading: async () => reading(61) });
+    h.source.setState({ capturing: true });
+    await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    expect((await createTripsRepo(db).get(uuid(9)))?.weather).toBe('ice');
+    clock = T0 + 70_000;
+    await h.host.suspendForSignOut();
+    expect((await createTripsRepo(db).get(uuid(9)))).toMatchObject({ status: 'pending', weather: 'ice' });
+
+    const offline = build({ weatherReading: async () => null });
+    await offline.host.boot();
+    clock = T0 + 100_000;
+    await drive(offline, rows(60, { t0: T0 + 100_000, speedMps: 15 }));
+    await new Promise((r) => setTimeout(r, 0));
+    const other = offline.host.snapshot().clientTripId!;
+    await offline.host.end();
+    expect((await createTripsRepo(db).get(other))?.weather).toBeNull();
+    expect(JSON.parse((await createQueueRepo(db).byKey(`trip:${other}`))!.payload_json)).not.toHaveProperty('weather');
+    await offline.host.stop({ endOpenTrip: false });
+  });
 });
 
 describe('the spot nudge', () => {
@@ -994,6 +1110,173 @@ describe('the spot nudge', () => {
     await feed(behind, rows(40, { speedMps: 15 }));
     expect(behind.host.snapshot().spotNudge).toBeNull();
     await behind.host.stop({ endOpenTrip: true });
+  });
+});
+
+describe('the break reminder', () => {
+  const HOUR = 3_600_000;
+  /** Driving speed is reached on the second row of `drive` (15 m/s from the tap). */
+  const DROVE = T0 + 1000;
+  const breaks = (h: H) => h.player.delivered.filter((d) => d.kind === 'break');
+
+  test('after 2 h of driving, at the first stop in front: the soft tone and the words even with voice off, the band, the hour stored; then nothing until 3 h', async () => {
+    const h = build({ voiceEnabled: () => false });
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    const id = h.host.snapshot().clientTripId!;
+    // A stop just before the mark gives nothing.
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR - 9000, speedMps: 15 }));
+    await feed(h, rows(5, { t0: DROVE + 2 * HOUR - 6000, speedMps: 0 }));
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', stopped: true });
+    expect(breaks(h)).toEqual([]);
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15 }));
+    const stopAt = DROVE + 2 * HOUR + 3000;
+    await feed(h, rows(4, { t0: stopAt, speedMps: 0 }));
+    await h.host.settled();
+    expect(breaks(h)).toEqual([
+      expect.objectContaining({ id: `break:${id}:2`, level: 1, kind: 'break', ts: stopAt + 1000, voice: 'Take a break soon', voiceAlways: true, intensity: 1 }),
+    ]);
+    expect(breaks(h)[0]!.suppressed).toBeUndefined();
+    expect(breaks(h)[0]!.stillWanted!()).toBe(true);
+    h.appState.set('background');
+    expect(breaks(h)[0]!.stillWanted!()).toBe(false);
+    h.appState.set('active');
+    expect(h.host.snapshot().breakReminder).toEqual({ key: `break@${stopAt + 1000}`, at: stopAt + 1000, hours: 2 });
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2 });
+    // More stops before 3 h: nothing more.
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 20 * 60_000, speedMps: 15 }));
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 20 * 60_000 + 3000, speedMps: 0 }));
+    expect(breaks(h)).toHaveLength(1);
+    // At 3 h, the next.
+    await feed(h, rows(3, { t0: DROVE + 3 * HOUR, speedMps: 15 }));
+    await feed(h, rows(3, { t0: DROVE + 3 * HOUR + 3000, speedMps: 0 }));
+    expect(breaks(h).map((d) => d.id)).toEqual([`break:${id}:2`, `break:${id}:3`]);
+    await h.host.end();
+    expect(h.host.snapshot().breakReminder).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('behind it is never given; back in front at the stop it is; within 10 min after a DashPal drowsy alert it waits', async () => {
+    let drowsyAt: number | null = null;
+    const dashcam: DriveHostDashcam = { row: () => {}, adopt: async () => {}, beforeFinalize: async () => {}, continuousAlertActive: () => false, lastDrowsyAt: () => drowsyAt };
+    const h = build({ dashcam });
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15 }));
+    h.appState.set('background');
+    await feed(h, rows(5, { t0: DROVE + 2 * HOUR + 3000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([]);
+    expect(h.host.snapshot().breakReminder).toBeNull();
+    // In front again, still stopped, but DashPal said "Take a break" 9 min ago.
+    h.appState.set('active');
+    drowsyAt = DROVE + 2 * HOUR + 8000 - 9 * 60_000;
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 8000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([]);
+    drowsyAt = null;
+    await feed(h, rows(1, { t0: DROVE + 2 * HOUR + 11_000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([expect.objectContaining({ kind: 'break' })]);
+    expect(breaks(h)[0]!.suppressed).toBeUndefined();
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a phone alert on the row the car stops at holds it (banner + 1 s) without using it up; it comes at the first stopped row after', async () => {
+    const h = build();
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    // Past 2 h, a hard brake (0.40 g, the GPS 2 m/s slower) as the car comes to a stop.
+    const brakeAt = DROVE + 2 * HOUR + 2000;
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15, over: (i) => (i === 2 ? { speed: 13, aLonMin: -0.4 } : {}) }));
+    const alertAt = h.host.snapshot().lastAlert!.at;
+    expect(alertAt).toBe(brakeAt);
+    // Stopped from the next row: the second stopped row is still inside the alert's 2.5 s.
+    await feed(h, rows(1, { t0: brakeAt + 1000, speedMps: 0 }));
+    await feed(h, rows(1, { t0: brakeAt + 2000, speedMps: 0 }));
+    expect(h.host.snapshot().stopped).toBe(true);
+    expect(breaks(h)).toEqual([]);
+    expect(h.host.snapshot().breakReminder).toBeNull();
+    await feed(h, rows(1, { t0: brakeAt + 3000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([expect.objectContaining({ kind: 'break', ts: brakeAt + 3000 })]);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a DashPal one-shot sounding or just flashed holds it; it comes once the DashPal banner and 1 s have passed', async () => {
+    let shownAt: number | null = null;
+    const dashcam: DriveHostDashcam = { row: () => {}, adopt: async () => {}, beforeFinalize: async () => {}, continuousAlertActive: () => false, lastAlertShownAt: () => shownAt };
+    const h = build({ dashcam });
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15 }));
+    const stopAt = DROVE + 2 * HOUR + 3000;
+    clock = stopAt;
+    shownAt = stopAt;
+    await feed(h, rows(2, { t0: stopAt, speedMps: 0 }));
+    clock = stopAt + 2000;
+    await feed(h, rows(1, { t0: stopAt + 2000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([]);
+    clock = stopAt + 2500;
+    await feed(h, rows(1, { t0: stopAt + 2500, speedMps: 0 }));
+    expect(breaks(h)).toEqual([expect.objectContaining({ kind: 'break' })]);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('dropped unplayed (RoadWise behind before it started): the hour is not stored and the next stop in front gives it', async () => {
+    const h = build();
+    await h.host.boot();
+    await drive(h, rows(20, { speedMps: 15 }));
+    const id = h.host.snapshot().clientTripId!;
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR, speedMps: 15 }));
+    // A sound still plays ahead of it; RoadWise goes behind before it starts.
+    h.player.paused = true;
+    await feed(h, rows(2, { t0: DROVE + 2 * HOUR + 3000, speedMps: 0 }));
+    expect(breaks(h)).toHaveLength(1);
+    h.appState.set('background');
+    h.player.resume();
+    await h.host.settled();
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toBeNull();
+    // In front at the next stop: given again, and this time it plays and is stored.
+    h.appState.set('active');
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 60_000, speedMps: 15 }));
+    await feed(h, rows(2, { t0: DROVE + 2 * HOUR + 63_000, speedMps: 0 }));
+    await h.host.settled();
+    expect(breaks(h).map((d) => d.id)).toEqual([`break:${id}:2`, `break:${id}:2`]);
+    expect(await createSettingsRepo(db).get(BREAK_KEY)).toEqual({ clientTripId: id, remindedH: 2 });
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a drive taken up after a relaunch keeps the hour it was reminded at; another drive’s mark is ignored', async () => {
+    const adopt = async (mark: unknown) => {
+      const session = createSession({ clientTripId: uuid(9), startedAt: T0, origin: 'manual' });
+      for (const r of rows(60, { speedMps: 15 })) appendRow(session, r, { unsafe: false, limitUsable: false, platform: 'ios' });
+      session.pending = [];
+      await createTripsRepo(db).insert({ client_trip_id: uuid(9), started_at: T0, tz: TZ, status: 'recording' }, T0);
+      await createSamplesRepo(db).appendMany(uuid(9), rows(60, { speedMps: 15 }).map((r) => ({ ts: r.ts, row: r })));
+      await createSettingsRepo(db).set(BREAK_KEY, mark);
+      const h = build();
+      h.source.setState({ capturing: true });
+      clock = T0 + 2 * HOUR + 30 * 60_000;
+      await h.host.boot({ adopt: { session, detectors: createDetectors(() => 'x') } });
+      await new Promise((r) => setTimeout(r, 0));
+      await h.host.settled();
+      return h;
+    };
+    // Reminded at 2 h before the relaunch: a stop at 2.5 h gives nothing; at 3 h it does.
+    const h = await adopt({ clientTripId: uuid(9), remindedH: 2 });
+    await feed(h, rows(3, { t0: DROVE + 2 * HOUR + 30 * 60_000, speedMps: 15 }));
+    await feed(h, rows(4, { t0: DROVE + 2 * HOUR + 30 * 60_000 + 3000, speedMps: 0 }));
+    expect(breaks(h)).toEqual([]);
+    await feed(h, rows(3, { t0: DROVE + 3 * HOUR, speedMps: 15 }));
+    await feed(h, rows(3, { t0: DROVE + 3 * HOUR + 3000, speedMps: 0 }));
+    expect(breaks(h).map((d) => d.id)).toEqual([`break:${uuid(9)}:3`]);
+    await h.host.stop({ endOpenTrip: true });
+
+    db = await createSqlJsDb();
+    await migrate(db);
+    await createSettingsRepo(db).set('device.lastUserId', 'user-1');
+    const other = await adopt({ clientTripId: uuid(8), remindedH: 5 });
+    await feed(other, rows(3, { t0: DROVE + 2 * HOUR + 30 * 60_000, speedMps: 15 }));
+    await feed(other, rows(3, { t0: DROVE + 2 * HOUR + 30 * 60_000 + 3000, speedMps: 0 }));
+    expect(breaks(other).map((d) => d.id)).toEqual([`break:${uuid(9)}:2`]);
+    await other.host.stop({ endOpenTrip: true });
   });
 });
 
@@ -1125,6 +1408,32 @@ describe('iOS: the drive detector', () => {
     await feedIos(h, rows(20, { t0: T0 + 40_000, speedMps: 25 }));
     const live = h.player.delivered.filter((d) => d.kind === 'speeding').slice(replayed.length);
     expect(live.some((d) => d.suppressed !== true)).toBe(true);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the break reminder: stopped rows read from the journal (a gap filled) past 2 h never give it, nor count as a stop; live ones do', async () => {
+    const h = buildIos();
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(40, { speedMps: 15 }));
+    const HOUR = 3_600_000;
+    await feedIos(h, rows(3, { t0: T0 + 1000 + 2 * HOUR, speedMps: 15 }));
+    // Four stopped rows reach the journal only; the next arrives live, so all five are read from
+    // the journal (replayed) and its live copy is a repeat.
+    const stop = rows(7, { t0: T0 + 1000 + 2 * HOUR + 3000, speedMps: 0 });
+    h.link.lossy = true;
+    h.detect.emitRows(journalRows(stop.slice(0, 4)));
+    h.link.lossy = false;
+    await feedIos(h, stop.slice(4, 5));
+    expect(h.detect.calls.some((c) => c.startsWith(`readRows:${NATIVE}:`))).toBe(true);
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', stopped: true, lastRowTs: stop[4]!.ts });
+    expect(h.player.delivered.filter((d) => d.kind === 'break')).toEqual([]);
+    // The first live stopped row is one, not two in a row; the second gives it.
+    await feedIos(h, stop.slice(5, 6));
+    expect(h.player.delivered.filter((d) => d.kind === 'break')).toEqual([]);
+    await feedIos(h, stop.slice(6));
+    expect(h.player.delivered.filter((d) => d.kind === 'break')).toEqual([expect.objectContaining({ ts: stop[6]!.ts })]);
     await h.host.stop({ endOpenTrip: false });
   });
 

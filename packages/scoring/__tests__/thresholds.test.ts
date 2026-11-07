@@ -33,11 +33,14 @@ import {
   WALK_STAND_MIN_S,
 } from '../src/thresholds';
 
-test('the ten achievements, each with its title and description', () => {
+test('the 13 achievements, each with its title and description', () => {
   expect(ACHIEVEMENTS).toEqual([
     { id: 'first_drive', title: 'First Drive', description: 'Complete a scored drive.' },
     { id: 'clean_100', title: 'Clean 100', description: 'Drive 100 clean miles.' },
+    { id: 'clean_500', title: 'Clean 500', description: 'Drive 500 clean miles.' },
+    { id: 'clean_1000', title: 'Clean 1,000', description: 'Drive 1,000 clean miles.' },
     { id: 'perfect_week', title: 'Perfect Week', description: 'Take 3 or more drives in a week, all with zero events.' },
+    { id: 'rain_or_shine', title: 'Rain or Shine', description: 'Finish a clean drive in rain or snow.' },
     { id: 'better_speed', title: 'Easing Off', description: 'Raise your Speed score by 10 in 30 days.' },
     { id: 'better_braking', title: 'Softer Stops', description: 'Raise your Braking score by 10 in 30 days.' },
     { id: 'better_acceleration', title: 'Gentle Starts', description: 'Raise your Acceleration score by 10 in 30 days.' },

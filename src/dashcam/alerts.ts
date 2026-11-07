@@ -197,6 +197,17 @@ export interface DashcamAlertController {
   held(): HeldAlert | null;
   /** Every continuous alert held. */
   continuing(): ContinuingAlert[];
+  /**
+   * When a drowsy alert ("Take a break", or "Wake up") last started, stepped up or left the table
+   * (`deps.now()`), or null when none has: the phone's break reminder waits 10 min after it.
+   */
+  lastDrowsyAt(): number | null;
+  /**
+   * When a DashPal alert last showed (`deps.now()`): now while the phone sounds one or has one in
+   * the player, else its last flash (the HUD's banner); null before the first. The phone's break
+   * reminder waits while it shows, one-shots included.
+   */
+  lastShownAt(): number | null;
   settled(): Promise<void>;
 }
 
@@ -209,9 +220,19 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
   let seq = 0;
   /** when a no-face alert last left the table (stopped, superseded, cleared) */
   let lastNoFaceEndAt = -Infinity;
+  /** when a drowsy alert last started, stepped up or left the table */
+  let lastDrowsyAt: number | null = null;
+  /** when the last flash went to the HUD */
+  let lastFlashAt: number | null = null;
 
-  function noFaceEnded(e: Entry): void {
+  function drowsySeen(e: Entry): void {
+    if (e.sound === SOUND.DROWSY || e.sound === SOUND.WAKE) lastDrowsyAt = deps.now();
+  }
+
+  /** `e` left the table (stopped, superseded, cleared). */
+  function leftTable(e: Entry): void {
     if (e.sound === SOUND.NO_FACE) lastNoFaceEndAt = deps.now();
+    drowsySeen(e);
   }
 
   function report(e: unknown): void {
@@ -233,6 +254,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
   function flash(e: Entry, resend = false): void {
     try {
       flashes += 1;
+      lastFlashAt = deps.now();
       deps.onVisual?.({ key: `${flashes}:${e.id}:${e.level}`, alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, onPhone: e.playing, at: deps.now(), resend });
     } catch (err) {
       report(err);
@@ -325,7 +347,10 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         if (table.get(e.id) === e) {
           if (e.playing && e.continuous) e.nextAt = Math.max(startedAt + cadenceMs(e.sound, e.level), at);
           // A one-shot is done once played (a level change cannot follow it).
-          else if (!e.continuous && !e.firstOwed) table.delete(e.id);
+          else if (!e.continuous && !e.firstOwed) {
+            table.delete(e.id);
+            drowsySeen(e);
+          }
         }
         pump();
         changed();
@@ -346,6 +371,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         if (existing.level !== f.level) {
           existing.level = f.level;
           existing.speak = true;
+          drowsySeen(existing);
           if (!existing.playing) existing.firstOwed = true; // one haptic for the step up
           flash(existing);
           pump();
@@ -385,6 +411,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
         since: inherit?.since ?? deps.now(),
       };
       table.set(f.alertId, e);
+      drowsySeen(e);
       flash(e, inherit !== undefined && f.level <= inherit.level);
       if (playing && f.tier >= 3) {
         // A dashcam critical preempts whatever the player is doing (a phone alert, another DashPal
@@ -404,7 +431,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
       const e = table.get(alertId);
       if (!e) return;
       table.delete(alertId);
-      noFaceEnded(e);
+      leftTable(e);
       if (e.playing || inFlight?.alertId === alertId) cut(e);
       changed();
     },
@@ -427,7 +454,7 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     clear() {
       if (table.size === 0 && !inFlight) return;
       const sounding = [...table.values()].some((e) => e.playing) || inFlight !== null;
-      for (const e of table.values()) noFaceEnded(e);
+      for (const e of table.values()) leftTable(e);
       table.clear();
       gen += 1;
       if (sounding) stopPlayer();
@@ -511,6 +538,10 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
     continuing() {
       return [...table.values()].filter((e) => e.continuous).map((e) => ({ alertId: e.id, sound: e.sound, tier: e.tier, level: e.level, since: e.since }));
     },
+
+    lastDrowsyAt: () => lastDrowsyAt,
+
+    lastShownAt: () => (inFlight !== null || [...table.values()].some((e) => e.playing) ? deps.now() : lastFlashAt),
 
     async settled() {
       for (let i = 0; i < 50; i++) {

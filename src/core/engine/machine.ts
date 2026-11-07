@@ -63,7 +63,7 @@ import {
   type ArriveClock,
   type StepMark,
 } from './motion';
-import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, noteWarmup, snapshotSession } from './session';
+import { appendRow, autoEndAt, closeAtLastMovement, closeSession, createSession, idleSince, limitFlags, noteWarmup, snapshotSession } from './session';
 import type { DetectorContext, DetectorSuite, FeatureRow, LimitSample } from './types';
 
 /** Speed-limit tiles are prefetched once per this much distance, never per fix, and never from a replayed row. */
@@ -376,7 +376,7 @@ export function createEngine(deps: EngineDeps): Engine {
         shake(a.id, row.ts, a.tier);
       }
     }
-    appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform });
+    appendRow(s, row, { unsafe: det.unsafe(), limitUsable: det.speedingNow() !== null, platform: ctx.platform, ...limitFlags(row, limit) });
     if (fastRow(row)) lastFastAt = row.ts;
     stepLog = noteSteps(stepLog, row);
     noteArrive(s, row);

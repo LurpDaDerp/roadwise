@@ -374,6 +374,10 @@ export interface DashcamLink {
   sendAlertAck(alertId: number, outcome: 0 | 1): void;
   playerUnavailable(): void;
   continuousAlertActive(): boolean;
+  /** When a DashPal drowsy alert last started, stepped up or ended (JS clock), or null: the break reminder waits after it. */
+  lastDrowsyAlertAt(): number | null;
+  /** When a DashPal alert last showed (JS clock): now while one sounds on the phone, else its last flash; or null. */
+  lastAlertShownAt(): number | null;
   snapshot(): LinkSnapshot;
   subscribe(fn: (s: LinkSnapshot) => void): () => void;
   nextWakeAt(): number | null;
@@ -1308,6 +1312,10 @@ export function createDashcamLink(deps: LinkDeps): DashcamLink {
     },
 
     continuousAlertActive: () => alerts.continuousActive(),
+
+    lastDrowsyAlertAt: () => alerts.lastDrowsyAt(),
+
+    lastAlertShownAt: () => alerts.lastShownAt(),
 
     snapshot,
 

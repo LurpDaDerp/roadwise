@@ -203,7 +203,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'ribbon-outline',
     lines: [
       'Each week brings three goals: no speeding, smooth driving and clean drives. They’re just for fun and never change your scores.',
-      'Badges mark milestones: First Drive, Clean 100 and Perfect Week.',
+      'Badges mark milestones like First Drive, Clean 100, Clean 1,000 and Rain or Shine.',
     ],
   },
   {

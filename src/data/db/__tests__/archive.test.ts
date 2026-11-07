@@ -33,6 +33,10 @@ const drive = (id: string, daysAgo: number, over: Partial<NewTrip> = {}): NewTri
   car_name: 'Civic',
   end_lat_full: 47.60012,
   end_lng_full: -122.30034,
+  speed_trace_json: '{"w":5,"p":[[0,30,25]]}',
+  limit_buckets_json: '{"low":{"s":10,"m":100},"mid":{"s":0,"m":0},"high":{"s":0,"m":0}}',
+  weather: 'rain',
+  practice_supervisor: 'Mom',
   start_lat: 47.6,
   start_lng: -122.3,
   end_lat: 47.7,
@@ -95,6 +99,13 @@ test('a settled drive past the 183 days loses its route, ends, labels and event 
     });
   }
   expect(await trips.get('old-scored')).toMatchObject({ status: 'scored', clean: 1 });
+  // None of the speed trace, the limit buckets, the weather or the supervisor says where it went: all four stay.
+  expect(await trips.get('old-scored')).toMatchObject({
+    speed_trace_json: '{"w":5,"p":[[0,30,25]]}',
+    limit_buckets_json: '{"low":{"s":10,"m":100},"mid":{"s":0,"m":0},"high":{"s":0,"m":0}}',
+    weather: 'rain',
+    practice_supervisor: 'Mom',
+  });
   // Only a scored drive's route is drawn on the All trips map, so only it is pooled: its trimmed line, never the whole one.
   expect(await createRoutePoolRepo(db).list()).toEqual(['route-old-scored']);
   const events = await createEventsRepo(db).listByTrip('old-scored');

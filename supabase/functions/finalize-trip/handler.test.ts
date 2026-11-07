@@ -61,7 +61,7 @@ const envelopeOf = (h: ReturnType<typeof harness>): ApplyDriveEnvelope => h.fake
 const ENVELOPE_KEYS = ['dashcam', 'events', 'payload', 'reason', 'scored', 'scoringVersion', 'user'];
 const PAYLOAD_KEYS = [
   'appVersion', 'clientTripId', 'dashcam', 'durationS', 'endedAt', 'exposure', 'localDay', 'miles', 'nightMiles',
-  'notDrivingExpired', 'origin', 'polyline', 'startedAt', 'tz',
+  'notDrivingExpired', 'origin', 'polyline', 'startedAt', 'tz', 'weather',
 ];
 
 Deno.test('happy path: a v5 upload is stored in one transaction with its origin, its "Not driving?" flag and its counters, and the stored answer is returned', async () => {
@@ -82,6 +82,8 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 11]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
+  // no weather sent: none passed on
+  assertEquals(e.payload.weather, null);
   // the uploaded event goes in active whatever the device said, with its position and measurements
   assertEquals(e.events.map((x) => [x.id, x.status, x.lat, x.measured]), [[EVENT, 'active', 40.72, { peakG: 0.42 }]]);
   // nor its end point: apply_drive never keeps where a drive ended
@@ -97,6 +99,19 @@ Deno.test('a manual drive whose "Not driving?" ran out, and one with no counters
   assertEquals((await handleFinalizeTrip(post(noExposure), h.deps)).status, 200);
   const e = envelopeOf(h);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired, e.payload.exposure], ['manual', true, null]);
+});
+
+Deno.test('the drive weather travels to apply_drive as uploaded; a word outside the four is refused by the contract', async () => {
+  for (const weather of ['clear', 'rain', 'snow', 'ice'] as const) {
+    const h = harness();
+    assertEquals((await handleFinalizeTrip(post(payload({ weather })), h.deps)).status, 200);
+    assertEquals(envelopeOf(h).payload.weather, weather);
+  }
+  const h = harness();
+  const bad = await handleFinalizeTrip(post({ ...payload(), weather: 'fog' }), h.deps);
+  assertEquals(bad.status, 400);
+  assertEquals((await bad.json()).code, 'invalid_payload');
+  assertEquals(h.fake.calls.some((c) => c.fn === 'applyDrive'), false);
 });
 
 Deno.test('a phone pickup travels to apply_drive as uploaded: its tier, its seconds in hand, its speeds; it breaks nothing else', async () => {

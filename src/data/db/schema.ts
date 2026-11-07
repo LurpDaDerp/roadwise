@@ -16,7 +16,8 @@
  * column each. Version 10 is the round where points and phone use leave, drives start on their own,
  * scores are judged per opportunity and problem spots are kept. Version 13 keeps a drive's route
  * and places for 183 days only (`archive.ts`). Version 14 keeps the whole route and the exact event
- * places on the phone, for the driver's own views.
+ * places on the phone, for the driver's own views. Version 16 keeps a few facts of each drive for the
+ * recap and the analytics: its speed over time, its time on each kind of road, and its weather.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -462,4 +463,27 @@ export const SCHEMA_V15: readonly string[] = [
   'ALTER TABLE trips ADD COLUMN car_name TEXT',
   'ALTER TABLE trips ADD COLUMN end_lat_full REAL',
   'ALTER TABLE trips ADD COLUMN end_lng_full REAL',
+];
+
+/**
+ * V16: what a drive was like, for the recap and the analytics.
+ * - `trips.speed_trace_json`: the speed over time, `{"w":<bucket width s>,"p":[[t,v,l],...]}` with
+ *   `t` the bucket's start (whole seconds from the drive's start), `v` the mean trusted speed in
+ *   mph (1 dp, null when no row had one) and `l` the sign's limit in whole mph (null when none);
+ *   at most 720 buckets (`speedTrace.ts`). Local only: never uploaded or restored.
+ * - `trips.limit_buckets_json`: the drive's limit time split by the scored limit,
+ *   `{"low":{"s":..,"m":..},"mid":{...},"high":{...}}` (seconds, whole metres; low ≤ 27 mph,
+ *   mid 28 to 47, high ≥ 48; `limitBuckets.ts`). Local only.
+ * - `trips.weather`: the worst weather the drive saw (`clear`, `rain`, `snow` or `ice`;
+ *   `features/weather/driveWeather.ts`). Uploaded; a restored drive comes back without it.
+ * - `trips.practice_supervisor`: who supervised the drive, for the permit's practice log (at most 60
+ *   characters). Local only.
+ * Null in each on a drive recorded before, and when the drive had none of it (no reading, no limit).
+ * Archiving keeps all four: none of them says where the drive went.
+ */
+export const SCHEMA_V16: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN speed_trace_json TEXT',
+  'ALTER TABLE trips ADD COLUMN limit_buckets_json TEXT',
+  "ALTER TABLE trips ADD COLUMN weather TEXT CHECK (weather IS NULL OR weather IN ('clear', 'rain', 'snow', 'ice'))",
+  'ALTER TABLE trips ADD COLUMN practice_supervisor TEXT',
 ];

@@ -184,6 +184,8 @@ describe('the mark', () => {
       lastFix: s.lastFix,
       trackLength: 2,
       exposure: s.exposure,
+      limitBuckets: s.limitBuckets,
+      speedTrace: s.speedTrace,
     });
     // Rows after it change the session, not the mark.
     appendRow(s, at(2, 14, { speed: 0 }), { unsafe: false, limitUsable: false, platform: 'ios' });

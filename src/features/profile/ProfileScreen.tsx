@@ -23,7 +23,7 @@ export const PROFILE_HREFS = {
 
 /**
  * The Profile tab: your card (the public one, plus the week's change and your
- * all-time totals), the three achievements, then everything about you and your account: friends,
+ * all-time totals), six of the achievements, then everything about you and your account: friends,
  * who can see your heat map, how scores work, settings, account and blocked users. It sits on the
  * page sky, so the title uses the white sky ink and the pull-to-refresh spinner does too. Like
  * every tab, it scrolls below the status bar (clipped at the safe area), never under it.

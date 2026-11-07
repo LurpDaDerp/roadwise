@@ -8,6 +8,7 @@ import { createEngine } from '@/core/engine/machine';
 import { recoverRecordingTrips } from '@/core/engine/recovery';
 import { rebuildFromSamples } from '@/core/engine/replay';
 import { appendRow, createSession } from '@/core/engine/session';
+import { speedTraceOf } from '@/core/engine/speedTrace';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createSamplesRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 
@@ -114,7 +115,7 @@ test('a rebuilt drive decides its warm-up as the live engine did: a stored resta
   expect(stopped.session.warmup).toEqual({ continues: false, decided: true, endsAt: T0 + 30_000 });
 });
 
-test('a rebuilt drive agrees with the live engine on movement: the mark (bar safe miles and limit time, which follow the tiles), the hold and the warm-up, despite missing tiles', async () => {
+test('a rebuilt drive agrees with the live engine on movement: the mark (bar safe miles, limit time, limit buckets and the trace limits, which follow the tiles), the hold and the warm-up, despite missing tiles', async () => {
   // Driving, a tunnel (vehicle-like fix-less rows), more driving with handling, then parked.
   const list = [
     ...rows(60, { speedMps: 15 }),
@@ -143,11 +144,18 @@ test('a rebuilt drive agrees with the live engine on movement: the mark (bar saf
   await createSamplesRepo(db).appendMany(uuid(7), list.map((r) => ({ ts: r.ts, row: r })));
   const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(7)))!, base()))!.session;
 
-  const { safeDistanceM: _a, exposure: liveExposure, ...liveMark } = live!.moved!;
-  const { safeDistanceM: _b, exposure: rebuiltExposure, ...rebuiltMark } = rebuilt.moved!;
+  const { safeDistanceM: _a, exposure: liveExposure, limitBuckets: liveBuckets, speedTrace: liveTrace, ...liveMark } = live!.moved!;
+  const { safeDistanceM: _b, exposure: rebuiltExposure, limitBuckets: rebuiltBuckets, speedTrace: rebuiltTrace, ...rebuiltMark } = rebuilt.moved!;
   expect(rebuiltMark).toEqual(liveMark);
   expect({ ...rebuiltExposure, limitS: 0 }).toEqual({ ...liveExposure, limitS: 0 });
   expect(liveExposure.limitS).toBeGreaterThan(0);
+  // No tiles on the rebuild: no limit, so no bucket and no limit line; the speeds are the same.
+  expect(liveBuckets.mid.s).toBe(liveExposure.limitS);
+  expect(rebuiltBuckets.mid.s).toBe(0);
+  const speeds = (t: typeof liveTrace) => speedTraceOf(t)?.points.map((p) => [p.t, p.v]);
+  expect(speeds(rebuiltTrace)).toEqual(speeds(liveTrace));
+  expect(speedTraceOf(liveTrace)?.points[0]?.l).toBe(35);
+  expect(speedTraceOf(rebuiltTrace)?.points.every((p) => p.l === null)).toBe(true);
   expect(rebuilt.motion).toEqual(live!.motion);
   expect(rebuilt.warmup).toEqual(live!.warmup);
   expect(live!.moved!.rowTs).toBe(T0 + 159_000);
@@ -202,4 +210,33 @@ test('an orphan that never moved is dropped with closeDrive: trip, samples, even
   expect(await createSamplesRepo(db).count(uuid(4))).toBe(0);
   expect((await db.execute('SELECT * FROM dashcam_coverage')).rows).toEqual([]);
   expect((await db.execute('SELECT * FROM sync_queue')).rows).toEqual([]);
+});
+
+test('with the same tiles, a rebuilt drive has the live speed trace and limit buckets, its mark too', async () => {
+  const posted = { limitMps: 35 * 0.44704, source: 'posted' as const, matchConfidence: 1, parallelRoads: false };
+  const list = [...rows(90, { speedMps: 15 }), ...rows(60, { t0: T0 + 90_000, speedMps: 0 })];
+  const engine = createEngine({
+    now: () => T0,
+    newId: () => uuid(8),
+    limits: { lookup: () => posted, prefetch: () => {} },
+    createDetectors: () => createDetectors(() => 'x'),
+    ctx: () => ({ platform: 'ios' }),
+    onAlert: () => {},
+    onCheckpoint: async () => {},
+    onFinalize: async () => {},
+    onCancel: async () => {},
+  });
+  await engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+  for (const r of list) await engine.dispatch({ type: 'row', row: r });
+  const live = engine.session()!;
+  const trips = createTripsRepo(db);
+  await trips.insert({ client_trip_id: uuid(8), started_at: T0, tz: TZ, status: 'recording' }, T0);
+  await createSamplesRepo(db).appendMany(uuid(8), list.map((r) => ({ ts: r.ts, row: r })));
+  const rebuilt = (await rebuildFromSamples(db, (await trips.get(uuid(8)))!, { ...base(), limits: { lookup: () => posted } }))!.session;
+  expect(rebuilt.speedTrace).toEqual(live.speedTrace);
+  expect(rebuilt.limitBuckets).toEqual(live.limitBuckets);
+  expect(rebuilt.moved).toEqual(live.moved);
+  expect(live.limitBuckets.mid.s).toBe(live.exposure.limitS);
+  expect(live.limitBuckets.mid.s).toBeGreaterThan(0);
+  expect(speedTraceOf(live.speedTrace)?.points.length).toBe(30);
 });

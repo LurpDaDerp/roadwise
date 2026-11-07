@@ -737,6 +737,7 @@ export type Database = {
           tz: string
           updated_at: string
           user_id: string
+          weather: string | null
         }
         ComputedFields: never
         Insert: {
@@ -782,6 +783,7 @@ export type Database = {
           tz: string
           updated_at?: string
           user_id: string
+          weather?: string | null
         }
         Update: {
           app_version?: string | null
@@ -826,6 +828,7 @@ export type Database = {
           tz?: string
           updated_at?: string
           user_id?: string
+          weather?: string | null
         }
         Relationships: []
       }
