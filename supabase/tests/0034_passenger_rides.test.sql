@@ -154,7 +154,7 @@ grant select on rides_n to service_role;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 create temporary table ex as select public.export_account('00000000-0000-0000-0000-000000000001') as e;
-select is((select e -> 'format_version' from ex), '7'::jsonb, 'the export is format 7');
+select is((select e -> 'format_version' from ex), '8'::jsonb, 'the export is format 8');
 select is((select jsonb_array_length(e -> 'passenger_rides') from ex), (select n from rides_n), 'with every passenger ride: its trip, day and kind');
 reset role;
 

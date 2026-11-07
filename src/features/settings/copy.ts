@@ -93,7 +93,7 @@ export const settingsCopy = {
       },
       footer: 'Saved on this phone only.',
     },
-    notifications: { title: 'Notifications', subtitle: 'Weekly recap and friends' },
+    notifications: { title: 'Notifications', subtitle: 'Recaps and friends' },
     saveError: "That didn't save. Check your connection and try again.",
   },
 

@@ -4,9 +4,9 @@ export const notificationSettingsCopy = {
   send: 'Send me',
   kinds: {
     weekly_recap: {
-      title: 'Weekly recap',
-      on: 'Your week in review, every Sunday evening.',
-      off: 'No Sunday recap.',
+      title: 'Weekly and monthly recaps',
+      on: 'Your week in review every Sunday evening, and your Wrapped on the 1st of each month.',
+      off: 'No weekly recap or monthly Wrapped.',
     },
     social: {
       title: 'Friend requests',

@@ -897,6 +897,31 @@ export type Database = {
           },
         ]
       }
+      wrapped_shares: {
+        Row: {
+          created_at: string
+          id: string
+          month: string
+          snapshot: Json
+          user_id: string
+        }
+        ComputedFields: never
+        Insert: {
+          created_at?: string
+          id: string
+          month: string
+          snapshot: Json
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          month?: string
+          snapshot?: Json
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -920,6 +945,8 @@ export type Database = {
         Args: { p_terms_version: string }
         Returns: undefined
       }
+      create_wrapped_share: { Args: { p_month: string }; Returns: string }
+      delete_wrapped_share: { Args: { p_month: string }; Returns: boolean }
       export_account: { Args: { p_user: string }; Returns: Json }
       get_current_speed_limit: {
         Args: { p_heading: number; p_lat: number; p_lon: number }
@@ -936,11 +963,13 @@ export type Database = {
       get_heatmap: { Args: { p_user_id: string }; Returns: Json }
       get_member_stats: { Args: { p_user_id: string }; Returns: Json }
       get_my_summary: { Args: Record<PropertyKey, never>; Returns: Json }
+      get_my_wrapped: { Args: { p_month: string }; Returns: Json }
       get_notification_prefs: {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
       get_profile: { Args: { p_username: string }; Returns: Json }
+      get_shared_wrapped: { Args: { p_id: string }; Returns: Json }
       list_blocked: { Args: Record<PropertyKey, never>; Returns: Json }
       list_friends: { Args: Record<PropertyKey, never>; Returns: Json }
       list_my_drives: {
@@ -951,6 +980,7 @@ export type Database = {
         Args: { p_after?: string; p_limit?: number }
         Returns: Json
       }
+      list_my_wrapped: { Args: Record<PropertyKey, never>; Returns: Json }
       osm_claim_fill_cell: {
         Args: { p_version?: number; p_x: number; p_y: number }
         Returns: string

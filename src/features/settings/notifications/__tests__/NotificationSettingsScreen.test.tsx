@@ -83,6 +83,8 @@ it('shows the server’s prefs, saves a switch, and shows what the server answer
   );
   await waitFor(() => expect(screen.getByTestId('prefs-weekly_recap').props.value).toBe(false));
   expect(screen.getByLabelText(`${copy.kinds.weekly_recap.title}, ${copy.kinds.weekly_recap.off}`)).toBeOnTheScreen();
+  // one switch for both: the weekly recap and the monthly Wrapped push
+  expect(screen.getByLabelText('Weekly and monthly recaps, No weekly recap or monthly Wrapped.')).toBeOnTheScreen();
 });
 
 it('steps quiet hours by the hour', async () => {

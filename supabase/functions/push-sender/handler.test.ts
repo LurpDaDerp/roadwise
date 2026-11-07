@@ -248,6 +248,25 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
   assertCleanLogs(h.logs, [...SECRETS, USER_2, 'friend']);
 });
 
+Deno.test('a monthly Wrapped is sent with its month and the url of that month', async () => {
+  const w = item({ kind: 'monthly_wrapped', payload: { month: '2026-08' } }, { tokens: [TOKEN_A] });
+  const h = harness({ items: [w] });
+  assertEquals(await (await h.handle(sweep(VECTOR))).json(), { claimed: 1, sent: 1, deferred: 0, skipped: 0, failed: 0, receipts: 0 });
+  assertEquals(h.expoCalls[0].body, [
+    {
+      to: TOKEN_A,
+      title: 'Your August Wrapped is here',
+      body: 'See your month on the road.',
+      data: { inboxId: w.inboxId, url: '/wrapped/2026-08' },
+      sound: 'default',
+      priority: 'default',
+      channelId: 'updates',
+    },
+  ]);
+  assertEquals(h.fake.outcomes, [{ inbox_id: w.inboxId, state: 'sent', reason: 'ok', deliveries: [{ token: TOKEN_A, ticket_id: 'ticket-0-aaa' }] }]);
+  assertCleanLogs(h.logs, [...SECRETS, 'Wrapped', '2026-08']);
+});
+
 Deno.test('a deferral is recorded with push_after (never deliver_after) and nothing is sent', async () => {
   // 23:13 Los Angeles: quiet hours until 07:00 PDT (14:00Z)
   const late = NOW + 16 * 3_600_000;

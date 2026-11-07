@@ -85,7 +85,7 @@ select is((select bool_and(has_function_privilege('service_role', f, 'execute') 
     from unnest(array['public.claim_push_batch(int, int)', 'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(int)', 'public.record_push_receipts(jsonb)']) f), true, 'the push writers execute for service_role only');
 select is((select count(*)::int from information_schema.role_table_grants g where g.grantee in ('anon', 'authenticated') and g.table_name in ('inbox', 'push_deliveries')), 0,
   'inbox and deliveries have no client grants');
-select is((select array_agg(jobname order by jobname) from cron.job), array['cron-log-purge', 'inbox-purge', 'purge-auth-audit', 'push-sender-sweep', 'rating-refresh', 'route-archive', 'weekly-recap'], 'the seven cron jobs are scheduled (no league close)');
+select is((select array_agg(jobname order by jobname) from cron.job), array['cron-log-purge', 'inbox-purge', 'monthly-stats', 'monthly-wrapped', 'purge-auth-audit', 'push-sender-sweep', 'rating-refresh', 'route-archive', 'weekly-recap'], 'the nine cron jobs are scheduled (no league close; 0038: the Wrapped cohort and push)');
 
 select * from finish();
 rollback;

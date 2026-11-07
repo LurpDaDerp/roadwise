@@ -1,6 +1,6 @@
 import { assertEquals } from '@std/assert';
 import { decide, inQuietHours, nextLocalTime, resolveTz, type PushItem } from './push_policy.ts';
-import { isPushKind, PUSH_KINDS, renderPush, TTL_MS } from './push_copy.ts';
+import { isPushKind, monthName, PUSH_KINDS, renderPush, TTL_MS } from './push_copy.ts';
 import { pushItem } from './testing/fake_push_db.ts';
 
 /** 2026-09-21 14:13:20 UTC = 07:13:20 Los Angeles (outside the default quiet hours). */
@@ -23,7 +23,7 @@ Deno.test('no league result is ever sent: the kind is gone, so a queued one is s
   const league = item({ kind: 'league_result', payload: { week: '2026-W40', result: 'promoted', final_rank: 3, tier: 'bronze', new_tier: 'silver', week_points: 410 } });
   assertEquals(decide(league, NOW), { kind: 'skip', reason: 'unknown_type' });
   assertEquals(isPushKind('league_result'), false);
-  assertEquals([...PUSH_KINDS], ['weekly_recap', 'friend_request']);
+  assertEquals([...PUSH_KINDS], ['weekly_recap', 'friend_request', 'monthly_wrapped']);
 });
 
 Deno.test('the rules in order: unknown kind, bad payload, preference off, no device, stale', () => {
@@ -68,4 +68,36 @@ Deno.test('copy: the recap says the drives, the rating and its change, and the g
   assertEquals(fr, { title: 'New friend request', body: 'Someone wants to add you as a friend.', url: '/friends' });
   assertEquals(renderPush('weekly_recap', { week: 1 }), null);
   assertEquals(renderPush('weekly_recap', { week: '2026-W40', rating: 90, rating_delta: 1, drives: 3, goals_done: 4 }), null);
+});
+
+Deno.test('the monthly Wrapped: its month in the title, a tap opens that month, a bad month says nothing', () => {
+  assertEquals(renderPush('monthly_wrapped', { month: '2026-10' }), {
+    title: 'Your October Wrapped is here',
+    body: 'See your month on the road.',
+    url: '/wrapped/2026-10',
+  });
+  assertEquals(renderPush('monthly_wrapped', { month: '2027-01' })?.title, 'Your January Wrapped is here');
+  assertEquals(renderPush('monthly_wrapped', { month: '2026-12' })?.url, '/wrapped/2026-12');
+  assertEquals([monthName('2026-01'), monthName('2026-05'), monthName('2026-12')], ['January', 'May', 'December']);
+  for (const bad of [{}, { month: '2026-13' }, { month: '2026-1' }, { month: '2026-00' }, { month: 202610 }, { month: '/w/x' }]) {
+    assertEquals(renderPush('monthly_wrapped', bad), null);
+  }
+  const body = renderPush('monthly_wrapped', { month: '2026-10' });
+  assertEquals(/points?|streak|league|level|mph|!|—/i.test(`${body?.title} ${body?.body}`), false);
+});
+
+Deno.test('the monthly Wrapped is sent with its url, follows its switch, and is stale after 3 days', () => {
+  const wrapped = (o: Partial<PushItem> = {}, ctx: Partial<PushItem['ctx']> = {}) =>
+    item({ kind: 'monthly_wrapped', payload: { month: '2026-08' }, ...o }, ctx);
+  const d = decide(wrapped(), NOW);
+  assertEquals(d.kind, 'send');
+  if (d.kind !== 'send') return;
+  assertEquals(d.message.title, 'Your August Wrapped is here');
+  assertEquals(d.message.body, 'See your month on the road.');
+  assertEquals(d.message.data.url, '/wrapped/2026-08');
+  assertEquals(TTL_MS.monthly_wrapped, 3 * 86_400_000);
+  assertEquals(decide(wrapped({}, { enabled: false }), NOW), { kind: 'skip', reason: 'category_off' });
+  assertEquals(decide(wrapped({ createdAt: NOW - TTL_MS.monthly_wrapped - 1 }), NOW), { kind: 'skip', reason: 'stale' });
+  assertEquals(decide(wrapped({ createdAt: NOW - TTL_MS.monthly_wrapped }), NOW).kind, 'send');
+  assertEquals(decide(wrapped({ payload: { month: 'October' } }), NOW), { kind: 'fail', reason: 'bad_payload' });
 });
