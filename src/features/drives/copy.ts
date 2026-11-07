@@ -62,6 +62,21 @@ export const recapCopy = {
     not_found: 'This drive hasn’t reached the server yet. Try again in a moment.',
     passenger_too_late: 'Your passenger mark from the notification arrived too late. You can still use “Wasn’t driving”.',
   } as Readonly<Record<string, string>>,
+  /** The speed chart's card (recap only; the share card never shows a speed). */
+  speed: {
+    title: 'Speed',
+    yourSpeed: 'Your speed',
+    limit: 'Speed limit',
+    /** "Speed chart. Over the limit 3 times, 1 minute 10 seconds in all." */
+    spoken: (times: number, time: string) =>
+      times === 0 ? 'Speed chart. Never over the limit.' : `Speed chart. Over the limit ${times === 1 ? 'once' : `${times} times`}, ${time} in all.`,
+  },
+  /** The line under the hero on a commute drive that went as well as the usual one or better (never worse). */
+  commute: {
+    fewer: (leg: string) => `Fewer events than your usual ${leg}`,
+    clean: (leg: string) => `Clean, like your usual ${leg}`,
+    same: (leg: string) => `Same as your usual ${leg}`,
+  },
   /** "4 passenger rides this month": own Analytics and the profile friends see. */
   passengerRides: (n: number) => `${n} passenger ${n === 1 ? 'ride' : 'rides'} this month`,
   report: {

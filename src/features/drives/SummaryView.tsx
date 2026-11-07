@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { MIN_SCORED_MILES, MIN_SCORED_S } from '@scoring';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
@@ -8,6 +9,7 @@ import { formatDistance, type Units } from '@/lib/units';
 import { Button, Card, Divider, IconButton, Text, useTheme } from '@/ui';
 import { opaque, over } from '@/ui/sky/color';
 
+import type { CommuteCompare } from './commuteCompare';
 import { recapCopy } from './copy';
 import { EventList } from './EventList';
 import { formatDay, formatDuration, formatTimeSpan, routeLine, spokenDuration, spokenRoute } from './format';
@@ -18,6 +20,7 @@ import { NotDrivingSheet, ReportSheet } from './ReportSheet';
 import { decodeRoute, leadIn } from './route';
 import { RouteMap } from './RouteMap';
 import { ShareSheet } from './ShareCard';
+import { SpeedChart } from './SpeedChart';
 import {
   canMarkNotDriving,
   eventRows,
@@ -41,6 +44,14 @@ export type SummaryViewProps = {
   onBack: () => void;
   onReport: (eventId: string, reason: Exclude<ReportReason, 'not_driving'>) => Promise<void>;
   onNotDriving: () => Promise<void>;
+  /** How this commute drive compares with the usual one on its leg, when as good or better (`useCommuteCompare`); absent or null: no line. */
+  commute?: CommuteCompare | null;
+};
+
+const COMMUTE_ICON: Record<CommuteCompare['kind'], keyof typeof Ionicons.glyphMap> = {
+  fewer: 'sparkles-outline',
+  clean: 'checkmark-circle-outline',
+  same: 'reorder-two-outline',
 };
 
 function StateBlock({ title, body, testID }: { title: string; body: string; testID: string }) {
@@ -73,9 +84,11 @@ function StateHead({ state, drive, units }: { state: Exclude<ScoreState, { kind:
  * The drive recap, top to bottom: time and distance (and how it started or ended on its own), the
  * route map, then the score card: the hero, the share card's smaller sibling (the tier's icon,
  * score, distance and time in the tier's colour on a soft wash of it) with Share right beside it,
- * and the drive's events under it. "Wasn't driving" sits in a fixed footer.
+ * a commute drive's line against the usual one on its leg (only when as good or better), and the
+ * drive's events under it; then the speed chart in its own card (only where the events are listed:
+ * never on a drive in progress or marked "Wasn't driving"). "Wasn't driving" sits in a fixed footer.
  */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack, onReport, onNotDriving }: SummaryViewProps) {
+export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack, onReport, onNotDriving, commute = null }: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -173,6 +186,19 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
                 </View>
                 {share}
               </View>
+              {commute !== null ? (
+                <View
+                  accessible
+                  accessibilityLabel={commute.spoken}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, paddingTop: t.space.sm }}
+                  testID="summary-commute"
+                >
+                  <Ionicons name={COMMUTE_ICON[commute.kind]} size={t.size.iconSm} color={t.colors.textMuted} />
+                  <Text variant="subhead" tone="muted" style={{ flex: 1 }}>
+                    {commute.text}
+                  </Text>
+                </View>
+              ) : null}
               {state.sync !== null ? (
                 <Text variant="footnote" tone="muted" testID={state.sync === 'refused' ? 'state-sync-refused' : 'state-not-synced'} style={{ paddingTop: t.space.sm }}>
                   {state.sync === 'refused' ? recapCopy.syncRefused : recapCopy.notSynced}
@@ -200,6 +226,9 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
             </>
           ) : null}
         </Card>
+
+        {/* 4. Speed over time against the limit (never on the share card); like the events, none on a drive in progress or marked */}
+        {listed ? <SpeedChart drive={drive} events={events} units={units} /> : null}
       </ScrollView>
 
       {/* "Wasn't driving", when it is on offer or the server said why not */}

@@ -22,7 +22,8 @@ import { HistoryView } from './HistoryView';
 import { markRecapSeen } from './recapSeen';
 import type { HistoryFilter } from './model';
 import { driveSummaryHref, HOME_HREF } from './routes';
-import { SummaryView } from './SummaryView';
+import { SummaryView, type SummaryViewProps } from './SummaryView';
+import { useCommuteCompare } from './useCommuteCompare';
 import { useDriveScores } from './useDriveScores';
 
 function useBack() {
@@ -68,6 +69,12 @@ export function DriveHistoryScreen() {
   );
 }
 
+/** The recap with its commute line, read once the drive is there. */
+function DriveRecap(props: Omit<SummaryViewProps, 'commute'>) {
+  const commute = useCommuteCompare(props.drive);
+  return <SummaryView {...props} commute={commute} />;
+}
+
 export function DriveSummaryScreen() {
   const t = useTheme();
   const back = useBack();
@@ -108,7 +115,7 @@ export function DriveSummaryScreen() {
   const { drive, events } = detail.data;
   return (
     <Screen padded={false}>
-      <SummaryView
+      <DriveRecap
         drive={drive}
         events={events}
         fresh={isFresh}

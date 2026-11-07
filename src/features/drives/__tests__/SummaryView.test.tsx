@@ -70,6 +70,55 @@ test('top to bottom: time and distance, the route map, then the hero with Share 
   expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
 });
 
+const TRACE = { widthS: 60, points: Array.from({ length: 24 }, (_, i) => ({ t: i * 60, v: 20 + i, l: 35 })) };
+
+test('the speed chart is its own card right after the score card, and never inside the share card', async () => {
+  await draw(<SummaryView {...props({ drive: drive({ speedTrace: TRACE }) })} />);
+  const ids = testIds();
+  const at = (id: string) => ids.indexOf(id);
+  expect(at('speed-chart-card')).toBeGreaterThan(at('event-list'));
+  expect(at('speed-chart-card')).toBeGreaterThan(at('summary-score-card'));
+  expect(within(screen.getByTestId('summary-score-card')).queryByTestId('speed-chart-card')).toBeNull();
+  expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
+  // A drive without a trace (recorded before it, restored) shows none.
+  await draw(<SummaryView {...props()} />);
+  expect(screen.queryByTestId('speed-chart-card')).toBeNull();
+});
+
+test("like the events, the speed chart shows on a too-short drive but never on one in progress or marked as not driving", async () => {
+  const speeding = [event({ id: 's1', type: 'speeding', tier: 'moderate', startedAt: NOW - 2 * HOUR + 5 * 60_000, durationS: 70 })];
+  await draw(<SummaryView {...props({ events: speeding, drive: drive({ speedTrace: TRACE, status: 'unscored', reason: 'too_short' }) })} />);
+  expect(screen.getByTestId('speed-chart-card')).toBeOnTheScreen();
+  for (const over of [{ status: 'not_driving' }, { status: 'recording' }] as const) {
+    await draw(<SummaryView {...props({ events: speeding, drive: drive({ speedTrace: TRACE, ...over }) })} />);
+    expect(screen.queryByTestId('speed-chart-card')).toBeNull();
+    expect(screen.queryByTestId('speed-chart-band')).toBeNull();
+    expect(JSON.stringify(screen.toJSON())).not.toMatch(/Over the limit/);
+  }
+});
+
+describe('the commute line', () => {
+  const fewer = { kind: 'fewer', text: 'Fewer events than your usual Home → School', spoken: 'Fewer events than your usual Home to School' } as const;
+
+  test('sits in the score card under the hero, above the events', async () => {
+    await draw(<SummaryView {...props({ commute: fewer })} />);
+    const ids = testIds();
+    const at = (id: string) => ids.indexOf(id);
+    expect(at('summary-commute')).toBeGreaterThan(at('summary-hero'));
+    expect(at('summary-commute')).toBeLessThan(at('event-list'));
+    expect(within(screen.getByTestId('summary-score-card')).getByTestId('summary-commute')).toHaveTextContent(/Fewer events than your usual Home → School$/);
+    expect(screen.getByTestId('summary-commute')).toHaveProp('accessibilityLabel', 'Fewer events than your usual Home to School');
+    expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
+  });
+
+  test('none without one, and none on a drive with no score', async () => {
+    await draw(<SummaryView {...props()} />);
+    expect(screen.queryByTestId('summary-commute')).toBeNull();
+    await draw(<SummaryView {...props({ commute: fewer, drive: drive({ status: 'not_driving' }) })} />);
+    expect(screen.queryByTestId('summary-commute')).toBeNull();
+  });
+});
+
 describe('the lead-in from where the drive began', () => {
   const H = { includeHiddenElements: true } as const;
   const parked = { lat: ROUTE[0]!.lat - 0.002, lng: ROUTE[0]!.lng };

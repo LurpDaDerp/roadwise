@@ -38,6 +38,15 @@ jest.mock('@/data/sync/driveActions', () => ({
 jest.mock('@tanstack/react-query', () => ({ useQueryClient: () => 'qc' }));
 let mockScores = new Map<string, number>();
 jest.mock('../useDriveScores', () => ({ useDriveScores: () => mockScores }));
+// The recap's commute line reads the scored drives and the saved places; it has its own tests.
+let mockCommute: unknown = null;
+const mockCommuteFor = jest.fn();
+jest.mock('../useCommuteCompare', () => ({
+  useCommuteCompare: (d: { clientTripId: string }) => {
+    mockCommuteFor(d.clientTripId);
+    return mockCommute;
+  },
+}));
 let mockAuto: { state: string } = { state: 'unsupported' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
 let mockHistory: unknown[] = [];
@@ -58,6 +67,7 @@ beforeEach(() => {
   mockParams = { clientTripId: 'a1' };
   mockDetail = { drive: mockDrive(), events: [mockEvent()] };
   mockScores = new Map();
+  mockCommute = null;
   mockAuto = { state: 'unsupported' };
   mockHistory = [];
   mockHistoryFilters = [];
@@ -73,6 +83,15 @@ test('the summary reads the drive and the uses left, and reports through the dri
   await press(screen.getByTestId('reason-hazard'));
   await press(screen.getByTestId('report-send'));
   expect(mockReport).toHaveBeenCalledWith('a1', 'e1', 'hazard', { db: 'db', queryClient: 'qc' });
+});
+
+test('the summary shows the commute line for the drive on show', async () => {
+  await draw(<DriveSummaryScreen />);
+  expect(mockCommuteFor).toHaveBeenCalledWith('a1');
+  expect(screen.queryByTestId('summary-commute')).toBeNull();
+  mockCommute = { kind: 'same', text: 'Same as your usual Home → School', spoken: 'Same as your usual Home to School' };
+  await draw(<DriveSummaryScreen />);
+  expect(screen.getByTestId('summary-commute')).toHaveProp('accessibilityLabel', 'Same as your usual Home to School');
 });
 
 test("confirming \"wasn't driving\" marks the drive", async () => {
