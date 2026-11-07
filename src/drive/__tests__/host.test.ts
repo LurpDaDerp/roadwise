@@ -2223,6 +2223,17 @@ describe('iOS: the push-to-start once the confirming rows are in (plan decision 
     await g.host.stop({ endOpenTrip: false });
   });
 
+  test.each(['no_token', 'unconfigured', 'duplicate', 'rate_limited'])('the expected answer %s is not reported as an error and not asked again', async (reason) => {
+    const p = pushes([{ sent: false, reason, detail: null, retryable: false }]);
+    const h = await behind({ pushToStart: p.pushToStart });
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    expect(p.pushed).toHaveLength(1);
+    expect(h.errors.filter((e) => e.startsWith('pushToStart'))).toEqual([]);
+    expect(h.scheduler.delays()).not.toContain(PUSH_START_RETRY_MS);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('a failure a retry may fix is reported with its reason and asked once more after 30 s; a final one is not; one already running asks nothing', async () => {
     const p = pushes([{ sent: false, reason: 'timeout', detail: null, retryable: true }, { sent: false, reason: 'apns_error', detail: 'TooManyRequests', retryable: true }]);
     const h = await behind({ pushToStart: p.pushToStart });
@@ -2252,7 +2263,8 @@ describe('iOS: the push-to-start once the confirming rows are in (plan decision 
     const g = await behind({ pushToStart: f.pushToStart });
     await confirm(g, rows(30, { speedMps: 15 }));
     await flush(g);
-    expect(g.errors).toContain('pushToStart: push-to-start not sent: unconfigured');
+    // The server's ordinary answer: final, and not filed as an error.
+    expect(g.errors.filter((e) => e.startsWith('pushToStart'))).toEqual([]);
     expect(g.scheduler.delays()).not.toContain(PUSH_START_RETRY_MS);
     await g.host.stop({ endOpenTrip: false });
 

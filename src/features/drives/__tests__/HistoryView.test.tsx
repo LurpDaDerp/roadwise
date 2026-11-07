@@ -1,6 +1,7 @@
 import { screen, within } from '@testing-library/react-native';
 import { driveMerit } from '@scoring';
 
+import * as unitsModule from '@/data/queries/units';
 import { contrastRatio } from '@/ui';
 import { tokens } from '@/ui/tokens';
 
@@ -145,4 +146,17 @@ test('while loading it shows placeholders, not an empty state', async () => {
   await draw(<HistoryView {...props({ drives: undefined, loading: true })} />);
   expect(screen.getByTestId('history-loading')).toBeOnTheScreen();
   expect(screen.queryByTestId('history-empty-all')).toBeNull();
+});
+
+test('the units are read once for the list, not once per row or week header, and every row and header shows them', async () => {
+  const read = jest.spyOn(unitsModule, 'useUnits').mockReturnValue('km');
+  try {
+    await draw(<HistoryView {...props()} />);
+    // 4 rows and 3 week headers: a read per item would be 7 or more.
+    expect(read.mock.calls.length).toBeLessThan(4);
+    expect(screen.getByLabelText('This week, 1 drive, 42 km')).toBeOnTheScreen();
+    expect(screen.getByTestId('drive-a').props.accessibilityLabel).toContain('kilometers');
+  } finally {
+    read.mockRestore();
+  }
 });

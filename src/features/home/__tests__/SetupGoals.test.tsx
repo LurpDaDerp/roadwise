@@ -6,6 +6,7 @@ import { act, screen, waitFor, within } from '@testing-library/react-native';
 import { useEffect, useState } from 'react';
 
 import { SIGN_OUT_SETTINGS } from '@/boot/device';
+import { SERVER_SLOW_STALE_MS } from '@/data/server/useServerQuery';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import { PLACES_KEY } from '@/features/places/model';
@@ -29,7 +30,14 @@ jest.mock('@/features/carLink/useCarLink', () => ({ useCarLink: () => ({ view: m
 /** The friends query as Home sees it. */
 let mockFriends: { data?: { friends: unknown[] }; status: string; fetchStatus: string } = { data: { friends: [] }, status: 'success', fetchStatus: 'idle' };
 const friendsList = (friends: unknown[]) => ({ data: { friends }, status: 'success', fetchStatus: 'idle' });
-jest.mock('@/features/social/api', () => ({ useFriends: () => mockFriends }));
+/** What the row asked the friends query for, last call last. */
+let mockFriendsOpts: unknown[] = [];
+jest.mock('@/features/social/api', () => ({
+  useFriends: (opts: unknown) => {
+    mockFriendsOpts.push(opts);
+    return mockFriends;
+  },
+}));
 /** The DashPal runtime's state (null: no runtime, as in a build without Bluetooth). */
 let mockDashcam: unknown = null;
 jest.mock('@/dashcam/ui/useDashcam', () => ({ useDashcamSelector: (select: (s: unknown) => unknown) => select(mockDashcam) }));
@@ -55,6 +63,7 @@ beforeEach(() => {
   mockPush.mockClear();
   mockCarView = { status: 'unsupported' };
   mockFriends = friendsList([]);
+  mockFriendsOpts = [];
   mockDashcam = null;
 });
 afterEach(() => clearQueryClients());
@@ -203,6 +212,16 @@ describe('when the row is gone', () => {
     await w.render(<HomeSetupGoals hidden />);
     await waitFor(async () => expect(await w.settings.get(PLACES_KEY)).toBeNull());
     expect(screen.queryByTestId('home-setup')).toBeNull();
+  });
+
+  it('the friends read is kept 10 minutes (no list_friends on every Home visit) and off during a drive', async () => {
+    const w = await appWorld();
+    const r = await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
+    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: true, staleMs: SERVER_SLOW_STALE_MS });
+    await r.unmount();
+    await w.render(<HomeSetupGoals hidden />);
+    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: false, staleMs: SERVER_SLOW_STALE_MS });
   });
 
   it('copy has no dashes, exclamation marks or game words', () => {

@@ -120,7 +120,7 @@ describe('the drive row', () => {
 
   test('a row with no testID still draws its chip', async () => {
     await pairAll(civic, volvo);
-    await draw(<DriveRow drive={drives[0]!} onPress={jest.fn()} />);
+    await draw(<DriveRow drive={drives[0]!} units="mi" onPress={jest.fn()} />);
     await settle();
     expect(screen.getByTestId('row-car')).toBeOnTheScreen();
   });

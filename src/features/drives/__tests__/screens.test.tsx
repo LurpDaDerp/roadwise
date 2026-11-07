@@ -25,7 +25,7 @@ jest.mock('@/data/queries', () => ({
   useDriveDetail: () => (mockDetail === undefined ? { data: undefined, isLoading: true, isError: false } : mockOk(mockDetail)),
   useDriveHistory: (filter: string) => {
     mockHistoryFilters.push(filter);
-    return mockOk(mockHistory);
+    return { ...mockOk(mockHistory), isRefetching: mockHistoryRefetching, refetch: mockHistoryRefetch };
   },
   useRecentDrives: () => mockOk([mockDrive()]),
   useStatSums: () => mockOk(undefined),
@@ -57,6 +57,8 @@ let mockAuto: { state: string } = { state: 'unsupported' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
 let mockHistory: unknown[] = [];
 let mockHistoryFilters: string[] = [];
+let mockHistoryRefetching = false;
+let mockHistoryRefetch = jest.fn(async () => ({}));
 let mockDetect = createFakeDriveDetect();
 jest.mock('@/features/carLink/port', () => ({
   readCarLink: () => mockDetect.carLinkState().catch(() => null),
@@ -78,6 +80,8 @@ beforeEach(() => {
   mockAuto = { state: 'unsupported' };
   mockHistory = [];
   mockHistoryFilters = [];
+  mockHistoryRefetching = false;
+  mockHistoryRefetch = jest.fn(async () => ({}));
   mockArchived = undefined;
   resetPairedCars();
   mockDetect = createFakeDriveDetect();
@@ -154,6 +158,24 @@ test('the history shows each drive with its score, and the empty list words foll
   mockArchived = { all: true, clean: false, passenger: false };
   await draw(<DriveHistoryScreen />);
   expect(screen.getByText('No drives in the last 6 months')).toBeOnTheScreen();
+});
+
+test('the history spinner shows for a pull only, until its read is done, never for a background refetch', async () => {
+  mockHistory = [mockDrive({ clientTripId: 'h1' })];
+  const spinner = () => (screen.getByTestId('drive-history').props as { refreshControl: { props: { refreshing: boolean; onRefresh: () => void } } }).refreshControl.props;
+  // A background refetch (a sync or a report invalidated the drives): no spinner, so the list stays put.
+  mockHistoryRefetching = true;
+  await draw(<DriveHistoryScreen />);
+  expect(spinner().refreshing).toBe(false);
+  // The driver's pull: the spinner shows until the read is done.
+  let done = () => {};
+  mockHistoryRefetch = jest.fn(() => new Promise<object>((resolve) => (done = () => resolve({}))));
+  await draw(<DriveHistoryScreen />);
+  await act(async () => spinner().onRefresh());
+  expect(mockHistoryRefetch).toHaveBeenCalledTimes(1);
+  expect(spinner().refreshing).toBe(true);
+  await act(async () => done());
+  expect(spinner().refreshing).toBe(false);
 });
 
 const civic: CarOutput = { uid: '00:11:22:33:44:55-tacl', name: 'Civic', type: 'bluetoothA2DP' };

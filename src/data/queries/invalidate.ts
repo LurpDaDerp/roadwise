@@ -10,10 +10,20 @@ import { queryKeys, QUERY_ROOTS } from '@/data/queries/keys';
 const ignore = () => undefined;
 
 /**
+ * The settings-backed caches a wipe empties (saved and learned places, their suggestions and the
+ * recap's prompt, the emergency contacts, Permit mode's settings). They are keyed by no uid.
+ */
+export const WIPE_RESET_ROOTS: readonly string[] = ['places', 'emergency', 'permit'];
+
+/**
  * Everything this layer caches is now suspect, except after a spots recompute: it moved only the
- * spots, so only they refresh.
+ * spots, so only they refresh. A wipe also resets the settings-backed caches (`WIPE_RESET_ROOTS`)
+ * to empty, so no screen paints the leaving driver's places or contacts from the cache.
  */
 export async function invalidateAfterSync(queryClient: QueryClient, change?: DataChange): Promise<void> {
+  if (change?.source === 'wipe') {
+    await queryClient.resetQueries({ predicate: (q) => WIPE_RESET_ROOTS.includes(String(q.queryKey[0])) }).catch(ignore);
+  }
   const roots = change?.source === 'spots' ? (['spots'] as const) : QUERY_ROOTS;
   await Promise.all(roots.map((root) => queryClient.invalidateQueries({ queryKey: [root] }).catch(ignore)));
 }

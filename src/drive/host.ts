@@ -284,6 +284,11 @@ export interface PushToStartOutcome {
 export const PUSH_START_WAIT_MS = 1_500;
 /** A push-to-start that failed in a way a retry may fix is asked once more this long after. */
 export const PUSH_START_RETRY_MS = 30_000;
+/**
+ * The server's ordinary "not sent" answers (no push-to-start token on the phone, no APNs secrets, a
+ * first ask already sent, the rate limit): not faults, so never reported as errors.
+ */
+export const EXPECTED_PUSH_REASONS: ReadonlySet<string> = new Set(['no_token', 'unconfigured', 'duplicate', 'rate_limited']);
 
 /** The first Live Activity state, for a server push-to-start (iOS 17.2+). */
 export interface PushToStartRequest {
@@ -878,6 +883,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       report(e, 'parked');
     }
     dropParked();
+    // Signed out (a drive closed by the sign-out): no parked watch is armed for a driver who left.
+    if (signedOut) return;
     const t = carTally;
     const point = session.lastFix;
     if (t === null || point === null || !t.pairedEver()) return;
@@ -924,7 +931,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (outcome === 'confirmed') {
       const arm = parkedArm;
       dropParked();
-      if (arm !== null && persist) {
+      // Signed out, the spot is not kept: the sign-out wipe may already have run.
+      if (arm !== null && persist && !signedOut) {
         void writeParkedSpot(db, { lat: arm.lat, lng: arm.lng, parkedAt: arm.parkedAt, label: arm.label, driveId: arm.driveId }).catch((e: unknown) => report(e, 'parked'));
       }
       return;
@@ -1608,7 +1616,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       return;
     }
     const again = outcome.retryable && !p.retried;
-    report(new Error(`push-to-start not sent: ${outcome.reason ?? 'unknown'}${outcome.detail ? ` (${outcome.detail})` : ''}${again ? `; asking again in ${PUSH_START_RETRY_MS / 1000} s` : ''}`), 'pushToStart');
+    if (!EXPECTED_PUSH_REASONS.has(outcome.reason ?? '')) report(new Error(`push-to-start not sent: ${outcome.reason ?? 'unknown'}${outcome.detail ? ` (${outcome.detail})` : ''}${again ? `; asking again in ${PUSH_START_RETRY_MS / 1000} s` : ''}`), 'pushToStart');
     if (!again) {
       p.phase = 'done';
       return;
@@ -2686,6 +2694,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         if (isBusyStatus(engine.snapshot().status)) await engine.dispatch({ type: 'end', ts: now() });
       }, 'signOut');
       await self.untilIdle();
+      // A "Where you parked" watch still pending would write the spot back after the sign-out wipe
+      // (also one armed by the drive the sign-out just closed).
+      dropParked();
     },
     resumeAfterSignIn: () =>
       run(async () => {

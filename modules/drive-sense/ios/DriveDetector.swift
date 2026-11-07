@@ -96,8 +96,10 @@ final class DriveDetector {
     (rec ?? DetectStateRecord()).json(access.snapshot(), reason: reason)
   }
 
+  /// Live only: JS reads the state with `getState`, so a `detectState` with no listener is dropped
+  /// rather than buffered, where it would pile up and push buffered drive events out of the hub.
   func emitState(_ reason: String) {
-    EventHub.detect.emit("detectState", stateJSON(reason: reason))
+    EventHub.detect.emitLive("detectState", stateJSON(reason: reason))
   }
 
   /// Back to armed (or off without the arming or the permissions); the drive's fields cleared.

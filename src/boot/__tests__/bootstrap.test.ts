@@ -11,9 +11,10 @@ import { createQueueRepo, createRoutePoolRepo, createSamplesRepo, createSettings
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
 import { bootstrapApp, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
+import { RestoreAbandonedError } from '@/data/hydrate/restore';
 import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, rememberDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createFakeDashcamRuntime } from '@/dashcam/__fixtures__/fakeRuntime';
-import { setActiveDashcam } from '@/dashcam/registry';
+import { activeDashcam, setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
 import type { DriveHost } from '@/drive/host';
@@ -182,6 +183,40 @@ test('the headless task keeps a continued drive alive and stops a capture with n
   await rt.stop();
 });
 
+test("the headless task posts no recap of its own: it waits on the launch's one notifier", async () => {
+  const attached: string[] = [];
+  let settledCalls = 0;
+  let release: () => void = () => {};
+  const posted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const d = deps({
+    attachSummaryNotifier: () => {
+      attached.push('launch');
+      return {
+        detach: () => {},
+        settled: () => {
+          settledCalls += 1;
+          return posted;
+        },
+      };
+    },
+  });
+  const rt = await bootstrapApp(d.deps);
+  const task = createDriveHeadlessTask({ ensureRuntime: async () => rt, stopCapture: async () => {}, report: () => {} });
+  let done = false;
+  const running = task({}).then(() => {
+    done = true;
+  });
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+  expect(settledCalls).toBe(1);
+  expect(done).toBe(false);
+  release();
+  await running;
+  expect(attached).toEqual(['launch']);
+  await rt.stop();
+});
+
 test('device ownership: a different user wipes every table but the schema’s; an empty device is adopted', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
@@ -306,6 +341,35 @@ test('restore: the owner’s drives come from the server under the owner’s ses
   expect(await createTripsRepo(db).count()).toBe(0);
 });
 
+test("the foreground jobs' 'not now' (a drive under way, a drive recording, a restore abandoned) is not reported; a real failure is", async () => {
+  const rt = await bootstrapApp(deps().deps);
+  const errors: string[] = [];
+  let busy = true;
+  Object.assign(rt.drive, { isBusy: () => busy });
+  Object.assign(rt, {
+    restore: async () => {
+      throw new RestoreAbandonedError();
+    },
+    refreshConfig: async () => {
+      throw new Error('config fetch failed');
+    },
+  });
+  const appState = createFakeAppState('active');
+  const jobs = await startForegroundJobs(rt, { appState, onError: (e, context) => void errors.push(`${context}: ${e instanceof Error ? e.message : String(e)}`) });
+  for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(errors.filter((e) => e.startsWith('foreground job config') || e.startsWith('foreground job restore'))).toEqual([]);
+  expect(await jobs.runNow()).toBe(false);
+  expect(errors).toEqual([]);
+  // A drive no longer under way: the config job's own failure reaches the hook.
+  busy = false;
+  appState.set('background');
+  appState.set('active');
+  for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(errors).toContain('foreground job config: config fetch failed');
+  await jobs.stop();
+  await rt.stop();
+});
+
 test('a phone first opened signed out restores the driver’s drives at their sign-in, not at the next relaunch; a sign-out that emptied the phone restores again', async () => {
   const supabase = createFakeSupabase({ uid: null, rpc: () => ({ data: [serverDrive(1)], error: null }) });
   const rt = await bootstrapApp(deps({ supabase: supabase as unknown as BootSupabase }).deps);
@@ -313,9 +377,10 @@ test('a phone first opened signed out restores the driver’s drives at their si
   const errors: string[] = [];
   const jobs = await startForegroundJobs(rt, { appState: createFakeAppState('active'), onError: (_e, context) => errors.push(context) });
   for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
-  // Signed out on a phone nobody owns: nothing restored, nothing marked done, no request.
+  // Signed out on a phone nobody owns: nothing restored, nothing marked done, no request. Expected,
+  // so not reported to the crash sink.
   expect(supabase.rpcs).toHaveLength(0);
-  expect(errors).toContain('foreground job restore');
+  expect(errors).not.toContain('foreground job restore');
 
   // The sign-in: the owner watch records the owner, then the layout runs the restore now.
   supabase.setUid('user-1');
@@ -422,6 +487,37 @@ test('a wipe under a live app restarts the DashPal link, so it handshakes again 
   await rt.stop();
 });
 
+test("a launch abandoned at its deadline neither takes nor clears the retry's DashPal registration", async () => {
+  const withSettle = () => {
+    const f = createFakeDashcamRuntime();
+    let disposed: () => void = () => {};
+    const gone = new Promise<void>((resolve) => {
+      disposed = resolve;
+    });
+    return { rt: Object.assign(f, { link: { ...f.link, settled: async () => {} }, dispose: () => disposed() }), gone };
+  };
+  const slow = withSettle();
+  const retry = withSettle();
+  let open: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  try {
+    const first = deps({ openDb: async () => (await gate, db), createDashcam: () => slow.rt, timeoutMs: 20 });
+    await expect(bootstrapApp(first.deps)).rejects.toThrow('timed out');
+    const rt = await bootstrapApp(deps({ createDashcam: () => retry.rt }).deps);
+    expect(activeDashcam()).toBe(retry.rt);
+    // The abandoned launch finishes now, and is stopped as it resolves.
+    open();
+    await slow.gone;
+    expect(activeDashcam()).toBe(retry.rt);
+    await rt.stop();
+    expect(activeDashcam()).toBeNull();
+  } finally {
+    setActiveDashcam(null);
+  }
+});
+
 test('a plain sign-out takes the DashPal events, boots and coverage with the drives; the pairing stays', async () => {
   const d = deps();
   const rt = await bootstrapApp(d.deps);
@@ -507,9 +603,12 @@ test('iOS: a launch whose session cannot be read (an expired token, no network) 
     ...d.supabase,
     auth: { ...d.supabase.auth, getSession: async () => ({ data: { session: null }, error: { name: 'AuthRetryableFetchError', message: 'Network request failed' } }) },
   } as unknown as BootSupabase;
-  const rt = await bootstrapApp({ ...d.deps, supabase, detect });
+  const errors: string[] = [];
+  const rt = await bootstrapApp({ ...d.deps, supabase, detect, onError: (_e, context) => void errors.push(context) });
   expect(rt.owner).toBe('same');
   expect(rt.drive.signedIn()).toBe(true);
+  // Every offline launch reads so: not a fault for the crash sink.
+  expect(errors).not.toContain('identity: session');
   const jobs = await startForegroundJobs(rt, { appState: d.appState, onError: () => {} });
   await new Promise((r) => setTimeout(r, 0));
   expect(detect.snapshot).toMatchObject({ armed: true, ownerId: 'user-1' });
@@ -748,7 +847,7 @@ test('iOS: the default push-to-start asks the server over the launch’s client 
   detect.confirm({ driveId: uuid(21), startedAt: clock - 30_000, rows: list.map((r) => ({ ...r })) });
   const supabase = createFakeSupabase({
     uid: 'user-1',
-    invoke: (call) => (call.name === 'live-activity-start' ? invokeOk({ sent: false, reason: 'no_token' }) : invokeOk({})),
+    invoke: (call) => (call.name === 'live-activity-start' ? invokeOk({ sent: false, reason: 'apns_error', detail: 'BadDeviceToken', retry: false }) : invokeOk({})),
     rpc: () => ({ data: [], error: null }),
   });
   const display = { start: jest.fn(), update: jest.fn(), refresh: jest.fn(), end: jest.fn(), isRunning: async () => false };
@@ -770,7 +869,7 @@ test('iOS: the default push-to-start asks the server over the launch’s client 
   const asks = supabase.invokes.filter((c) => c.name === 'live-activity-start');
   expect(asks).toHaveLength(1);
   expect(asks[0]!.body).toMatchObject({ deviceId: 'install-0001', clientTripId: uuid(21), leg: 0, startedAt: clock - 30_000 });
-  // The server's own reason, not a bare false: no token is not worth a retry.
-  expect(errors).toContain('drive pushToStart: push-to-start not sent: no_token');
+  // The server's own reason, not a bare false: a refused token is not worth a retry.
+  expect(errors).toContain('drive pushToStart: push-to-start not sent: apns_error (BadDeviceToken)');
   await rt.stop({ endOpenTrip: false });
 });

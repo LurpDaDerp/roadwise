@@ -164,9 +164,14 @@ function exposureCols(d: ServerDrive): Pick<NewTrip, 'slowdowns' | 'speedups' | 
   return { slowdowns: e.slowdowns, speedups: e.speedups, turns: e.turns, limit_s: e.limitS, moving_s: e.movingS, phone_s: e.phoneS };
 }
 
-/** The local row of a server drive; one the server archived is stored archived at `now`, with no route. */
+/**
+ * The local row of a server drive; one the server archived is stored archived at `now`, with no route.
+ * Only a scored drive keeps a clean flag, as on the phone itself: the server leaves a "Wasn't driving"
+ * drive's flag as it was.
+ */
 export function toTripRow(d: ServerDrive, now: number = Date.now()): NewTrip {
   const events = knownEvents(d).map((e) => ({ type: e.type, status: e.status ?? 'active' }));
+  const status = d.notDriving ? 'not_driving' : d.scored ? 'scored' : 'unscored';
   return {
     client_trip_id: d.clientTripId,
     started_at: d.startedAt,
@@ -177,8 +182,8 @@ export function toTripRow(d: ServerDrive, now: number = Date.now()): NewTrip {
     night_miles: d.nightMiles,
     duration_s: d.durationS,
     polyline: d.polyline,
-    status: d.notDriving ? 'not_driving' : d.scored ? 'scored' : 'unscored',
-    clean: d.clean === null ? null : d.clean ? 1 : 0,
+    status,
+    clean: status === 'scored' && d.clean !== null ? (d.clean ? 1 : 0) : null,
     counts_json: JSON.stringify(countEvents(events)),
     reason: d.reason,
     result_json: d.result === undefined || d.result === null ? null : JSON.stringify(d.result),

@@ -116,13 +116,15 @@ export function createExpoSummaryPort(): SummaryNotificationPort {
           body: req.body,
           data: { kind: DRIVE_SUMMARY_KIND, url: req.url, clientTripId: req.clientTripId },
           ...(req.categoryIdentifier ? { categoryIdentifier: req.categoryIdentifier } : {}),
-          ...({ channelId: SUMMARY_CHANNEL_ID } as object),
         },
-        trigger: null,
+        // Android reads the channel only from the trigger (in `content` it is ignored and the recap
+        // lands on expo's fallback channel); a channel-only trigger still posts at once, and on iOS
+        // it is the same as no trigger.
+        trigger: { channelId: SUMMARY_CHANNEL_ID },
       });
     },
     async scheduled() {
-      // Posted with no trigger, a recap is delivered at once and never pending: the ones in
+      // Posted with no time trigger, a recap is delivered at once and never pending: the ones in
       // Notification Center are listed too, so the handover wipe takes them down as well.
       const [pending, presented] = await Promise.all([
         Notifications.getAllScheduledNotificationsAsync(),

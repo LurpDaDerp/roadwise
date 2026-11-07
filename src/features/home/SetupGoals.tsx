@@ -15,6 +15,7 @@ import type { DashcamState } from '@/dashcam/runtime';
 import { useDashcamSelector } from '@/dashcam/ui/useDashcam';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { SERVER_SLOW_STALE_MS } from '@/data/server/useServerQuery';
 import { useCarLink } from '@/features/carLink/useCarLink';
 import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts';
 import { FRIENDS_ADD_HREF } from '@/features/leagues/routes';
@@ -215,7 +216,9 @@ export function HomeSetupGoals({ hidden }: { hidden: boolean }) {
   const client = useQueryClient();
   const car = useCarLink();
   const dashpal = useDashcamSelector(selectDashpalPaired);
-  const friends = useFriends();
+  // Not read during a drive, and kept 10 minutes: Home is visited often and the row only needs a first
+  // friend (adding or accepting one on this phone refreshes it at once).
+  const friends = useFriends({ enabled: !hidden, staleMs: SERVER_SLOW_STALE_MS });
   // Something set up a screen deeper shows as done on the way back (the car link and friends read again on focus themselves).
   useFocusEffect(
     useCallback(() => {

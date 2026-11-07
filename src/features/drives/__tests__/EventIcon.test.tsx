@@ -79,7 +79,7 @@ describe('the hard-acceleration glyph', () => {
 
 test('a drive row (Home and Drive history) shows the chevrons for a hard acceleration', async () => {
   const d = drive({ clientTripId: 'x', counts: { ...drive().counts, hardBrake: 1, hardAccel: 2 } });
-  await draw(<DriveRow drive={d} onPress={jest.fn()} testID="recent-x" />);
+  await draw(<DriveRow drive={d} units="mi" onPress={jest.fn()} testID="recent-x" />);
   const accel = screen.getByTestId('recent-x-event-hard_accel', H);
   expect(within(accel).getByTestId('accel-glyph', H)).toBeOnTheScreen();
   expect(within(accel).getByText('2', H)).toBeOnTheScreen();
@@ -91,7 +91,7 @@ test('a drive row (Home and Drive history) shows the chevrons for a hard acceler
 
 test('a phone pickup wears the phone icon: in a drive row, on its pin and on the card the pin opens, which says its time in hand and speed', async () => {
   const d = drive({ clientTripId: 'x', counts: { ...drive().counts, hardBrake: 0, pickups: 2 } });
-  await draw(<DriveRow drive={d} onPress={jest.fn()} testID="recent-x" />);
+  await draw(<DriveRow drive={d} units="mi" onPress={jest.fn()} testID="recent-x" />);
   expect(within(screen.getByTestId('recent-x-event-phone_pickup', H)).getByText(glyph('phone-portrait-outline'), H)).toBeOnTheScreen();
   expect(screen.getByTestId('recent-x').props.accessibilityLabel).toContain('2 phone pickup');
 

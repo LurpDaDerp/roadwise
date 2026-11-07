@@ -27,11 +27,33 @@ export interface EmergencyContact {
 
 export type ContactProblem = 'name_empty' | 'name_long' | 'phone' | 'too_many';
 
-/** The number with everything but digits dropped, keeping a leading +. iOS ignores tel: links with * or #. */
+/** The phone keypad's letters, from 2 (ABC) to 9 (WXYZ). */
+const KEYPAD = ['ABC', 'DEF', 'GHI', 'JKL', 'MNO', 'PQRS', 'TUV', 'WXYZ'];
+const keypadDigit = (letter: string): string => String(KEYPAD.findIndex((keys) => keys.includes(letter.toUpperCase())) + 2);
+
+/** An extension written out after the number ("x89", "ext. 89"), up to its first digit. */
+const EXTENSION_MARKER = /(\d)[\s.-]*(?:extension|ext\.?|x)[\s.:-]*(?=\d)/gi;
+const markExtension = (raw: string): string => raw.replace(EXTENSION_MARKER, '$1,');
+
+/**
+ * The number as the dialer takes it: digits, a leading +, and the keypad's pause (,) and wait (;)
+ * before an extension, everything else dropped. An extension written out ("x89", "ext. 89") becomes
+ * a pause, and letters become their keypad digits ("1-800-FLOWERS" → "18003569377"), so the call
+ * goes where the driver meant. iOS ignores tel: links with * or #.
+ */
 export function cleanPhone(raw: string): string {
   const trimmed = raw.trim();
-  const digits = trimmed.replace(/\D/g, '');
-  return trimmed.startsWith('+') ? `+${digits}` : digits;
+  const dialed = markExtension(trimmed)
+    .replace(/[a-z]/gi, keypadDigit)
+    .replace(/[^\d,;]/g, '')
+    .replace(/^[,;]+|[,;]+$/g, '');
+  return trimmed.startsWith('+') ? `+${dialed}` : dialed;
+}
+
+/** The cleaned number split at its first pause or wait: the number itself and the extension part. */
+function splitPhone(clean: string): { main: string; extension: string } {
+  const at = clean.search(/[,;]/);
+  return at === -1 ? { main: clean, extension: '' } : { main: clean.slice(0, at), extension: clean.slice(at) };
 }
 
 /** What is wrong with one contact, or null. */
@@ -39,7 +61,12 @@ export function contactProblem(c: Pick<EmergencyContact, 'name' | 'phone'>): Con
   const name = c.name.trim();
   if (name.length === 0) return 'name_empty';
   if (name.length > CONTACT_NAME_MAX) return 'name_long';
-  const digits = cleanPhone(c.phone).replace('+', '').length;
+  // Letters only count as part of the number after a dash or another letter ("1-800-FLOWERS"). A
+  // word at the start, set apart or run onto the digits ("Cell 555…", "555… (home)", "555…ext",
+  // "555…x") is a label, which would otherwise be dialed as extra digits. A written-out extension
+  // ("x89", "ext. 89") is a pause by now.
+  if (/(^|[^a-z-])[a-z]/i.test(markExtension(c.phone.trim()))) return 'phone';
+  const digits = splitPhone(cleanPhone(c.phone)).main.replace('+', '').length;
   if (digits < PHONE_DIGITS_MIN || digits > PHONE_DIGITS_MAX) return 'phone';
   return null;
 }
@@ -100,14 +127,14 @@ export const telUrl = (phone: string): string => `tel:${cleanPhone(phone)}`;
 /**
  * A number laid out for reading, its digits as stored: 10 digits as "(555) 123-4567", +1 and 10
  * digits as "+1 (555) 123-4567", 1 and 10 digits as "1 (555) 123-4567", 7 digits as "123-4567";
- * anything else as it is stored.
+ * anything else as it is stored. An extension follows as stored: "(555) 123-4567,89".
  */
 export function formatPhone(phone: string): string {
-  const clean = cleanPhone(phone);
+  const { main: clean, extension } = splitPhone(cleanPhone(phone));
   const digits = clean.replace('+', '');
   const us = (d: string) => `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-  if (!clean.startsWith('+') && digits.length === 10) return us(digits);
-  if (digits.length === 11 && digits.startsWith('1')) return `${clean.startsWith('+') ? '+' : ''}1 ${us(digits.slice(1))}`;
-  if (!clean.startsWith('+') && digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
-  return clean;
+  if (!clean.startsWith('+') && digits.length === 10) return us(digits) + extension;
+  if (digits.length === 11 && digits.startsWith('1')) return `${clean.startsWith('+') ? '+' : ''}1 ${us(digits.slice(1))}${extension}`;
+  if (!clean.startsWith('+') && digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}${extension}`;
+  return clean + extension;
 }

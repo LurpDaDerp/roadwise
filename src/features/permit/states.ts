@@ -86,6 +86,41 @@ export const PERMIT_STATES: readonly PermitState[] = Object.freeze([
 const BY_CODE = new Map(PERMIT_STATES.map((s) => [s.code, s]));
 const BY_NAME = new Map(PERMIT_STATES.map((s) => [s.name.toLowerCase(), s]));
 
+/**
+ * The Spanish names that differ from the English ones, accents left off: Android's geocoder names
+ * the state in the phone's language, and Spanish is the common non-English one in the US.
+ */
+const SPANISH_NAMES: Readonly<Record<string, string>> = {
+  'carolina del norte': 'NC',
+  'carolina del sur': 'SC',
+  'dakota del norte': 'ND',
+  'dakota del sur': 'SD',
+  'distrito de columbia': 'DC',
+  hawai: 'HI',
+  luisiana: 'LA',
+  misisipi: 'MS',
+  misuri: 'MO',
+  'nueva hampshire': 'NH',
+  'nuevo hampshire': 'NH',
+  'nueva jersey': 'NJ',
+  'nueva york': 'NY',
+  'nuevo mexico': 'NM',
+  pensilvania: 'PA',
+  tenesi: 'TN',
+  'virginia occidental': 'WV',
+};
+
+/** Lower case, accents off ("Nuevo México" → "nuevo mexico"), no dots, single spaces. */
+function plainName(s: string): string {
+  let n = s.toLowerCase();
+  try {
+    n = n.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  } catch {
+    // No normalizer on this engine: accented names stay as they are.
+  }
+  return n.replace(/\./g, '').replace(/\s+/g, ' ');
+}
+
 /** The state with this postal code (any case); null for anything else. */
 export function stateByCode(code: unknown): PermitState | null {
   if (typeof code !== 'string') return null;
@@ -94,15 +129,16 @@ export function stateByCode(code: unknown): PermitState | null {
 
 /**
  * The state a geocoder's region names: a postal code ("WA", as an iPhone says it) or a full name
- * ("Washington", as Android says it; "Washington, D.C." and "Washington DC" too). Null otherwise.
+ * ("Washington", as Android says it; "Washington, D.C." and "Washington DC" too), in English or,
+ * on a phone set to Spanish, in Spanish ("Nueva York"). Null otherwise.
  */
 export function stateFromRegion(region: unknown): PermitState | null {
   if (typeof region !== 'string') return null;
   const r = region.trim();
   if (r.length === 2) return stateByCode(r);
-  const name = r.toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ');
+  const name = plainName(r);
   if (name === 'washington dc' || name === 'washington, dc' || name === 'dc') return stateByCode('DC');
-  return BY_NAME.get(name) ?? null;
+  return BY_NAME.get(name) ?? stateByCode(SPANISH_NAMES[name]);
 }
 
 /** Every state, A to Z by name (the picker's order). */

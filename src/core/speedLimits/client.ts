@@ -84,7 +84,7 @@ import {
   truncatedNear,
 } from './store';
 import { fillCellKey, prefetchSet, tileFor, tileKey } from './tiles';
-import { MAX_TILE_TTL_MS, type PointResponse } from './wire';
+import { MAX_TILE_TTL_MS, MAX_TILES_PER_REQUEST, type PointResponse } from './wire';
 
 /** Under this speed the car counts as stopped, for stickiness and for the point-lookup trigger. */
 export const MIN_MOVING_MPS = 2;
@@ -445,7 +445,11 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
     warm(lat, lng, [0, 45, 90, 135, 180, 225, 270, 315], [WARM_AROUND_M]);
   }
 
-  /** The warm-up (see the header): one request for the tiles at `distances` along `bearings` that lie in other fill cells. */
+  /**
+   * The warm-up (see the header): one request for the tiles at `distances` along `bearings` that lie
+   * in other fill cells, split into requests of at most `MAX_TILES_PER_REQUEST` (far north, the eight
+   * points around the car can reach more cells than one request may carry).
+   */
   function warm(lat: number, lng: number, bearings: readonly number[], distances: readonly number[]): void {
     if (!isOnline()) return;
     const here = fillCellKey(lat, lng);
@@ -460,7 +464,7 @@ export function createSpeedLimitClient(deps: SpeedLimitClientDeps): SpeedLimitCl
       warmed.set(cell, t);
       keys.push(tileKey(tileFor(wLat, wLng)));
     }
-    if (keys.length > 0) void track(runBatch(keys, generation, counters));
+    for (let i = 0; i < keys.length; i += MAX_TILES_PER_REQUEST) void track(runBatch(keys.slice(i, i + MAX_TILES_PER_REQUEST), generation, counters));
   }
 
   /**

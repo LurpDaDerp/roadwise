@@ -31,6 +31,9 @@ import {
 } from './pushToken';
 import { registerDevice, registeredRecently, type Rpc } from './register';
 
+/** At most this many back-to-back passes per run (the first plus the requests folded in mid-pass). */
+const MAX_PASSES_PER_RUN = 4;
+
 export interface DeviceHostDeps {
   rpc: Rpc;
   push: PushPort;
@@ -99,6 +102,12 @@ export function DeviceHost(props: DeviceHostProps): null {
     let deviceId: string | null = null;
     let running = false;
     let again = false;
+    /**
+     * The device push token the last token event carried. Every token read fires the event again
+     * with the same token (expo-notifications answers each read with it), so only a token not seen
+     * before registers: our own echo is dropped and the loop ends, a rotated token goes up at once.
+     */
+    let lastDeviceToken: string | null = null;
 
     const register = async (force: boolean): Promise<void> => {
       if (!live || d.platform === null) return;
@@ -137,10 +146,14 @@ export function DeviceHost(props: DeviceHostProps): null {
       }
       running = true;
       try {
+        // Requests that land during a pass are folded into one more pass; a backstop bounds the
+        // repeats so nothing that keeps asking mid-pass can hold the host in a loop.
+        let passes = 0;
         do {
           again = false;
+          passes += 1;
           await work();
-        } while (again && live);
+        } while (again && live && passes < MAX_PASSES_PER_RUN);
       } catch (error) {
         report(error, 'devices host');
       } finally {
@@ -149,7 +162,11 @@ export function DeviceHost(props: DeviceHostProps): null {
     };
 
     cleanups.push(onDeviceSyncRequested(() => void run(() => register(true))));
-    const tokenSub = d.push.addPushTokenListener(() => void run(() => register(true)));
+    const tokenSub = d.push.addPushTokenListener((token) => {
+      if (token === lastDeviceToken) return;
+      lastDeviceToken = token;
+      void run(() => register(true));
+    });
     cleanups.push(() => tokenSub.remove());
     const laSub = d.liveActivity.addTokenListener(() => void run(() => register(true)));
     cleanups.push(() => laSub.remove());

@@ -76,6 +76,26 @@ test('the ends are trimmed along the route by the plan; the middle is kept; a sh
   expect(keptRuns([])).toEqual([]);
 });
 
+test('a GNSS jump no car could make does not count toward the end trims (start or end), so the points near home stay hidden', () => {
+  const plan = trimPlan(SEED, []);
+  const out = (p: TrackPoint, m: number): TrackPoint => ({ ...p, lng: p.lng + m / M_PER_DEG_LNG });
+  // A 450 m out-and-back multipath fix at the third point, rated within 50 m: 900 m of fake travel.
+  const t = track(200);
+  t[2] = out(t[2]!, 450);
+  const kept = keptPoints(t, [], plan);
+  expect(kept.indexOf(true) * 10).toBeGreaterThanOrEqual(plan.startM);
+  expect(kept.slice(0, 30).some(Boolean)).toBe(false);
+  // The same jump just before the end.
+  const u = track(200);
+  u[197] = out(u[197]!, 450);
+  const keptEnd = keptPoints(u, [], plan);
+  expect(1990 - keptEnd.lastIndexOf(true) * 10).toBeGreaterThanOrEqual(plan.endM);
+  expect(keptEnd.slice(170).some(Boolean)).toBe(false);
+  // Fast but possible travel (90 m/s) still counts.
+  const fast = Array.from({ length: 30 }, (_, i) => out({ ...HOME, ts: T0 + i * 1000, hAcc: 5 }, i * 90));
+  expect(keptPoints(fast, [], plan).some(Boolean)).toBe(true);
+});
+
 test('a route through a zone keeps both visible runs, each encoded on its own, and is never drawn across the zone; events inside are unlocated', () => {
   const t = track(400); // ~4 km east, the zone at 1.5 km
   const zone = { id: 'z', name: 'School', lat: t[150]!.lat, lng: t[150]!.lng, radiusM: 200 };

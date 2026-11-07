@@ -18,6 +18,7 @@ import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
+import { DataCredits } from './DataCredits';
 
 import { readUnits, writeUnits, type Units } from './localPrefs';
 import { LinkRow, RowIcon, Section, SwitchRow, TopBar } from './parts';
@@ -296,6 +297,8 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
       <Section>
         <LinkRow icon="notifications-outline" title={copy.notifications.title} subtitle={copy.notifications.subtitle} onPress={() => router.push(SETTINGS_HREFS.notifications)} testID="settings-notifications" />
       </Section>
+
+      <DataCredits />
 
       <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} scroll testID="settings-appearance-sheet">
         <View style={{ gap: th.space.sm }}>

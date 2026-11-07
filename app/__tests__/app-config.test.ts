@@ -181,6 +181,15 @@ describe('permissions', () => {
   });
 });
 
+// The share sheet's Save Image (drive card, Wrapped card) writes to Photos: iOS ends an app that does
+// that without the add-only string. Nothing reads the library, so the read string stays out.
+test('iOS: the add-to-Photos usage string, and no photo-library read string', () => {
+  const plist = build().ios?.infoPlist ?? {};
+  expect(plist.NSPhotoLibraryAddUsageDescription).toBe(PERMISSION_COPY.photosAdd);
+  expect(PERMISSION_COPY.photosAdd).toBe('RoadWise saves the picture you share to your photo library when you choose Save Image.');
+  expect(plist).not.toHaveProperty('NSPhotoLibraryUsageDescription');
+});
+
 // DashPal (plan §7.1): react-native-ble-manager with no config plugin. iOS gets the Bluetooth usage
 // string and the `bluetooth-central` background mode; Android takes its permissions from the
 // library's manifest, which must never put a maxSdkVersion on fine location (drive location on

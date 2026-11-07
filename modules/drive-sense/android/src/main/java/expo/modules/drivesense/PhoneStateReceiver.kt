@@ -15,7 +15,9 @@ import androidx.core.content.ContextCompat
  * Phone state while capturing (README §5): `locked = KeyguardManager.isKeyguardLocked`,
  * `screenOn = PowerManager.isInteractive`, `appForeground` = RoadWise in front ([AppVisibility]).
  * Registered dynamically only while capturing — `SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT` emit
- * `screen`, the thermal listener (API 29+) emits `thermal`. Android's lock signal is `reliable`.
+ * `screen`, the thermal listener (API 29+) emits `thermal`, both live only ([EventBus.emitLive]):
+ * never buffered, so unheard events cannot fill the buffer and push buffered rows out. Android's
+ * lock signal is `reliable`.
  */
 class PhoneStateReceiver(private val context: Context, private val handler: Handler) : BroadcastReceiver() {
   companion object {
@@ -92,7 +94,7 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
           val level = thermalLevel(status)
           if (level != lastThermal) {
             lastThermal = level
-            EventBus.emit("thermal", linkedMapOf("level" to level, "ts" to System.currentTimeMillis()))
+            EventBus.emitLive("thermal", linkedMapOf("level" to level, "ts" to System.currentTimeMillis()))
           }
         }
         try {
@@ -129,7 +131,7 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
   override fun onReceive(ctx: Context, intent: Intent) {
     when (intent.action) {
       Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF, Intent.ACTION_USER_PRESENT ->
-        EventBus.emit(
+        EventBus.emitLive(
           "screen",
           linkedMapOf("locked" to locked(context), "on" to screenOn(context), "ts" to System.currentTimeMillis())
         )

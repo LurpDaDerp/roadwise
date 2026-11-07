@@ -43,7 +43,10 @@ export function BlockedScreen() {
                 size="sm"
                 variant="secondary"
                 loading={action.pending !== null && pendingFor === u.user_id}
+                // One unblock at a time: the server action drops a second call while one runs.
+                disabled={action.pending !== null && pendingFor !== u.user_id}
                 onPress={() => {
+                  if (action.pending !== null) return;
                   setPendingFor(u.user_id);
                   void action.run('unblock_user', { p_user_id: u.user_id });
                 }}

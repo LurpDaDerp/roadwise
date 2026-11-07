@@ -266,12 +266,24 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
   }
 
   /**
+   * Release the session a continuous DashPal alert held between repeats, cutting nothing: the
+   * player may be sounding the phone's own alert (a speeding or hard-event tone) in that gap.
+   * A player without `release` falls back to `stopCurrent`.
+   */
+  function releaseHeld(): void {
+    if (deps.player.release) deps.player.release('dashpal').catch(report);
+    else stopPlayer();
+  }
+
+  /**
    * Cut `e`'s item if it is the one in the player, or release the session a continuous alert held
-   * between repeats; another DashPal item in flight is left alone.
+   * between repeats; another DashPal item in flight, or a phone alert, is left alone.
    */
   function cut(e: Entry): void {
     gen += 1;
-    if (inFlight === null || inFlight.alertId === e.id) stopPlayer();
+    if (inFlight !== null) {
+      if (inFlight.alertId === e.id) stopPlayer();
+    } else releaseHeld();
   }
 
   /** Stop the phone sounding `e` (it stays in the table for the visual). */
@@ -453,11 +465,13 @@ export function createDashcamAlerts(deps: DashcamAlertDeps): DashcamAlertControl
 
     clear() {
       if (table.size === 0 && !inFlight) return;
-      const sounding = [...table.values()].some((e) => e.playing) || inFlight !== null;
+      const anyPlaying = [...table.values()].some((e) => e.playing);
       for (const e of table.values()) leftTable(e);
       table.clear();
       gen += 1;
-      if (sounding) stopPlayer();
+      // Cut only a DashPal item in the player; between repeats, release a held session alone.
+      if (inFlight !== null) stopPlayer();
+      else if (anyPlaying) releaseHeld();
       changed();
     },
 

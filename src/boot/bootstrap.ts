@@ -26,7 +26,7 @@ import { createPushToStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
 import { runWhenForeground, type AppStateLike as ForegroundAppState } from '@/data/foreground';
 import { archiveOldDrives } from '@/data/hydrate/archive';
-import { restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
+import { RestoreAbandonedError, restoreDrives, type RestoreResult } from '@/data/hydrate/restore';
 import { createExpoNet, getSharedOnline } from '@/data/net/net';
 import { createQueryClient } from '@/data/queries/client';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
@@ -35,7 +35,7 @@ import type { MySummary } from '@/data/server/summary';
 import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { createSyncRunner, type SyncRunner, type SyncSupabase } from '@/data/sync/runner';
 import { dashcamFinalizeDeps } from '@/dashcam/finalizeDeps';
-import { setActiveDashcam } from '@/dashcam/registry';
+import { activeDashcam, setActiveDashcam } from '@/dashcam/registry';
 import { createDashcamRuntime, type DashcamRuntime } from '@/dashcam/runtime';
 import { createDriveDisplay, nativeDisplaySinks, type DriveDisplay } from '@/drive/display';
 import { writeDropNotice } from '@/drive/dropNotice';
@@ -80,6 +80,14 @@ export class BootstrapError extends Error {
     this.stage = stage;
     this.reason = reason;
   }
+}
+
+/**
+ * A foreground job that cannot run yet (no owner, a drive under way): thrown so the job is not
+ * stamped and runs again at the next foreground. Expected, so never sent to the crash sink.
+ */
+export class NotNowError extends Error {
+  override readonly name = 'NotNowError';
 }
 
 /** The Supabase client as the launch uses it: the runner's slice plus `rpc`. */
@@ -190,6 +198,8 @@ export interface AppRuntime {
   restore(): Promise<RestoreResult | null>;
   /** Stops the runner, then the drive host (ending an open drive unless told not to), and empties the cache. */
   stop(opts?: { endOpenTrip?: boolean }): Promise<void>;
+  /** Resolves once the launch's recap notifier has posted what it owes (at once without one). Never rejects. */
+  notifierSettled(): Promise<void>;
 }
 
 /** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
@@ -204,9 +214,13 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   let reached: BootstrapStage = 'open';
   let abandoned = false;
 
-  const sequence = runLaunch(deps, (name) => {
-    reached = name;
-  });
+  const sequence = runLaunch(
+    deps,
+    (name) => {
+      reached = name;
+    },
+    () => abandoned
+  );
   sequence.then(
     (runtime) => {
       if (abandoned) void runtime.stop({ endOpenTrip: false });
@@ -267,7 +281,11 @@ async function ownerMayHaveChanged(db: Db): Promise<boolean> {
   return (seen !== null && seen !== owner) || (pending !== null && pending !== owner);
 }
 
-async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => void): Promise<AppRuntime> {
+/**
+ * `isAbandoned`: the deadline fired (`bootstrapApp`). Such a launch is stopped as soon as it
+ * resolves, so it registers nothing process-wide: a retry's runtime may already hold those slots.
+ */
+async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => void, isAbandoned: () => boolean = () => false): Promise<AppRuntime> {
   const now = deps.now ?? Date.now;
   const onError = deps.onError ?? warn;
   const appState = deps.appState ?? AppState;
@@ -321,7 +339,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       // session may well still be good: the owner stands, as when the read is slow. A session that
       // really ended reaches the app as SIGNED_OUT.
       owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
-      onError(new Error('the session could not be read'), 'identity: session');
+      // Every offline launch reads so: the dev console only, never the crash sink.
+      if (__DEV__) console.warn('[bootstrap] identity: session: the session could not be read');
     } else if (await ownerMayHaveChanged(db)) {
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
       owner = await decide((await reading).data.session?.user.id ?? null);
@@ -348,7 +367,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   await retireReminder(db, source, onError);
 
   // Automatic drives (iPhone) follow the signed-in, onboarded driver (`autoDetect.ts`).
-  setAutoDetectRuntime({
+  if (!isAbandoned()) setAutoDetectRuntime({
     db,
     detect,
     // Rejects when the session cannot be read (unknown): automatic drives then stay as they are.
@@ -497,7 +516,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
-    setActiveDashcam(dc);
+    if (!isAbandoned()) setActiveDashcam(dc);
     // Before the boot: a drive the boot stores (native ended it while no process ran) gets its
     // recap notification; the notifier decides which are recent enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
@@ -583,10 +602,12 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
         await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));
         dc.dispose();
-        setActiveDashcam(null);
+        // Only its own: a retry's runtime may have registered its dashcam since.
+        if (activeDashcam() === dc) setActiveDashcam(null);
       }
     };
-    return { drive, adopted: adopt?.session.clientTripId ?? null, release, dashcam: dc };
+    const notifierSettled = (): Promise<void> => notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier')) ?? Promise.resolve();
+    return { drive, adopted: adopt?.session.clientTripId ?? null, release, notifierSettled, dashcam: dc };
   });
 
   const detach = subscribeInvalidation(queryClient);
@@ -638,6 +659,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     owner: identity.owner,
     schemaVersion,
     now,
+    notifierSettled: engine.notifierSettled,
     async refreshConfig() {
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- the app client, only outside tests
       const seam = deps.appConfig ?? (require('@/data/supabase/client') as typeof import('@/data/supabase/client')).supabase;
@@ -879,7 +901,15 @@ export interface ForegroundJobs {
  * problem spots' recompute.
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
-  const onError = deps.onError ?? warn;
+  const report = deps.onError ?? warn;
+  // "Not now" (no owner, a drive under way, a restore a sign-out left behind) only defers the job.
+  const onError = (error: unknown, context: string): void => {
+    if (error instanceof NotNowError || error instanceof RestoreAbandonedError) {
+      if (__DEV__) console.warn(`[bootstrap] ${context}:`, error.message);
+      return;
+    }
+    report(error, context);
+  };
   const foreground = { appState: deps.appState ?? AppState, now: runtime.now, db: runtime.db, onError };
   let restoredThisLaunch = false;
   const restore = async (): Promise<void> => {
@@ -887,7 +917,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     // No owner yet (a launch signed out on a phone nobody has used): nothing is marked done and no
     // stamp is written, so the sign-in that names the owner (`runNow`) or the next foreground restores.
     const result = await runtime.restore();
-    if (result === null) throw new Error('no device owner yet: nothing to restore');
+    if (result === null) throw new NotNowError('no device owner yet: nothing to restore');
     // A run that read its most pages and has more to go carries on at the next return to the front.
     restoredThisLaunch = result.complete;
     await runtime.limits.purgeExpired().catch((error: unknown) => onError(error, 'purge expired tiles'));
@@ -897,7 +927,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     'config',
     APP_CONFIG_INTERVAL_MS,
     async () => {
-      if (runtime.drive.isBusy()) throw new Error('a drive is under way');
+      if (runtime.drive.isBusy()) throw new NotNowError('a drive is under way');
       await runtime.refreshConfig();
     },
     foreground
@@ -916,7 +946,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     'archive',
     ARCHIVE_INTERVAL_MS,
     async () => {
-      if ((await archiveWithPractice(runtime.db, runtime.now(), onError)) === null) throw new Error('a drive is recording');
+      if ((await archiveWithPractice(runtime.db, runtime.now(), onError)) === null) throw new NotNowError('a drive is recording');
     },
     foreground
   );

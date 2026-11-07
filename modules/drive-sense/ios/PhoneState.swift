@@ -58,6 +58,7 @@ final class PhoneStateMonitor {
     let level = PhoneState.thermalLevel()
     guard level != lastThermal else { return }
     lastThermal = level
-    EventHub.shared.emit("thermal", ["level": level, "ts": TimeBase.nowTs()])
+    // Live only: never buffered, so unheard levels cannot fill the hub and push buffered rows out.
+    EventHub.shared.emitLive("thermal", ["level": level, "ts": TimeBase.nowTs()])
   }
 }

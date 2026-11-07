@@ -55,6 +55,19 @@ export async function deviceOwnerIs(on: Db, uid: string): Promise<boolean> {
   }
 }
 
+/**
+ * The waiting item under `idempotencyKey` is due at `at`, whatever its back-off: an action that
+ * waited on its drive's upload goes as soon as that upload lands. One in flight or settled keeps
+ * its time. True when it moved.
+ */
+export async function bringForward(on: Db, idempotencyKey: string, at: number): Promise<boolean> {
+  const { changes } = await on.execute(
+    "UPDATE sync_queue SET next_attempt_at = ? WHERE idempotency_key = ? AND status = 'pending' AND next_attempt_at > ?",
+    [at, idempotencyKey, at]
+  );
+  return changes > 0;
+}
+
 /** The `trip-actions` request bodies, as queued: the contract's (`payload.ts`), plus one device-only key. */
 export { DisputeActionSchema };
 export const NotDrivingActionSchema = NotDrivingWireSchema.extend({

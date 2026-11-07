@@ -53,36 +53,56 @@ function useCardWidth(): number {
   return Math.max(160, Math.min(width - 48, ((height - 330) * 9) / 16, 320));
 }
 
-function SummarySlide({ core, units, own, mine }: { core: WrappedCore; units: ReturnType<typeof useUnits>; own: boolean; mine: boolean }) {
+/**
+ * The summary slide's share state. It lives in the screen, not the slide: the story mounts only the
+ * slide on show, so a slide's own state would be lost on a step back and forward. `linked`: a link
+ * to this month is known to be out (absent: the driver's own shared copy, `mine`, decides).
+ */
+type ShareState = { linked?: boolean; state: 'idle' | 'busy' | 'shared' | 'error' | 'stopped' | 'stopError' };
+const SHARE_IDLE: ShareState = { state: 'idle' };
+
+function SummarySlide({
+  core,
+  units,
+  own,
+  mine,
+  share: shareState,
+  setShare,
+}: {
+  core: WrappedCore;
+  units: ReturnType<typeof useUnits>;
+  own: boolean;
+  mine: boolean;
+  share: ShareState;
+  setShare: (next: ShareState | ((s: ShareState) => ShareState)) => void;
+}) {
   const t = useTheme();
   const card = useRef<View>(null);
   const width = useCardWidth();
   const client = useQueryClient();
   const { session } = useSession();
-  const [state, setState] = useState<'idle' | 'busy' | 'shared' | 'error' | 'stopped' | 'stopError'>('idle');
+  const state = shareState.state;
   // A link to this month is known to be out: the driver's own shared copy, or one shared from here.
-  const [linked, setLinked] = useState(mine);
+  const linked = shareState.linked ?? mine;
   const share = async () => {
-    setState('busy');
+    setShare((s) => ({ ...s, state: 'busy' }));
     try {
       await shareWrapped(card, core);
-      setLinked(true);
-      setState('shared');
+      setShare({ linked: true, state: 'shared' });
     } catch {
-      setState('error');
+      setShare((s) => ({ ...s, state: 'error' }));
     }
   };
   const stop = async () => {
-    setState('busy');
+    setShare((s) => ({ ...s, state: 'busy' }));
     try {
       await deleteWrappedShare(core.month);
-      setLinked(false);
-      setState('stopped');
+      setShare({ linked: false, state: 'stopped' });
       // Shared copies read as not available the next time they open. The one on screen (the driver's
       // own link) is not fetched again now, so it stays up with the "Sharing stopped" line.
       void client.invalidateQueries({ queryKey: serverKey(session?.user.id ?? null, 'wrapped', 'shared'), refetchType: mine ? 'none' : 'active' });
     } catch {
-      setState('stopError');
+      setShare((s) => ({ ...s, state: 'stopError' }));
     }
   };
   const line = state === 'error' ? copy.summary.shareError : state === 'stopError' ? copy.summary.stopError : state === 'stopped' ? copy.summary.stopped : null;
@@ -151,6 +171,7 @@ export function WrappedMonthScreen({ month }: { month: string }) {
   const valid = isMonth(month);
   const q = useMyWrapped(month);
   const places = useWrappedPlaces(month);
+  const [share, setShare] = useState<ShareState>(SHARE_IDLE);
   const name = monthName(month);
 
   if (!valid || q.data === null) return <Unavailable title={valid ? copy.noMonth(name) : copy.notAvailable} body={copy.noMonthBody} testID="wrapped-none" />;
@@ -162,7 +183,7 @@ export function WrappedMonthScreen({ month }: { month: string }) {
   const ids = storySlides('own', { badges: core.badges.length, goals: core.goalsCompleted, places });
   return (
     <WrappedStory
-      slides={buildSlides(ids, view, <SummarySlide core={core} units={units} own mine={false} />)}
+      slides={buildSlides(ids, view, <SummarySlide core={core} units={units} own mine={false} share={share} setShare={setShare} />)}
       stops={archetypeStops(core.archetype)}
       header={copy.ownHeader(name)}
       onClose={() => backOrHome(router)}
@@ -176,6 +197,7 @@ export function SharedWrappedScreen({ id }: { id: string }) {
   const units = useUnits();
   const valid = SHARE_ID_RE.test(id);
   const q = useSharedWrapped(id);
+  const [share, setShare] = useState<ShareState>(SHARE_IDLE);
 
   if (!valid || q.data === null) return <Unavailable title={copy.notAvailable} body={copy.notAvailableBody} testID="wrapped-unavailable" />;
   if (q.isError && !q.data) return <LoadError onRetry={() => void q.refetch()} testID="wrapped-error" />;
@@ -187,7 +209,7 @@ export function SharedWrappedScreen({ id }: { id: string }) {
   const ids = storySlides('shared', { badges: core.badgesCount, goals: 0, places: null });
   return (
     <WrappedStory
-      slides={buildSlides(ids, view, <SummarySlide core={core} units={units} own={false} mine={core.mine} />)}
+      slides={buildSlides(ids, view, <SummarySlide core={core} units={units} own={false} mine={core.mine} share={share} setShare={setShare} />)}
       stops={archetypeStops(core.archetype)}
       header={core.mine ? copy.ownHeader(name) : copy.sharedHeader(core.username, name)}
       onClose={() => backOrHome(router)}

@@ -62,7 +62,12 @@ let mockConditions: { tempF: number; label: string; icon: string; color: string 
 jest.mock('@/features/weather/useWeatherAlert', () => ({
   useWeatherAlert: () => ({ alert: null, dismiss: jest.fn(), conditions: mockConditions }),
 }));
-jest.mock('@/data/server/summary', () => ({ useMySummary: () => mockOk(mockSummary()) }));
+// The summary read: whether a refetch is running, and the refetch itself, are the test's to set.
+let mockSummaryRefetching = false;
+let mockSummaryRefetch = jest.fn(async () => ({}));
+jest.mock('@/data/server/summary', () => ({
+  useMySummary: () => ({ ...mockOk(mockSummary()), isRefetching: mockSummaryRefetching, refetch: mockSummaryRefetch }),
+}));
 let mockRecording = false;
 let mockWaiting = false;
 jest.mock('@/drive/useDrive', () => ({
@@ -135,6 +140,8 @@ beforeEach(() => {
   mockRecording = false;
   mockWaiting = false;
   mockNotice = null;
+  mockSummaryRefetching = false;
+  mockSummaryRefetch = jest.fn(async () => ({}));
   clearHomeNotice();
 });
 
@@ -367,6 +374,23 @@ describe('the permission card', () => {
     const { refreshControl } = screen.getByTestId('home').props as { refreshControl: { props: { onRefresh: () => void } } };
     await act(async () => refreshControl.props.onRefresh());
     expect(mockBoard.refresh).toHaveBeenCalledWith('shared');
+  });
+
+  test('the pull spinner shows for a pull only, until its reads are done, never for a background refetch', async () => {
+    const control = () => (screen.getByTestId('home').props as { refreshControl: { props: { refreshing: boolean; onRefresh: () => void } } }).refreshControl.props;
+    // A focus refetch, or one after an upload: no spinner, so the page doesn't move.
+    mockSummaryRefetching = true;
+    await draw(<HomeScreen />);
+    expect(control().refreshing).toBe(false);
+    // The driver's pull: the spinner until the summary (the slowest read here) is back.
+    let done = () => {};
+    mockSummaryRefetch = jest.fn(() => new Promise<object>((resolve) => (done = () => resolve({}))));
+    await draw(<HomeScreen />);
+    await act(async () => control().onRefresh());
+    expect(mockSummaryRefetch).toHaveBeenCalledTimes(1);
+    expect(control().refreshing).toBe(true);
+    await act(async () => done());
+    expect(control().refreshing).toBe(false);
   });
 });
 

@@ -184,7 +184,9 @@ export function HomeScreen() {
         ? { message: dropCopy(dropped.cause, dropped.reason), onDismiss: dismissDropped }
         : null;
 
-  const refreshing = summary.isRefetching || recent.isRefetching;
+  // The spinner shows for the driver's own pull only, until its reads are done: a background
+  // refetch (a focus, an upload, a score) would show it and move the page with nobody pulling.
+  const [pulling, setPulling] = useState(false);
   // Pull to refresh also looks for a DashPal ready to pair (the slot counts the pulls).
   const [pulls, setPulls] = useState(0);
 
@@ -225,14 +227,12 @@ export function HomeScreen() {
         car={<HomeCarCard hidden={recording} />}
         setupGoals={<HomeSetupGoals hidden={recording} />}
         scrollRef={scrollRef}
-        refreshing={refreshing}
+        refreshing={pulling}
         onRefresh={() => {
-          void summary.refetch();
-          void count.refetch();
-          void recent.refetch();
-          void week.refetch();
-          void month.refetch();
-          void thisWeek.refetch();
+          setPulling(true);
+          void Promise.allSettled([summary.refetch(), count.refetch(), recent.refetch(), week.refetch(), month.refetch(), thisWeek.refetch()]).finally(() =>
+            setPulling(false)
+          );
           void board.refresh('shared');
           setPulls((n) => n + 1);
         }}

@@ -33,6 +33,7 @@ export const PERMISSION_COPY = {
   camera: "RoadWise uses the camera only to scan your friends' QR codes. Nothing is recorded.",
   bluetooth:
     "RoadWise connects to your DashPal dashcam over Bluetooth to play its alerts and add its events to your drives. It also checks that Bluetooth is on before asking whether you're driving.",
+  photosAdd: 'RoadWise saves the picture you share to your photo library when you choose Save Image.',
 } as const;
 
 /**
@@ -112,6 +113,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         // list (both dedupe).
         NSBluetoothAlwaysUsageDescription: PERMISSION_COPY.bluetooth,
         UIBackgroundModes: ['bluetooth-central'],
+        // Save Image in the share sheet of the drive card and the Wrapped card writes the PNG to
+        // Photos, and iOS ends an app that does that without this string. Add-only: no screen reads
+        // the photo library, so there is no NSPhotoLibraryUsageDescription.
+        NSPhotoLibraryAddUsageDescription: PERMISSION_COPY.photosAdd,
         // The driving screen's navigation button finds the navigation apps installed with
         // canOpenURL, which answers false for any scheme not listed here. Exactly the iOS schemes of
         // src/features/navigation/catalog.ts, in order (src/features/navigation/__tests__/apps.test.ts holds them equal).

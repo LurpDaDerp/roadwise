@@ -3,9 +3,8 @@ import { driveMerit, type EventType } from '@scoring';
 import { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
 
-import { useUnits } from '@/data/queries/units';
 import { driveCarLabel, usePairedCarLabels } from '@/features/carLink/usePairedCars';
-import { formatDistance } from '@/lib/units';
+import { formatDistance, type Units } from '@/lib/units';
 import { Text, useTheme } from '@/ui';
 
 import { recapCopy } from './copy';
@@ -37,11 +36,11 @@ export function eventTally(counts: DriveCounts): { type: EventType; n: number }[
  * at the right in its merit tier's colour (no icon; "not synced" under it when the recap has a sync
  * line: an upload that has failed, or one the server turned down), or the word for why it has none.
  * With 2 or more cars paired (iPhone), a small chip names the car it was made in (`driveCarLabel`).
- * `score` is the drive's (`useDriveScores`); absent while it loads.
+ * `score` is the drive's (`useDriveScores`); absent while it loads. `units` comes from the list
+ * (`useUnits` read once there, not once per row).
  */
-export function DriveRow({ drive, score, onPress, testID }: { drive: LocalDrive; score?: number | null; onPress: () => void; testID?: string }) {
+export function DriveRow({ drive, units, score, onPress, testID }: { drive: LocalDrive; units: Units; score?: number | null; onPress: () => void; testID?: string }) {
   const t = useTheme();
-  const units = useUnits();
   const runs = useMemo(() => decodeRoute(drive.polyline), [drive.polyline]);
   const kind = driveKind(drive);
   const scorable = kind.kind === 'scorable';

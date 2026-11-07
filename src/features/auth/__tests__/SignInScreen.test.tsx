@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 
 import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
@@ -89,6 +90,14 @@ test('shows Apple and Google only, in every build: no email or password field', 
   expect(screen.queryByLabelText('Email')).toBeNull();
   expect(screen.queryByLabelText('Password')).toBeNull();
   expect(JSON.stringify(screen.toJSON())).not.toMatch(/email|password|create account/i);
+});
+
+// Apple's HIG: a custom Sign in with Apple button shows the Apple logo (App Review 4.0).
+test('the Apple button carries the Apple logo; Google has none', async () => {
+  await mount();
+  const logo = String.fromCodePoint(Number(Ionicons.glyphMap['logo-apple']));
+  expect(within(screen.getByRole('button', APPLE)).getByText(logo)).toBeOnTheScreen();
+  expect(within(screen.getByRole('button', GOOGLE)).queryByText(logo)).toBeNull();
 });
 
 test('nothing on the screen asks for an age or a birth date', async () => {

@@ -48,6 +48,12 @@ async function next(times = 1) {
     });
   }
 }
+/** Tap the left half of the slide: the slide before. */
+async function back() {
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('wrapped-story-slide'), { nativeEvent: { pageX: 10, pageY: 300 } });
+  });
+}
 const showing = () => (screen.getByTestId(/^wrapped-slide-/).props.testID as string).replace('wrapped-slide-', '');
 
 let shareSpy: jest.SpyInstance;
@@ -168,6 +174,21 @@ describe('the own story', () => {
     expect(screen.getByTestId('wrapped-share-line')).toHaveTextContent("Couldn't share. Try again.");
   });
 
+  it('after a share, a step back and forward keeps Stop sharing (the link is still out)', async () => {
+    answerRpc(mockRpc, { get_my_wrapped: myWrapped(), create_wrapped_share: 'Ab3dEf7hJk9m' });
+    const w = await appWorld();
+    await w.render(<WrappedMonthScreen month="2026-10" />);
+    await screen.findByTestId('wrapped-story');
+    await next(9);
+    await tap('wrapped-share');
+    expect(screen.getByTestId('wrapped-stop-sharing')).toBeOnTheScreen();
+    await back();
+    expect(showing()).toBe('archetype');
+    await next();
+    expect(showing()).toBe('summary');
+    expect(screen.getByTestId('wrapped-stop-sharing')).toBeOnTheScreen();
+  });
+
   it('a month without a Wrapped, or a malformed one, says so', async () => {
     answerRpc(mockRpc, { get_my_wrapped: null });
     const w = await appWorld();
@@ -239,6 +260,12 @@ describe('a shared Wrapped', () => {
     await act(async () => {});
     expect(screen.getByTestId('wrapped-share-line')).toHaveTextContent("Sharing stopped. The link doesn't work anymore.");
     expect(screen.queryByText("This Wrapped isn't available")).toBeNull();
+    expect(screen.queryByTestId('wrapped-stop-sharing')).toBeNull();
+    // A step back and forward still says so, with no Stop sharing again.
+    await back();
+    expect(showing()).toBe('archetype');
+    await next();
+    expect(screen.getByTestId('wrapped-share-line')).toHaveTextContent("Sharing stopped. The link doesn't work anymore.");
     expect(screen.queryByTestId('wrapped-stop-sharing')).toBeNull();
   });
 

@@ -375,6 +375,14 @@ describe('iOS drive-sense module (text)', () => {
     expect(live).toMatch(/guard self\.listening\.contains\(event\), let sink = self\.sink else \{ return \}/);
     expect(live).not.toMatch(/buffer/);
   });
+
+  it('sends `thermal` and `detectState` live only: JS never listens, so buffering them would fill the hubs and evict rows and drive events', () => {
+    expect(fn(code('PhoneState.swift'), 'private func thermalChanged()')).toMatch(
+      /EventHub\.shared\.emitLive\("thermal", \["level": level, "ts": TimeBase\.nowTs\(\)\]\)/
+    );
+    expect(fn(code('DriveDetector.swift'), 'func emitState(')).toMatch(/EventHub\.detect\.emitLive\("detectState", stateJSON\(reason: reason\)\)/);
+    expect(allCode()).not.toMatch(/\.emit\("(thermal|detectState)"/);
+  });
 });
 
 describe('iOS drive detector: the bridge (text)', () => {

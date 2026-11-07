@@ -678,6 +678,13 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(MODULE()).toMatch(/OBSERVED_EVENTS = listOf\([^)]*"speed"[^)]*\)/);
   });
 
+  it('sends `screen` and `thermal` live only: JS never listens, so buffering them would fill the buffer and evict rows', () => {
+    const src = code(kt('PhoneStateReceiver'));
+    expect(src).toMatch(/EventBus\.emitLive\(\s*"screen",/);
+    expect(src).toMatch(/EventBus\.emitLive\("thermal", linkedMapOf\("level" to level, "ts" to System\.currentTimeMillis\(\)\)\)/);
+    expect(code(allKotlin())).not.toMatch(/EventBus\.emit\(\s*"(screen|thermal)"/);
+  });
+
   it('1 s high accuracy at full rate, 10 s balanced at low rate', () => {
     const src = code(kt('LocationSource'));
     expect(src).toMatch(/PRIORITY_HIGH_ACCURACY/);

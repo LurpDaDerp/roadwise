@@ -5,7 +5,7 @@ import type { ArchivedKinds } from '@/data/queries/archived';
 import { carFilterUid, carHistoryFilter } from '@/data/queries/keys';
 import { useUnits } from '@/data/queries/units';
 import type { CarLabel } from '@/features/carLink/usePairedCars';
-import { formatDistance } from '@/lib/units';
+import { formatDistance, type Units } from '@/lib/units';
 import { Banner, Chip, Divider, EmptyState, Skeleton, Text, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
@@ -79,9 +79,8 @@ export type HistoryViewProps = {
   cars?: readonly CarLabel[];
 };
 
-function WeekHeader({ group }: { group: WeekGroup }) {
+function WeekHeader({ group, units }: { group: WeekGroup; units: Units }) {
   const t = useTheme();
-  const units = useUnits();
   const n = group.data.length;
   const summary = recapCopy.history.week(n, formatDistance(group.miles, units, { digits: 0 }));
   return (
@@ -103,6 +102,8 @@ function WeekHeader({ group }: { group: WeekGroup }) {
 /** Drive history: every drive, newest first, grouped by week, with two filters and, with 2 or more cars paired, one per car. */
 export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, onBack, onHome, onRefresh, refreshing = false, now, scores, autoDrives = false, archived, cars = [] }: HistoryViewProps) {
   const t = useTheme();
+  // Read once for the list, not per row or week header (each mount of one would read it again).
+  const units = useUnits();
   const sections = useMemo(() => groupByWeek(drives ?? [], now), [drives, now]);
   const carUid = carFilterUid(filter);
 
@@ -180,7 +181,7 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
       removeClippedSubviews
       ListHeaderComponent={header}
       ListEmptyComponent={empty}
-      renderSectionHeader={({ section }) => <WeekHeader group={section} />}
+      renderSectionHeader={({ section }) => <WeekHeader group={section} units={units} />}
       renderItem={({ item, index, section }) => {
         const first = index === 0;
         const last = index === section.data.length - 1;
@@ -197,7 +198,7 @@ export function HistoryView({ drives, loading, error, filter, onFilter, onOpen, 
             }}
           >
             {first ? null : <Divider inset={16} />}
-            <DriveRow drive={item} score={scores?.get(item.clientTripId)} onPress={() => onOpen(item.clientTripId)} testID={`drive-${item.clientTripId}`} />
+            <DriveRow drive={item} units={units} score={scores?.get(item.clientTripId)} onPress={() => onOpen(item.clientTripId)} testID={`drive-${item.clientTripId}`} />
           </View>
         );
       }}

@@ -19,6 +19,7 @@ import { haversineMeters, type LatLng } from '@/lib/geo';
 import { encodePolyline, simplify } from '@/lib/polyline';
 
 import type { TrackPoint } from './engine.types';
+import { GNSS_JUMP_MPS } from './session';
 
 export interface PrivacyZone {
   id: string;
@@ -125,7 +126,14 @@ export function keptPoints(track: readonly TrackPoint[], zones: readonly Privacy
   const cum: number[] = new Array<number>(track.length);
   let total = 0;
   for (let i = 0; i < track.length; i += 1) {
-    if (i > 0) total += haversineMeters(track[i - 1] as TrackPoint, track[i] as TrackPoint);
+    // A step no car could make is a bad fix (the session's own distance skips it too): an
+    // out-and-back jump must not count as travel and use up the end trims.
+    if (i > 0) {
+      const a = track[i - 1] as TrackPoint;
+      const b = track[i] as TrackPoint;
+      const step = haversineMeters(a, b);
+      if (step <= GNSS_JUMP_MPS * Math.max(1, (b.ts - a.ts) / 1000)) total += step;
+    }
     cum[i] = total;
   }
   const hidden = (p: TrackPoint): boolean => zones.some((z, i) => haversineMeters(p, z) <= (plan.zoneRadiiM[i] ?? z.radiusM));

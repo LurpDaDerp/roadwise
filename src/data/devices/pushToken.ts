@@ -14,7 +14,12 @@ export interface PushPort {
   /** Notification permission granted (or iOS provisional). Never asks. */
   permitted(): Promise<boolean>;
   getExpoPushToken(projectId: string | null): Promise<string>;
-  addPushTokenListener(listener: () => void): { remove(): void };
+  /**
+   * The OS issued a device push token, passed as its raw device token. Fired by every token read
+   * too (expo-notifications answers each `getExpoPushTokenAsync` with this event), so a listener
+   * must tell a new token from the echo of its own read.
+   */
+  addPushTokenListener(listener: (deviceToken: string) => void): { remove(): void };
 }
 
 /** expo-notifications and expo-device, loaded on first use. */
@@ -34,7 +39,7 @@ export function createExpoPushPort(): PushPort {
       const { data } = await notifications().getExpoPushTokenAsync(projectId ? { projectId } : undefined);
       return data;
     },
-    addPushTokenListener: (listener) => notifications().addPushTokenListener(() => listener()),
+    addPushTokenListener: (listener) => notifications().addPushTokenListener((token) => listener(typeof token.data === 'string' ? token.data : JSON.stringify(token.data))),
   };
 }
 

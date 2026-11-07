@@ -13,8 +13,6 @@
 import DriveSense from '@drive-sense';
 import { AppRegistry, Platform } from 'react-native';
 
-import type { Db } from '@/data/db';
-import type { DriveHost } from '@/drive/host';
 import { reportError } from '@/lib/crashReport';
 
 import type { AppRuntime } from './bootstrap';
@@ -27,19 +25,10 @@ export const DRIVE_HEADLESS_TASK = 'DriveSenseTask';
 /** How long the task waits for its one upload pass after the drive is finalized. */
 export const HEADLESS_DRAIN_TIMEOUT_MS = 60_000;
 
-type AttachNotifier = (host: DriveHost, db: Db) => { detach(): void; settled(): Promise<void> };
-
-export function attachHeadlessSummaryNotifier(host: DriveHost, db: Db): { detach(): void; settled(): Promise<void> } {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: expo-notifications
-  const { attachSummaryNotifier, summaryUnits } = require('@/features/drive/summaryNotifier') as typeof import('@/features/drive/summaryNotifier');
-  return attachSummaryNotifier(host, { units: summaryUnits(db) });
-}
-
 export interface DriveHeadlessTaskDeps {
   ensureRuntime: (profile: LaunchProfile) => Promise<AppRuntime>;
   stopCapture: () => Promise<void>;
   report: (error: unknown) => void;
-  attachNotifier?: AttachNotifier;
 }
 
 /** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
@@ -67,7 +56,6 @@ async function bounded(promise: Promise<unknown>, ms: number, report: (error: un
 export function createDriveHeadlessTask(deps: DriveHeadlessTaskDeps): (data: unknown) => Promise<void> {
   return async () => {
     const leave = enterHeadless();
-    let notifier: ReturnType<AttachNotifier> | null = null;
     try {
       let rt: AppRuntime;
       try {
@@ -80,12 +68,12 @@ export function createDriveHeadlessTask(deps: DriveHeadlessTaskDeps): (data: unk
       // Nothing to continue (the drive was finalized as an orphan, or there was none): the capture
       // native restarted must not run on with no drive behind it.
       if (!rt.drive.isBusy()) await deps.stopCapture().catch(() => {});
-      notifier = deps.attachNotifier?.(rt.drive, rt.db) ?? null;
       await rt.drive.untilIdle();
       await bounded(
         (async () => {
           await rt.runner.idle();
-          await Promise.all([rt.runner.drainOnce(), notifier?.settled()]);
+          // The launch's own recap notifier posts the drive's recap (once); the task waits for it.
+          await Promise.all([rt.runner.drainOnce(), rt.notifierSettled()]);
         })(),
         HEADLESS_DRAIN_TIMEOUT_MS,
         deps.report
@@ -93,7 +81,6 @@ export function createDriveHeadlessTask(deps: DriveHeadlessTaskDeps): (data: unk
     } catch (error) {
       deps.report(error);
     } finally {
-      notifier?.detach();
       leave();
     }
   };
@@ -113,7 +100,6 @@ export function registerDriveHeadlessTask(deps: RegisterDeps = {}): boolean {
       ensureRuntime,
       stopCapture: () => DriveSense.stopCapture(),
       report: warn,
-      attachNotifier: attachHeadlessSummaryNotifier,
     }
   );
   (deps.registry ?? AppRegistry).registerHeadlessTask(DRIVE_HEADLESS_TASK, () => task);

@@ -65,6 +65,45 @@ describe('stored contacts', () => {
     expect(formatPhone('1234567')).toBe('123-4567');
     expect(formatPhone('+442071234567')).toBe('+442071234567');
     expect(formatPhone('911')).toBe('911');
+    expect(formatPhone('5551234567,89')).toBe('(555) 123-4567,89');
+    expect(formatPhone('+15551234567;89')).toBe('+1 (555) 123-4567;89');
+  });
+
+  // Digits after an extension, a pause or a wait were glued onto the number, and letters dropped:
+  // the emergency panel then dialed a different number.
+  it('keeps an extension apart from the number, and dials letters as their keypad digits', () => {
+    expect(cleanPhone('555-123-4567, 89')).toBe('5551234567,89');
+    expect(cleanPhone('555-123-4567;89')).toBe('5551234567;89');
+    expect(cleanPhone('555-123-4567 x89')).toBe('5551234567,89');
+    expect(cleanPhone('555-123-4567 ext. 89')).toBe('5551234567,89');
+    expect(cleanPhone('(555) 123-4567 Extension 89')).toBe('5551234567,89');
+    expect(cleanPhone('555-123-4567,,89')).toBe('5551234567,,89');
+    expect(cleanPhone('555-123-4567,')).toBe('5551234567');
+    expect(cleanPhone('1-800-FLOWERS')).toBe('18003569377');
+    expect(cleanPhone('1-800-XFINITY')).toBe('18009346489');
+    expect(telUrl('555-123-4567 x89')).toBe('tel:5551234567,89');
+    expect(telUrl('1-800-FLOWERS')).toBe('tel:18003569377');
+    // The 3 to 15 digits are the number's own; the extension's digits don't count.
+    expect(contactProblem({ name: 'Work', phone: '555-123-4567, 89' })).toBeNull();
+    expect(contactProblem({ name: 'Work', phone: '55, 1234' })).toBe('phone');
+    expect(contactProblem({ name: 'Work', phone: '+123456789012345;6789' })).toBeNull();
+  });
+
+  // A label word pasted with the number would be dialed as its keypad digits ("Cell" → 2355).
+  it('turns down a number with a label word rather than dialing the word', () => {
+    expect(contactProblem({ name: 'Mom', phone: 'Cell 555-123-4567' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: 'Tel: 555-123-4567' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 (home)' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 mom' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 ext' })).toBe('phone');
+    expect(contactProblem({ name: 'Shop', phone: '1-800-FLOWERS' })).toBeNull();
+    expect(contactProblem({ name: 'Shop', phone: '1800FLOWERS' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '5551234567x' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567cell' })).toBe('phone');
+    expect(contactProblem({ name: 'Mom', phone: '5551234567ext' })).toBe('phone');
+    expect(contactProblem({ name: 'Work', phone: '5551234567x89' })).toBeNull();
+    expect(contactProblem({ name: 'Work', phone: '555-123-4567 x89' })).toBeNull();
+    expect(contactProblem({ name: 'Work', phone: '(555) 123-4567 Extension 89' })).toBeNull();
   });
 
   it('wants a name of up to 20 characters and 3 to 15 digits', () => {

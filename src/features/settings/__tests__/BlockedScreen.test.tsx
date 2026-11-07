@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react-native';
+import { act, screen, waitFor } from '@testing-library/react-native';
 
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 
@@ -50,4 +50,36 @@ it('says so when nobody is blocked', async () => {
   const w = await appWorld();
   await w.render(<BlockedScreen />);
   expect(await screen.findByText(settingsCopy.blocked.empty)).toBeOnTheScreen();
+});
+
+it('one unblock at a time: while one runs the other rows are disabled, and a tap on them sends nothing', async () => {
+  let blocked = [
+    { user_id: 'u1', username: 'loud_larry' },
+    { user_id: 'u2', username: 'meanie' },
+  ];
+  let finish: () => void = () => {};
+  answerRpc(mockRpc, {
+    list_blocked: () => blocked,
+    unblock_user: (args) =>
+      new Promise((resolve) => {
+        finish = () => {
+          blocked = blocked.filter((b) => b.user_id !== args?.p_user_id);
+          resolve(null);
+        };
+      }),
+  });
+  const w = await appWorld();
+  await w.render(<BlockedScreen />);
+  expect(await screen.findByTestId('blocked-loud_larry')).toBeOnTheScreen();
+
+  await tap('unblock-loud_larry');
+  await waitFor(() => expect(screen.getByTestId('unblock-meanie')).toBeDisabled());
+  await tap('unblock-meanie');
+  // The spinner stays on the row in flight, and the second row's unblock was never sent.
+  expect(screen.getByTestId('unblock-loud_larry')).toBeBusy();
+  expect(mockRpc.mock.calls.filter(([fn]) => fn === 'unblock_user')).toEqual([['unblock_user', { p_user_id: 'u1' }]]);
+
+  await act(async () => finish());
+  await waitFor(() => expect(screen.queryByTestId('blocked-loud_larry')).toBeNull());
+  expect(screen.getByTestId('unblock-meanie')).toBeEnabled();
 });

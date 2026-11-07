@@ -381,6 +381,103 @@ describe('held and since (the HUD halo, drive-screen design §5.3)', () => {
   });
 });
 
+describe('a stop between repeats releases the held session and never cuts the phone’s own alert', () => {
+  function rig(can: { v: boolean } = { v: true }) {
+    const clock = { now: 0 };
+    const calls: string[] = [];
+    let finish: (() => void) | null = null;
+    let holding = false;
+    const player: AlertPlayer = {
+      deliver: async () => {
+        if (holding) await new Promise<void>((resolve) => (finish = resolve));
+      },
+      stopCurrent: async () => void calls.push('stop'),
+      release: async (kind) => void calls.push(`release:${kind}`),
+      announce: async () => {},
+    };
+    const c = createDashcamAlerts({ player, now: () => clock.now, sendAck: () => {}, canPlay: () => can.v });
+    const alert = (alertId: number, sound = 6) => c.onAlert({ type: 'ALERT', alertId, sound, tier: 2, level: 0, mode: 1, route: 1, uptimeMs: 0 });
+    return {
+      c,
+      clock,
+      calls,
+      alert,
+      hold: (on: boolean) => (holding = on),
+      finish: () => {
+        const f = finish as (() => void) | null;
+        finish = null;
+        f?.();
+      },
+    };
+  }
+
+  test.each([
+    ['ALERT_STOP', (r: ReturnType<typeof rig>) => r.c.onStop(1)],
+    ['ALERT_FALLBACK', (r: ReturnType<typeof rig>) => r.c.onFallback(1, 1)],
+    ['the 3 s stale stop', (r: ReturnType<typeof rig>) => r.c.stale()],
+    ['a link drop (clear)', (r: ReturnType<typeof rig>) => r.c.clear()],
+  ])('no-face alert between plays, %s: release("dashpal") only, no stopCurrent', async (_name, stop) => {
+    const r = rig();
+    r.alert(1);
+    await r.c.settled();
+    // Between plays (the next is 5 s away): a phone speeding or hard-brake alert may be sounding now.
+    r.clock.now = 2000;
+    stop(r);
+    expect(r.calls).toEqual(['release:dashpal']);
+  });
+
+  test('the phone can no longer play (a tick) between plays: release only', async () => {
+    const can = { v: true };
+    const r = rig(can);
+    r.alert(1);
+    await r.c.settled();
+    can.v = false;
+    r.c.tick(2000);
+    expect(r.calls).toEqual(['release:dashpal']);
+  });
+
+  test('a continuous glance (holds its session) stopped between repeats: release only', async () => {
+    const r = rig();
+    r.alert(1, 1);
+    await r.c.settled();
+    r.c.onStop(1);
+    expect(r.calls).toEqual(['release:dashpal']);
+  });
+
+  test('a DashPal item in the player is cut with stopCurrent (stop and clear); a stop of another alert while one is in flight cuts nothing', async () => {
+    const r = rig();
+    r.hold(true);
+    r.alert(1);
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    r.c.onStop(1);
+    expect(r.calls).toEqual(['stop']);
+    r.finish();
+    await r.c.settled();
+    r.calls.length = 0;
+    // 2 plays and settles; 3 is in the player; a stop of 2 leaves 3 alone.
+    r.hold(false);
+    r.alert(2, 1);
+    await r.c.settled();
+    r.hold(true);
+    r.alert(3, 1);
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    r.c.onStop(2);
+    expect(r.calls).toEqual([]);
+    r.c.clear();
+    expect(r.calls).toEqual(['stop']);
+    r.finish();
+    await r.c.settled();
+  });
+
+  test('a clear with nothing sounding (visual-only alerts) touches the player not at all', async () => {
+    const r = rig();
+    r.c.onAlert({ type: 'ALERT', alertId: 1, sound: 1, tier: 2, level: 0, mode: 1, route: 0, uptimeMs: 0 });
+    await r.c.settled();
+    r.c.clear();
+    expect(r.calls).toEqual([]);
+  });
+});
+
 describe('phone-first routing: the can-play reads, critical items', () => {
   const ALERT = { type: 'ALERT' as const, level: 0, uptimeMs: 0 };
   function make(can: (fresh?: boolean) => boolean = () => true) {

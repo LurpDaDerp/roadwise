@@ -143,6 +143,7 @@ export function SignInScreen() {
         {showApple ? (
           <Button
             label={t('signIn.apple')}
+            icon="logo-apple"
             onPress={run('apple', apple.signIn)}
             loading={busy === 'apple'}
             disabled={locked}

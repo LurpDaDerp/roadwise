@@ -108,6 +108,41 @@ describe('the recap notification’s "I wasn’t driving"', () => {
     expect(await createQueueRepo(db).byKey('not_driving:' + uuid(12))).toMatchObject({ status: 'pending', last_error: 'not_found' });
     await r.stop();
   });
+
+  test('a mark deep in its back-off while it waited on the upload goes in the same pass the upload lands, not when the back-off ends', async () => {
+    await finishedDrive(db, uuid(13), { t0: T0 });
+    await markNotDriving(uuid(13), { db, now: () => NOW }, { via: 'notification' });
+    let up = false;
+    const stored = new Set<string>();
+    const s = createFakeSupabase({
+      invoke: ({ body }) => {
+        if (!up) return functionsHttpError(503, { code: 'unavailable' });
+        const id = (body as { clientTripId: string }).clientTripId;
+        stored.add(id);
+        return invokeOk(answer(id));
+      },
+      rpc: ({ args }) => {
+        const id = (args as { p_client_trip_id: string }).p_client_trip_id;
+        return stored.has(id) ? marked(id) : pgError('P0002', 'trip not found');
+      },
+    });
+    let clock = NOW;
+    const r = createSyncRunner({ db, supabase: s, mayDrain: () => true, isRecording: () => false, now: () => clock });
+    await r.start();
+    await r.drainOnce();
+    const q = createQueueRepo(db);
+    expect(await q.byKey('not_driving:' + uuid(13))).toMatchObject({ status: 'pending', last_error: 'not_found' });
+    // Several not_found answers later the mark waits most of an hour; the upload is due again first.
+    await db.execute('UPDATE sync_queue SET attempts = 6, next_attempt_at = ? WHERE idempotency_key = ?', [NOW + 3_600_000, 'not_driving:' + uuid(13)]);
+    clock = NOW + 60_000;
+    await db.execute('UPDATE sync_queue SET next_attempt_at = ? WHERE idempotency_key = ?', [clock, 'trip:' + uuid(13)]);
+    up = true;
+    expect(await r.drainOnce()).toMatchObject({ done: 2, failed: 0 });
+    expect(s.rpcs.at(-1)).toEqual({ fn: 'mark_passenger_ride', args: { p_client_trip_id: uuid(13) } });
+    expect(await q.byKey('not_driving:' + uuid(13))).toMatchObject({ status: 'done' });
+    expect(await createTripsRepo(db).get(uuid(13))).toMatchObject({ status: 'not_driving', server_id: uuid(77), sync_error: null });
+    await r.stop();
+  });
 });
 
 test('classifyRpcError: no code is the network; the writers’ refusals are terminal under their codes; the rate limit and anything undecided wait', () => {

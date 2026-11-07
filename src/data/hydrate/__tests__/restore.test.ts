@@ -5,6 +5,7 @@ import { createEventsRepo, createRoutePoolRepo, createSettingsRepo, createTripsR
 import { onDataChanged } from '@/data/events';
 import { applyServerDrive, MAX_PAGES, POOL_PAGE, RESTORE_CURSOR_KEY, RESTORED_AT_KEY, RestoreAbandonedError, restoreDrives, ServerDriveSchema, toEventRows, toTripRow } from '@/data/hydrate/restore';
 import { readDriveCount, readDriveDetail, readRecentDrives, readRoutePolylines, readStatSums } from '@/data/queries/drives';
+import { matchesHistoryFilter } from '@/data/queries/rows';
 
 const T0 = 1_700_000_000_000;
 /** The restore's clock: the fixtures' drives are hours old, far inside the 183 days. */
@@ -241,6 +242,25 @@ test('bringing a held drive in line with the server keeps the counters this phon
   });
   expect(await trips.get(uuid(1))).toMatchObject({ status: 'scored', origin: 'manual', not_driving_expired: 1, slowdowns: 9, moving_s: 9, server_id: uuid(101) });
   expect(await trips.get(uuid(2))).toMatchObject({ status: 'scored', not_driving_expired: 0, slowdowns: 3, speedups: 2, turns: 4, limit_s: 300, moving_s: 500 });
+});
+
+test('only a scored drive keeps the server’s clean flag: a "Wasn’t driving" drive (still clean on the server) and an unscored one come down with none, restored or resynced', async () => {
+  const passenger = serverDrive(1, { notDriving: true, clean: true, events: [] });
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(2, { clean: true })))).toMatchObject({ status: 'scored', clean: 1 });
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(2, { clean: false })))).toMatchObject({ status: 'scored', clean: 0 });
+  expect(toTripRow(ServerDriveSchema.parse(passenger))).toMatchObject({ status: 'not_driving', clean: null });
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(3, { scored: false, clean: false })))).toMatchObject({ status: 'unscored', clean: null });
+
+  expect(await restoreDrives({ db, uid: UID, now: NOW, rpc: async () => [passenger] })).toMatchObject({ restored: 1 });
+  expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'not_driving', clean: null });
+  const [restored] = await readRecentDrives(db, 1);
+  expect(restored).toMatchObject({ status: 'not_driving', clean: null });
+  expect(matchesHistoryFilter(restored!, 'clean')).toBe(false);
+
+  // The resync after an action the server already holds writes the same.
+  await createTripsRepo(db).update(uuid(1), { status: 'scored', clean: 1 }, T0);
+  await db.transaction((tx) => applyServerDrive(tx, ServerDriveSchema.parse(passenger), T0 + 1));
+  expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'not_driving', clean: null });
 });
 
 // ---------------------------------------------------------------------------------------------

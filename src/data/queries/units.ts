@@ -31,6 +31,21 @@ export function publishUnits(units: Units): void {
 
 export const parseUnits = (v: unknown): Units => (v === 'km' ? 'km' : 'mi');
 
+/** The mirror read in flight, shared by every row that mounts before it lands (a list's rows mount together). */
+let reading: { db: object; read: Promise<unknown> } | null = null;
+
+const readMirror = (db: NonNullable<ReturnType<typeof useOptionalDb>>): Promise<unknown> => {
+  if (reading?.db === db) return reading.read;
+  const read = createSettingsRepo(db).get<unknown>(UNITS_KEY);
+  const entry = { db, read };
+  reading = entry;
+  const done = () => {
+    if (reading === entry) reading = null;
+  };
+  read.then(done, done);
+  return read;
+};
+
 /** The driver's units; miles until the mirror has been read. */
 export function useUnits(): Units {
   const db = useOptionalDb();
@@ -38,8 +53,7 @@ export function useUnits(): Units {
   useEffect(() => {
     if (!db) return;
     let live = true;
-    createSettingsRepo(db)
-      .get<unknown>(UNITS_KEY)
+    readMirror(db)
       .then((v) => {
         if (live) publishUnits(parseUnits(v));
       })
@@ -82,4 +96,5 @@ export function useUnitsFromServer(serverUnits: Units | undefined, settings?: Pi
 /** Tests only: forget the shared value. */
 export function resetUnitsForTests(): void {
   current = null;
+  reading = null;
 }

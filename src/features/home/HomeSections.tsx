@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { View, type LayoutChangeEvent } from 'react-native';
 
+import { useUnits } from '@/data/queries/units';
 import type { MySummary } from '@/data/server/summary';
 import { DriveRow } from '@/features/drives/DriveRow';
 import type { LocalDrive } from '@/features/drives/model';
@@ -96,6 +97,7 @@ export function RecentDrives({
   onSeeAll: () => void;
 }) {
   const t = useTheme();
+  const units = useUnits();
   if (drives.length === 0) return null;
   return (
     <View style={{ gap: t.space.sm }} testID="recent-drives">
@@ -104,7 +106,7 @@ export function RecentDrives({
         {drives.map((d, i) => (
           <View key={d.clientTripId}>
             {i > 0 ? <Divider inset={16} /> : null}
-            <DriveRow drive={d} score={scores?.get(d.clientTripId)} onPress={() => onOpen(d.clientTripId)} testID={`recent-${d.clientTripId}`} />
+            <DriveRow drive={d} units={units} score={scores?.get(d.clientTripId)} onPress={() => onOpen(d.clientTripId)} testID={`recent-${d.clientTripId}`} />
           </View>
         ))}
       </Card>

@@ -22,7 +22,7 @@ import {
 } from '@/core/speedLimits/client';
 import { TILE_DATA_VERSION } from '@/core/speedLimits/store';
 import { fillCellKey, parseTileKey, prefetchSet, tileBounds, tileFor, tileKey } from '@/core/speedLimits/tiles';
-import { type LimitSegment, MAX_TILE_TTL_MS, type PointResponse, type TileBatchResponse } from '@/core/speedLimits/wire';
+import { type LimitSegment, MAX_TILE_TTL_MS, MAX_TILES_PER_REQUEST, type PointResponse, type TileBatchResponse, TileKeysSchema } from '@/core/speedLimits/wire';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
@@ -793,6 +793,27 @@ describe('the warm-up: the fill cells ahead start loading before the car gets th
     client.lookup(LAT, LNG0 + mLng(20), EAST, MOVING);
     await client.settled();
     expect(getTiles).toHaveBeenCalledTimes(3);
+  });
+
+  it('far north, a course-less start that reaches more fill cells than one request may carry splits them into requests the server accepts', async () => {
+    // 68.095 N, 20.05 E: 0.1 deg of longitude is ~4.2 km, so the eight points 3 km away land in five
+    // other cells (N, NE, NW, E, W).
+    const lat = 68.095;
+    const lng = 20.05;
+    const { api, getTiles } = fakeApi();
+    const fake = getTiles.getMockImplementation()!;
+    // The real client refuses a batch the server would (`api.getTiles` parses with `TileKeysSchema`).
+    getTiles.mockImplementation(async (keys) => fake(TileKeysSchema.parse(keys)));
+    make(api, warmOn).startTrip(lat, lng, -1);
+    await client.settled();
+    expect(errors).toEqual([]);
+    const block = prefetchSet(lat, lng, -1).map(tileKey);
+    const calls = getTiles.mock.calls.map((c) => c[0]);
+    for (const c of calls) expect(c.length).toBeLessThanOrEqual(MAX_TILES_PER_REQUEST);
+    const warmedKeys = calls.filter((c) => c.join() !== block.join()).flat();
+    expect(new Set(warmedKeys).size).toBe(warmedKeys.length);
+    expect(warmedKeys).toHaveLength(5);
+    expect(getTiles).toHaveBeenCalledTimes(3); // the 2 x 2 block, then 4 + 1 warmed tiles
   });
 
   it('a cell is warmed again no sooner than WARM_REPEAT_MS, and only while its tile is not fresh here', async () => {

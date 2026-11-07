@@ -15,6 +15,7 @@ import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { usePairedCarLabels } from '@/features/carLink/usePairedCars';
+import { usePullRefresh } from '@/features/leagues/components';
 import { usePracticeDrive } from '@/features/permit/usePermit';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
@@ -44,6 +45,8 @@ export function DriveHistoryScreen() {
   const filter: HistoryFilter = pickedCar !== null && !cars.some((c) => c.uid === pickedCar) ? 'all' : picked;
   if (filter !== picked) setFilter(filter);
   const q = useDriveHistory(filter);
+  // The spinner shows for the driver's own pull only, not for a background refetch (a sync, a report).
+  const pull = usePullRefresh(q.refetch);
   const scores = useDriveScores(q.data);
   const archived = useArchivedKinds();
   const auto = useAutoDrives();
@@ -58,8 +61,8 @@ export function DriveHistoryScreen() {
         onOpen={(id) => router.push(driveSummaryHref(id))}
         onBack={back}
         onHome={() => router.dismissTo(HOME_HREF)}
-        onRefresh={() => void q.refetch()}
-        refreshing={q.isRefetching}
+        onRefresh={pull.onRefresh}
+        refreshing={pull.refreshing}
         now={Math.floor(now() / 3_600_000) * 3_600_000}
         scores={scores}
         autoDrives={autoDrivesOn(auto)}

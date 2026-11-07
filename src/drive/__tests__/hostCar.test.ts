@@ -452,6 +452,37 @@ describe('"Where you parked"', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('a watch still pending at a sign-out is dropped: the spot is not written after the wipe, nor after signing in again', async () => {
+    const h = buildIos();
+    await driveAndStop(h);
+    h.detect.setCarRoute([]);
+    await feedIos(h, rows(3, { t0: T0 + 110_000, speedMps: 0 }));
+    await h.host.end();
+    clock += 5_000;
+    activity(h, 'walking');
+    await h.host.settled();
+    expect(await readParkedSpot(db)).toBeNull();
+    await h.host.suspendForSignOut();
+    // The sign-out wipe takes the key (the watch was still pending, so there is nothing yet).
+    await createSettingsRepo(db).remove(PARKED_KEY);
+    for (let i = 0; i < 3; i += 1) {
+      clock += 60_000;
+      h.scheduler.fire();
+      await h.host.settled();
+    }
+    await flush();
+    expect(await readParkedSpot(db)).toBeNull();
+    await h.host.signedInAgain();
+    for (let i = 0; i < 3; i += 1) {
+      clock += 60_000;
+      h.scheduler.fire();
+      await h.host.settled();
+    }
+    await flush();
+    expect(await readParkedSpot(db)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('the car may leave up to 30 s after the end; later, or car motion after, or no walk: nothing', async () => {
     const h = buildIos();
     await driveAndStop(h);

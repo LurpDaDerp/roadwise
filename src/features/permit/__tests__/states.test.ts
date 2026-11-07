@@ -109,6 +109,26 @@ test("a geocoder's region: an iPhone's code or Android's full name, DC in its sp
   expect(stateFromRegion(undefined)).toBeNull();
 });
 
+// Android's geocoder names the state in the phone's language.
+test("a phone set to Spanish: the state's Spanish name, with or without accents", () => {
+  expect(stateFromRegion('Nueva York')?.code).toBe('NY');
+  expect(stateFromRegion('Carolina del Norte')?.code).toBe('NC');
+  expect(stateFromRegion('Luisiana')?.code).toBe('LA');
+  expect(stateFromRegion('Distrito de Columbia')?.code).toBe('DC');
+  expect(stateFromRegion('Nuevo México')?.code).toBe('NM');
+  expect(stateFromRegion('Nuevo Mexico')?.code).toBe('NM');
+  expect(stateFromRegion('Hawái')?.code).toBe('HI');
+  expect(stateFromRegion('Míchigan')?.code).toBe('MI');
+  expect(stateFromRegion('Oregón')?.code).toBe('OR');
+  expect(stateFromRegion('Tenesí')?.code).toBe('TN');
+  expect(stateFromRegion('Virginia Occidental')?.code).toBe('WV');
+  expect(stateFromRegion('Pensilvania')?.code).toBe('PA');
+  expect(stateFromRegion('Florida')?.code).toBe('FL');
+  // Not a state, and nothing leaks from the object prototype.
+  expect(stateFromRegion('Nueva Escocia')).toBeNull();
+  expect(stateFromRegion('constructor')).toBeNull();
+});
+
 test('the picker lists them A to Z by name', () => {
   const names = STATES_BY_NAME.map((s) => s.name);
   expect(names[0]).toBe('Alabama');

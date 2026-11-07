@@ -407,6 +407,25 @@ describe('"Wasn’t driving" or a report before the drive’s upload has gone (r
     await r.stop();
   });
 
+  test('"Wasn’t driving" before the upload went, whose upload is then refused for good: the drive stays marked (never "failed"), and the mark’s not_found undoes nothing', async () => {
+    const finalizedAt = await waitingDrive();
+    const tap = finalizedAt + 60_000;
+    await markNotDriving(uuid(10), { db, now: () => tap });
+    const s = createFakeSupabase({
+      invoke: ({ name }) => (name === 'finalize-trip' ? functionsHttpError(400, { code: 'spoofed_payload' }) : functionsHttpError(404, { code: 'not_found' })),
+    });
+    const r = runner(s, { now: () => tap + 1000 });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 0, failed: 2 });
+    expect(s.invokes.map((i) => i.name)).toEqual(['finalize-trip', 'trip-actions']);
+    const trip = (await createTripsRepo(db).get(uuid(10)))!;
+    expect(trip).toMatchObject({ status: 'not_driving', sync_error: 'spoofed_payload', result_json: null });
+    expect(canMarkNotDriving(toLocalDrive(trip), tap + 2000)).toBe(false);
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'failed', next_attempt_at: REFUSED_NEVER });
+    expect(await r.owed()).toBe(0);
+    await r.stop();
+  });
+
   test('not_found while the drive’s upload is still owed is no refusal: nothing is undone, and the mark goes once the drive is up; a failed mark tapped again is really sent', async () => {
     const finalizedAt = await waitingDrive();
     const tap = finalizedAt + 60_000;

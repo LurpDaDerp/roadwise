@@ -216,6 +216,15 @@ describe('Settings', () => {
     });
   });
 
+  it('shows the weather and speed-limit data credits, with their links', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const credits = await screen.findByTestId('settings-credits');
+    expect(within(credits).getByText(copy.root.credits.line)).toBeOnTheScreen();
+    expect(within(credits).getByRole('link', { name: copy.root.credits.openMeteo })).toBeOnTheScreen();
+    expect(within(credits).getByRole('link', { name: copy.root.credits.osm })).toBeOnTheScreen();
+  });
+
   describe('Privacy: what friends see', () => {
     it('the zones row, then Safety Rating on and the other three off by default, then the heat map', async () => {
       const w = await appWorld();

@@ -12,7 +12,7 @@ import { Card, IconButton, Text, useTheme, withAlpha } from '@/ui';
 import { ArchetypeIcon } from './ArchetypeIcon';
 import { archetypePattern, archetypeStops } from './archetypes';
 import { wrappedCopy as copy } from './copy';
-import { homeCardEntry, inCardWindow, monthName, WRAPPED_CARD_DISMISSED_KEY } from './month';
+import { homeCardEntry, inCardWindow, monthName, monthOf, previousMonth, WRAPPED_CARD_DISMISSED_KEY } from './month';
 
 /** The archetype colour's wash over the card face: a touch more on the dark card. */
 export const WASH_ALPHA: Readonly<Record<'light' | 'dark', number>> = { light: 0.12, dark: 0.2 };
@@ -63,7 +63,6 @@ export function HomeWrappedCard({ hidden }: { hidden: boolean }) {
   const at = now();
   const zone = deviceZone();
   const open = !hidden && inCardWindow(at, zone);
-  const archive = useWrappedArchive({ enabled: open });
   // undefined: not read yet (no flash of a card closed earlier).
   const [dismissed, setDismissed] = useState<string | null | undefined>(undefined);
   useEffect(() => {
@@ -76,6 +75,8 @@ export function HomeWrappedCard({ hidden }: { hidden: boolean }) {
       live = false;
     };
   }, [settings]);
+  // Asked for only while the card can show: not before the close is read, nor once this month's card is closed.
+  const archive = useWrappedArchive({ enabled: open && dismissed !== undefined && dismissed !== previousMonth(monthOf(at, zone)) });
 
   if (!open || dismissed === undefined) return null;
   const entry = homeCardEntry(at, zone, archive.data, dismissed);

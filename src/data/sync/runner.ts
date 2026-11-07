@@ -23,7 +23,7 @@ import { isDashcamType } from '@scoring';
 
 import type { Db } from '@/data/db/driver';
 import { createEventsRepo, type EventsRepo } from '@/data/db/events';
-import { createQueueRepo, MAX_DELAY_S, TRANSPORT_FAILURE } from '@/data/db/queue';
+import { createQueueRepo, FUNCTION_MISSING, MAX_DELAY_S, REFUSED_NEVER, TRANSPORT_FAILURE } from '@/data/db/queue';
 import { createSamplesRepo } from '@/data/db/samples';
 import { createSettingsRepo } from '@/data/db/settings';
 import { createTripsRepo } from '@/data/db/trips';
@@ -34,7 +34,16 @@ import { applyServerDrive, readServerDrive } from '@/data/hydrate/restore';
 import { countEvents } from '@/data/queries/rows';
 import { isSyncKind } from '@/data/sync/kinds';
 import { FinalizeTripResponseSchema, parseFinalizeUpload, type FinalizeTripResponse } from '@/data/sync/payload';
-import { deviceOwnerIs, finalizeIdempotencyKey, PassengerRideSchema, SESSION_UID_KEY, TripActionSchema, type TripAction } from '@/data/sync/queue';
+import {
+  bringForward,
+  deviceOwnerIs,
+  finalizeIdempotencyKey,
+  notDrivingIdempotencyKey,
+  PassengerRideSchema,
+  SESSION_UID_KEY,
+  TripActionSchema,
+  type TripAction,
+} from '@/data/sync/queue';
 import {
   ATTEST_REQUIRED_CODE,
   classifyInvokeError,
@@ -220,6 +229,16 @@ function answeredScored(resultJson: string | null): boolean | null {
   return parsed.success ? parsed.data.scored : null;
 }
 
+/** Whether the drive's upload was refused for good (failed, never to be tried again), read on `on`. */
+async function uploadRefused(on: Db, clientTripId: string): Promise<boolean> {
+  // A missing function (`FUNCTION_MISSING`) is reopened by a later foreground, so it is not a refusal for good.
+  const { rows } = await on.execute(
+    "SELECT 1 AS refused FROM sync_queue WHERE idempotency_key = ? AND status = 'failed' AND next_attempt_at = ? AND (last_error IS NULL OR last_error <> ?)",
+    [finalizeIdempotencyKey(clientTripId), REFUSED_NEVER, FUNCTION_MISSING]
+  );
+  return rows.length > 0;
+}
+
 /** What `applyDisputeResult` reads of a dispute answer. */
 export interface DisputeOutcome {
   status: 'accepted' | 'rejected';
@@ -335,7 +354,11 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const response = FinalizeTripResponseSchema.safeParse(res.data);
     if (!response.success) return { kind: 'retry', error: 'bad_response' };
     const written = await fenced(uid, (tx) => applyFinalizeResponse(tx, payload.clientTripId, response.data, now()));
-    return written ? { kind: 'done' } : { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
+    if (!written) return { kind: 'release', untilMs: now() + FOREIGN_OWNER_RETRY_MS };
+    // A "Wasn't driving" that waited on this upload (told `not_found` meanwhile) goes in this pass's
+    // next round, not at the end of its back-off: the notification's mark has a 35-minute window.
+    await bringForward(db, notDrivingIdempotencyKey(payload.clientTripId), now()).catch(noop);
+    return { kind: 'done' };
   }
 
   async function runAction(item: QueueItem, uid: string): Promise<Outcome> {
@@ -434,6 +457,8 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
       }
       const trip = await trips.get(action.clientTripId, tx);
       if (trip === null || trip.status !== 'not_driving') return;
+      // The server never held the drive because its upload was refused for good: the mark stays, on this phone only.
+      if (code === FUNCTION_NOT_FOUND_CODE && answeredScored(trip.result_json) === null && (await uploadRefused(tx, action.clientTripId))) return;
       const answered = action.previousStatus === 'pending' && !(await createQueueRepo(tx).owes(finalizeIdempotencyKey(action.clientTripId), tx)) ? answeredScored(trip.result_json) : null;
       // The refusal code (`too_old`, `no_uses_left`, `not_driving_expired`, `not_found`) is what the summary explains.
       if (answered !== null) {
@@ -476,7 +501,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
             const id = isRecord(body) && typeof body.clientTripId === 'string' ? body.clientTripId : null;
             if (id !== null) {
               await fenced(uid, async (tx) => {
-                await trips.update(id, { status: 'failed', sync_error: outcome.error }, now(), tx);
+                // A drive marked "Wasn't driving" keeps the mark (it never counts anywhere); the refusal is noted.
+                const marked = (await trips.get(id, tx))?.status === 'not_driving';
+                await trips.update(id, marked ? { sync_error: outcome.error } : { status: 'failed', sync_error: outcome.error }, now(), tx);
               }).catch(noop);
             }
           }

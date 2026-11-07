@@ -96,11 +96,15 @@ it('✕ closes it for that month (kept on the phone, wiped at sign-out); next mo
   expect(SIGN_OUT_SETTINGS).toContain(WRAPPED_CARD_DISMISSED_KEY);
   await r.unmount();
 
-  // Closed earlier: no flash of it on the next visit.
+  // Closed earlier: no flash of it on the next visit, and the archive is not asked for again.
+  clearQueryClients();
+  mockRpc.mockClear();
   const w2 = await appWorld({ settings: { [WRAPPED_CARD_DISMISSED_KEY]: '2026-10' } });
-  await w2.render(<HomeWrappedCard hidden={false} />);
-  await waitFor(() => expect(mockRpc).toHaveBeenCalled());
+  const r2 = await w2.render(<HomeWrappedCard hidden={false} />);
+  await act(async () => {});
   expect(screen.queryByTestId('home-wrapped')).toBeNull();
+  expect(mockRpc).not.toHaveBeenCalled();
+  await r2.unmount();
 
   // December 1st: November's card, even with October's closed.
   clearQueryClients();
