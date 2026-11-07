@@ -12,6 +12,7 @@ import { setAutoDrivesEnabled, useAutoDrives, type AutoDrives } from '@/features
 import { CarSettingRow } from '@/features/carLink/CarSettingRow';
 import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts';
 import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
+import { PermitSettingRow } from '@/features/permit/PermitSettingRow';
 import { usePlaces } from '@/features/places/usePlaces';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
@@ -238,6 +239,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <NavAppSettingRow db={db} />
+        <PermitSettingRow />
         <LinkRow icon="shield-checkmark-outline" title={copy.permissions.title} subtitle={copy.permissions.subtitle} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-permissions" />
       </Section>
 

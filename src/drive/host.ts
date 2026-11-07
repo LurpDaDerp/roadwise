@@ -69,6 +69,7 @@ import { enqueuePassengerRide } from '@/data/sync/queue';
 import type { AppStateLike } from '@/data/foreground';
 import { readWatchSpots } from '@/data/queries/spots';
 import { clearParkedSpot, readParkedSpot, writeParkedSpot } from '@/features/parked/model';
+import { permitFinalizeDeps } from '@/features/permit/data';
 import { WEATHER_TITLES } from '@/features/weather/copy';
 import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
 import { worseWeather, type DriveWeather } from '@/features/weather/driveWeather';
@@ -680,6 +681,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         carTag: () => car,
         weather: () => weather,
         ...dashcamFinalizeDeps(db),
+        // A drive in the permit log gets the saved supervisor.
+        ...permitFinalizeDeps(db),
       };
       const result = await closeDrive(session, finalizeDeps);
       const endCause = session.endCause ?? 'manual';

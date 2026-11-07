@@ -15,6 +15,7 @@ import { useMySummary } from '@/data/server/summary';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { usePairedCarLabels } from '@/features/carLink/usePairedCars';
+import { usePracticeDrive } from '@/features/permit/usePermit';
 import { EmptyState, Screen, Skeleton, useTheme } from '@/ui';
 
 import { BackHeader } from './BackHeader';
@@ -69,10 +70,11 @@ export function DriveHistoryScreen() {
   );
 }
 
-/** The recap with its commute line, read once the drive is there. */
-function DriveRecap(props: Omit<SummaryViewProps, 'commute'>) {
+/** The recap with its commute line and its practice row (Permit mode), read once the drive is there. */
+function DriveRecap(props: Omit<SummaryViewProps, 'commute' | 'practice' | 'onPracticeSupervisor'>) {
   const commute = useCommuteCompare(props.drive);
-  return <SummaryView {...props} commute={commute} />;
+  const { practice, setSupervisor } = usePracticeDrive(props.drive);
+  return <SummaryView {...props} commute={commute} practice={practice} onPracticeSupervisor={setSupervisor} />;
 }
 
 export function DriveSummaryScreen() {

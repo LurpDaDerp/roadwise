@@ -10,6 +10,12 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn(async () => {}),
 }));
 
+// expo-print's native module is absent under Jest: printing a page "makes" a PDF at a fixed path.
+jest.mock('expo-print', () => ({
+  printToFileAsync: jest.fn(async () => ({ uri: 'file:///cache/Print/practice-log.pdf', numberOfPages: 1 })),
+  printAsync: jest.fn(async () => {}),
+}));
+
 // Safe-area insets are a native measurement that never arrives under Jest: the real
 // `SafeAreaProvider` renders nothing until it does, and `useSafeAreaInsets` throws outside one.
 // The library's own mock reports zero insets by default and honours `initialMetrics`, so a test

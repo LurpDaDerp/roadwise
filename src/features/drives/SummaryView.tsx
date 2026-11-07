@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
+import { PracticeDriveRow } from '@/features/permit/PracticeDriveRow';
+import type { PracticeDriveView } from '@/features/permit/usePermit';
 import { DrivePlacePrompt } from '@/features/places/DrivePlacePrompt';
 import { formatDistance, type Units } from '@/lib/units';
 import { Button, Card, Divider, IconButton, Text, useTheme } from '@/ui';
@@ -46,6 +48,10 @@ export type SummaryViewProps = {
   onNotDriving: () => Promise<void>;
   /** How this commute drive compares with the usual one on its leg, when as good or better (`useCommuteCompare`); absent or null: no line. */
   commute?: CommuteCompare | null;
+  /** The drive's place in the permit's practice log (`usePracticeDrive`); absent or null: not a practice drive, no row. */
+  practice?: PracticeDriveView | null;
+  /** Sets this drive's supervisor (the practice row's Change). */
+  onPracticeSupervisor?: (name: string) => Promise<boolean>;
 };
 
 const COMMUTE_ICON: Record<CommuteCompare['kind'], keyof typeof Ionicons.glyphMap> = {
@@ -84,11 +90,24 @@ function StateHead({ state, drive, units }: { state: Exclude<ScoreState, { kind:
  * The drive recap, top to bottom: time and distance (and how it started or ended on its own), the
  * route map, then the score card: the hero, the share card's smaller sibling (the tier's icon,
  * score, distance and time in the tier's colour on a soft wash of it) with Share right beside it,
- * a commute drive's line against the usual one on its leg (only when as good or better), and the
+ * a commute drive's line against the usual one on its leg (only when as good or better), a
+ * practice drive's row (Permit mode: how long, the minutes at night, who supervised), and the
  * drive's events under it; then the speed chart in its own card (only where the events are listed:
  * never on a drive in progress or marked "Wasn't driving"). "Wasn't driving" sits in a fixed footer.
  */
-export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack, onReport, onNotDriving, commute = null }: SummaryViewProps) {
+export function SummaryView({
+  drive,
+  events,
+  fresh,
+  notDrivingLeft,
+  now,
+  onBack,
+  onReport,
+  onNotDriving,
+  commute = null,
+  practice = null,
+  onPracticeSupervisor,
+}: SummaryViewProps) {
   const t = useTheme();
   const units = useUnits();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -213,6 +232,7 @@ export function SummaryView({ drive, events, fresh, notDrivingLeft, now, onBack,
               {share}
             </View>
           )}
+          {practice !== null && onPracticeSupervisor ? <PracticeDriveRow practice={practice} onSupervisor={onPracticeSupervisor} /> : null}
           {listed ? (
             <>
               <Divider />

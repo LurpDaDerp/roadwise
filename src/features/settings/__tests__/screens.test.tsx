@@ -414,6 +414,24 @@ describe('Settings', () => {
     expect(copy.root.emergency.subtitle(['A', 'B', 'C', 'D', 'E'])).toBe('A, B and 3 more');
   });
 
+  it('Driving › Permit mode, after Navigation app: Off until it is on, then the hours against the target; opens its screen', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const row = await screen.findByTestId('settings-permit');
+    expect(within(row).getByText('Permit mode')).toBeOnTheScreen();
+    expect(within(row).getByText('Off')).toBeOnTheScreen();
+    const ids = screen.getAllByTestId(/^settings-(nav-app|permit|permissions)$/).map((el) => el.props.testID);
+    expect(ids).toEqual(['settings-nav-app', 'settings-permit', 'settings-permissions']);
+    await tap('settings-permit');
+    expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.permit);
+  });
+
+  it('Permit mode on with no target reads On (the log is read from the drives)', async () => {
+    const w = await appWorld({ settings: { 'permit.enabled': true, 'permit.startDay': '2026-11-01', 'permit.state': { code: 'AR', auto: false } } });
+    await w.render(<SettingsScreen />);
+    await waitFor(() => expect(within(screen.getByTestId('settings-permit')).getByText('On')).toBeOnTheScreen());
+  });
+
   it('opens alerts, zones and notifications, and has no driver monitoring entry', async () => {
     const w = await appWorld();
     await w.render(<SettingsScreen />);

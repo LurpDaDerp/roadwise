@@ -18,7 +18,8 @@
 // Recap and analytics facts (local only): the speed trace and the limit buckets come from the
 // session (its mark's for a cut drive), the buckets held to the drive's limit time and distance. The
 // weather (the worst the drive saw: the host's tag, or what it wrote to the trip row) is stored and
-// uploaded when the drive had a reading.
+// uploaded when the drive had a reading. A drive in the permit's practice log gets the saved
+// supervisor (`practice_supervisor`, local only).
 //
 // DashPal: before any of that, the dashcam's facts for the drive are read once. Its candidates
 // become severe `eyes_off` / `drowsy` events under the scoring rules (inside the drive, at 10 mph or
@@ -46,6 +47,7 @@ import {
   createSettingsRepo,
   createTripsRepo,
   DRIVE_WEATHERS,
+  PRACTICE_SUPERVISOR_MAX,
   type Db,
   type DriveWeather,
   type EventRow,
@@ -106,6 +108,12 @@ export interface FinalizeDeps {
    * unknown or failing: the row's alone.
    */
   weather?: () => DriveWeather | null;
+  /**
+   * Who supervised the drive, for the permit's practice log (`permitFinalizeDeps`): the saved
+   * supervisor when Permit mode is on and the drive is in the log, else null. Stored on the phone
+   * only (`practice_supervisor`). Absent, null or failing: none.
+   */
+  practiceSupervisor?: (trip: { clientTripId: string; localDay: string }) => Promise<string | null>;
   /** The per-drive privacy trim seed. Default: `deviceTrimSeed` (HMAC of the SecureStore secret). */
   trimSeed?: (clientTripId: string) => Promise<string>;
   /**
@@ -347,6 +355,19 @@ export function driveWeatherFor(tag: FinalizeDeps['weather'], stored: DriveWeath
   return best < 0 ? null : (DRIVE_WEATHERS[best] as DriveWeather);
 }
 
+/** The practice supervisor as stored: trimmed and clipped to `PRACTICE_SUPERVISOR_MAX`; none when empty, absent or failing. */
+export async function practiceSupervisorOf(dep: FinalizeDeps['practiceSupervisor'], trip: { clientTripId: string; localDay: string }): Promise<string | null> {
+  let name: unknown = null;
+  try {
+    name = dep ? await dep(trip) : null;
+  } catch {
+    name = null;
+  }
+  if (typeof name !== 'string') return null;
+  const t = name.trim().slice(0, PRACTICE_SUPERVISOR_MAX).trim();
+  return t === '' ? null : t;
+}
+
 async function readZones(db: Db): Promise<PrivacyZone[]> {
   try {
     return parseZones(await createSettingsRepo(db).get<unknown>(PRIVACY_ZONES_KEY));
@@ -489,6 +510,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const [fromEnd, toEnd] = await Promise.all([endLabel(from, zones, places, geocode), endLabel(session.lastFix, zones, places, geocode)]);
   const car = carTagOf(deps.carTag);
   const weather = driveWeatherFor(deps.weather, existing?.weather);
+  const supervisor = await practiceSupervisorOf(deps.practiceSupervisor, { clientTripId: id, localDay });
 
   const phoneEvents = session.events.filter((e) => e.startedAt < endedAt + 2000).map((e) => sanitizeEvent(e, startedAt, endedAt));
   const fromDashcam = dashcamEvents(facts?.events ?? [], { startedAt, endedAt }, phoneEvents).map((e) => sanitizeEvent(e, startedAt, endedAt));
@@ -600,6 +622,8 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
     speed_trace_json: speedTraceJson(session.speedTrace),
     limit_buckets_json: limitBucketsJson(boundLimitBuckets(session.limitBuckets, exposure.limitS, finite(session.distanceM))),
     weather,
+    // Local only: the permit log's supervisor (a drive outside the log keeps whatever it had: none).
+    ...(supervisor === null ? {} : { practice_supervisor: supervisor }),
     // Local only (the summary's end note); a manual end cut at the last movement is `manual_still`.
     end_cause: session.endCause === null ? null : session.endCause === 'manual' && session.cut ? 'manual_still' : session.endCause,
   } as const;

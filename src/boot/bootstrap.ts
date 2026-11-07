@@ -42,6 +42,7 @@ import { writeDropNotice } from '@/drive/dropNotice';
 import { createDriveHost, finishPendingCancel, isJournaled, playerInputs, type DriveHost, type DriveStartPermissions, type PushToStartOutcome, type PushToStartRequest } from '@/drive/host';
 import { bindDriveScreenMemory, DRIVE_SCREEN_ENTERED_KEY, isDriveScreenFocused, markDriveScreenEntered } from '@/features/drive/hudPresence';
 import type { StoredDrive } from '@/features/drive/summaryNotifier';
+import { keepArchivedNight, permitFinalizeDeps } from '@/features/permit/data';
 import { alertStylePref, loadAlertStylePref } from '@/features/settings/alerts/stylePref';
 import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voicePref';
 import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
@@ -290,7 +291,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   const schemaVersion = await stage('migrate', () => migrate(db));
   // Drives past the 183 days leave the lists before anything reads them: local SQL only, and it
   // does nothing while a drive is recording. A failure holds nothing up (the daily job retries).
-  await archiveOldDrives(db, now()).catch((error: unknown) => onError(error, 'archive old drives'));
+  await archiveWithPractice(db, now(), onError).catch((error: unknown) => onError(error, 'archive old drives'));
   // Neither holds the launch, and a failure costs only what it would have given.
   const createNet = deps.createNet === undefined ? createExpoNet : deps.createNet;
   if (createNet) void createNet().catch((error: unknown) => onError(error, 'network state'));
@@ -373,6 +374,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       now,
       appVersion,
       ...dashcamFinalizeDeps(db),
+      ...permitFinalizeDeps(db),
     });
     if (!isDropped(result)) {
       storedOrphans.push({
@@ -690,6 +692,16 @@ async function excludeDatabaseFromBackup(): Promise<void> {
 }
 
 /** The forgot-to-start reminder's one switch-off per install (it is retired). Never fails the launch. */
+/**
+ * The 183-day archive (`archiveOldDrives`), with the permit log's night minutes kept first for the
+ * drives it is about to clear (`keepArchivedNight`, same `now`). A failure there is reported and the
+ * archive still runs: the retention rule never waits on the log.
+ */
+async function archiveWithPractice(db: Db, at: number, onError: (error: unknown, context: string) => void): Promise<number | null> {
+  await keepArchivedNight(db, at).catch((error: unknown) => onError(error, 'permit: keep archived night'));
+  return archiveOldDrives(db, at);
+}
+
 async function retireReminder(db: Db, source: DriveSource, onError: (error: unknown, context: string) => void): Promise<void> {
   try {
     const settings = createSettingsRepo(db);
@@ -904,7 +916,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     'archive',
     ARCHIVE_INTERVAL_MS,
     async () => {
-      if ((await archiveOldDrives(runtime.db, runtime.now())) === null) throw new Error('a drive is recording');
+      if ((await archiveWithPractice(runtime.db, runtime.now(), onError)) === null) throw new Error('a drive is recording');
     },
     foreground
   );

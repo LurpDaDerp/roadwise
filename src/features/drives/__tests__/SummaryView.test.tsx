@@ -97,6 +97,29 @@ test("like the events, the speed chart shows on a too-short drive but never on o
   }
 });
 
+describe('the practice row (Permit mode)', () => {
+  const practice = { dayMin: 18, nightMin: 6, supervisor: 'Dad' };
+
+  test('in the score card, under the hero and above the events; none without one', async () => {
+    await draw(<SummaryView {...props({ practice, onPracticeSupervisor: jest.fn(async () => true) })} />);
+    const ids = testIds();
+    const at = (id: string) => ids.indexOf(id);
+    expect(within(screen.getByTestId('summary-score-card')).getByTestId('summary-practice')).toBeOnTheScreen();
+    expect(at('summary-hero')).toBeLessThan(at('summary-practice'));
+    expect(at('summary-practice')).toBeLessThan(at('event-list'));
+    expect(screen.getByTestId('summary-practice-line')).toHaveTextContent('24 min · 6 min at night · with Dad');
+    expect(JSON.stringify(screen.toJSON())).not.toMatch(NO_POINTS);
+    await draw(<SummaryView {...props()} />);
+    expect(screen.queryByTestId('summary-practice')).toBeNull();
+  });
+
+  test('a too-short practice drive still shows it', async () => {
+    await draw(<SummaryView {...props({ drive: drive({ status: 'unscored', reason: 'too_short' }), practice, onPracticeSupervisor: jest.fn(async () => true) })} />);
+    expect(screen.getByTestId('state-too-short')).toBeOnTheScreen();
+    expect(screen.getByTestId('summary-practice')).toBeOnTheScreen();
+  });
+});
+
 describe('the commute line', () => {
   const fewer = { kind: 'fewer', text: 'Fewer events than your usual Home → School', spoken: 'Fewer events than your usual Home to School' } as const;
 

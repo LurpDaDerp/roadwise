@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import { createFakeDriveDetect, type CarLinkState, type CarOutput } from '@drive-sense';
 import { resetPairedCars } from '@/features/carLink/usePairedCars';
@@ -47,6 +47,12 @@ jest.mock('../useCommuteCompare', () => ({
     return mockCommute;
   },
 }));
+// The recap's practice row reads Permit mode's settings; it has its own tests (src/features/permit).
+let mockPractice: unknown = null;
+const mockSetSupervisor = jest.fn(async (_name: string) => true);
+jest.mock('@/features/permit/usePermit', () => ({
+  usePracticeDrive: () => ({ practice: mockPractice, setSupervisor: (name: string) => mockSetSupervisor(name) }),
+}));
 let mockAuto: { state: string } = { state: 'unsupported' };
 jest.mock('@/features/autoDrives/useAutoDrives', () => ({ useAutoDrives: () => mockAuto, autoDrivesOn: (a: { state: string }) => a.state === 'on' }));
 let mockHistory: unknown[] = [];
@@ -68,6 +74,7 @@ beforeEach(() => {
   mockDetail = { drive: mockDrive(), events: [mockEvent()] };
   mockScores = new Map();
   mockCommute = null;
+  mockPractice = null;
   mockAuto = { state: 'unsupported' };
   mockHistory = [];
   mockHistoryFilters = [];
@@ -92,6 +99,18 @@ test('the summary shows the commute line for the drive on show', async () => {
   mockCommute = { kind: 'same', text: 'Same as your usual Home → School', spoken: 'Same as your usual Home to School' };
   await draw(<DriveSummaryScreen />);
   expect(screen.getByTestId('summary-commute')).toHaveProp('accessibilityLabel', 'Same as your usual Home to School');
+});
+
+test('a practice drive shows its row, and Change sets its supervisor', async () => {
+  await draw(<DriveSummaryScreen />);
+  expect(screen.queryByTestId('summary-practice')).toBeNull();
+  mockPractice = { dayMin: 20, nightMin: 4, supervisor: 'Dad' };
+  await draw(<DriveSummaryScreen />);
+  expect(screen.getByTestId('summary-practice-line')).toHaveTextContent('24 min · 4 min at night · with Dad');
+  await press(screen.getByTestId('summary-practice-change'));
+  await fireEvent.changeText(screen.getByTestId('summary-practice-sheet-input'), 'Mom');
+  await press(screen.getByTestId('summary-practice-sheet-save'));
+  expect(mockSetSupervisor).toHaveBeenCalledWith('Mom');
 });
 
 test("confirming \"wasn't driving\" marks the drive", async () => {

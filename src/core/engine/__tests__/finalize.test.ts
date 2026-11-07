@@ -17,6 +17,7 @@ import {
   INVALID_PAYLOAD_SYNC_ERROR,
   isDropped,
   normaliseZone,
+  practiceSupervisorOf,
   sanitizeEvent,
 } from '@/core/engine/finalize';
 import { parseLimitBuckets } from '@/core/engine/limitBuckets';
@@ -787,5 +788,21 @@ describe('exact place labels, the saved places at each end and the car (local on
     ).toBeNull();
     const none = await finalizeTrip(closedSession(N, [], { clientTripId: uuid(72) }), deps({ carTag: () => null }));
     expect(none.trip).toMatchObject({ car_uid: null, car_name: null });
+  });
+
+  test("the permit log's supervisor: asked with the drive's id and local day, stored trimmed on the phone only; none, empty or failing is none", async () => {
+    const asked: string[] = [];
+    const session = closedSession(N);
+    const supervised = await finalizeTrip(
+      session,
+      deps({ practiceSupervisor: async ({ clientTripId, localDay }) => (asked.push(`${clientTripId} ${localDay}`), '  Dad  ') })
+    );
+    expect(asked).toEqual([`${session.clientTripId} 2023-11-14`]);
+    expect(supervised.trip.practice_supervisor).toBe('Dad');
+    expect(JSON.stringify(supervised.payload)).not.toContain('Dad');
+    expect((await finalizeTrip(closedSession(N, [], { clientTripId: uuid(73) }), deps({ practiceSupervisor: async () => '   ' }))).trip.practice_supervisor).toBeNull();
+    expect((await finalizeTrip(closedSession(N, [], { clientTripId: uuid(74) }), deps({ practiceSupervisor: () => Promise.reject(new Error('locked')) }))).trip.practice_supervisor).toBeNull();
+    expect((await finalizeTrip(closedSession(N, [], { clientTripId: uuid(75) }), deps())).trip.practice_supervisor).toBeNull();
+    expect(await practiceSupervisorOf(async () => 'n'.repeat(80), { clientTripId: 'x', localDay: '2023-11-14' })).toHaveLength(60);
   });
 });
