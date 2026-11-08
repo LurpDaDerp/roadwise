@@ -1,6 +1,6 @@
 -- 0036_improvement_achievements: a category score 10 or more whole points above where it was 30
 -- days ago, both windows ranked, unlocks that category's badge, once; no ranked past, no badge;
--- drives detected at older lines (scoring version under 11) in either window, no badge.
+-- drives detected at older lines (scoring version under 12, 0040) in either window, no badge.
 -- claim_spot_cleared writes Spot Cleared for its caller only, once, and is closed to anon; the
 -- client still writes no badge itself, and the CHECK takes exactly the ten ids.
 create extension if not exists pgtap with schema extensions;
@@ -18,9 +18,9 @@ insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000004', 'd@example.com');
 
 -- a scored drive with p_brakes minor hard brakes (no measured peak: each weighs 1); 10 speed-ups,
--- 5 turns and 600 s under a limit, so the other categories barely move; scored at version 11 (today's
+-- 5 turns and 600 s under a limit, so the other categories barely move; scored at version 12 (today's
 -- lines) unless told otherwise
-create function pg_temp.trip(p_user uuid, p_started timestamptz, p_miles numeric, p_slowdowns int, p_brakes int, p_version int default 11) returns uuid
+create function pg_temp.trip(p_user uuid, p_started timestamptz, p_miles numeric, p_slowdowns int, p_brakes int, p_version int default 12) returns uuid
 language plpgsql as $$
 declare v_id uuid;
 begin

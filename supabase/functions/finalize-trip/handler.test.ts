@@ -79,7 +79,7 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
-  assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 11]);
+  assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 12]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // no weather sent: none passed on

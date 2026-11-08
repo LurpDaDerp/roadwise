@@ -75,7 +75,7 @@ create function pg_temp.env(p_client uuid, p_start timestamptz, p_merge uuid) re
       'endedAt', floor(extract(epoch from p_start + interval '20 minutes') * 1000)::bigint, 'tz', 'America/New_York',
       'localDay', to_char(p_start at time zone 'America/New_York', 'YYYY-MM-DD'), 'miles', 8, 'nightMiles', 0, 'durationS', 1200,
       'end', null, 'polyline', 'poly', 'appVersion', '3.2.0', 'origin', 'auto', 'notDrivingExpired', false),
-    'scored', true, 'reason', null, 'events', '[]'::jsonb, 'scoringVersion', 11)
+    'scored', true, 'reason', null, 'events', '[]'::jsonb, 'scoringVersion', 12)
 $$;
 create temporary table r1 as select private.apply_drive(pg_temp.env('a1000000-0000-4000-8000-000000000001', (select t0 from t), null)) as r;
 select is((select array(select jsonb_object_keys(r) order by 1) from r1),

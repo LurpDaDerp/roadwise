@@ -23,7 +23,7 @@ begin
     'payload', jsonb_build_object('clientTripId', p_client, 'startedAt', v_ms, 'endedAt', v_ms + 1200000, 'tz', 'America/Los_Angeles',
       'localDay', to_char(p_start at time zone 'America/Los_Angeles', 'YYYY-MM-DD'), 'miles', 8, 'nightMiles', 0, 'durationS', 1200,
       'polyline', '', 'appVersion', '4.0.0', 'origin', 'auto', 'notDrivingExpired', false) || p_payload,
-    'scored', true, 'reason', null, 'events', '[]'::jsonb, 'scoringVersion', 11));
+    'scored', true, 'reason', null, 'events', '[]'::jsonb, 'scoringVersion', 12));
 end $$;
 create function pg_temp.weather(p_client uuid) returns text language sql stable as $$
   select weather from public.trips where client_trip_id = p_client $$;
@@ -90,7 +90,7 @@ begin
   insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored,
       n_events, n_hard_brake, clean, slowdowns, speedups, turns, limit_s, moving_s, scoring_version, weather, not_driving, not_driving_at)
     values (v_user, gen_random_uuid(), v_start, v_start + interval '20 minutes', (v_start at time zone 'America/New_York')::date,
-      private.league_week(v_start), 'America/New_York', p_miles, 0, 1200, true, (not p_clean)::int, (not p_clean)::int, p_clean, 10, 10, 5, 600, 1000, 11,
+      private.league_week(v_start), 'America/New_York', p_miles, 0, 1200, true, (not p_clean)::int, (not p_clean)::int, p_clean, 10, 10, 5, 600, 1000, 12,
       p_weather, p_not_driving, case when p_not_driving then now() end);
 end $$;
 create function pg_temp.unlock(p_user int) returns jsonb language sql as $$
