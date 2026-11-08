@@ -65,7 +65,7 @@ select col_default_is('public', 'trips', 'scoring_version', '9', 'scoring versio
 
 -- ---------------------------------------------------------------------------
 -- the weights, to the digit (packages/scoring rating.test.ts pins the same values). The hard-event
--- digits are at 0035's lines (0.36 g brake, 0.45 g start, 0.55 g turn), which replace 0028's.
+-- digits are at 0040's lines (0.36 g brake, 0.40 g start, 0.48 g turn), which replace 0028's.
 -- ---------------------------------------------------------------------------
 select is(array[private.speed_factor(30), private.speed_factor(60), private.speed_factor(10), private.speed_factor(4), private.speed_factor(120), private.speed_factor(null)],
   array[1, 2, 0.3333333333333333, 0.3333333333333333, 2.6666666666666665, 1]::float8[], 'speed_factor: the speed over 30 mph, read between 10 and 80; 1 with none');
@@ -73,7 +73,7 @@ select is(array[private.hard_event_weight('hard_brake', 'minor', '{"peakG": 0.45
     private.hard_event_weight('hard_corner', 'minor', '{"peakG": 0.6}'), private.hard_event_weight('hard_brake', 'severe', '{"peakG": 0.75}'),
     private.hard_event_weight('hard_corner', 'minor', '{"peakG": 0.2}'), private.hard_event_weight('hard_brake', 'severe', '{}'),
     private.hard_event_weight('hard_brake', 'minor', '{"peakG": "x"}')],
-  array[1.5625, 1.234567901234568, 1.190082644628099, 4, 1, 2, 1]::float8[], 'hard_event_weight: (peak / threshold)^2 between 1 and 4; the tier without a peak');
+  array[1.5625, (0.5::float8 / 0.4::float8) * (0.5::float8 / 0.4::float8), (0.6::float8 / 0.48::float8) * (0.6::float8 / 0.48::float8), 4, 1, 2, 1]::float8[], 'hard_event_weight: (peak / threshold)^2 between 1 and 4; the tier without a peak');
 select is(array[private.speeding_weight(1, '{"overMphS": 1}', 'minor'), private.speeding_weight(3, '{"overMphS": 4.5}', 'minor'), private.speeding_weight(5, '{"overMphS": 65}', 'severe')],
   array[0.08944271909999159, 0.49295030175464943, 5 * (13 / 5.0)::float8 * sqrt((13 / 5.0)::float8)]::float8[],
   'speeding_weight: no grace, one second just over the line weighs a little and five seconds count all five');
@@ -104,9 +104,9 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000
 select is((select row(n_events, n_speeding, clean, scoring_version)::text from public.trips where client_trip_id = 'a0000000-0000-4000-8000-0000000000aa'),
   row(7, 2, false, 9)::text, 'the 3-second speeding is an event like the rest: it is counted and breaks a clean drive');
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[71.1, 64.80938416422288, 42.384105960264904, 62.636222106901926, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
-  'pin Q: 71.1 and every category to the digit (scoring ratingAt)');
-select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 71.1, 'the stored rating is the new one');
+  array[69.9, 60.56350089920356, 42.384105960264904, 57.58630714983263, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
+  'pin Q: 69.9 and every category to the digit (scoring ratingAt)');
+select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 69.9, 'the stored rating is the new one');
 -- a short episode weighs on Speed: taking it away raises the score
 update public.trip_events set status = 'removed' where client_event_id = 'a1000000-0000-4000-8000-000000000005';
 select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 87.82410285072866::float8,
@@ -128,7 +128,7 @@ select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) 
   'a 4-second eyes-off weighs less than a 12.5-second one');
 update public.trip_events set duration_s = 12.5 where client_event_id = 'a1000000-0000-4000-8000-000000000008';
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[71.1, 64.80938416422288, 42.384105960264904, 62.636222106901926, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
+  array[69.9, 60.56350089920356, 42.384105960264904, 57.58630714983263, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
   'and back as it was');
 
 -- ---------------------------------------------------------------------------

@@ -1,15 +1,15 @@
 // Detection thresholds and drive rules. Shared by the device's detectors, the server's
 // re-validation and the screens, so every number lives here once.
 
-// The hard-event lines sit inside the range fleet and insurance telematics use for passenger cars
-// (brake 0.32 to 0.61 g, start 0.40 to 0.45 g, turn 0.47 to 0.56 g), toward the lenient end, since a
-// phone reads per-second peaks: a safe driver rarely reaches them.
+// The hard-event lines sit inside the range insurers, fleet telematics and driving research use for
+// passenger cars (brake 0.32 to 0.61 g, start 0.35 to 0.50 g, turn 0.47 to 0.50 g): braking at the
+// insurers' ~8 mph per second, starts and turns at the fleet and research norm.
 /** Hard braking, in g: minor from 0.36, severe from 0.55 (confirmed by a GPS speed drop). */
 export const HARD_BRAKE_G = { minor: 0.36, severe: 0.55 } as const;
-/** Hard acceleration, in g: minor from 0.45, severe from 0.60. */
-export const HARD_ACCEL_G = { minor: 0.45, severe: 0.6 } as const;
-/** Hard cornering (sideways force), in g: minor from 0.55, severe from 0.70. */
-export const HARD_CORNER_G = { minor: 0.55, severe: 0.7 } as const;
+/** Hard acceleration, in g: minor from 0.40, severe from 0.60. */
+export const HARD_ACCEL_G = { minor: 0.4, severe: 0.6 } as const;
+/** Hard cornering (sideways force), in g: minor from 0.48, severe from 0.70. */
+export const HARD_CORNER_G = { minor: 0.48, severe: 0.7 } as const;
 /** The car counts as moving at or above this speed (mph): moving time, harsh-event gates. */
 export const MOVING_MIN_MPH = 5;
 

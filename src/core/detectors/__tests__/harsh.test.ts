@@ -29,9 +29,9 @@ describe('hard braking / acceleration (spec event table, "confirmed by GPS")', (
     expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.5 }, 10, 10)).all).toEqual([]);
   });
 
-  test('a 0.45 g acceleration with a matching GNSS rise is a minor hard accel (0.44 g is none); 0.60 g and up severe', () => {
-    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.45 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
-    expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.44 }, 10, 10, mph(20), mph(30))).all).toEqual([]);
+  test('a 0.40 g acceleration with a matching GNSS rise is a minor hard accel (0.39 g is none); 0.60 g and up severe', () => {
+    expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.4 }, 10, 10, mph(20), mph(30))).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
+    expect(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.39 }, 10, 10, mph(20), mph(30))).all).toEqual([]);
     expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.59 }, 10, 10, mph(20), mph(32))).all).tier).toBe('minor');
     expect(only(drive(createHarshDetector(counterIds()), peakDrive({ aLonMax: 0.6 }, 10, 10, mph(20), mph(32))).all).tier).toBe('severe');
   });
@@ -70,6 +70,11 @@ describe('hard cornering (spec: sideways force, confirmed by the gyroscope and t
     expect(e).toMatchObject({ type: 'hard_corner', tier: 'minor' });
     expect(e.measured.peakG).toBe(0.6);
     expect(only(corner(turn(45, { aLatMax: 0.6 }))).type).toBe('hard_corner');
+  });
+
+  test('a sharp turn counts from 0.48 g sideways (0.47 g is none)', () => {
+    expect(only(corner(turn(135, { aLatMin: -0.48 })))).toMatchObject({ type: 'hard_corner', tier: 'minor' });
+    expect(corner(turn(135, { aLatMin: -0.47 }))).toEqual([]);
   });
 
   test('the force against the turn (a jolt to the left in a right turn) is not a corner', () => {
@@ -210,10 +215,10 @@ describe('before the forward axis is learned, the GPS speed change stands in for
     expect(only(drive(createHarshDetector(counterIds()), minor).all)).toMatchObject({ type: 'hard_brake', tier: 'minor' });
   });
 
-  test('a well-rated 20 → 30 mph rise in a second (0.46 g) is a hard accel; 20 → 29 mph (0.41 g) is under 0.45 g', () => {
-    const rows = seq([10, { speed: mph(20) }], [10, { speed: mph(30) }]);
+  test('a well-rated 20 → 29 mph rise in a second (0.41 g) is a hard accel; 20 → 28 mph (0.36 g) is under 0.40 g', () => {
+    const rows = seq([10, { speed: mph(20) }], [10, { speed: mph(29) }]);
     expect(only(drive(createHarshDetector(counterIds()), rows).all)).toMatchObject({ type: 'hard_accel', tier: 'minor' });
-    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(20) }], [10, { speed: mph(29) }])).all).toEqual([]);
+    expect(drive(createHarshDetector(counterIds()), seq([10, { speed: mph(20) }], [10, { speed: mph(28) }])).all).toEqual([]);
   });
 
   test('a gentle change, a speed rated worse than 1 m/s or unrated, or a jump past 1 g is nothing', () => {
