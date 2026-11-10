@@ -38,7 +38,7 @@ import { EmergencyPanel } from './EmergencyPanel';
 import { nextEndLock } from './endLock';
 import { EventBanner, type HudAlert, useAlertFlash } from './EventBanner';
 import { hudButtonColors } from './hudButtons';
-import { hudCopy } from './hudCopy';
+import { DRIVE_HREF, hudCopy } from './hudCopy';
 import { hudLayout, type Rect } from './hudLayout';
 import { setDriveScreenFocused } from './hudPresence';
 import { navHighlight, NavigationButton, nextNavLock } from './NavigationButton';
@@ -270,16 +270,28 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // The screen's focus: the "Not driving?" budget counts only while this screen is focused (the host
   // adds RoadWise being in front), so the lock-screen hint goes at the same moment the link does.
   const [focused, setFocused] = useState(false);
+  // The same focus as it is this instant, for the way out (`leave`), which may run outside a render.
+  const focusedNow = useRef(false);
   useFocusEffect(
     useCallback(() => {
       setFocused(true);
+      focusedNow.current = true;
       if (!overlay) controls.setHudVisible(true);
       return () => {
         setFocused(false);
+        focusedNow.current = false;
         if (!overlay) controls.setHudVisible(false);
       };
     }, [controls, overlay])
   );
+  // Still in the stack: a way out that lands after the screen has gone has no route of its own to return to.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // Presence (`hudPresence`): focused with RoadWise in front, for the open drive. Not for the
   // diagnostics simulation, which is never the driving screen.
   const appActive = useAppActive();
@@ -418,6 +430,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // Where the drive goes once it is over: its summary, fresh, or Home when there was none (a drive
   // that was not kept has no summary; Home says why). Home is the one under the drive: `dismissTo`
   // pops back to the tabs already in the stack (and selects Home), never a second copy of them.
+  // With another route over this screen (it is not the focused one), the stack first pops back to
+  // this screen, so the summary takes this screen's place and never the place of the route over it.
   const droppedId = useDrive((d) => (d.lastFinalized !== null && d.lastFinalized.ok && d.lastFinalized.dropped !== null ? d.lastFinalized.clientTripId : null));
   const lastTripId = useRef<string | null>(live.clientTripId);
   useEffect(() => {
@@ -428,6 +442,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
     (clientTripId: string | null) => {
       if (overlay || navigated.current) return;
       navigated.current = true;
+      if (mounted.current && !focusedNow.current) router.dismissTo(DRIVE_HREF);
       if (clientTripId !== null) router.replace(driveSummaryHref(clientTripId, true));
       else router.dismissTo(HOME_HREF);
     },
@@ -748,7 +763,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       {sosOpen ? (
         <View testID="hud-sos-sheet" style={[styles.panel, styles.sosPanel, { ...at(layout.sosPanel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
-          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={layout.sosPanel.h} onCall={callSos} onClose={closeSos} />
+          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={layout.sosPanel.h} width={layout.sosPanel.w} onCall={callSos} onClose={closeSos} />
         </View>
       ) : waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>

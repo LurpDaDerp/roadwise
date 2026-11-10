@@ -162,6 +162,8 @@ export interface BootstrapDeps {
   sessionTimeoutMs?: number;
   /** Default: `OWNER_SESSION_TIMEOUT_MS`. */
   ownerSessionTimeoutMs?: number;
+  /** The longest the launch waits for an abandoned one before it to stop. Default: `DRAIN_WAIT_MS`. */
+  drainWaitMs?: number;
   /**
    * The process's network adapter, which the speed limits and the account screens read
    * (`getSharedOnline`), made at launch and not waited for. Default: `createExpoNet`. `null`: none.
@@ -218,24 +220,33 @@ function warn(error: unknown, context: string): void {
 }
 
 /**
- * Settles once every launch a deadline abandoned has stopped. The next launch waits for it, so a
- * Retry never runs beside the launch it replaces (two drive hosts on the same native drive).
+ * Settles once every launch a deadline abandoned has stopped. The next launch waits for it (for
+ * `DRAIN_WAIT_MS` at most), so a Retry does not run beside a launch that is still stopping (two
+ * drive hosts on the same native drive).
  */
 let draining: Promise<void> = Promise.resolve();
 
 /**
+ * The longest a launch waits for the abandoned launches before it to stop. One that never stops
+ * (its teardown hangs) holds a Retry up this long and no longer.
+ */
+export const DRAIN_WAIT_MS = 5_000;
+
+/**
  * The whole launch, with a deadline around it: a hang is reported as a failure at the stage reached.
- * The launch starts once an abandoned one before it has stopped, and that wait counts against its
- * own deadline.
+ * The launch starts once an abandoned one before it has stopped, or after `DRAIN_WAIT_MS` of
+ * waiting for that, and the wait counts against its own deadline.
  */
 export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime> {
   const limitMs = deps.timeoutMs ?? BOOTSTRAP_TIMEOUT_MS;
+  const drainMs = deps.drainWaitMs ?? DRAIN_WAIT_MS;
   const onError = deps.onError ?? warn;
   let reached: BootstrapStage = 'open';
   let abandoned = false;
 
-  const sequence = draining.then(() => {
+  const sequence = withinMs(draining, drainMs).then((drained) => {
     if (abandoned) throw new BootstrapError(reached, new Error(ABANDONED));
+    if (drained === TIMED_OUT) onError(new Error(`an abandoned launch had not stopped after ${drainMs} ms`), 'abandoned launch');
     return runLaunch(
       deps,
       (name) => {
@@ -257,7 +268,8 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       abandoned = true;
-      draining = settled;
+      // After the ones abandoned before it: this launch may have started without waiting them out.
+      draining = draining.then(() => settled);
       reject(new BootstrapError(reached, new Error(`timed out after ${limitMs} ms`)));
     }, limitMs);
   });
@@ -564,93 +576,106 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     // recap notification; the notifier decides which are recent enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
     let notifier: LaunchSummaryNotifier | null = null;
-    if (attach) {
-      try {
-        notifier = attach(drive, db);
-      } catch (error) {
-        onError(error, 'summary notifier');
-      }
-    }
-    // Before the boot too: a drive taken in at this launch takes every weather heads-up down.
-    const attachHeadsUp = deps.attachWeatherHeadsUp === undefined ? defaultWeatherHeadsUp : deps.attachWeatherHeadsUp;
     let headsUp: LaunchWeatherHeadsUp | null = null;
-    if (attachHeadsUp) {
-      try {
-        headsUp = attachHeadsUp(drive, db, {
-          signedIn: async () => {
-            const read = await identity.supabase.auth.getSession();
-            if (sessionUnknown(read)) throw new Error('the session could not be read');
-            return read.data.session !== null;
-          },
-          appState,
-          now,
-          onError,
-        });
-      } catch (error) {
-        onError(error, 'weather heads-up');
-      }
-    }
-    // The drive the driving screen is first shown for is written down, so a relaunch in the middle
-    // of it keeps it entered (the lockout, and an automatic drive's way back to its screen).
-    const screenMemory = createSettingsRepo(db);
-    const unbindScreenMemory = bindDriveScreenMemory((tripId) => {
-      void screenMemory.set(DRIVE_SCREEN_ENTERED_KEY, tripId).catch((error: unknown) => onError(error, 'drive screen'));
-    });
-    const adopt: AdoptedTrip | null = recovery.adopt;
+    let unbindScreenMemory: () => void = () => {};
+    let unmountDiagnostics: () => void = () => {};
     try {
+      if (attach) {
+        try {
+          notifier = attach(drive, db);
+        } catch (error) {
+          onError(error, 'summary notifier');
+        }
+      }
+      // Before the boot too: a drive taken in at this launch takes every weather heads-up down.
+      const attachHeadsUp = deps.attachWeatherHeadsUp === undefined ? defaultWeatherHeadsUp : deps.attachWeatherHeadsUp;
+      if (attachHeadsUp) {
+        try {
+          headsUp = attachHeadsUp(drive, db, {
+            signedIn: async () => {
+              const read = await identity.supabase.auth.getSession();
+              if (sessionUnknown(read)) throw new Error('the session could not be read');
+              return read.data.session !== null;
+            },
+            appState,
+            now,
+            onError,
+          });
+        } catch (error) {
+          onError(error, 'weather heads-up');
+        }
+      }
+      // The drive the driving screen is first shown for is written down, so a relaunch in the middle
+      // of it keeps it entered (the lockout, and an automatic drive's way back to its screen).
+      const screenMemory = createSettingsRepo(db);
+      unbindScreenMemory = bindDriveScreenMemory((tripId) => {
+        void screenMemory.set(DRIVE_SCREEN_ENTERED_KEY, tripId).catch((error: unknown) => onError(error, 'drive screen'));
+      });
+      const adopt: AdoptedTrip | null = recovery.adopt;
       await drive.boot({ adopt });
+      // A drive taken in at this launch that the driving screen was shown for before it: still entered.
+      const taken = drive.snapshot();
+      if (taken.status === 'recording' && taken.clientTripId !== null) {
+        const enteredFor = await screenMemory.get<unknown>(DRIVE_SCREEN_ENTERED_KEY).catch((error: unknown) => {
+          onError(error, 'drive screen');
+          return null;
+        });
+        if (enteredFor === taken.clientTripId) markDriveScreenEntered(taken.clientTripId);
+      }
+      // The orphans crash recovery stored before the host existed, once the boot shows whether a
+      // drive records now (their recaps then wait until none does).
+      if (storedOrphans.length > 0) {
+        try {
+          notifier?.announceStored?.(storedOrphans);
+        } catch (error) {
+          onError(error, 'summary notifier');
+        }
+      }
+      if (!drive.isBusy()) limits.resetTrip();
+      const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
+      if (mount) {
+        try {
+          unmountDiagnostics = mount(drive, db, (error) => onError(error, 'diagnostics battery'));
+        } catch (error) {
+          onError(error, 'diagnostics battery');
+        }
+      }
+      const release = async (): Promise<void> => {
+        unmountDiagnostics();
+        unbindScreenMemory();
+        await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
+        notifier?.detach();
+        headsUp?.detach();
+        await headsUp?.settled?.().catch((error: unknown) => onError(error, 'weather heads-up'));
+        if (dc) {
+          // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
+          await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));
+          dc.dispose();
+          // Only its own: a retry's runtime may have registered its dashcam since.
+          if (activeDashcam() === dc) setActiveDashcam(null);
+        }
+      };
+      const notifierSettled = (): Promise<void> => notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier')) ?? Promise.resolve();
+      return { drive, adopted: adopt?.session.clientTripId ?? null, release, notifierSettled, dashcam: dc };
     } catch (error) {
-      // The launch fails with this host: nothing it would announce may post.
-      notifier?.detach();
-      headsUp?.detach();
-      unbindScreenMemory();
+      // The launch fails with this host (its boot, or anything after it): nothing it would announce
+      // may post, and it lets go of native, leaving its drive recording for the next launch to take
+      // in, so a Retry's host is the only one listening.
+      try {
+        unmountDiagnostics();
+        notifier?.detach();
+        headsUp?.detach();
+        unbindScreenMemory();
+      } finally {
+        await drive.stop({ endOpenTrip: false }).catch((reason: unknown) => onError(reason, 'failed launch'));
+        if (dc) {
+          dc.dispose();
+          // Only its own, as when a runtime is released.
+          if (activeDashcam() === dc) setActiveDashcam(null);
+        }
+      }
       throw error;
     }
-    // A drive taken in at this launch that the driving screen was shown for before it: still entered.
-    const taken = drive.snapshot();
-    if (taken.status === 'recording' && taken.clientTripId !== null) {
-      const enteredFor = await screenMemory.get<unknown>(DRIVE_SCREEN_ENTERED_KEY).catch((error: unknown) => {
-        onError(error, 'drive screen');
-        return null;
-      });
-      if (enteredFor === taken.clientTripId) markDriveScreenEntered(taken.clientTripId);
-    }
-    // The orphans crash recovery stored before the host existed, once the boot shows whether a
-    // drive records now (their recaps then wait until none does).
-    if (storedOrphans.length > 0) {
-      try {
-        notifier?.announceStored?.(storedOrphans);
-      } catch (error) {
-        onError(error, 'summary notifier');
-      }
-    }
-    if (!drive.isBusy()) limits.resetTrip();
-    let unmountDiagnostics: () => void = () => {};
-    const mount = deps.mountDiagnostics === undefined ? defaultDiagnostics : deps.mountDiagnostics;
-    if (mount) {
-      try {
-        unmountDiagnostics = mount(drive, db, (error) => onError(error, 'diagnostics battery'));
-      } catch (error) {
-        onError(error, 'diagnostics battery');
-      }
-    }
-    const release = async (): Promise<void> => {
-      unmountDiagnostics();
-      unbindScreenMemory();
-      await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
-      notifier?.detach();
-      headsUp?.detach();
-      await headsUp?.settled?.().catch((error: unknown) => onError(error, 'weather heads-up'));
-      if (dc) {
-        // The pending link work (a write, an ACK) is let go: the transport outlives this runtime.
-        await dc.link.settled().catch((error: unknown) => onError(error, 'dashcam'));
-        dc.dispose();
-        // Only its own: a retry's runtime may have registered its dashcam since.
-        if (activeDashcam() === dc) setActiveDashcam(null);
-      }
-    };
-    const notifierSettled = (): Promise<void> => notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier')) ?? Promise.resolve();
-    return { drive, adopted: adopt?.session.clientTripId ?? null, release, notifierSettled, dashcam: dc };
   });
   // Abandoned during the boot: the host lets go (its drive stays recording) before the next launch starts.
   if (isAbandoned()) {

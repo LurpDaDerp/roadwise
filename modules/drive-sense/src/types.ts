@@ -172,7 +172,8 @@ export interface ExitInfo {
 /**
  * What the background surface shows (plan §6): the Android foreground notification and, on iOS,
  * the Live Activity (forwarded natively when one is running). Callers throttle to ≤ 1 update per
- * 3 s on Android and about one a second (900 ms) on iOS, send the drive's first known speed and
+ * 3 s on Android and, on iOS, a new speed every 5 s at most and other changes a second apart
+ * (`src/drive/display.ts`), send the drive's first known speed and
  * limit at once, send on change, and re-send an unchanged state every 60 s (the Live Activity's
  * 2-min stale date). `null` speed or limit shows "—". `points`, `pointsDelta` and `stopped` are read only by
  * the frozen Android notification (the host sends null points); the iOS Live Activity ignores them.

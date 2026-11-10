@@ -21,30 +21,24 @@ export interface EmergencyContact {
   id: string;
   /** What the driver calls them: "Mom", "Coach Lee". */
   name: string;
-  /** As typed, cleaned to digits with an optional leading +, e.g. "+15551234567" or "5551234567". */
+  /** As typed, cleaned to digits with an optional leading + and any extension after a pause, e.g. "+15551234567", "5551234567" or "5551234567,89". */
   phone: string;
 }
 
 export type ContactProblem = 'name_empty' | 'name_long' | 'phone' | 'too_many';
 
-/** The phone keypad's letters, from 2 (ABC) to 9 (WXYZ). */
-const KEYPAD = ['ABC', 'DEF', 'GHI', 'JKL', 'MNO', 'PQRS', 'TUV', 'WXYZ'];
-const keypadDigit = (letter: string): string => String(KEYPAD.findIndex((keys) => keys.includes(letter.toUpperCase())) + 2);
-
 /** An extension written out after the number ("x89", "ext. 89"), up to its first digit. */
 const EXTENSION_MARKER = /(\d)[\s.-]*(?:extension|ext\.?|x)[\s.:-]*(?=\d)/gi;
-const markExtension = (raw: string): string => raw.replace(EXTENSION_MARKER, '$1,');
 
 /**
  * The number as the dialer takes it: digits, a leading +, and the keypad's pause (,) and wait (;)
  * before an extension, everything else dropped. An extension written out ("x89", "ext. 89") becomes
- * a pause, and letters become their keypad digits ("1-800-FLOWERS" → "18003569377"), so the call
- * goes where the driver meant. iOS ignores tel: links with * or #.
+ * a pause, so its digits are not dialed as part of the number. iOS ignores tel: links with * or #.
  */
 export function cleanPhone(raw: string): string {
   const trimmed = raw.trim();
-  const dialed = markExtension(trimmed)
-    .replace(/[a-z]/gi, keypadDigit)
+  const dialed = trimmed
+    .replace(EXTENSION_MARKER, '$1,')
     .replace(/[^\d,;]/g, '')
     .replace(/^[,;]+|[,;]+$/g, '');
   return trimmed.startsWith('+') ? `+${dialed}` : dialed;
@@ -61,11 +55,7 @@ export function contactProblem(c: Pick<EmergencyContact, 'name' | 'phone'>): Con
   const name = c.name.trim();
   if (name.length === 0) return 'name_empty';
   if (name.length > CONTACT_NAME_MAX) return 'name_long';
-  // Letters only count as part of the number after a dash or another letter ("1-800-FLOWERS"). A
-  // word at the start, set apart or run onto the digits ("Cell 555…", "555… (home)", "555…ext",
-  // "555…x") is a label, which would otherwise be dialed as extra digits. A written-out extension
-  // ("x89", "ext. 89") is a pause by now.
-  if (/(^|[^a-z-])[a-z]/i.test(markExtension(c.phone.trim()))) return 'phone';
+  // The 3 to 15 digits are the number's own; an extension's digits don't count.
   const digits = splitPhone(cleanPhone(c.phone)).main.replace('+', '').length;
   if (digits < PHONE_DIGITS_MIN || digits > PHONE_DIGITS_MAX) return 'phone';
   return null;

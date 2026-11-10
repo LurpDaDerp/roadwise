@@ -1,7 +1,8 @@
 // The one notification response listener: a tap on the iPhone's recording note opens the
 // driving screen while a drive records (never held past the drive, never
 // replayed, starting nothing), and any other tap opens its allowlisted route, held during a drive
-// (the driving screen meanwhile only for a drive recap, and only while the engine records).
+// (the driving screen meanwhile only for a drive recap, and only while the engine records) and
+// while the driving screen is the top route.
 import { act, render } from '@testing-library/react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -115,6 +116,12 @@ async function mount(o: { drive?: Drive; ready?: boolean } = {}) {
       await view.rerender(ui(props()));
       await settle();
     },
+    /** The top route changes (the driving screen leaves, a tab opens). */
+    setPathname: async (path: string) => {
+      mockPathname = path;
+      await view.rerender(ui(props()));
+      await settle();
+    },
   };
 }
 
@@ -219,6 +226,26 @@ test('on the driving screen already, the note opens nothing more', async () => {
   }
 });
 
+test('any note tapped while the driving screen is the top route keeps it, and opens once the driving screen has left', async () => {
+  const push = (url: string, date: number) => ({
+    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    notification: { date, request: { identifier: `push-${date}`, content: { data: { url } } } },
+  });
+  try {
+    for (const [url, date] of [['/friends', 36], ['/drives', 37]] as const) {
+      mockPathname = '/drive';
+      const h = await mount();
+      await act(async () => mockNotifications.listener!(push(url, date)));
+      await h.settle();
+      expect(h.navigate).not.toHaveBeenCalled();
+      await h.setPathname('/drives/trip-9');
+      expect(h.navigate.mock.calls).toEqual([[url]]);
+    }
+  } finally {
+    mockPathname = '/home';
+  }
+});
+
 test('any other note opens its route, and never the driving screen', async () => {
   const h = await mount();
   await act(async () =>
@@ -277,11 +304,57 @@ describe('a tap on the "Drive ended" note', () => {
     expect(h.navigate.mock.calls).toEqual([['/drive'], ['/drives/trip-9?fresh=1']]);
   });
 
-  test('held while a drive records, on the driving screen already: nothing more opens until the drive is over', async () => {
+  test('held while a drive records, on the driving screen already: nothing opens until the drive is over and the driving screen has left', async () => {
     mockPathname = '/drive';
     const h = await mount({ drive: 'recording' });
     await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 15)));
     await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setDrive('closing');
+    await h.setDrive('idle');
+    // still the top route: a recap opened now would sit over the driving screen
+    expect(h.navigate).not.toHaveBeenCalled();
+    // the driving screen left for the drive that just ended: the older recap opens over it
+    await h.setPathname('/drives/trip-10');
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+  });
+
+  test('tapped with the drive over and the driving screen still the top route: held, and dropped when the driving screen opens that recap itself', async () => {
+    mockPathname = '/drive';
+    const h = await mount();
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 19)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setPathname('/drives/trip-9');
+    expect(h.navigate).not.toHaveBeenCalled();
+    // not kept for later either
+    await h.setPathname('/home');
+    await h.setDrive('recording');
+    await h.setDrive('idle');
+    expect(h.navigate).not.toHaveBeenCalled();
+  });
+
+  test('tapped with the drive over and the driving screen still the top route: opens once when the driving screen leaves for Home', async () => {
+    mockPathname = '/drive';
+    const h = await mount();
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 20)));
+    await h.settle();
+    expect(h.navigate).not.toHaveBeenCalled();
+    await h.setPathname('/home');
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+    await h.setPathname('/friends');
+    await h.setDrive('recording');
+    await h.setDrive('idle');
+    expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);
+  });
+
+  test('a new drive that starts before the driving screen leaves keeps the tap held until that drive is over and the screen has left', async () => {
+    mockPathname = '/drive';
+    const h = await mount();
+    await act(async () => mockNotifications.listener!(summaryTap('/drives/trip-9?fresh=1', 21)));
+    await h.settle();
+    await h.setDrive('recording');
+    await h.setPathname('/home');
     expect(h.navigate).not.toHaveBeenCalled();
     await h.setDrive('idle');
     expect(h.navigate.mock.calls).toEqual([['/drives/trip-9?fresh=1']]);

@@ -69,9 +69,9 @@ describe('stored contacts', () => {
     expect(formatPhone('+15551234567;89')).toBe('+1 (555) 123-4567;89');
   });
 
-  // Digits after an extension, a pause or a wait were glued onto the number, and letters dropped:
-  // the emergency panel then dialed a different number.
-  it('keeps an extension apart from the number, and dials letters as their keypad digits', () => {
+  // Digits after an extension, a pause or a wait glued onto the number would make the emergency
+  // panel dial a different number.
+  it('keeps an extension apart from the number', () => {
     expect(cleanPhone('555-123-4567, 89')).toBe('5551234567,89');
     expect(cleanPhone('555-123-4567;89')).toBe('5551234567;89');
     expect(cleanPhone('555-123-4567 x89')).toBe('5551234567,89');
@@ -79,28 +79,30 @@ describe('stored contacts', () => {
     expect(cleanPhone('(555) 123-4567 Extension 89')).toBe('5551234567,89');
     expect(cleanPhone('555-123-4567,,89')).toBe('5551234567,,89');
     expect(cleanPhone('555-123-4567,')).toBe('5551234567');
-    expect(cleanPhone('1-800-FLOWERS')).toBe('18003569377');
-    expect(cleanPhone('1-800-XFINITY')).toBe('18009346489');
+    expect(cleanPhone('5551234567x89')).toBe('5551234567,89');
     expect(telUrl('555-123-4567 x89')).toBe('tel:5551234567,89');
-    expect(telUrl('1-800-FLOWERS')).toBe('tel:18003569377');
     // The 3 to 15 digits are the number's own; the extension's digits don't count.
     expect(contactProblem({ name: 'Work', phone: '555-123-4567, 89' })).toBeNull();
     expect(contactProblem({ name: 'Work', phone: '55, 1234' })).toBe('phone');
     expect(contactProblem({ name: 'Work', phone: '+123456789012345;6789' })).toBeNull();
   });
 
-  // A label word pasted with the number would be dialed as its keypad digits ("Cell" → 2355).
-  it('turns down a number with a label word rather than dialing the word', () => {
-    expect(contactProblem({ name: 'Mom', phone: 'Cell 555-123-4567' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: 'Tel: 555-123-4567' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 (home)' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 mom' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 ext' })).toBe('phone');
-    expect(contactProblem({ name: 'Shop', phone: '1-800-FLOWERS' })).toBeNull();
-    expect(contactProblem({ name: 'Shop', phone: '1800FLOWERS' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '5551234567x' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '555-123-4567cell' })).toBe('phone');
-    expect(contactProblem({ name: 'Mom', phone: '5551234567ext' })).toBe('phone');
+  it('drops letters and other words around a number, and saves the number', () => {
+    expect(cleanPhone('Cell 555-123-4567')).toBe('5551234567');
+    expect(cleanPhone('Tel: 555-123-4567')).toBe('5551234567');
+    expect(cleanPhone('555-123-4567 (home)')).toBe('5551234567');
+    expect(cleanPhone('555-123-4567 ext')).toBe('5551234567');
+    expect(cleanPhone('5551234567x')).toBe('5551234567');
+    expect(cleanPhone('Fax 555-123-4567')).toBe('5551234567');
+    expect(cleanPhone('1-800-FLOWERS')).toBe('1800');
+    expect(telUrl('Cell 555-123-4567')).toBe('tel:5551234567');
+    expect(formatPhone('Cell 555-123-4567')).toBe('(555) 123-4567');
+    expect(contactProblem({ name: 'Mom', phone: 'Cell 555-123-4567' })).toBeNull();
+    expect(contactProblem({ name: 'Mom', phone: 'Tel: 555-123-4567' })).toBeNull();
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 (home)' })).toBeNull();
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567 mom' })).toBeNull();
+    expect(contactProblem({ name: 'Mom', phone: '555-123-4567cell' })).toBeNull();
+    expect(contactProblem({ name: 'Mom', phone: 'call me' })).toBe('phone');
     expect(contactProblem({ name: 'Work', phone: '5551234567x89' })).toBeNull();
     expect(contactProblem({ name: 'Work', phone: '555-123-4567 x89' })).toBeNull();
     expect(contactProblem({ name: 'Work', phone: '(555) 123-4567 Extension 89' })).toBeNull();

@@ -82,54 +82,6 @@ it('polls while active and stops once the app goes to the background', async () 
   expect(mockCallRpc.mock.calls.length).toBe(afterMount + 1);
 });
 
-it('sends nothing while the app was launched in the background, then fetches on the first active', async () => {
-  Object.defineProperty(AppState, 'currentState', { value: 'background', configurable: true });
-  await renderHook(() => useServerQuery(['summary'], 'get_my_summary'), { wrapper });
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(5_000);
-  });
-  expect(mockCallRpc).not.toHaveBeenCalled();
-
-  await act(async () => {
-    appStateListener?.('active');
-    await jest.advanceTimersByTimeAsync(0);
-  });
-  expect(mockCallRpc).toHaveBeenCalledTimes(1);
-});
-
-it('fetches when the app came to the front between the first render and the subscription', async () => {
-  Object.defineProperty(AppState, 'currentState', { value: 'background', configurable: true });
-  jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, l) => {
-    // The 'active' change fired before this listener existed.
-    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
-    appStateListener = l as (s: AppStateStatus) => void;
-    return { remove: () => (appStateListener = null) };
-  });
-  await renderHook(() => useServerQuery(['summary'], 'get_my_summary'), { wrapper });
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(0);
-  });
-  expect(mockCallRpc).toHaveBeenCalledTimes(1);
-});
-
-it('a short inactive after the first active does not hold back a query that mounts then', async () => {
-  Object.defineProperty(AppState, 'currentState', { value: 'background', configurable: true });
-  const { rerender } = await renderHook(({ on }: { on: boolean }) => useServerQuery(['friends'], 'list_friends', undefined, { enabled: on }), {
-    wrapper,
-    initialProps: { on: false },
-  });
-  await act(async () => {
-    appStateListener?.('active');
-    appStateListener?.('inactive');
-    await jest.advanceTimersByTimeAsync(0);
-  });
-  await rerender({ on: true });
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(0);
-  });
-  expect(mockCallRpc).toHaveBeenCalledTimes(1);
-});
-
 it('does not retry a refusal the server would repeat (profile not found)', async () => {
   mockCallRpc.mockRejectedValue(new RpcError('profile not found', 'P0002'));
   const { result } = await renderHook(() => useServerQuery(['profile', 'x'], 'get_profile').status, { wrapper });

@@ -5,9 +5,10 @@
 // A tap on 911 or a contact hands the number to the phone's call screen (`placeCall`) and the screen
 // closes the panel; a call that didn't start keeps it open and says so. "Call 911" never shrinks or
 // scrolls away: in a tall panel it sits under the title with the contacts scrolling between it and
-// Close; in a short one (an iPhone SE, larger text or a split-screen window: too short to show the
-// title, "Call 911", a whole contact row and Close at the text size in use) the title is only read
-// out and everything scrolls, "Call 911" first, Close last. Numbers read as in Settings (`formatPhone`).
+// Close; in a short one the title is only read out and everything scrolls, "Call 911" first, Close
+// last. With contacts to show, short is too short for the title, "Call 911", a whole contact row and
+// Close at the text size in use (an iPhone SE, larger text or a split-screen window); with none, it
+// is under 260 pt (a split-screen window). Numbers read as in Settings (`formatPhone`).
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useState } from 'react';
@@ -27,20 +28,41 @@ const CALL_INK = '#FFFFFF';
 export const SOS_CALL_MIN = 7;
 /** The "Call 911" button's height. */
 export const SOS_CALL_H_PT = HUD_MIN_TARGET_PT + 8;
+/** With no contact rows to show, a panel under this height drops its visible title and scrolls as one list. */
+export const SOS_PANEL_TALL_PT = 260;
 /** The padding and border around the panel in its slot (16 + 1 pt a side, the HUD's and the crash screen's). */
 export const SOS_PANEL_INSET_PT = 2 * (16 + 1);
+/**
+ * The title's width in ems of its face (Barlow Semi Condensed Bold: "Emergency call" sets 6.14 em
+ * wide), and its longer word's ("Emergency", 4.51 em), each with a hair to spare.
+ */
+const SOS_TITLE_EM = 6.2;
+const SOS_TITLE_WORD_EM = 4.55;
+/** A line of the headline face with no line height set: 1.2 em. */
+const HEADLINE_LINE_EM = 1.2;
+
+/** The lines the title takes `width` wide at this text size: one, or a word a line once it no longer fits. */
+function sosTitleLines(width: number, fontPt: number): number {
+  if (SOS_TITLE_EM * fontPt <= width) return 1;
+  return 1 + Math.ceil((SOS_TITLE_WORD_EM * fontPt) / Math.max(width, 1));
+}
 
 /**
- * Whether a panel `height` tall (its slot, padding and border included) shows the title with
- * "Call 911" and Close pinned and room for one whole contact row between them, at this font scale.
- * Otherwise it drops the visible title and scrolls as one list.
+ * Whether a panel `height` by `width` (its slot, padding and border included) shows the title with
+ * "Call 911" and Close pinned; otherwise it drops the visible title and scrolls as one list. With
+ * contact `rows` to show, it does when one whole row fits between "Call 911" and Close at this font
+ * scale: the title on as many lines as it takes at that width, each button as tall as its label
+ * makes it. With none, it does from `SOS_PANEL_TALL_PT` up.
  */
-export function sosPanelTall(height: number, fontScale: number): boolean {
+export function sosPanelTall(height: number, width: number, fontScale: number, rows: boolean): boolean {
+  if (!rows) return height >= SOS_PANEL_TALL_PT;
   const s = Number.isFinite(fontScale) ? Math.max(fontScale, 1) : 1;
-  const title = 28 * s * (s > 1.5 ? 2 : 1); // "Emergency call" wraps at the largest sizes
-  const close = Math.max(PANEL_CAPSULE_PT, Math.ceil(17 * 1.2 * s));
-  const row = Math.max(HUD_MIN_TARGET_PT, (23 + 2 + 19) * s + 2 * 10 + 2 * 1.5);
-  return height - SOS_PANEL_INSET_PT >= title + SOS_CALL_H_PT + row + close + 3 * 12;
+  const title = Math.ceil(ps.title.lineHeight * s) * sosTitleLines(width - SOS_PANEL_INSET_PT, ps.title.fontSize * s);
+  const call = Math.max(SOS_CALL_H_PT, Math.ceil(styles.callLabel.fontSize * HEADLINE_LINE_EM * s));
+  const close = Math.max(PANEL_CAPSULE_PT, Math.ceil(ps.capsuleLabel.fontSize * HEADLINE_LINE_EM * s) + 2 * ps.capsule.borderWidth);
+  const rowText = Math.ceil(ps.rowLabel.lineHeight * s) + ps.rowText.gap + Math.ceil(ps.rowSub.lineHeight * s);
+  const row = Math.max(HUD_MIN_TARGET_PT, rowText + 2 * ps.row.paddingVertical + 2 * ps.row.borderWidth);
+  return height - SOS_PANEL_INSET_PT >= title + call + row + close + 3 * styles.tall.gap;
 }
 
 /** The 911 button's red: the sign ring's, deepened until white print reads on it at 7:1. */
@@ -53,6 +75,7 @@ export function EmergencyPanel({
   palette,
   colors,
   height,
+  width,
   onCall,
   onClose,
 }: {
@@ -62,6 +85,8 @@ export function EmergencyPanel({
   colors: WaitPanelColors;
   /** The panel's slot height, padding and border included (`hudLayout` `sosPanel.h`): a short one scrolls as one list. */
   height: number;
+  /** The slot's width, padding and border included (`hudLayout` `sosPanel.w`): the title wraps in a narrow one. */
+  width: number;
   /** Places the call; false when the call screen didn't open. */
   onCall(phone: string): Promise<boolean>;
   onClose(): void;
@@ -83,7 +108,7 @@ export function EmergencyPanel({
     AccessibilityInfo.announceForAccessibility?.(hudCopy.sos.title);
   }, []);
 
-  const tall = sosPanelTall(height, fontScale);
+  const tall = sosPanelTall(height, width, fontScale, contacts !== undefined && contacts.length > 0);
 
   const call911 = (
     <Pressable

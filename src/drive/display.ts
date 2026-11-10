@@ -2,22 +2,29 @@
 // Android foreground notification and, on iOS, a running Live Activity; `LiveDrive.start`/`end`
 // bound the activity's life to the drive. This adapter sends only changes (and an unchanged state
 // again every 60 s, so a long stop never leaves the Live Activity stale: its stale date is 2 min
-// on), at most one per 3 s on Android and one a second on iOS (the drive's first known speed and
-// first known limit go out at once, outside either), and tolerates either module being absent (a
-// missing display must never affect a drive). On iOS a change the throttle holds goes out when the
-// second is up (one timer, armed only while something new waits), with the newest state and the
-// halo's number at that moment, so no fix waits for the next row or fix to carry it; Android's held
-// change goes out with the first `update` past its 3 s. `refresh` sends at once, outside the
-// throttle (the weather line, the "Not driving?" hint running out). Every state goes out wearing the
-// app's current sky (`displayLook.ts`).
+// on), at most one per 3 s on Android and at the pace below on iOS (the drive's first known speed
+// and first known limit go out at once, outside either), and tolerates either module being absent
+// (a missing display must never affect a drive). On iOS a change that comes before it may go is
+// held and goes out when its time is up (one timer, armed only while something new waits), with the
+// newest state and the halo's number at that moment, so no fix waits for the next row or fix to
+// carry it; Android's held change goes out with the first `update` past its 3 s. `refresh` sends
+// at once, outside the throttle (the weather line, the "Not driving?" hint running out). Every state
+// goes out wearing the app's current sky (`displayLook.ts`).
 //
-// iOS, the speed's step: iOS meters a Live Activity's updates (an app's own updates from the
-// background are throttled by "priority and budget"; frequent ones are supported only by push), and
-// a steady speed wobbles by 1 mph every few fixes. So the speed goes out within the second only when
-// it moves `LIVE_SPEED_STEP` (2 mph, 3 km/h) from the Live Activity's; a smaller move, and the
-// speeding tint shifting with it, waits until `LIVE_SMALL_CHANGE_MS` (5 s) after the last update.
-// Everything else (the limit, the tint coming on or off, the speeding flag, the hint, the weather,
-// the sky) keeps the second.
+// iOS, the pace behind: iOS meters a Live Activity's updates (an app's own updates from the
+// background are throttled by "priority and budget"; frequent ones are supported only by push) and
+// stops applying them for a while when they come faster than it allows. So when a change may go out
+// depends on what differs from the last update:
+// - the speed's number or the speeding flag: `LIVE_PACE_MS` (5 s) after the last update, the
+//   newest number then (one that comes after 5 s without an update goes at once);
+// - the speeding tint alone, under the same number: `LIVE_TINT_ONLY_MS` (15 s) after it;
+// - anything else (the limit, the unit, the hint, the weather, the sky, a speed becoming known or
+//   unknown): `LIVE_MIN_INTERVAL_MS` (1 s) after it.
+// "Changed" is judged on what the Live Activity's content carries (`sameLive`: no points, no
+// stopped flag), so no update goes out that the activity could not show. An update handed over is
+// not taken as shown: a changed state that went out is sent once more `LIVE_CONFIRM_MS` (10 s)
+// later if nothing changed since (one iOS skipped does not stay on screen), and from then on every
+// 60 s like any unchanged state.
 //
 // iOS, RoadWise in front (`setFront`): nobody sees the Live Activity then (iOS keeps an app's own
 // activity out of the Dynamic Island while the app is in use, and the lock screen isn't showing),
@@ -25,7 +32,7 @@
 // that does show later (the screen off, RoadWise behind) would get throttled. In front it takes only
 // the minute keepalive (its stale date never runs out); the moment RoadWise goes behind (the lock
 // button, another app, the notification shade) the newest state goes out at once, and from then on
-// once a second again.
+// at the pace above.
 //
 // iOS, the lock screen's number: given the halo's speed (`SpeedCarry`: the engine's estimate, its
 // acceleration and the time it stands for), each update shows the halo's number at that moment,
@@ -33,8 +40,8 @@
 // the halo's hysteresis (`wholeSpeed`). The hysteresis depends on the path, so each update first
 // walks the carry through the halo's own re-reads (every `SPEED_TICK_MS` from when the carry came,
 // until `CARRY_MAX_MS` after its time) without any timer, and the number lands where the halo's
-// does. The Live Activity holds its number until the next update (at most a second later).
-// Android's notification never carries.
+// does. The Live Activity holds its number until the next update (`LIVE_PACE_MS` later at most
+// while the speed moves). Android's notification never carries.
 //
 // iOS: `start` starts a local activity, or adopts one already running (a push-started one); it is
 // called as a drive opens with RoadWise in front and again on every return to the front while it
@@ -92,21 +99,24 @@ export interface DisplaySinks {
 /** Android: the notification takes a change this often at most. */
 export const DISPLAY_MIN_INTERVAL_MS = 3000;
 /**
- * iOS: the Live Activity takes a change at most once a second (about once per GPS fix, the most
- * iOS keeps applying on a locked screen). A change that comes sooner is sent when the second is up.
+ * iOS: a change in anything but the speed's number, its tint and the speeding flag (the limit, the
+ * unit, the hint, the weather, the sky, a speed becoming known or unknown) goes out at the soonest
+ * a second after the last update. One that comes sooner is sent when the second is up.
  */
 export const LIVE_MIN_INTERVAL_MS = 1000;
 /**
- * iOS: the shown speed goes out within the second only when it moves this much (in the display's
- * unit) from the Live Activity's. A smaller move waits `LIVE_SMALL_CHANGE_MS`: iOS meters a Live
- * Activity's updates, and one spent on every 1 mph wobble at a steady speed leaves none for later.
+ * iOS: a new speed number or the speeding flag goes out at the soonest this long after the last
+ * update, the newest number then; one that comes later goes at once. iOS meters a Live Activity's
+ * updates and stops applying them for a while when they come faster.
  */
-export const LIVE_SPEED_STEP: Readonly<Record<DriveDisplayState['unit'], number>> = { mph: 2, 'km/h': 3 };
+export const LIVE_PACE_MS = 5000;
+/** iOS: the speeding tint shifting under an unchanged number goes out this long after the last update. */
+export const LIVE_TINT_ONLY_MS = 15_000;
 /**
- * iOS: a speed move under `LIVE_SPEED_STEP` (and the speeding tint shifting with it, or alone) goes
- * out this long after the last update, the newest number then.
+ * iOS: a changed state that went out is sent once more this long after, if nothing changed since
+ * (an update iOS skipped does not stay on screen until the keepalive).
  */
-export const LIVE_SMALL_CHANGE_MS = 5000;
+export const LIVE_CONFIRM_MS = 10_000;
 /** An unchanged display is re-sent this often (one update a minute at a stop). */
 export const DISPLAY_KEEPALIVE_MS = 60_000;
 
@@ -130,17 +140,25 @@ const same = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
   (a.accent ?? null) === (b.accent ?? null);
 
 /**
- * `b` differs from `a` only by a speed move under `step` and by the speeding tint shifting (a tint
- * in both or in neither): a tint coming on or going off, the speeding flag, the limit, the hint,
- * the weather or the sky is never small.
+ * `same` on what the Live Activity's content carries (`toLive`): the points and the stopped flag,
+ * which it cannot show, are left out.
  */
-const small = (a: DriveDisplayState | null, b: DriveDisplayState, step: number): boolean =>
+const sameLive = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
+  a !== null && same({ ...a, points: b.points, pointsDelta: b.pointsDelta, stopped: b.stopped }, b);
+
+/** The Live Activity's `b` differs from `a` at most in the speeding tint: the number is the same. */
+const tintOnly = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
+  a !== null && a.speed === b.speed && sameLive({ ...a, speedTint: b.speedTint ?? null }, b);
+
+/**
+ * The Live Activity's `b` differs from `a` at most in the speed's number, its tint and the speeding
+ * flag, with the speed known in both.
+ */
+const speedOnly = (a: DriveDisplayState | null, b: DriveDisplayState): boolean =>
   a !== null &&
   a.speed !== null &&
   b.speed !== null &&
-  Math.abs(b.speed - a.speed) < step &&
-  (a.speedTint == null) === (b.speedTint == null) &&
-  same({ ...a, speed: b.speed, speedTint: b.speedTint ?? null }, b);
+  sameLive({ ...a, speed: b.speed, speedTint: b.speedTint ?? null, speeding: b.speeding ?? false }, b);
 
 /** The Live Activity's content (`LiveDriveAttributes.ContentState`): no points, no stopped flag. */
 export const toLive = (s: DriveDisplayState): LiveDriveState => ({
@@ -196,17 +214,28 @@ export function createDriveDisplay(
     look?: () => DisplayLook | null;
     /** Runs `fn` once after `ms` (iOS's held change); returns the cancel. Default: `setTimeout`. */
     later?: (fn: () => void, ms: number) => () => void;
-    /** iOS: the speed move that goes out within the second (default `LIVE_SPEED_STEP` for the unit). */
-    speedStep?: number;
+    /** iOS: the wait for a new speed number or the speeding flag (default `LIVE_PACE_MS`). */
+    paceMs?: number;
+    /** iOS: the wait for the tint alone (default `LIVE_TINT_ONLY_MS`). */
+    tintOnlyMs?: number;
+    /** iOS: the wait for the one re-send of a changed state (default `LIVE_CONFIRM_MS`). */
+    confirmMs?: number;
   }
 ): DriveDisplay {
   const ios = deps.platform === 'ios';
   const look = deps.look ?? displayLook;
   const minInterval = deps.minIntervalMs ?? (ios ? LIVE_MIN_INTERVAL_MS : DISPLAY_MIN_INTERVAL_MS);
+  const pace = deps.paceMs ?? LIVE_PACE_MS;
+  const tintWait = deps.tintOnlyMs ?? LIVE_TINT_ONLY_MS;
+  const confirmWait = deps.confirmMs ?? LIVE_CONFIRM_MS;
+  /** Nothing new to show: on iOS, nothing the Live Activity's content carries. */
+  const eq = ios ? sameLive : same;
   const set = typeof sinks.setDriveDisplay === 'function' ? sinks.setDriveDisplay : null;
   const live = sinks.liveDrive && typeof sinks.liveDrive.start === 'function' && typeof sinks.liveDrive.end === 'function' ? sinks.liveDrive : null;
   let last: DriveDisplayState | null = null;
   let lastAt = Number.NEGATIVE_INFINITY;
+  /** iOS: false while `last` went out as a change and has not gone out again (it is owed its re-send). */
+  let confirmed = true;
   /** The drive's unit, from its start call, for an end before any update went out. */
   let unit: DriveDisplayState['unit'] = 'mph';
   /**
@@ -244,21 +273,28 @@ export function createDriveDisplay(
   }
 
   /**
-   * When `state` may go out: the second after the last update, or on iOS, for a small change
-   * (`small`), `LIVE_SMALL_CHANGE_MS` after it.
+   * When `state` may go out: the minimum interval after the last update, or on iOS, when only the
+   * tint differs, `LIVE_TINT_ONLY_MS` after it, and when only the speed's number, its tint and the
+   * speeding flag do, `LIVE_PACE_MS` after it.
    */
   function dueAt(state: DriveDisplayState): number {
-    const step = deps.speedStep ?? LIVE_SPEED_STEP[state.unit];
-    return lastAt + (ios && !same(last, state) && small(last, state, step) ? LIVE_SMALL_CHANGE_MS : minInterval);
+    if (!ios || eq(last, state)) return lastAt + minInterval;
+    return lastAt + (tintOnly(last, state) ? tintWait : speedOnly(last, state) ? pace : minInterval);
   }
 
-  /** True when `state` went out. */
+  /**
+   * True when `state` went out. An unchanged state goes out again at the keepalive; on iOS the
+   * first time after it went out as a change, `LIVE_CONFIRM_MS` after that.
+   */
   function send(state: DriveDisplayState, force: boolean): boolean {
     const now = deps.now();
     const first = (!speedShown && state.speed !== null) || (!limitShown && state.limit !== null);
-    if (!force && !first && (now < dueAt(state) || (same(last, state) && now - lastAt < DISPLAY_KEEPALIVE_MS))) return false;
+    const again = eq(last, state);
+    const repeat = ios && !confirmed ? confirmWait : DISPLAY_KEEPALIVE_MS;
+    if (!force && !first && (now < dueAt(state) || (again && now - lastAt < repeat))) return false;
     // Whatever waited is older than this.
     dropHeld();
+    confirmed = again;
     last = state;
     lastAt = now;
     if (state.speed !== null) speedShown = true;
@@ -268,21 +304,21 @@ export function createDriveDisplay(
   }
 
   /**
-   * The carried number may still move by the time the second is up (the halo re-reads it every
-   * `SPEED_TICK_MS` until `CARRY_MAX_MS` after its fix).
+   * The carried number may still move by `at` (the halo re-reads it every `SPEED_TICK_MS` until
+   * `CARRY_MAX_MS` after its fix).
    */
   const stillCarrying = (at: number): boolean => carry !== null && carry.mps > 0 && carry.accel !== 0 && at < carry.at + CARRY_MAX_MS + SPEED_TICK_MS;
 
   /**
-   * iOS: `state` came before it may go out (`dueAt`: inside the second, or a small change inside
-   * its 5 s). It is held (the newest wins) and sent when its time is up, with the halo's number
-   * then, if it shows something new by then: a change now, or a number still being carried. One
-   * that shows nothing new also drops what waited (a tint that came and went inside the second never
-   * goes out late). A change that may go sooner than the one waiting brings the send forward.
+   * iOS: `state` came before it may go out (`dueAt`). It is held (the newest wins) and sent when
+   * its time is up, with the halo's number then, if it shows something new by then: a change now,
+   * or a number still being carried. One that shows nothing new also drops what waited (a number
+   * that came and went inside its wait never goes out late). A change that may go sooner than the
+   * one waiting brings the send forward.
    */
   function hold(state: DriveDisplayState, shown: DriveDisplayState, now: number): void {
     const due = dueAt(shown);
-    if (same(last, shown) && !stillCarrying(due)) {
+    if (eq(last, shown) && !stillCarrying(due)) {
       dropHeld();
       return;
     }
@@ -315,7 +351,7 @@ export function createDriveDisplay(
     }
     if (send(shown, false) || !ios) return;
     if (now < dueAt(shown)) hold(state, shown, now);
-    // Nothing new to show (the Live Activity shows it already): a small change waiting goes too.
+    // Nothing new to show (the Live Activity shows it already): a change waiting goes too.
     else dropHeld();
   }
 
@@ -359,6 +395,7 @@ export function createDriveDisplay(
     start(state) {
       dropHeld();
       last = null;
+      confirmed = true;
       speedShown = false;
       limitShown = false;
       carry = null;
@@ -384,7 +421,7 @@ export function createDriveDisplay(
       // In front it goes out on going behind (or with the keepalive).
       if (ios && front) return;
       const s = carried(wearing(state, look()), now);
-      if (same(last, s)) return;
+      if (eq(last, s)) return;
       send(s, true);
     },
     setFront(f) {
@@ -398,7 +435,7 @@ export function createDriveDisplay(
       if (newest === null) return;
       const now = deps.now();
       const s = carried(wearing(newest, look()), now);
-      if (!same(last, s)) send(s, true);
+      if (!eq(last, s)) send(s, true);
     },
     end() {
       // Exactly one end path: iOS ends the Live Activity through `LiveDrive.end()` (a `setDriveDisplay`
@@ -415,6 +452,7 @@ export function createDriveDisplay(
       last = null;
       newest = null;
       lastAt = Number.NEGATIVE_INFINITY;
+      confirmed = true;
       speedShown = false;
       limitShown = false;
       carry = null;

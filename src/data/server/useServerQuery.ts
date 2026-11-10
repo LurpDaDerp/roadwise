@@ -7,11 +7,6 @@
  * while the screen stays focused and the app is active — a backgrounded tab or app costs no
  * requests. `keepPrevious` keeps the last data on screen while a changed key (filter) loads.
  *
- * A query mounted while the app is in the background fetches nothing until the app first comes to
- * the front: iOS relaunches the app in the background (a drive wake) and mounts the screens, and
- * their reads would feed a UI nobody sees. Once in front, a short 'inactive' (Control Center, the
- * Face ID sheet) never turns a query off.
- *
  * A refusal the server would repeat (not found, not allowed or rate limited, bad input) is not
  * retried; anything else (a network failure, a 5xx) gets one retry.
  */
@@ -52,22 +47,14 @@ export function useServerQuery<T>(
   const uid = session?.user.id ?? null;
   const [focused, setFocused] = useState(true);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
-  // Latched: false only while a hook mounted in the background has not yet seen the app in front.
-  const [everActive, setEverActive] = useState(AppState.currentState !== 'background');
   useEffect(() => {
-    const onChange = (s: string) => {
-      setAppActive(s === 'active');
-      if (s === 'active') setEverActive(true);
-    };
-    const sub = AppState.addEventListener('change', onChange);
-    // The app may have come to the front between the first render and this subscription.
-    if (AppState.currentState === 'active') onChange('active');
+    const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
     return () => sub.remove();
   }, []);
   const query = useQuery<T>({
     queryKey: serverKey(uid, ...key),
     queryFn: () => callRpc<T>(fn, args),
-    enabled: uid !== null && everActive && (opts.enabled ?? true),
+    enabled: uid !== null && (opts.enabled ?? true),
     staleTime: opts.staleMs ?? SERVER_STALE_MS,
     retry: retryServerQuery,
     placeholderData: opts.keepPrevious ? keepPreviousData : undefined,

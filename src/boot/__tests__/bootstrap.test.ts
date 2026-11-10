@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { createFakeDriveDetect, createFakeDriveSense } from '@drive-sense';
+import { createFakeDriveDetect, createFakeDriveSense, DRIVE_SENSE_EVENTS } from '@drive-sense';
 
 import type { AlertPlayer } from '@/core/alerts/player';
 import { T0 } from '@/core/detectors/__fixtures__/rows';
@@ -9,7 +9,7 @@ import type { SpeedLimitClient } from '@/core/speedLimits/client';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueueRepo, createRoutePoolRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, REFUSED_NEVER, type Db } from '@/data/db';
 import { createFakeAppState, createFakeSupabase, invokeOk } from '@/data/sync/__fixtures__/fakes';
-import { bootstrapApp, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
+import { bootstrapApp, DRAIN_WAIT_MS, endSession, flushBeforeSignOut, REMINDER_RETIRED_KEY, startForegroundJobs, type BootSupabase } from '@/boot/bootstrap';
 import { createDriveHeadlessTask } from '@/boot/headless';
 import { RestoreAbandonedError } from '@/data/hydrate/restore';
 import { DEVICE_TABLES, ensureDeviceOwner, hasDriverData, readDeviceOwner, rememberDeviceOwner, wipeDevice, wipeForSignOut } from '@/boot/device';
@@ -884,6 +884,167 @@ test('a boot that fails takes the recap notifier down with it', async () => {
   });
   await expect(bootstrapApp(failing.deps)).rejects.toThrow();
   expect(detach).toHaveBeenCalledTimes(1);
+});
+
+/** How many native listeners are attached to this source, over every event. */
+const listening = (source: ReturnType<typeof createFakeDriveSense>): number => DRIVE_SENSE_EVENTS.reduce((n, event) => n + source.listenerCount(event), 0);
+
+/** A recap notifier that only records the stops its host is asked for (`endOpenTrip` of each). */
+const recordStops = (stops: string[], detach: () => void = () => {}) => (host: DriveHost) => {
+  const stop = host.stop.bind(host);
+  Object.assign(host, {
+    stop: async (opts: Parameters<DriveHost['stop']>[0]) => {
+      stops.push(String(opts?.endOpenTrip));
+      await stop(opts);
+    },
+  });
+  return { detach };
+};
+
+test('a boot that fails after its host attached to native stops that host, leaving the drive, and takes its dashcam away; the retry boots the only host listening', async () => {
+  const disposed = jest.fn();
+  const failed = settlingDashcam(disposed);
+  const retry = settlingDashcam();
+  const stops: string[] = [];
+  const detach = jest.fn();
+  const unbound = jest.fn();
+  const reported: string[] = [];
+  try {
+    const record = recordStops(stops, detach);
+    const failing = deps({
+      createDashcam: () => failed,
+      attachSummaryNotifier: (host: DriveHost) => {
+        const boot = host.boot.bind(host);
+        Object.assign(host, {
+          boot: async (opts: Parameters<DriveHost['boot']>[0]) => {
+            await boot(opts);
+            throw new Error('boot failed');
+          },
+        });
+        return record(host);
+      },
+      attachWeatherHeadsUp: () => ({ detach: unbound }),
+      onError: (_error: unknown, context: string) => void reported.push(context),
+      timeoutMs: 5_000,
+    });
+    await expect(bootstrapApp(failing.deps)).rejects.toMatchObject({ stage: 'engine', message: expect.stringContaining('boot failed') });
+    expect(stops).toEqual(['false']);
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(unbound).toHaveBeenCalledTimes(1);
+    expect(listening(failing.source)).toBe(0);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(activeDashcam()).toBeNull();
+    expect(reported).not.toContain('failed launch');
+
+    // Retry, on the same native source: one host listens, and it is the retry's.
+    const before = createFakeDriveSense({ platform: 'android', now: () => clock });
+    const alone = await bootstrapApp(deps({ source: before }).deps);
+    const one = listening(before);
+    await alone.stop();
+    expect(one).toBeGreaterThan(0);
+
+    const rt = await bootstrapApp(deps({ source: failing.source, createDashcam: () => retry }).deps);
+    expect(listening(failing.source)).toBe(one);
+    expect(activeDashcam()).toBe(retry);
+    await rt.stop();
+    expect(listening(failing.source)).toBe(0);
+    expect(stops).toEqual(['false']);
+  } finally {
+    setActiveDashcam(null);
+  }
+});
+
+test('a launch that fails after its boot (the speed limits throw) stops its host the same way; the retry boots the only host listening', async () => {
+  const disposed = jest.fn();
+  const failed = settlingDashcam(disposed);
+  const retry = settlingDashcam();
+  const stops: string[] = [];
+  const detach = jest.fn();
+  try {
+    const failing = deps({
+      createDashcam: () => failed,
+      attachSummaryNotifier: recordStops(stops, detach),
+      limits: {
+        ...fakeLimits(),
+        resetTrip: () => {
+          throw new Error('limits failed');
+        },
+      } as unknown as SpeedLimitClient,
+      timeoutMs: 5_000,
+    });
+    await expect(bootstrapApp(failing.deps)).rejects.toMatchObject({ stage: 'engine', message: expect.stringContaining('limits failed') });
+    expect(stops).toEqual(['false']);
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(listening(failing.source)).toBe(0);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(activeDashcam()).toBeNull();
+
+    const rt = await bootstrapApp(deps({ source: failing.source, createDashcam: () => retry }).deps);
+    expect(failing.source.listenerCount('row')).toBe(1);
+    expect(activeDashcam()).toBe(retry);
+    await rt.stop();
+    expect(listening(failing.source)).toBe(0);
+  } finally {
+    setActiveDashcam(null);
+  }
+});
+
+test('a failed launch whose host cannot stop reports it and still fails with its own error, its dashcam gone', async () => {
+  const disposed = jest.fn();
+  const reported: string[] = [];
+  try {
+    const failing = deps({
+      createDashcam: () => settlingDashcam(disposed),
+      attachSummaryNotifier: (host: DriveHost) => {
+        Object.assign(host, {
+          boot: async () => {
+            throw new Error('boot failed');
+          },
+          stop: async () => {
+            throw new Error('stop failed');
+          },
+        });
+        return { detach: () => {} };
+      },
+      onError: (_error: unknown, context: string) => void reported.push(context),
+      timeoutMs: 5_000,
+    });
+    await expect(bootstrapApp(failing.deps)).rejects.toThrow('boot failed');
+    expect(reported).toContain('failed launch');
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(activeDashcam()).toBeNull();
+  } finally {
+    setActiveDashcam(null);
+  }
+});
+
+test('a retry waits only so long for an abandoned launch that never stops, then boots; a launch that stops in time is still waited for', async () => {
+  expect(DRAIN_WAIT_MS).toBe(5_000);
+  let open: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const reported: { message: string; context: string }[] = [];
+  await expect(bootstrapApp(deps({ openDb: async () => (await gate, db), timeoutMs: 20 }).deps)).rejects.toThrow('timed out');
+  // The abandoned launch hangs for good: the retry starts once its wait is spent.
+  const startedAt = Date.now();
+  const rt = await bootstrapApp(
+    deps({ drainWaitMs: 40, timeoutMs: 5_000, onError: (error: unknown, context: string) => void reported.push({ message: (error as Error).message, context }) }).deps
+  );
+  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(35);
+  expect(reported).toEqual([{ message: 'an abandoned launch had not stopped after 40 ms', context: 'abandoned launch' }]);
+  await rt.stop();
+  // A second launch abandoned behind it: the next one still waits for both, and starts once they are gone.
+  await expect(bootstrapApp(deps({ openDb: async () => (await gate, db), drainWaitMs: 5, timeoutMs: 20 }).deps)).rejects.toThrow('timed out');
+  let booted = false;
+  const retrying = bootstrapApp(deps().deps).then((runtime) => {
+    booted = true;
+    return runtime;
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(booted).toBe(false);
+  open();
+  await (await retrying).stop();
 });
 
 test('the default speed-limit client hands its options to the network: a re-ask for a tile that came back filling misses every HTTP cache', async () => {

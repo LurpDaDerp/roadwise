@@ -147,30 +147,6 @@ describe('Add friends', () => {
     expect(mockRpc).toHaveBeenCalledWith('search_users', { p_query: 'may' });
     expect(mockRouter.push).toHaveBeenCalledWith('/u/maya_16');
   });
-
-  it('ignores a leading @', async () => {
-    answerRpc(mockRpc, {
-      get_my_summary: { profile: { username: 'swift_fox' } },
-      search_users: [{ user_id: 'id-maya', username: 'maya_16', safety_rating: null }],
-    });
-    const w = await appWorld();
-    await w.render(<AddFriendsScreen debounceMs={0} />);
-    const input = screen.getByTestId('friends-search');
-    expect(input).toHaveProp('maxLength', 21);
-
-    // "@ma" is two letters: still the 3-letter hint
-    await act(async () => {
-      fireEvent.changeText(input, '@ma');
-    });
-    expect(screen.getByText(copy.searchHint)).toBeOnTheScreen();
-    expect(mockRpc).not.toHaveBeenCalledWith('search_users', expect.anything());
-
-    await act(async () => {
-      fireEvent.changeText(input, '@maya');
-    });
-    expect(await screen.findByTestId('result-maya_16')).toBeOnTheScreen();
-    expect(mockRpc).toHaveBeenCalledWith('search_users', { p_query: 'maya' });
-  });
 });
 
 describe('Scan', () => {

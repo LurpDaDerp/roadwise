@@ -83,10 +83,12 @@ and `targets/live-drive-widget`; `__tests__/native-ios.test.ts` compares the two
 
 `app.config.ts` loads `@bacons/apple-targets` and sets `NSSupportsLiveActivities: true` and
 `NSSupportsLiveActivitiesFrequentUpdates: true` (the larger update budget; the driver can turn it off
-in Settings › RoadWise › Live Activities). Updates come about once a second while RoadWise is behind
-and once a minute while it is in front, where nobody sees the activity (`src/drive/display.ts`
-`setFront`), so the budget goes to the screen-off lock screen. Behind, the speed goes out within the
-second only when it moves 2 mph (3 km/h); a smaller move waits 5 s (`LIVE_SPEED_STEP`,
-`LIVE_SMALL_CHANGE_MS`): iOS throttles an app's own background updates by priority and budget. The
+in Settings › RoadWise › Live Activities). Updates come once a minute while RoadWise is in front,
+where nobody sees the activity (`src/drive/display.ts` `setFront`), so the budget goes to the
+screen-off lock screen. Behind, a new speed number goes out at most once every 5 s
+(`LIVE_PACE_MS`), the speeding tint alone 15 s after the last update (`LIVE_TINT_ONLY_MS`), and
+the limit, the hint, the weather line and the sky within a second: iOS throttles an app's own
+background updates by priority and budget. A changed state is sent once more 10 s later if nothing
+changed since (`LIVE_CONFIRM_MS`), then every 60 s. The
 extension is signed with `ios.appleTeamId` (from `EXPO_APPLE_TEAM_ID`); without it, `npx expo
 prebuild` warns and Xcode asks for a team.

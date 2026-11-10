@@ -78,7 +78,7 @@ export function useProfile(username: string): UseQueryResult<PublicProfile> {
   });
 }
 
-export function useFriends(opts: { enabled?: boolean; staleMs?: number } = {}): UseQueryResult<FriendsList> {
+export function useFriends(opts: { enabled?: boolean } = {}): UseQueryResult<FriendsList> {
   return useServerQuery<FriendsList>(['friends'], 'list_friends', undefined, opts);
 }
 

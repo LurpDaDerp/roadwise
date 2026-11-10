@@ -20,7 +20,7 @@ import { ThemeProvider, useTheme, type Theme } from '@/ui/theme';
 import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
 
 import { ARRIVAL_HOLD_MS } from '../ArrivalOverlay';
-import { hudCopy } from '../hudCopy';
+import { DRIVE_HREF, hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
 import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
 import { EMERGENCY_IDLE_MS, HudScreen, hudNightOf, NO_DRIVE_LEAVE_MS } from '../HudScreen';
@@ -1078,6 +1078,54 @@ describe('swipe to end', () => {
   });
 
   const drop = (clientTripId: string): LastFinalized => ({ clientTripId, ok: true, status: null, dropped: 'no_movement', endCause: 'stopped', at: T, durationS: null, miles: null });
+
+  test('with another route over the driving screen, the way out first pops back to it, then opens the summary in its place', async () => {
+    const h = await renderHud();
+    mockFocused = false;
+    await h.update({ status: 'finalizing' });
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.dismissTo.mock.calls).toEqual([[DRIVE_HREF]]);
+    expect(mockRouter.replace.mock.calls).toEqual([[driveSummaryHref('t1', true)]]);
+    expect(mockRouter.dismissTo.mock.invocationCallOrder[0]!).toBeLessThan(mockRouter.replace.mock.invocationCallOrder[0]!);
+    // once only, focused again or not
+    mockFocused = true;
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+  });
+
+  test('with another route over it, a drive that was not kept pops back to the driving screen, then to Home', async () => {
+    const h = await renderHud();
+    await h.update({ status: 'finalizing' });
+    mockFocused = false;
+    mockLastFinalized = drop('t1');
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.dismissTo.mock.calls).toEqual([[DRIVE_HREF], [HOME_HREF]]);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('focused again before the drive ends, the way out is the plain one', async () => {
+    const h = await renderHud();
+    mockFocused = false;
+    await h.update({ status: 'finalizing' });
+    mockFocused = true;
+    await h.update({ status: 'finalizing' });
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace.mock.calls).toEqual([[driveSummaryHref('t1', true)]]);
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+  });
+
+  test('a swipe whose end lands after the screen has gone does not go back to a driving screen', async () => {
+    let finish: (v: { clientTripId: string; dropped: null }) => void = () => {};
+    mockEnd.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    await renderHud();
+    await swipeEnd();
+    await screen.unmount();
+    await act(async () => finish({ clientTripId: 't1', dropped: null }));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace.mock.calls).toEqual([[driveSummaryHref('t1', true)]]);
+  });
 
   test('a drive that ended by itself and was not kept lands on Home once, not on a summary', async () => {
     const h = await renderHud();

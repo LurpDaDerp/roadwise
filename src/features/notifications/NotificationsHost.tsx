@@ -7,7 +7,9 @@
  * SDK 57 `getLastNotificationResponse`, then cleared so a remount does not act on it again). A tap
  * is acted on by `handleResponse`; one
  * that lands during a drive, or before the navigator is mounted, is held and replayed when the
- * drive's busy signal says it is over.
+ * drive's busy signal says it is over. One that lands while the driving screen is the top route
+ * (a drive just over, the screen about to leave for its recap or Home) is held the same way and
+ * replayed once the driving screen has left, so no route is ever opened over the driving screen.
  *
  * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
  * records) opens the driving screen, through `router.navigate` so it never stacks a second one, and
@@ -35,7 +37,8 @@
  * drive only finalizes, keeps the current screen and opens its route once the drive is over.
  *
  * Battery (§3.5): no timer and no polling. The busy subscription fires with the drive host's state
- * changes; while nothing is held it returns after one boolean read.
+ * changes, and a change of route away from the driving screen asks once more; while nothing is held
+ * either returns after one boolean read.
  *
  * Renders nothing. Mounted by the root layout inside `DataProvider` and the query client (Task 18),
  * which also removes M3's interim `useSummaryNotificationRouting`, so one tap navigates once.
@@ -121,6 +124,11 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     if (summary !== null && latest.current.pathname === `/drives/${summary[1]}`) return;
     (latest.current.props.navigate ?? defaultNavigate)(href);
   });
+  /**
+   * A tap's route must wait: a drive is under way, or the driving screen is the top route (a route
+   * opened over it would be the one its way out replaces). Reads only refs.
+   */
+  const mustHold = useRef(() => latest.current.props.isBusy() || latest.current.pathname === DRIVE_HREF);
   /** Something may be held in settings: true at mount (a tap from an earlier process), and after a deferral. */
   const mayHavePending = useRef(true);
   /** Replays the held tap if the app may navigate now; a no-op until the navigator is ready. */
@@ -191,7 +199,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
         db: l.db,
         now: l.now,
         navigate: tapRoute.current,
-        isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
+        isBusy: () => !latest.current.ready || mustHold.current(),
         onError: report,
       };
     };
@@ -279,7 +287,7 @@ export function NotificationsHost(props: NotificationsHostProps): null {
     const tryReplay = () => {
       if (replaying || !mayHavePending.current) return;
       const l = latest.current;
-      if (l.props.isBusy()) return;
+      if (mustHold.current()) return;
       replaying = true;
       mayHavePending.current = false;
       const seq = deferrals.current;
@@ -287,13 +295,13 @@ export function NotificationsHost(props: NotificationsHostProps): null {
         db: l.db,
         now: l.now,
         navigate: tapRoute.current,
-        isBusy: () => !latest.current.ready || latest.current.props.isBusy(),
+        isBusy: () => !latest.current.ready || mustHold.current(),
       })
         .then((out) => {
           if (out.kind === 'busy') mayHavePending.current = true;
         })
         .catch((e: unknown) => {
-          // Tried again at the next change of the busy signal, not in a loop.
+          // Tried again at the next change of the busy signal or of the route, not in a loop.
           mayHavePending.current = true;
           l.props.onError?.(e, 'notifications.replay');
         })
@@ -311,6 +319,11 @@ export function NotificationsHost(props: NotificationsHostProps): null {
       unsubscribe();
     };
   }, [ready, subscribeBusy]);
+
+  // The driving screen has left: a tap held while it was the top route opens now.
+  useEffect(() => {
+    if (pathname !== DRIVE_HREF) replay.current();
+  }, [pathname]);
 
   return null;
 }

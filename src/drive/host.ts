@@ -37,8 +37,8 @@
 //   (focused, RoadWise active) and never for a replayed row; with RoadWise not active nothing plays
 //   or is posted. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
-//   (the automatic end, `ticks.ts`), the display throttled (about one update a second on iOS, one
-//   per 3 s on Android), the weather
+//   (the automatic end, `ticks.ts`), the display throttled (on iOS a new speed every 5 s at most
+//   and other changes within a second, `display.ts`; one update per 3 s on Android), the weather
 //   checked every 15 min or 20 km, the state published at most once per row.
 // - **Background (Android).** Each row first pumps the process's timers (`src/lib/timers.ts`): with
 //   the app in the Android background JS timers are paused, and the rows are what keeps the alert
