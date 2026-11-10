@@ -2546,9 +2546,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       if (isBusyStatus(engine.snapshot().status)) return { ok: false, reason: 'busy' };
       try {
         const perms = await deps.permissions?.();
-        if (perms !== undefined && perms.location !== 'granted') return { ok: false, reason: 'permission' };
-        // With the switch off nothing records; approximate fixes are kilometres wide and never count.
+        // With the switch off nothing records. Services come first: iOS reports every app's
+        // location `denied` while the switch is off. Approximate fixes are kilometres wide and never count.
         if (perms?.services === false) return { ok: false, reason: 'services' };
+        if (perms !== undefined && perms.location !== 'granted') return { ok: false, reason: 'permission' };
         if (perms?.precise === false) return { ok: false, reason: 'precise' };
       } catch (e) {
         // Unreadable is no answer: native refuses a start it cannot record (`permission`).

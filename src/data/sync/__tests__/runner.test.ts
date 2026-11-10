@@ -50,6 +50,22 @@ test('posts the queued v5 payload and writes the server’s answer into the driv
   await r.stop();
 });
 
+test('a claim a killed process left open is sent on the first wake after start, however fresh', async () => {
+  await finalized(uuid(16), T0, uuid(5));
+  const now = T0 + 2_000_000;
+  // The last process claimed it ten seconds ago and died before the request settled.
+  await db.execute("UPDATE sync_queue SET status = 'inflight', claimed_at = ?", [now - 10_000]);
+  const supabase = createFakeSupabase({ invoke: ({ body }) => invokeOk(response((body as { clientTripId: string }).clientTripId, { eventIds: [uuid(5)] })) });
+  const r = runner(supabase);
+  await r.start();
+  await r.idle();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await r.idle();
+  expect(supabase.invokes).toHaveLength(1);
+  expect(await createQueueRepo(db).countByStatus('done')).toBe(1);
+  await r.stop();
+});
+
 test('a drive an older build queued as v3 goes up as v5: its phone event and safe miles stay behind, origin manual, "Not driving?" never ran out', async () => {
   const p = payloadV3(uuid(12), { events: [speeding(uuid(1), T0)] });
   await createTripsRepo(db).insert({ client_trip_id: uuid(12), started_at: T0, tz: 'UTC', status: 'pending' }, T0);

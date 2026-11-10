@@ -3,7 +3,8 @@
  *
  * The generated `Database` types describe jsonb returns as `Json`, so each feature declares the
  * shape it reads and passes it as `T`. Errors surface as `RpcError` carrying Postgres's code
- * (`22023` bad input, `42501` not allowed, `P0001` rate limited, …) and its fixed message.
+ * (`22023` bad input, `42501` not allowed, including the rate limit's 'too many requests',
+ * `P0002` not found, …) and its fixed message.
  */
 import { supabase } from '@/data/supabase/client';
 

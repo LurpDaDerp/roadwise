@@ -17,13 +17,15 @@ const REJECT_MS = 2_500;
 /**
  * `/friends/scan`: the camera is asked for only here, when this screen opens. A code is read only
  * if it is exactly `roadwise://add/<username>`; anything else (a URL, another app's code) is
- * refused with one line and never opened.
+ * refused with one line and never opened. A camera that won't start says so in place of the
+ * viewfinder.
  */
 export function ScanScreen() {
   const th = useTheme();
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [rejected, setRejected] = useState(false);
+  const [cameraFailed, setCameraFailed] = useState(false);
   const done = useRef(false);
   const lastReject = useRef(0);
 
@@ -69,18 +71,23 @@ export function ScanScreen() {
         <Text variant="body" tone="muted">
           {copy.scanBody}
         </Text>
-        <View
-          style={{ aspectRatio: 1, borderRadius: th.radius.card, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: '#000000' }}
-          accessibilityLabel={copy.scanBody}
-        >
-          <CameraView
-            style={{ flex: 1 }}
-            facing="back"
-            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-            onBarcodeScanned={onScan}
-            testID="scan-camera"
-          />
-        </View>
+        {cameraFailed ? (
+          <Banner tone="warning" message={copy.noCamera} testID="scan-no-camera" />
+        ) : (
+          <View
+            style={{ aspectRatio: 1, borderRadius: th.radius.card, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: '#000000' }}
+            accessibilityLabel={copy.scanBody}
+          >
+            <CameraView
+              style={{ flex: 1 }}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              onBarcodeScanned={onScan}
+              onMountError={() => setCameraFailed(true)}
+              testID="scan-camera"
+            />
+          </View>
+        )}
         {rejected ? <Banner tone="warning" message={copy.notOurs} testID="scan-rejected" /> : null}
       </View>
     );

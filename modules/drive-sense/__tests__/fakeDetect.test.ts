@@ -109,6 +109,32 @@ describe('the fake detector', () => {
     expect(ended).toHaveLength(2);
   });
 
+  test('"Not driving?" while detection is not allowed (unarmed, or a required permission gone) settles off with no rest', async () => {
+    // A Start-card drive with automatic drives off: nothing could start on its own, so no rest.
+    const d = createFakeDriveDetect({ permissions: { location: 'whenInUse' } });
+    const reasons: string[] = [];
+    d.addListener('detectState', (e) => reasons.push(`${e.reason}:${e.state}`));
+    const ended: unknown[] = [];
+    d.addListener('driveEnded', (e) => ended.push(e.cause));
+    const r = await d.startWaiting();
+    if (!r.ok || r.driveId === null) throw new Error('the Start card opened no drive');
+    await d.notDriving();
+    expect(ended).toEqual(['cancelled']);
+    expect(d.journal.has(r.driveId)).toBe(false);
+    expect(await d.getState()).toMatchObject({ state: 'off', armed: false, origin: null, driveId: null, waitUntil: null, suppressedUntil: null });
+    expect(reasons.at(-1)).toBe('notDriving:off');
+    // Armed for an owner, but Motion revoked mid-drive: off as well.
+    const e = createFakeDriveDetect();
+    await e.setArmed(true, OWNER);
+    e.confirm();
+    e.setPermissions({ motion: 'denied' });
+    await e.notDriving();
+    expect(await e.getState()).toMatchObject({ state: 'off', armed: false, ownerId: OWNER, suppressedUntil: null });
+    // Motion back: arming again leaves the off state for armed (no rest is owed).
+    e.setPermissions({ motion: 'granted' });
+    expect(await e.setArmed(true, OWNER)).toMatchObject({ state: 'armed', suppressedUntil: null });
+  });
+
   test('the Start card: needs While Using and Precise; opens a manual drive at the tap, waiting for driving speed; a touch extends the wait; busy while one records', async () => {
     let now = 1_000_000;
     const d = createFakeDriveDetect({ now: () => now, permissions: { location: 'none' } });

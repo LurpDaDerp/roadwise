@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Text as RNText, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import type MapViewType from 'react-native-maps';
 
@@ -42,6 +42,25 @@ export function awayOnMap(current: Region, framed: Region, aspect: number): bool
 }
 
 const regionKey = (r: Region | null) => (r ? `${r.latitude},${r.longitude},${r.latitudeDelta},${r.longitudeDelta}` : '');
+
+/**
+ * A key per route line drawn from the line itself (its point count, first, middle and last points),
+ * so a new drive's lines arriving at the front of the list add overlays and leave the others' alone.
+ * Lines that share all of those get a running number.
+ */
+export function routeKeys(routes: readonly (readonly MapPoint[])[]): string[] {
+  const seen = new Map<string, number>();
+  return routes.map((line) => {
+    const at = (i: number) => {
+      const p = line[i];
+      return p ? `${p.latitude},${p.longitude}` : '';
+    };
+    const base = `${line.length}|${at(0)}|${at(line.length >> 1)}|${at(line.length - 1)}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n === 0 ? base : `${base}#${n}`;
+  });
+}
 
 const toCoords = (points: readonly LatLng[]) => points.map((p) => ({ latitude: p.lat, longitude: p.lng }));
 
@@ -120,6 +139,7 @@ export function TripsMapCard({
   const ink = withAlpha(t.colors.accent, t.scheme === 'dark' ? 0.45 : 0.35);
   const spotLine = spotInk(t.scheme);
   const settling = useSettling(`${t.scheme}|${spots.map((s) => `${s.id}:${s.label ?? ''}`).join(',')}`);
+  const lineKeys = useMemo(() => routeKeys(routes), [routes]);
   const mapRef = useRef<MapViewType>(null);
   /** The map has been dragged or zoomed off the view framing every route: Recenter shows. */
   const [away, setAway] = useState(false);
@@ -199,7 +219,7 @@ export function TripsMapCard({
               userInterfaceStyle={t.scheme === 'dark' ? 'dark' : 'light'}
             >
               {routes.map((coords, i) => (
-                <maps.Polyline key={i} coordinates={coords} strokeColor={ink} strokeWidth={4} lineCap="round" lineJoin="round" />
+                <maps.Polyline key={lineKeys[i]} coordinates={coords} strokeColor={ink} strokeWidth={4} lineCap="round" lineJoin="round" />
               ))}
               {spots.map((s) =>
                 s.segment.length >= 2 ? (

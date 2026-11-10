@@ -162,10 +162,13 @@ export function useDriveDetail(clientTripId: string): UseQueryResult<{ drive: Lo
   });
 }
 
-/** Sums over scored, non-not_driving drives since `sinceMs` (null: all time). */
+/**
+ * Sums over scored, non-not_driving drives since `sinceMs` (null: all time). A rolling window's key
+ * moves on the hour: the previous sums stay on screen until the new ones are read.
+ */
 export function useStatSums(sinceMs: number | null): UseQueryResult<StatSums> {
   const { db } = useDataSource();
-  return useQuery({ queryKey: queryKeys.statSums(sinceMs), queryFn: () => readStatSums(db, sinceMs) });
+  return useQuery({ queryKey: queryKeys.statSums(sinceMs), queryFn: () => readStatSums(db, sinceMs), placeholderData: keepPreviousData });
 }
 
 /** Scored drives, for the first-run gate (< 3). */

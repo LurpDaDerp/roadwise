@@ -504,6 +504,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
   // ——— state ———
 
   function setBt(s: BluetoothState): void {
+    const prev = bt;
     bt = s;
     sink?.setBluetooth(s);
     for (const fn of [...btListeners]) {
@@ -514,8 +515,16 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
       }
     }
     if (s === 'on') armConnect(0);
-    if (s === 'off' || s === 'turning_off' || s === 'unauthorized' || s === 'unsupported') {
-      if (conn !== 'down') markDown();
+    // A reset (iOS: the Bluetooth service restarted) invalidates every connection and pending connect
+    // with no disconnect event, as does iOS falling back to 'unknown' from a known state. The new
+    // attempt number makes a late callback of the lost connect stale; 'on' connects again.
+    const lost =
+      s === 'off' || s === 'turning_off' || s === 'unauthorized' || s === 'unsupported' || s === 'resetting' || (s === 'unknown' && platform === 'ios' && prev !== 'unknown');
+    if (lost) {
+      if (conn !== 'down') {
+        attempt += 1;
+        markDown();
+      }
       cancelRetry();
     }
   }
@@ -599,7 +608,8 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     }
     retryTimer = setTimer(() => {
       retryTimer = null;
-      connect();
+      // The state may have changed while it waited: the same checks again.
+      armConnect(0);
     }, delayMs);
   }
 
@@ -618,7 +628,9 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     call.then(
       () => {
         if (mine !== attempt || tgt !== t) {
-          hangUp(t.peripheralId).catch((e: unknown) => report(e, 'disconnect (stale connect)'));
+          // iOS keeps a lost connect's callback (a Bluetooth reset) and fires it with a newer
+          // attempt's on the same connection: that connection then belongs to the newer attempt.
+          if (tgt !== t || conn === 'down') hangUp(t.peripheralId).catch((e: unknown) => report(e, 'disconnect (stale connect)'));
           return;
         }
         void onConnected(t, { maybeUp: false });
@@ -970,8 +982,7 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
 
     retryNow() {
       if (!tgt || conn !== 'down' || retryTimer === null) return;
-      cancelRetry();
-      connect();
+      armConnect(0);
     },
 
     write(bytes, o) {

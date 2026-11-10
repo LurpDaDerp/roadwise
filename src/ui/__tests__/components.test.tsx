@@ -59,6 +59,15 @@ describe('Avatar', () => {
     expect(spread.size).toBeGreaterThan(3);
   });
 
+  test('a missing username draws "?" instead of throwing', async () => {
+    const n = tokens.color.light.avatar.length;
+    expect(avatarInitials(null)).toBe('?');
+    expect(avatarInitials('')).toBe('?');
+    expect(avatarColorIndex(null, n)).toBe(avatarColorIndex('', n));
+    await wrap(<Avatar username={null} accessibilityLabel="nameless" />);
+    expect(screen.getByLabelText('nameless')).toBeOnTheScreen();
+  });
+
   test('is decorative unless given a label', async () => {
     await wrap(
       <>

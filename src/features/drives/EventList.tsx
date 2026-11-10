@@ -18,7 +18,7 @@ function EventLine({
 }: {
   row: EventRow;
   selected: boolean;
-  /** Report shows: the event was never reported and some reason fits it now. */
+  /** Report shows: the drive is within the report window, the event was never reported and some reason fits it now. */
   reportable: boolean;
   onSelect: () => void;
   onReport: () => void;
@@ -97,6 +97,8 @@ export type EventListProps = {
   rows: readonly EventRow[];
   /** "I wasn't driving" can be a report's reason here (the whole-drive action is allowed). */
   allowNotDriving?: boolean;
+  /** Report is on offer at all: the drive ended within the report window. */
+  allowReport?: boolean;
   selectedId: string | null;
   onSelect: (eventId: string) => void;
   onReport: (eventId: string) => void;
@@ -108,7 +110,7 @@ export type EventListProps = {
  * report's status). A tap circles it on the route map. Three show before "Show more"; a clean drive
  * says so.
  */
-export function EventList({ rows, allowNotDriving = false, selectedId, onSelect, onReport }: EventListProps) {
+export function EventList({ rows, allowNotDriving = false, allowReport = true, selectedId, onSelect, onReport }: EventListProps) {
   const t = useTheme();
   const [all, setAll] = useState(false);
   const hidden = rows.length - EVENT_LIST_MAX;
@@ -129,7 +131,7 @@ export function EventList({ rows, allowNotDriving = false, selectedId, onSelect,
             <EventLine
               row={row}
               selected={selectedId === row.event.id}
-              reportable={canReport(row.event) && availableReasons(row.event.type, allowNotDriving).length > 0}
+              reportable={allowReport && canReport(row.event) && availableReasons(row.event.type, allowNotDriving).length > 0}
               onSelect={() => onSelect(row.event.id)}
               onReport={() => onReport(row.event.id)}
             />

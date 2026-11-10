@@ -1,10 +1,11 @@
 // Reading the row journal (plan §3.2): a file's first line and its last complete lines (for
 // `listDrives`, a resume and an orphan's end), and its rows in order after a seq (for `readRows`).
 // `listDrives` lists a file with no end that is not the live drive as an orphan JS adopts.
-// A torn last line (no newline, or not JSON) is never read, and a row whose seq is not the last one
-// plus one is dropped (a resume's `gap` moves the last one to its `lastSeq`). `readRows` keeps its
-// place in each file, so draining a long drive page by page reads it once. Journal queue only,
-// except `list` and `read`, which hop onto it and answer on main.
+// A torn last line (no newline, or not JSON) is never read. Rows are taken in rising seq order: a row
+// whose seq is not above the last one is dropped (a resume's `gap` moves the last one to its
+// `lastSeq`), and a hole (a row whose write failed) is skipped. `readRows` keeps its place in each
+// file, so draining a long drive page by page reads it once. Journal queue only, except `list` and
+// `read`, which hop onto it and answer on main.
 import Foundation
 
 /// What a journal file holds, from its first line and its tail.
@@ -158,7 +159,7 @@ extension RowJournal {
         if o?["k"] as? String == "gap", let g = (o?["lastSeq"] as? NSNumber)?.intValue, g > last {
           // A resume: the rows go on after its seq.
           last = g
-        } else if let o = o, o["k"] as? String == "row", let seq = (o["seq"] as? NSNumber)?.intValue, seq == last + 1 {
+        } else if let o = o, o["k"] as? String == "row", let seq = (o["seq"] as? NSNumber)?.intValue, seq > last {
           last = seq
           if seq > afterSeq {
             var row = o

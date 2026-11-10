@@ -23,7 +23,7 @@ import { ARRIVAL_HOLD_MS } from '../ArrivalOverlay';
 import { hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
 import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
-import { EMERGENCY_IDLE_MS, HudScreen, hudNightOf } from '../HudScreen';
+import { EMERGENCY_IDLE_MS, HudScreen, hudNightOf, NO_DRIVE_LEAVE_MS } from '../HudScreen';
 import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
 // The halo renders for real; its props are kept so a test can read the visual it was given.
@@ -1029,6 +1029,42 @@ describe('swipe to end', () => {
     await swipeEnd();
     expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
     expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('opened with no drive (a stale Live Activity tap), it goes Home on its own after a short grace', async () => {
+    await renderHud({ status: 'idle', clientTripId: null });
+    await act(() => jest.advanceTimersByTime(NO_DRIVE_LEAVE_MS - 1));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    await act(() => jest.advanceTimersByTime(1));
+    expect(mockRouter.dismissTo).toHaveBeenCalledTimes(1);
+    expect(mockRouter.dismissTo).toHaveBeenCalledWith(HOME_HREF);
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('opened idle, a drive that starts within the grace keeps the screen', async () => {
+    const h = await renderHud({ status: 'idle', clientTripId: null });
+    await act(() => jest.advanceTimersByTime(NO_DRIVE_LEAVE_MS / 2));
+    await h.update({ status: 'recording', clientTripId: 't1' });
+    await act(() => jest.advanceTimersByTime(NO_DRIVE_LEAVE_MS * 5));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('opened idle with a failed end pending, it stays so End can be swiped again', async () => {
+    mockLastFinalized = { clientTripId: 't0', ok: false, at: T };
+    await renderHud({ status: 'idle', clientTripId: null });
+    await act(() => jest.advanceTimersByTime(NO_DRIVE_LEAVE_MS * 5));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+  });
+
+  test('first shown while the drive is being saved, it lands on the summary once saved', async () => {
+    const h = await renderHud({ status: 'finalizing' });
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await h.update({ status: 'idle', clientTripId: null });
+    expect(mockRouter.replace).toHaveBeenCalledTimes(1);
+    expect(mockRouter.replace).toHaveBeenCalledWith(driveSummaryHref('t1', true));
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
   });
 
   test('a drive that auto-ends lands on its summary once', async () => {

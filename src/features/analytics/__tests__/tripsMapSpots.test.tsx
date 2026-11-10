@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
-import type { ComponentType, ReactNode } from 'react';
+import { useEffect, type ComponentType, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { draw } from '@/features/drives/__fixtures__/drives';
@@ -10,7 +10,7 @@ import { SPOT_INK } from '@/features/spots/ink';
 import { ThemeProvider } from '@/ui/theme';
 
 import type { MapPoint } from '../model';
-import { SPOT_CASING_WIDTH, SPOT_LINE_WIDTH, TripsMapCard } from '../TripsMapCard';
+import { routeKeys, SPOT_CASING_WIDTH, SPOT_LINE_WIDTH, TripsMapCard } from '../TripsMapCard';
 
 const H = { includeHiddenElements: true } as const;
 
@@ -90,4 +90,38 @@ test('in dark mode the spot ink follows the dark tiles', async () => {
 test('the map stays hidden from screen readers; the spots card is its accessible list', async () => {
   await draw(<TripsMapCard routes={LINES} region={REGION} spots={[problemSpot()]} />);
   expect(screen.getByTestId('trips-map', H)).toHaveProp('accessibilityElementsHidden', true);
+});
+
+test('a new drive at the front of the list adds its line and leaves every other line as it was', async () => {
+  const line = (a: number): MapPoint[] => [
+    { latitude: 47.6 + a / 100, longitude: -122.3 },
+    { latitude: 47.61 + a / 100, longitude: -122.31 },
+  ];
+  // Counts each line's mount and every change of its coordinates (one native overlay rebuild each).
+  let builds = 0;
+  const Polyline = ({ coordinates }: { coordinates: MapPoint[] }) => {
+    useEffect(() => {
+      builds += 1;
+    }, [coordinates]);
+    return <View testID="heat-line" />;
+  };
+  setMapsForTests({ ...fakeMaps(), Polyline } as unknown as MapsModule);
+  const [a, b, c] = [line(1), line(2), line(3)];
+  const view = await draw(<TripsMapCard routes={[a, b]} region={REGION} />);
+  expect(builds).toBe(2);
+  await view.rerender(
+    <ThemeProvider scheme="light" reduceMotion>
+      <TripsMapCard routes={[c, a, b]} region={REGION} />
+    </ThemeProvider>
+  );
+  expect(screen.getAllByTestId('heat-line', H)).toHaveLength(3);
+  expect(builds).toBe(3);
+});
+
+test('route keys follow the line, not its place in the list; lines alike in every sampled point still differ', () => {
+  const a = LINES[0]!;
+  const b = [a[1]!, a[0]!];
+  const [ka, kb] = routeKeys([a, b]);
+  expect(routeKeys([b, a, b])).toEqual([kb, ka, `${kb}#1`]);
+  expect(new Set(routeKeys([a, a, a])).size).toBe(3);
 });

@@ -328,6 +328,32 @@ describe('Settings', () => {
     expect(await w.settings.get(UNITS_KEY)).toBe('mi');
   });
 
+  it('a units save whose summary refetch fails keeps the new units in the mirror', async () => {
+    let summaries = 0;
+    answerRpc(mockRpc, {
+      get_my_summary: () => {
+        summaries += 1;
+        if (summaries > 1) throw new Error('offline');
+        return SUMMARY;
+      },
+      update_profile: null,
+    });
+    const w = await appWorld({ settings: { [UNITS_KEY]: 'mi' } });
+    await w.render(<SettingsScreen />);
+    await screen.findByTestId('settings-units');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('tab', { name: 'Kilometers' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_units: 'km' }));
+    // The refetch and its one retry (a second later) fail; the stale summary (mi) must not be written back.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    });
+    expect(summaries).toBeGreaterThan(1);
+    expect(await w.settings.get(UNITS_KEY)).toBe('km');
+    expect(within(screen.getByTestId('settings-units')).getByRole('tab', { name: 'Kilometers' })).toBeSelected();
+  });
+
   it('the mirror follows units changed on another device', async () => {
     answerRpc(mockRpc, { get_my_summary: { ...SUMMARY, profile: { ...SUMMARY.profile, units: 'km' } } });
     const w = await appWorld({ settings: { [UNITS_KEY]: 'mi' } });

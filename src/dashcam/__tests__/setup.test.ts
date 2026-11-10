@@ -639,6 +639,43 @@ describe('the hold: a lost link, its end, the commit’s outcomes', () => {
     expect(r.ops().filter((op) => op === 8)).toHaveLength(2);
   });
 
+  test('COMMAND 8 unanswered twice with the link up: the commit may be stored, so the undo is COMMAND 4; the DashPal forgets the phone and nothing is kept', async () => {
+    const r = rig();
+    await setUp(r, {}, { next: false });
+    r.cam().commit = 'silent';
+    // every answer to COMMAND 8 is lost (the second would be R_OK: the phone is stored)
+    const notify = r.cam().notify.bind(r.cam());
+    r.cam().notify = (f) => {
+      if (!Array.isArray(f) && f.type === 'SETUP_RESULT' && f.op === 8) return;
+      notify(f);
+    };
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(r.ops().filter((op) => op === 8)).toHaveLength(2);
+    expect(r.ops()).not.toContain(9);
+    expect(r.ops().at(-1)).toBe(4);
+    expect(r.cam().phones.size).toBe(0);
+    expect(r.cam().prov).toBeNull();
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+    expect(await r.secrets.readAuth()).toBeNull();
+  });
+
+  test('COMMAND 8 answered R_NOT_NOW twice: nothing was committed, so the hold is undone with COMMAND 9', async () => {
+    const r = rig();
+    await setUp(r, {}, { next: false });
+    Object.defineProperty(r.cam(), 'commit', { get: () => R.NOT_NOW, set: () => {}, configurable: true });
+    r.flow.next();
+    expect(await untilEnd(r)).toMatchObject({ kind: 'failed', reason: 'error' });
+    expect(r.ops().filter((op) => op === 8)).toHaveLength(2);
+    expect(r.ops().at(-1)).toBe(9);
+    expect(r.ops()).not.toContain(4);
+    expect(r.cam().phones.size).toBe(0);
+    expect(r.cam().prov).toBeNull();
+    expect(await r.secrets.readPendingAuth()).toBeNull();
+    expect(await r.secrets.readOrphan()).toBeNull();
+  });
+
   test('the commit went through but its answer was lost with the link: a reconnect, COMMAND 8 again (R_OK), done', async () => {
     const r = rig();
     await setUp(r, {}, { next: false });

@@ -68,8 +68,38 @@ test.each([
   'https://roadwise.app/w/Ab3dEf7hJk9m',
 ])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
 
-test('the dev client launcher links pass untouched', async () => {
+test('the dev client launcher links pass untouched in a development build', async () => {
   expect(await go('exp+roadwise://expo-development-client/?url=x')).toBe('exp+roadwise://expo-development-client/?url=x');
+});
+
+test.each([
+  // Only a real launcher link passes: the words anywhere else in a link do not skip the allowlist.
+  'roadwise://settings/dashcam?aim=1&x=expo-development-client',
+  'roadwise://drive?expo-development-client',
+  'roadwise://friends/scan#expo-development-client',
+  'roadwise://settings/delete-account?expo-development-client',
+  'roadwise://expo-development-client',
+  'https://evil.test/exp+roadwise://expo-development-client/',
+])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
+
+describe('in a release build', () => {
+  const g = globalThis as unknown as { __DEV__: boolean };
+  let dev: boolean;
+  beforeEach(() => {
+    dev = g.__DEV__;
+    g.__DEV__ = false;
+  });
+  afterEach(() => {
+    g.__DEV__ = dev;
+  });
+
+  test('a dev client launcher link goes through the allowlist and opens Home', async () => {
+    expect(await go('exp+roadwise://expo-development-client/?url=x')).toBe('/');
+  });
+
+  test('the app links still pass', async () => {
+    expect(await go('roadwise://drive')).toBe('/drive');
+  });
 });
 
 test('the Live Activity and Dynamic Island link reaches the driving screen on a cold launch and on a warm one alike', async () => {

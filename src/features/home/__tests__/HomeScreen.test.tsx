@@ -290,6 +290,38 @@ describe('the line Home keeps in memory', () => {
     expect(await screen.findByTestId('start-drive')).toBeOnTheScreen();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
   });
+
+  test('a drive that starts any way takes the "Not driving?" line down, and it does not come back when that drive is over', async () => {
+    showHomeNotice('notDriving');
+    const view = await draw(<HomeScreen />);
+    expect(await screen.findByTestId('not-driving-ack')).toBeOnTheScreen();
+    const again = async () =>
+      view.rerender(
+        <ThemeProvider scheme="light" reduceMotion>
+          <HomeScreen />
+        </ThemeProvider>
+      );
+    mockRecording = true;
+    await again();
+    await waitFor(() => expect(readHomeNotice()).toBeNull());
+    mockRecording = false;
+    await again();
+    expect(await screen.findByTestId('start-drive')).toBeOnTheScreen();
+    expect(screen.queryByTestId('not-driving-ack')).toBeNull();
+  });
+
+  test('the "Not driving?" line set while its drive is still recording stays once that drive stops', async () => {
+    mockRecording = true;
+    const view = await draw(<HomeScreen />);
+    await act(async () => showHomeNotice('notDriving'));
+    mockRecording = false;
+    await view.rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <HomeScreen />
+      </ThemeProvider>
+    );
+    expect(await screen.findByTestId('not-driving-ack')).toBeOnTheScreen();
+  });
 });
 
 describe('the permission card', () => {

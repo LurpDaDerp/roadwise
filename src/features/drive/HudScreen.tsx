@@ -60,6 +60,8 @@ export const HUD_NIGHT_RECHECK_MS = 5 * 60_000;
 const POSITION_MAX_AGE_MS = 60 * 60_000;
 /** The emergency panel closes on its own after this long without a touch. */
 export const EMERGENCY_IDLE_MS = 30_000;
+/** A screen that opens with no drive (a stale Live Activity tap, Try again after a crash) goes Home after this long. */
+export const NO_DRIVE_LEAVE_MS = 2000;
 
 /**
  * Night by the sun at the phone's last known position (the OS's cached fix: no GPS of its own), or
@@ -521,22 +523,32 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // A drive that ends without the button (it ended by itself) still lands on its summary, or on
   // Home when it was not kept. One that closed but could not be finalized stays here, saying
   // "Swipe again": End finalizes it again (`host.end()`). A wait that ends with no drive (its 5
-  // minutes ran out, or it was cancelled) goes Home, saying nothing.
+  // minutes ran out, or it was cancelled) goes Home, saying nothing. A screen first shown while the
+  // drive is being saved takes the same way out once it is saved.
   const failedId = useDrive((d) => (d.lastFinalized !== null && !d.lastFinalized.ok ? d.lastFinalized.clientTripId : null));
-  const sawRecording = useRef(false);
-  const sawWaiting = useRef(false);
+  // Whether this screen has seen the drive open or waiting (advanced once per render, as the locks are).
+  const [sawBusy, setSawBusy] = useState(live.status !== 'idle');
+  if (live.status !== 'idle' && !sawBusy) setSawBusy(true);
+  const [sawWaiting, setSawWaiting] = useState(isWaiting);
+  if (isWaiting && !sawWaiting) setSawWaiting(true);
   // The way out also waits while the "Welcome" line holds, and while the emergency panel is open (it
   // closes by itself within 30 s), so an automatic end never takes the panel away.
   useEffect(() => {
-    if (live.status === 'recording') sawRecording.current = true;
-    if (isWaiting) sawWaiting.current = true;
     if (live.status !== 'idle' || ending || cancelling || arrivalHolding || sosOpen) return;
-    if (sawRecording.current) {
+    if (sawBusy) {
       const id = lastTripId.current;
       if (failedId !== null && failedId === id) setEndFailed(true);
       else leave(droppedId !== null && droppedId === id ? null : id);
-    } else if (sawWaiting.current && !isWaiting) leave(null);
-  }, [live.status, isWaiting, ending, cancelling, arrivalHolding, sosOpen, leave, droppedId, failedId]);
+    } else if (sawWaiting && !isWaiting) leave(null);
+  }, [live.status, isWaiting, sawBusy, sawWaiting, ending, cancelling, arrivalHolding, sosOpen, leave, droppedId, failedId]);
+  // Opened with no drive at all (and no failed end to swipe again): Home after a short grace, which
+  // covers a Start or a launch that is still opening the drive.
+  const noDrive = live.status === 'idle' && !isWaiting && !sawBusy && !sawWaiting && failedId === null && !ending && !cancelling && !sosOpen;
+  useEffect(() => {
+    if (!noDrive) return;
+    const timer = setTimeout(() => leave(null), NO_DRIVE_LEAVE_MS);
+    return () => clearTimeout(timer);
+  }, [noDrive, leave]);
 
   // Over the limit the sign shows (the speed's spoken label says so).
   const speeding = live.overSign;

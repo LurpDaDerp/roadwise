@@ -30,6 +30,7 @@ import {
   notDrivingLabel,
   notDrivingRefusal,
   notDrivingRetryNote,
+  reportWindowOpen,
   scoreState,
   type ReportReason,
   type ScoreState,
@@ -87,8 +88,7 @@ function StateHead({ state, drive, units }: { state: Exclude<ScoreState, { kind:
 }
 
 /**
- * The drive recap, top to bottom: time and distance (and how it started or ended on its own), the
- * route map, then the score card: the hero, the share card's smaller sibling (the tier's icon,
+ * The drive recap, top to bottom: time and distance, the route map, then the score card: the hero, the share card's smaller sibling (the tier's icon,
  * score, distance and time in the tier's colour on a soft wash of it) with Share right beside it,
  * a commute drive's line against the usual one on its leg (only when as good or better), a
  * practice drive's row (Permit mode: how long, the minutes at night, who supervised), and the
@@ -126,7 +126,9 @@ export function SummaryView({
   const lead = useMemo(() => leadIn(drive.start, runs), [drive.start, runs]);
   const score = state.kind === 'score' ? state.value : null;
   const selected = events.find((e) => e.id === selectedId) ?? null;
-  const reportEvent = events.find((e) => e.id === reporting) ?? null;
+  // Reports close 7 days after the drive ended, the server's line; a sheet left open past it closes too.
+  const reportOk = reportWindowOpen(drive, now);
+  const reportEvent = reportOk ? (events.find((e) => e.id === reporting) ?? null) : null;
   const notDrivingOk = canMarkNotDriving(drive, now) && notDrivingLeft !== 0;
   const refusal = notDrivingRefusal(drive);
   const retryNote = notDrivingRetryNote(drive);
@@ -239,6 +241,7 @@ export function SummaryView({
               <EventList
                 rows={rows}
                 allowNotDriving={notDrivingOk}
+                allowReport={reportOk}
                 selectedId={selectedId}
                 onSelect={(id) => setSelectedId((cur) => (cur === id ? null : id))}
                 onReport={setReporting}

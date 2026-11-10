@@ -38,7 +38,7 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
       promise.resolve(DriveDetector.shared.getState())
     }.runOnQueue(.main)
 
-    // The one "Always" request: only from While Using, once per install.
+    // The one "Always" request: only from While Using, once (an ask iOS never showed is not spent).
     AsyncFunction("requestAlways") { (promise: Promise) in
       DriveDetectAccess.shared.requestAlways { promise.resolve($0) }
     }.runOnQueue(.main)

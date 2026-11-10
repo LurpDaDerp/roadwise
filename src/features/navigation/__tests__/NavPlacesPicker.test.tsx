@@ -1,11 +1,14 @@
-// "Where to?" (round 14): a row per saved place, then "Open {app}", then Cancel; 64 pt rows.
+// "Where to?" (round 14): a row per saved place, then "Open {app}", then Cancel; 64 pt rows. Only
+// Cancel is pinned, so a short driving-screen panel (an iPhone SE, larger text) reaches the first place.
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import type { SavedPlace } from '@/features/places/model';
 import { navCopy } from '@/features/navigation/copy';
+import { hudLayout } from '@/features/drive/hudLayout';
 import { NAV_ROW_MIN_PT } from '@/features/navigation/NavAppPicker';
 import { NavPlacesPicker, placeSubtitle } from '@/features/navigation/NavPlacesPicker';
+import { PANEL_CAPSULE_PT } from '@/ui/drive/panelLook';
 
 const COLORS = { surface: '#FFFFFF', ink: '#111113', muted: '#555555', edge: '#DDDDDD' };
 const WAZE = { id: 'waze', label: 'Waze', target: 'waze://' } as const;
@@ -89,4 +92,28 @@ test('the full ten places still end with "Open Waze" in the same scrolling list'
     .map((b) => b.props.testID);
   expect(ids).toHaveLength(11);
   expect(ids.at(-1)).toBe('nav-picker-open-app');
+});
+
+const hostChildIds = (id: string) =>
+  screen
+    .getByTestId(id)
+    .children.map((c) => (typeof c === 'string' ? c : c.props.testID));
+
+test('only Cancel is pinned; the title, the drive line, the places and "Open Waze" scroll as one list', async () => {
+  const { view } = renderList();
+  await view;
+  expect(hostChildIds('nav-picker')).toEqual(['nav-picker-scroll', 'nav-picker-close']);
+  const scroll = screen.getByTestId('nav-picker-scroll');
+  expect(within(scroll).getByRole('header')).toHaveTextContent(navCopy.placesTitle);
+  expect(within(scroll).getByText(navCopy.driveLine)).toBeOnTheScreen();
+  expect(within(scroll).getByTestId('nav-picker-place-home')).toBeOnTheScreen();
+  expect(within(scroll).getByTestId('nav-picker-open-app')).toBeOnTheScreen();
+  expect(StyleSheet.flatten(scroll.props.style)).toMatchObject({ flexGrow: 0, flexShrink: 1 });
+});
+
+test('an iPhone SE in portrait: the list keeps a scrolling window at least a row tall above the pinned Cancel', () => {
+  const l = hudLayout({ width: 375, height: 667, insets: { top: 20, bottom: 0, left: 0, right: 0 }, fontScale: 1, chip: false, units: 'mi' });
+  const inner = l.panel.h - 2 * (16 + 1); // HudScreen's panel padding and border
+  const window = inner - 12 - PANEL_CAPSULE_PT; // the gap and the pinned Cancel
+  expect(window).toBeGreaterThanOrEqual(NAV_ROW_MIN_PT);
 });

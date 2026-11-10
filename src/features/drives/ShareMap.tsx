@@ -4,6 +4,7 @@ import { Image, Platform, StyleSheet, View } from 'react-native';
 import type MapViewType from 'react-native-maps';
 import Svg, { Circle, Path } from 'react-native-svg';
 
+import { removeShareImage } from '@/lib/shareImages';
 import { withAlpha } from '@/ui';
 
 import { thin, type Lead, type Runs } from './route';
@@ -211,13 +212,29 @@ export function ShareMapBackdrop({
     };
   }, [maps, region, settle]);
 
+  // The snapshot file shows the route's area: it goes when the backdrop does (Show map turned off,
+  // a retry, the sheet closed). One that arrives after that, or after the map gave up, goes at once.
+  const snapshot = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      removeShareImage(snapshot.current);
+      snapshot.current = null;
+    },
+    []
+  );
+
   const onMapReady = () => {
     const map = mapRef.current;
     if (!map || !region || settled.current) return;
     map
       .takeSnapshot({ width, height, region, format: 'png', quality: 1, result: 'file' })
       .then((file) => {
-        if (alive.current && !settled.current) setUri(file);
+        if (!alive.current || settled.current || snapshot.current !== null) {
+          removeShareImage(file);
+          return;
+        }
+        snapshot.current = file;
+        setUri(file);
       })
       .catch(() => settle('failed'));
   };

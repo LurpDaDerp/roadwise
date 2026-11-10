@@ -15,6 +15,7 @@ import {
   createBleTransport,
   IOS_FAULT_RETRY_MAX_MS,
   IOS_MTU_WAIT_MS,
+  OP_TIMEOUT_MS,
   RELEASE_WAIT_MS,
   RESTORE_ID,
   SEAL_FAIL_MAX,
@@ -647,6 +648,88 @@ test('Bluetooth off drops the link and stops connecting; on again reconnects', a
   await flush();
   expect(connects(r)).toBe(n + 1);
   expect(r.t.linked()).toBe(true);
+});
+
+test('iOS Bluetooth reset with a pending connect: link down, one new connect on "on", and the lost connect’s late callback leaves the new link alone', async () => {
+  const r = rig('ios');
+  r.ble.connectMode.set(PID, 'hang');
+  await up(r, 'ios');
+  expect(connects(r)).toBe(1);
+  r.ble.setState('resetting');
+  await flush();
+  expect(r.k.log.at(-1)).toBe('down');
+  r.ble.connectMode.set(PID, 'resolve');
+  r.ble.setState('on');
+  await flush();
+  expect(connects(r)).toBe(2);
+  expect(r.t.linked()).toBe(true);
+  // the lost request's callback fires with the newer one's (ble-manager keeps it across a reset)
+  r.ble.completeConnect(PID);
+  await r.clock.advance(60_000);
+  expect(r.ble.calls).not.toContain(`disconnect:${PID}`);
+  expect(r.t.linked()).toBe(true);
+  expect(connects(r)).toBe(2);
+});
+
+test('iOS Bluetooth reset with the link up: queued writes fail, link down, one new connect on "on"', async () => {
+  const r = rig('ios');
+  await up(r, 'ios');
+  expect(r.t.linked()).toBe(true);
+  // the reset leaves a write waiting forever (no disconnect event fails it) with another queued behind it
+  r.ble.hangNext('write');
+  const outcome = (p: Promise<void>) => p.then(() => 'sent', () => 'failed');
+  const stuck = outcome(r.t.write([1, 2, 3], { withResponse: true }));
+  const queued = outcome(r.t.write([4, 5, 6], { withResponse: true }));
+  r.ble.setState('resetting');
+  await flush();
+  expect(await queued).toBe('failed');
+  expect(r.k.log.at(-1)).toBe('down');
+  expect(r.t.linked()).toBe(false);
+  r.ble.setState('on');
+  // the new handshake runs once the lost write's operation times out
+  await r.clock.advance(OP_TIMEOUT_MS);
+  expect(await stuck).toBe('failed');
+  expect(connects(r)).toBe(2);
+  expect(r.t.linked()).toBe(true);
+});
+
+test('iOS: falling back to "unknown" from "on" drops the link like a reset; the first "unknown" changes nothing', async () => {
+  const r = rig('ios');
+  r.t.attach(r.k.s);
+  r.t.setTarget(TARGET);
+  await r.t.start();
+  r.ble.setState('unknown');
+  await flush();
+  expect(connects(r)).toBe(0);
+  expect(r.k.log).not.toContain('down');
+  r.ble.setState('on');
+  await flush();
+  expect(r.t.linked()).toBe(true);
+  r.ble.setState('unknown');
+  await flush();
+  expect(r.k.log.at(-1)).toBe('down');
+  r.ble.setState('on');
+  await flush();
+  expect(connects(r)).toBe(2);
+  expect(r.t.linked()).toBe(true);
+});
+
+test('a retry timer never connects unless Bluetooth is on: a reset cancels it; one that fires in another state waits for "on"', async () => {
+  for (const between of ['resetting', 'turning_on'] as const) {
+    const r = rig('ios', { known: false });
+    await up(r, 'ios');
+    expect(r.k.log).toContain('repair:unknown_phone');
+    expect(connects(r)).toBe(1);
+    // the soft repair's timer is armed with the link down
+    r.ble.setState(between);
+    await r.clock.advance(SOFT_REPAIR_FIRST_MS + SOFT_REPAIR_EVERY_MS);
+    r.t.retryNow();
+    await flush();
+    expect(connects(r)).toBe(1);
+    r.ble.setState('on');
+    await flush();
+    expect(connects(r)).toBe(2);
+  }
 });
 
 test('forget: a null target cancels the connect (pending or live); nothing reconnects', async () => {

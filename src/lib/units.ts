@@ -34,10 +34,12 @@ export function formatDistance(miles: number, units: Units, opts: { digits?: 0 |
 
 /**
  * Progress toward a distance in the driver's units, whole numbers: "12/25 mi" or "19/40 km".
- * `done` is floored and capped at the target, so it never reads as reached early.
+ * `done` is floored and capped at the target, and stays below it until the real distance is
+ * reached, so it never reads as reached early (10 mi rounds to "16 km": 16.04 km reads "15/16 km").
  */
 export function formatDistanceProgress(doneMiles: number, targetMiles: number, units: Units): { done: number; target: number; text: string } {
   const target = Math.round(distanceIn(targetMiles, units));
-  const done = Math.min(target, Math.floor(distanceIn(Math.max(0, doneMiles), units)));
+  const floored = Math.floor(distanceIn(Math.max(0, doneMiles), units));
+  const done = Math.min(doneMiles >= targetMiles ? target : Math.max(0, target - 1), floored);
   return { done, target, text: `${done}/${target} ${units}` };
 }

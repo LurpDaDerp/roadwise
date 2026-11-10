@@ -1,4 +1,7 @@
+import { sha256 } from '@noble/hashes/sha2';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import { getRandomBytes } from 'expo-crypto';
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
@@ -22,11 +25,16 @@ export function useAppleSignIn(): { signIn: () => Promise<void>; available: bool
   }, []);
 
   async function signIn(): Promise<void> {
+    // A fresh nonce per sign-in: Apple bakes its SHA-256 into the identity token and Supabase checks
+    // the raw value against it, so a token lifted from another sign-in cannot be replayed here.
+    const rawNonce = bytesToHex(getRandomBytes(32));
+    const hashedNonce = bytesToHex(sha256(utf8ToBytes(rawNonce)));
     let credential: AppleAuthentication.AppleAuthenticationCredential;
     try {
       credential = await AppleAuthentication.signInAsync({
         // Email only: drivers go by usernames, so the real name is never asked for or stored.
         requestedScopes: [AppleAuthentication.AppleAuthenticationScope.EMAIL],
+        nonce: hashedNonce,
       });
     } catch (e) {
       // Backing out of the Apple sheet must leave the screen exactly as it was, with no error.
@@ -38,6 +46,7 @@ export function useAppleSignIn(): { signIn: () => Promise<void>; available: bool
     const { error } = await supabase.auth.signInWithIdToken({
       provider: 'apple',
       token: credential.identityToken,
+      nonce: rawNonce,
     });
     if (error) throw error;
   }

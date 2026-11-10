@@ -60,10 +60,10 @@ describe('readJournal', () => {
     expect(j.dropped).toBe(1);
   });
 
-  test('a seq that is not the last plus one is dropped, the rest kept', () => {
-    const text = [start, row(1), row(3), row(2), row(2), row(3)].map(journalLine).join('');
+  test('a seq not above the last one is dropped; a hole (a failed row write) is skipped, the rest kept', () => {
+    const text = [start, row(1), row(3), row(2), row(3), row(4)].map(journalLine).join('');
     const j = readJournal(text);
-    expect(j.rows.map((r) => r.seq)).toEqual([1, 2, 3]);
+    expect(j.rows.map((r) => r.seq)).toEqual([1, 3, 4]);
     expect(j.dropped).toBe(2);
   });
 

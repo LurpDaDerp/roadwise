@@ -1,8 +1,9 @@
 // The drive detector's permissions (plan §3.1.4): what is allowed now, and the one "Always" request.
 // Drives start on their own only with Location Always, Precise Location and Motion & Fitness; the
 // Start card needs While Using and Precise. Background App Refresh and Live Activities are reported,
-// never required. "Always" is asked once per install, only from While Using; afterwards the answer is
-// the current one and JS offers Settings.
+// never required. "Always" is asked once, only from While Using; afterwards the answer is the current
+// one and JS offers Settings. iOS resetting the authorisation to not determined (an "Allow Once" grant
+// lapsing, a Location reset) clears the ask, so it can be made again.
 import ActivityKit
 import CoreLocation
 import CoreMotion
@@ -125,7 +126,11 @@ final class DriveDetectAccess: NSObject, CLLocationManagerDelegate {
     }
   }
 
+  /// Also called when the manager is created, so a grant that lapsed while RoadWise was not running
+  /// clears the ask at the next launch.
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    // Not determined again (an "Allow Once" grant lapsed, or Location was reset): iOS may ask again.
+    if manager.authorizationStatus == .notDetermined { defaults.removeObject(forKey: Self.alwaysAskedKey) }
     if pending != nil && manager.authorizationStatus != before { finish() }
     onChange?()
   }

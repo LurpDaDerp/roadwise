@@ -4,7 +4,7 @@ import { RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Section, TopBar } from '@/features/settings/parts';
-import { useFriends, useServerAction, type PublicCard } from '@/features/social/api';
+import { useFriends, useServerAction, type FriendsList, type PublicCard } from '@/features/social/api';
 import { profileHref } from '@/features/social/links';
 import { Avatar, Banner, Button, EmptyState, ListRow, Skeleton, useTheme } from '@/ui';
 
@@ -13,6 +13,12 @@ import { friendsCopy as copy } from './copy';
 export const ADD_FRIENDS_HREF = '/friends/add' as Href;
 
 const subtitle = (c: PublicCard) => copy.rating(c.ranked ? c.safety_rating : null);
+
+/** The lists without any card that has no username: it could not be shown, opened or answered. */
+const named = (d: FriendsList): FriendsList => {
+  const keep = (cs: PublicCard[]) => cs.filter((c) => !!c.username);
+  return { friends: keep(d.friends), incoming: keep(d.incoming), outgoing: keep(d.outgoing) };
+};
 
 /**
  * `/friends`: requests to answer first, then friends, then requests you sent (each cancellable).
@@ -25,7 +31,7 @@ export function FriendsScreen() {
   const friends = useFriends();
   const action = useServerAction();
   const [busyId, setBusyId] = useState<string | null>(null);
-  const data = friends.data;
+  const data = friends.data ? named(friends.data) : undefined;
 
   const act = (id: string, fn: string, args: Record<string, unknown>) => {
     setBusyId(id);

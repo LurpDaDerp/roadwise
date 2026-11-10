@@ -22,4 +22,8 @@ test('distance progress in the driver units', () => {
   expect(formatDistanceProgress(12.9, 25, 'mi').text).toBe('12/25 mi');
   expect(formatDistanceProgress(12.9, 25, 'km').text).toBe('20/40 km');
   expect(formatDistanceProgress(30, 25, 'km').text).toBe('40/40 km');
+  // 10 mi is 16.09 km, shown as 16: short of it never reads as reached.
+  expect(formatDistanceProgress(9.97, 10, 'km')).toEqual({ done: 15, target: 16, text: '15/16 km' });
+  expect(formatDistanceProgress(10, 10, 'km').text).toBe('16/16 km');
+  expect(formatDistanceProgress(9.99, 10, 'mi').text).toBe('9/10 mi');
 });

@@ -5,17 +5,18 @@
 // A tap on 911 or a contact hands the number to the phone's call screen (`placeCall`) and the screen
 // closes the panel; a call that didn't start keeps it open and says so. "Call 911" never shrinks or
 // scrolls away: in a tall panel it sits under the title with the contacts scrolling between it and
-// Close; in a short one (a split-screen window) the title is only read out and everything scrolls,
-// "Call 911" first, Close last. Numbers read as in Settings (`formatPhone`).
+// Close; in a short one (an iPhone SE, larger text or a split-screen window: too short to show the
+// title, "Call 911", a whole contact row and Close at the text size in use) the title is only read
+// out and everything scrolls, "Call 911" first, Close last. Numbers read as in Settings (`formatPhone`).
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useState } from 'react';
-import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { EMERGENCY_NUMBER, formatPhone, type EmergencyContact } from '@/features/emergency/model';
 import { ensureGround } from '@/ui';
 import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
-import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT } from '@/ui/drive/panelLook';
+import { panelStyles as ps, panelTones, pressedLook, PANEL_CAPSULE_PT, PANEL_ICON_PT } from '@/ui/drive/panelLook';
 import { fontFamilies } from '@/ui/fonts';
 
 import { hudCopy } from './hudCopy';
@@ -26,8 +27,21 @@ const CALL_INK = '#FFFFFF';
 export const SOS_CALL_MIN = 7;
 /** The "Call 911" button's height. */
 export const SOS_CALL_H_PT = HUD_MIN_TARGET_PT + 8;
-/** Under this height the panel drops its visible title and scrolls as one list. */
-export const SOS_PANEL_TALL_PT = 260;
+/** The padding and border around the panel in its slot (16 + 1 pt a side, the HUD's and the crash screen's). */
+export const SOS_PANEL_INSET_PT = 2 * (16 + 1);
+
+/**
+ * Whether a panel `height` tall (its slot, padding and border included) shows the title with
+ * "Call 911" and Close pinned and room for one whole contact row between them, at this font scale.
+ * Otherwise it drops the visible title and scrolls as one list.
+ */
+export function sosPanelTall(height: number, fontScale: number): boolean {
+  const s = Number.isFinite(fontScale) ? Math.max(fontScale, 1) : 1;
+  const title = 28 * s * (s > 1.5 ? 2 : 1); // "Emergency call" wraps at the largest sizes
+  const close = Math.max(PANEL_CAPSULE_PT, Math.ceil(17 * 1.2 * s));
+  const row = Math.max(HUD_MIN_TARGET_PT, (23 + 2 + 19) * s + 2 * 10 + 2 * 1.5);
+  return height - SOS_PANEL_INSET_PT >= title + SOS_CALL_H_PT + row + close + 3 * 12;
+}
 
 /** The 911 button's red: the sign ring's, deepened until white print reads on it at 7:1. */
 export function sosCallFace(p: HudPalette): string {
@@ -46,13 +60,14 @@ export function EmergencyPanel({
   contacts: readonly EmergencyContact[] | undefined;
   palette: HudPalette;
   colors: WaitPanelColors;
-  /** The panel's height (`hudLayout` `sosPanel.h`): a short one scrolls as one list. */
+  /** The panel's slot height, padding and border included (`hudLayout` `sosPanel.h`): a short one scrolls as one list. */
   height: number;
   /** Places the call; false when the call screen didn't open. */
   onCall(phone: string): Promise<boolean>;
   onClose(): void;
 }) {
   const c = panelTones(colors);
+  const { fontScale } = useWindowDimensions();
   const red = useMemo(() => sosCallFace(palette), [palette]);
   const [failed, setFailed] = useState(false);
   const call = (phone: string) => {
@@ -68,7 +83,7 @@ export function EmergencyPanel({
     AccessibilityInfo.announceForAccessibility?.(hudCopy.sos.title);
   }, []);
 
-  const tall = height >= SOS_PANEL_TALL_PT;
+  const tall = sosPanelTall(height, fontScale);
 
   const call911 = (
     <Pressable
@@ -136,7 +151,9 @@ export function EmergencyPanel({
       onPress={onClose}
       style={({ pressed }) => [ps.capsule, { borderColor: c.edge, backgroundColor: c.surface }, pressedLook(pressed)]}
     >
-      <Text style={[ps.capsuleLabel, { color: c.ink }]}>{hudCopy.sos.close}</Text>
+      <Text style={[ps.capsuleLabel, { color: c.ink }]}>
+        {hudCopy.sos.close}
+      </Text>
     </Pressable>
   );
 

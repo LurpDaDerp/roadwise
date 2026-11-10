@@ -1,5 +1,6 @@
 import type { Session } from '@supabase/supabase-js';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
@@ -209,6 +210,9 @@ export function SessionProvider({
     // been written already, so overlapping reads cannot put an older row back on screen.
     let ticket = 0;
     let appliedTicket = 0;
+    // A load in the background (iOS relaunched the app for a drive wake) reads no server row; the
+    // session it saw waits here for the first time the app comes to the front.
+    let waitingForFront: { session: Session } | null = null;
 
     function apply(row: Profile, mine: number) {
       if (mine < appliedTicket) return;
@@ -240,6 +244,7 @@ export function SessionProvider({
       const superseded = () => !active || generation !== mine;
 
       setSession(next);
+      waitingForFront = null;
 
       if (!next) {
         account += 1;
@@ -277,8 +282,10 @@ export function SessionProvider({
 
       ticket += 1;
       const mineTicket = ticket;
-      // Started before the cache is read, so the cache costs the server read nothing.
-      const read = profileFor(userId);
+      // In the background the server is not asked: the cache (if any) goes on screen, and the read
+      // runs the first time the app comes to the front. Otherwise the read starts before the cache
+      // is read, so the cache costs it nothing.
+      let read = AppState.currentState === 'background' ? null : profileFor(userId);
 
       // The device's cache of the last read for this same user goes on screen at once (rev1: I11,
       // T17 m1), so a cold start is as fast offline — failing or hanging — as online; the server
@@ -293,6 +300,17 @@ export function SessionProvider({
           setProfileSource('cache');
           setStatus('signedIn');
         }
+      }
+
+      if (!read) {
+        if (superseded()) return;
+        // The app can come to the front while the cache is read, and that 'active' found nothing
+        // waiting: read now rather than wait for the next one.
+        if (AppState.currentState === 'background') {
+          waitingForFront = { session: next };
+          return;
+        }
+        read = profileFor(userId);
       }
 
       try {
@@ -331,6 +349,12 @@ export function SessionProvider({
       // signed out; leaving the app on 'loading' would strand it on the splash screen.
       () => load(null)
     );
+    const appSub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || !waitingForFront || !active) return;
+      const { session: waiting } = waitingForFront;
+      waitingForFront = null;
+      void load(waiting);
+    });
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       // Every end of a session — the driver's own sign-out, a revoked or expired one — forgets a
       // Terms tick not yet recorded (T17 security M-1) and takes Home's notice line down (it was
@@ -346,6 +370,7 @@ export function SessionProvider({
 
     return () => {
       active = false;
+      appSub.remove();
       sub.subscription.unsubscribe();
     };
   }, [settings]);

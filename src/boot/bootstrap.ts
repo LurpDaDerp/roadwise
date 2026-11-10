@@ -59,6 +59,11 @@ import { defaultWeatherHeadsUp, type LaunchWeatherHeadsUp, type WeatherHeadsUpAr
 export const DB_NAME = 'roadwise.db';
 export const BOOTSTRAP_TIMEOUT_MS = 20_000;
 export const SESSION_TIMEOUT_MS = 1_500;
+/**
+ * How long the identity stage waits on, past `SESSION_TIMEOUT_MS`, for a session read when the owner
+ * may have changed; with no answer by then the owner stands, as on any slow read.
+ */
+export const OWNER_SESSION_TIMEOUT_MS = 10_000;
 export const ZONE_REREAD_MS = 60_000;
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
 /** How often, while the app is in front, drives past the 183 days are archived (`archiveOldDrives`). */
@@ -153,6 +158,8 @@ export interface BootstrapDeps {
   /** The diagnostics battery recorder, dev builds only. Default: `defaultDiagnostics`. `null`: none. */
   mountDiagnostics?: ((host: DriveHost, db: Db, onError: (error: unknown) => void) => () => void) | null;
   sessionTimeoutMs?: number;
+  /** Default: `OWNER_SESSION_TIMEOUT_MS`. */
+  ownerSessionTimeoutMs?: number;
   /**
    * The process's network adapter, which the speed limits and the account screens read
    * (`getSharedOnline`), made at launch and not waited for. Default: `createExpoNet`. `null`: none.
@@ -208,22 +215,38 @@ function warn(error: unknown, context: string): void {
   reportError(error, `bootstrap: ${context}`);
 }
 
-/** The whole launch, with a deadline around it: a hang is reported as a failure at the stage reached. */
+/**
+ * Settles once every launch a deadline abandoned has stopped. The next launch waits for it, so a
+ * Retry never runs beside the launch it replaces (two drive hosts on the same native drive).
+ */
+let draining: Promise<void> = Promise.resolve();
+
+/**
+ * The whole launch, with a deadline around it: a hang is reported as a failure at the stage reached.
+ * The launch starts once an abandoned one before it has stopped, and that wait counts against its
+ * own deadline.
+ */
 export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime> {
   const limitMs = deps.timeoutMs ?? BOOTSTRAP_TIMEOUT_MS;
+  const onError = deps.onError ?? warn;
   let reached: BootstrapStage = 'open';
   let abandoned = false;
 
-  const sequence = runLaunch(
-    deps,
-    (name) => {
-      reached = name;
-    },
-    () => abandoned
-  );
-  sequence.then(
-    (runtime) => {
-      if (abandoned) void runtime.stop({ endOpenTrip: false });
+  const sequence = draining.then(() => {
+    if (abandoned) throw new BootstrapError(reached, new Error(ABANDONED));
+    return runLaunch(
+      deps,
+      (name) => {
+        reached = name;
+      },
+      () => abandoned
+    );
+  });
+  // An abandoned launch that still finishes is stopped at once, leaving its drive recording for the
+  // next launch to take in.
+  const settled = sequence.then(
+    async (runtime) => {
+      if (abandoned) await runtime.stop({ endOpenTrip: false }).catch((error: unknown) => onError(error, 'abandoned launch'));
     },
     () => {}
   );
@@ -232,6 +255,7 @@ export async function bootstrapApp(deps: BootstrapDeps = {}): Promise<AppRuntime
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       abandoned = true;
+      draining = settled;
       reject(new BootstrapError(reached, new Error(`timed out after ${limitMs} ms`)));
     }, limitMs);
   });
@@ -251,6 +275,7 @@ async function stage<T>(name: BootstrapStage, run: () => Promise<T>): Promise<T>
 }
 
 const TIMED_OUT = Symbol('timed out');
+const ABANDONED = 'abandoned at its deadline';
 
 async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -282,8 +307,9 @@ async function ownerMayHaveChanged(db: Db): Promise<boolean> {
 }
 
 /**
- * `isAbandoned`: the deadline fired (`bootstrapApp`). Such a launch is stopped as soon as it
- * resolves, so it registers nothing process-wide: a retry's runtime may already hold those slots.
+ * `isAbandoned`: the deadline fired (`bootstrapApp`). Such a launch quits at its next stage boundary
+ * (before it recovers drives, boots a host or starts the runner), undoing what it built, or is
+ * stopped as soon as it resolves; it registers nothing process-wide.
  */
 async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => void, isAbandoned: () => boolean = () => false): Promise<AppRuntime> {
   const now = deps.now ?? Date.now;
@@ -343,13 +369,19 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       if (__DEV__) console.warn('[bootstrap] identity: session: the session could not be read');
     } else if (await ownerMayHaveChanged(db)) {
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
-      owner = await decide((await reading).data.session?.user.id ?? null);
+      const late = await withinMs(reading, deps.ownerSessionTimeoutMs ?? OWNER_SESSION_TIMEOUT_MS);
+      if (late !== TIMED_OUT) owner = await decide(late.data.session?.user.id ?? null);
+      else owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
     } else {
       owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
     }
     return { supabase, owner };
   });
+  const quitIfAbandoned = (at: BootstrapStage): void => {
+    if (isAbandoned()) throw new BootstrapError(at, new Error(ABANDONED));
+  };
+  quitIfAbandoned('identity');
   const rpc = async (fn: string, args?: Record<string, unknown>): Promise<unknown> => {
     const { data, error } = await identity.supabase.rpc(fn, args ?? {});
     if (error) throw error instanceof Error ? error : new Error(`${fn} failed`);
@@ -415,8 +447,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
 
   // A "Not driving?" the last process was killed in the middle of is finished first, so the
   // cancelled drive is never recovered or recorded again.
+  quitIfAbandoned('recover');
   await finishPendingCancel(db, detect, onError).catch((error: unknown) => onError(error, 'not driving'));
 
+  quitIfAbandoned('recover');
   enter('recover');
   const recovery = await stage('recover', () =>
     recoverRecordingTrips(db, {
@@ -439,6 +473,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   );
   for (const failure of recovery.failed) onError(failure.error, `recover ${failure.clientTripId}`);
 
+  quitIfAbandoned('engine');
   enter('engine');
   const engine = await stage('engine', async () => {
     let host: DriveHost | undefined;
@@ -459,6 +494,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       alertsAvailable = false;
       player = { deliver: async () => {}, stopCurrent: async () => {}, announce: async () => {} };
     }
+    if (isAbandoned()) throw new Error(ABANDONED);
     const makeDashcam = deps.createDashcam === undefined ? defaultDashcam : deps.createDashcam;
     if (makeDashcam) {
       try {
@@ -516,7 +552,12 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       onError: (error, context) => onError(error, `drive ${context}`),
     });
     host = drive;
-    if (!isAbandoned()) setActiveDashcam(dc);
+    // Nothing is attached yet, and nothing awaits from here to the boot: the last way out before it.
+    if (isAbandoned()) {
+      dc?.dispose();
+      throw new Error(ABANDONED);
+    }
+    setActiveDashcam(dc);
     // Before the boot: a drive the boot stores (native ended it while no process ran) gets its
     // recap notification; the notifier decides which are recent enough to post.
     const attach = deps.attachSummaryNotifier === undefined ? defaultSummaryNotifier : deps.attachSummaryNotifier;
@@ -609,6 +650,12 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     const notifierSettled = (): Promise<void> => notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier')) ?? Promise.resolve();
     return { drive, adopted: adopt?.session.clientTripId ?? null, release, notifierSettled, dashcam: dc };
   });
+  // Abandoned during the boot: the host lets go (its drive stays recording) before the next launch starts.
+  if (isAbandoned()) {
+    await engine.drive.stop({ endOpenTrip: false }).catch((error: unknown) => onError(error, 'abandoned launch'));
+    await engine.release();
+    throw new BootstrapError('sync', new Error(ABANDONED));
+  }
 
   const detach = subscribeInvalidation(queryClient);
   // A settled upload or action moved the server's numbers too: the summary header refetches and

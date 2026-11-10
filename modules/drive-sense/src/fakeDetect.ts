@@ -76,7 +76,10 @@ export interface FakeDetectControls {
   confirm(c?: FakeConfirm): DriveStartedEvent;
   /** Rows journaled with the next `seq`s; returns the seqs. */
   emitRows(rows: readonly Record<string, unknown>[]): number[];
-  /** Native ends the drive on its own (`cancelled` = "Not driving?"). Null when nothing records. */
+  /**
+   * Native ends the drive on its own (`cancelled` = "Not driving?": the rest while detection is
+   * allowed, else off). Null when nothing records.
+   */
   endFor(cause: EndCauseNative, at?: number): DriveEndedEvent | null;
   /** A JS `stopCapture` reached native: the end is journaled with cause `js`, no event. */
   jsStop(endedAt?: number): void;
@@ -246,12 +249,19 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     const decidedAt = now();
     const ended: DriveEndedEvent = { driveId: live.driveId, endedAt, cause: cause === 'js' ? 'still' : cause, decidedAt, lastSeq: live.nextSeq - 1, lastRowTs: live.lastRowTs };
     if (cause === 'cancelled') {
+      // "Not driving?": rest while detection is allowed (armed, an owner, the required permissions),
+      // as native does; otherwise no automatic drive can start anyway, so it settles at once (off).
       journal.delete(live.driveId);
       live = null;
-      origin = null;
-      waitUntil = null;
-      enter('suppressed');
-      suppressedUntil = decidedAt + DETECT.SUPPRESS_MAX_MS;
+      if (intent && owner !== null && status().requiredOk) {
+        origin = null;
+        waitUntil = null;
+        enter('suppressed');
+        suppressedUntil = decidedAt + DETECT.SUPPRESS_MAX_MS;
+      } else {
+        suppressedUntil = null;
+        settle();
+      }
       emit('driveEnded', ended);
       announce('notDriving');
       return ended;

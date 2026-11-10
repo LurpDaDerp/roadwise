@@ -9,7 +9,7 @@ import { linkDomain } from '@/lib/linkDomain';
  * Home. A web link opens the app only as a shared Wrapped: `https://<link domain>/w/<id>` on the
  * one configured link domain (`@/lib/linkDomain`; none is set yet, so no web link opens anything).
  * Nothing a link can open starts a drive (plan §1.4): the driving screen only shows a drive
- * already recording.
+ * already recording. The dev client's launcher links pass untouched in development builds only.
  */
 const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$|^drive$|^wrapped(\/\d{4}-(0[1-9]|1[0-2]))?$/;
 /**
@@ -21,6 +21,9 @@ const SCHEME_WRAPPED = /^w\/([A-Za-z0-9]{12})\/?(?:[?#].*)?$/;
 /** A shared Wrapped on the web: https only, the host checked against the link domain apart. */
 const WEB_WRAPPED = /^https:\/\/([^/?#]+)\/w\/([A-Za-z0-9]{12})\/?(?:[?#].*)?$/i;
 
+/** The dev client's own launcher link, matched from the start so no other link can borrow it. */
+const DEV_CLIENT = /^exp\+[a-z0-9.+-]+:\/\/expo-development-client(\/|\?|#|$)/i;
+
 /** `roadwise://add/maya`, `roadwise:///add/maya`, `/add/maya` → `add/maya`. */
 function appPath(path: string): string {
   return path.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^\/+/, '');
@@ -28,8 +31,9 @@ function appPath(path: string): string {
 
 export async function redirectSystemPath({ path }: { path: string; initial: boolean }): Promise<string> {
   try {
-    // The dev client's own launcher links are not app routes; leave them to it.
-    if (path.includes('expo-development-client')) return path;
+    // A development build's launcher links (`exp+<scheme>://expo-development-client/...`) are not
+    // app routes; leave them to the dev client. A release build sends them through the allowlist.
+    if (__DEV__ && DEV_CLIENT.test(path)) return path;
     // A web link is one of the app's own only as a shared Wrapped on the link domain.
     if (/^https?:/i.test(path)) {
       const web = WEB_WRAPPED.exec(path);

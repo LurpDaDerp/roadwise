@@ -487,35 +487,119 @@ test('a wipe under a live app restarts the DashPal link, so it handshakes again 
   await rt.stop();
 });
 
-test("a launch abandoned at its deadline neither takes nor clears the retry's DashPal registration", async () => {
-  const withSettle = () => {
-    const f = createFakeDashcamRuntime();
-    let disposed: () => void = () => {};
-    const gone = new Promise<void>((resolve) => {
-      disposed = resolve;
-    });
-    return { rt: Object.assign(f, { link: { ...f.link, settled: async () => {} }, dispose: () => disposed() }), gone };
-  };
-  const slow = withSettle();
-  const retry = withSettle();
+/** A fake DashPal runtime whose link work settles at once (the launch's release waits for it). */
+function settlingDashcam(dispose: () => void = () => {}) {
+  const f = createFakeDashcamRuntime();
+  return Object.assign(f, { link: { ...f.link, settled: async () => {} }, dispose });
+}
+
+test('a launch abandoned at its deadline quits before it builds anything; the retry waits for it, then boots alone', async () => {
+  const slowDashcam = jest.fn(() => settlingDashcam());
+  const slowPlayer = jest.fn(async () => player);
+  const retry = settlingDashcam();
   let open: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
     open = resolve;
   });
   try {
-    const first = deps({ openDb: async () => (await gate, db), createDashcam: () => slow.rt, timeoutMs: 20 });
+    const first = deps({ openDb: async () => (await gate, db), createDashcam: slowDashcam, createPlayer: slowPlayer, timeoutMs: 20 });
     await expect(bootstrapApp(first.deps)).rejects.toThrow('timed out');
-    const rt = await bootstrapApp(deps({ createDashcam: () => retry.rt }).deps);
-    expect(activeDashcam()).toBe(retry.rt);
-    // The abandoned launch finishes now, and is stopped as it resolves.
+    let booted = false;
+    const retrying = bootstrapApp(deps({ createDashcam: () => retry }).deps).then((rt) => {
+      booted = true;
+      return rt;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // Retry holds off while the abandoned launch still runs.
+    expect(booted).toBe(false);
     open();
-    await slow.gone;
-    expect(activeDashcam()).toBe(retry.rt);
+    const rt = await retrying;
+    // The abandoned launch quit at its next stage boundary: no player, no dashcam, no host.
+    expect(slowPlayer).not.toHaveBeenCalled();
+    expect(slowDashcam).not.toHaveBeenCalled();
+    expect(first.source.calls).toEqual([]);
+    expect(activeDashcam()).toBe(retry);
     await rt.stop();
     expect(activeDashcam()).toBeNull();
   } finally {
     setActiveDashcam(null);
   }
+});
+
+test('a launch abandoned during its boot stops its host before the retry starts; the retry takes the slots', async () => {
+  const disposed = jest.fn();
+  const slow = settlingDashcam(disposed);
+  const retry = settlingDashcam();
+  let open: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const stops: string[] = [];
+  try {
+    const first = deps({
+      createDashcam: () => slow,
+      attachSummaryNotifier: (host: DriveHost) => {
+        const boot = host.boot.bind(host);
+        const stop = host.stop.bind(host);
+        Object.assign(host, {
+          boot: async (opts: Parameters<DriveHost['boot']>[0]) => {
+            await gate;
+            await boot(opts);
+          },
+          stop: async (opts: Parameters<DriveHost['stop']>[0]) => {
+            stops.push(`first:${String(opts?.endOpenTrip)}`);
+            await stop(opts);
+          },
+        });
+        return { detach: () => {} };
+      },
+      timeoutMs: 50,
+    });
+    await expect(bootstrapApp(first.deps)).rejects.toThrow('timed out');
+    const retrying = bootstrapApp(deps({ createDashcam: () => retry }).deps);
+    open();
+    const rt = await retrying;
+    // The abandoned host let go without ending the drive, and its dashcam is gone.
+    expect(stops).toEqual(['first:false']);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(activeDashcam()).toBe(retry);
+    await rt.stop();
+  } finally {
+    setActiveDashcam(null);
+  }
+});
+
+test('a retry whose wait for a hung abandoned launch passes its own deadline fails again; the next retry runs once that launch is gone', async () => {
+  let open: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const opened = jest.fn(async () => db);
+  await expect(bootstrapApp(deps({ openDb: async () => (await gate, db), timeoutMs: 20 }).deps)).rejects.toThrow('timed out');
+  await expect(bootstrapApp(deps({ openDb: opened, timeoutMs: 20 }).deps)).rejects.toThrow('timed out');
+  open();
+  const rt = await bootstrapApp(deps().deps);
+  // The retry that timed out while it waited never started.
+  expect(opened).not.toHaveBeenCalled();
+  await rt.stop();
+});
+
+test('a slow session read while the owner may have changed is bounded: the owner stands and the launch goes on', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  await createSettingsRepo(db).set('device.pendingOwner', 'user-2');
+  const d = deps();
+  // The launch's own read never answers; later reads (the runner's) do.
+  const getSession = d.supabase.auth.getSession.bind(d.supabase.auth);
+  let reads = 0;
+  const supabase = {
+    ...d.supabase,
+    auth: { ...d.supabase.auth, getSession: () => (reads++ === 0 ? new Promise(() => {}) : getSession()) },
+  } as unknown as BootSupabase;
+  const rt = await bootstrapApp({ ...d.deps, supabase, sessionTimeoutMs: 5, ownerSessionTimeoutMs: 20, timeoutMs: 5_000 });
+  expect(rt.owner).toBe('same');
+  expect(await readDeviceOwner(db)).toBe('user-1');
+  await rt.stop();
 });
 
 test('a plain sign-out takes the DashPal events, boots and coverage with the drives; the pairing stays', async () => {

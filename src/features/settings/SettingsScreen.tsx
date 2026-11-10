@@ -200,14 +200,20 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
     await writeUnits(settings, next).catch(() => {});
   };
 
-  // Another device changed units: bring this phone's mirror (offline display) in line.
+  // Another device changed units: bring this phone's mirror (offline display) in line. Only a new
+  // server value is applied, and never while this screen shows a units save the summary does not
+  // have yet, so a stale summary (its refetch failed) cannot put the old units back.
   const serverUnits = profile?.units;
+  const lastServerUnits = useRef<Units | undefined>(undefined);
+  const unitsAhead = serverUnits !== undefined && edit.value('units', serverUnits) !== serverUnits;
   useEffect(() => {
-    if (!serverUnits || units === null || serverUnits === units) return;
+    if (!serverUnits || units === null || unitsAhead || serverUnits === lastServerUnits.current) return;
+    lastServerUnits.current = serverUnits;
+    if (serverUnits === units) return;
     void writeUnits(settings, serverUnits)
       .then(() => setUnits(serverUnits))
       .catch(() => {});
-  }, [serverUnits, units, settings]);
+  }, [serverUnits, units, unitsAhead, settings]);
 
   // Only the row's status: Settings is not drawn again for each DashPal STATUS (its fps, temperature, time).
   const dashcam = useDashcamSelector(dashcamStatus);

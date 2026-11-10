@@ -115,6 +115,9 @@ final class RowJournal {
         try h.write(contentsOf: data)
         self.bytes += data.count
       } catch {
+        // Cut any torn bytes so the next line starts clean; `bytes` is still the last good offset.
+        try? h.truncate(atOffset: UInt64(self.bytes))
+        _ = try? h.seekToEnd()
         self.droppedRows += 1
         return
       }
@@ -127,8 +130,13 @@ final class RowJournal {
   func appendMarker(_ driveId: String, _ line: [String: Any], close: Bool, done: (() -> Void)? = nil) {
     queue.async {
       if self.openId == driveId, let h = self.handle, let data = Self.encode(line) {
-        try? h.write(contentsOf: data)
-        self.bytes += data.count
+        do {
+          try h.write(contentsOf: data)
+          self.bytes += data.count
+        } catch {
+          try? h.truncate(atOffset: UInt64(self.bytes))
+          _ = try? h.seekToEnd()
+        }
         self.sync()
       }
       if close && self.openId == driveId { self.closeHandle() }

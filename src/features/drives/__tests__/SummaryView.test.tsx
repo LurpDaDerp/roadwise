@@ -2,7 +2,7 @@ import { fireEvent, screen, within } from '@testing-library/react-native';
 import { driveMerit } from '@scoring';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
-import { contrastRatio, SHEET_DISMISS_FALLBACK_MS } from '@/ui';
+import { contrastRatio, SHEET_DISMISS_FALLBACK_MS, ThemeProvider } from '@/ui';
 import { opaque, over } from '@/ui/sky/color';
 import { plainBundle } from '@/ui/sky/palette';
 
@@ -411,6 +411,32 @@ describe('Report', () => {
     await draw(<SummaryView {...props({ events: [event({ disputeStatus: 'pending' })] })} />);
     expect(screen.queryByTestId('report-e1')).toBeNull();
     expect(screen.getByTestId('dispute-e1')).toHaveTextContent(/Report sent/);
+  });
+
+  test('Report shows until 7 days after the drive ended, never after; earlier statuses still show', async () => {
+    const ended = drive().endedAt!;
+    const speeding = event({ id: 's1', type: 'speeding', tier: 'moderate' });
+    const view = await draw(<SummaryView {...props({ events: [speeding], now: ended + 7 * DAY })} />);
+    expect(screen.getByTestId('report-s1')).toBeOnTheScreen();
+    await view.unmount();
+    await draw(<SummaryView {...props({ events: [speeding, event({ id: 'r1', disputeStatus: 'pending' })], now: ended + 7 * DAY + 1 })} />);
+    expect(screen.queryByTestId('report-s1')).toBeNull();
+    expect(screen.getByTestId('dispute-r1')).toHaveTextContent(/Report sent/);
+  });
+
+  test('an open report sheet closes when the drive passes the report window', async () => {
+    const ended = drive().endedAt!;
+    const speeding = event({ id: 's1', type: 'speeding', tier: 'moderate' });
+    const p = props({ events: [speeding], now: ended + 7 * DAY - 1 });
+    const view = await draw(<SummaryView {...p} />);
+    await press(screen.getByTestId('report-s1'));
+    expect(screen.getByTestId('reason-wrong_limit')).toBeOnTheScreen();
+    await view.rerender(
+      <ThemeProvider scheme="light" reduceMotion>
+        <SummaryView {...p} now={ended + 7 * DAY + 1} />
+      </ThemeProvider>
+    );
+    expect(screen.queryByTestId('reason-wrong_limit')).toBeNull();
   });
 });
 

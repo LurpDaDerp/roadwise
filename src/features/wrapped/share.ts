@@ -9,6 +9,7 @@ import { captureRef } from 'react-native-view-shot';
 
 import { createWrappedShare, type WrappedCore } from '@/data/server/wrapped';
 import { wrappedLink } from '@/features/social/links';
+import { removeShareImage } from '@/lib/shareImages';
 
 import { archetypeName } from './archetypes';
 import { wrappedCopy as copy } from './copy';
@@ -34,6 +35,11 @@ export function exportSize(): { width: number; height: number } {
 /** Captures the card, makes the month's link, then opens the share sheet. Throws when any step fails. */
 export async function shareWrapped(card: RefObject<View | null>, core: Pick<WrappedCore, 'month' | 'archetype'>): Promise<void> {
   const uri = await captureRef(card, { format: 'png', quality: 1, result: 'tmpfile', ...exportSize() });
-  const id = await createWrappedShare(core.month);
-  await Share.share({ url: uri, message: shareMessage(core, wrappedLink(id)) });
+  // The captured image is deleted however the sheet ends.
+  try {
+    const id = await createWrappedShare(core.month);
+    await Share.share({ url: uri, message: shareMessage(core, wrappedLink(id)) });
+  } finally {
+    removeShareImage(uri);
+  }
 }

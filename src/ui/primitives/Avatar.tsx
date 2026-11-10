@@ -9,10 +9,10 @@ export const AVATAR_PT: Record<AvatarSize, number> = { sm: 32, md: 40, lg: 56, x
 /**
  * One or two letters from a username: the first letters of its first two words, where words are
  * split on `_ - . space`, digits and camelCase ("maya_drives" → "MD", "LurpDaDerp" → "LD",
- * "jordan" → "J"). Falls back to "?" for a name with no letters.
+ * "jordan" → "J"). Falls back to "?" for a name with no letters, or none at all.
  */
-export function avatarInitials(username: string): string {
-  const words = username
+export function avatarInitials(username: string | null | undefined): string {
+  const words = (username ?? '')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .split(/[\s_\-.\d]+/)
     .filter((w) => /\p{L}/u.test(w));
@@ -21,15 +21,16 @@ export function avatarInitials(username: string): string {
   return words.length === 1 ? first(words[0]!) : first(words[0]!) + first(words[1]!);
 }
 
-/** A stable palette slot for a username (case-insensitive djb2 hash). */
-export function avatarColorIndex(username: string, paletteSize: number): number {
+/** A stable palette slot for a username (case-insensitive djb2 hash); a missing name hashes as ''. */
+export function avatarColorIndex(username: string | null | undefined, paletteSize: number): number {
   let h = 5381;
-  for (const ch of username.toLowerCase()) h = ((h << 5) + h + ch.charCodeAt(0)) | 0;
+  for (const ch of (username ?? '').toLowerCase()) h = ((h << 5) + h + ch.charCodeAt(0)) | 0;
   return Math.abs(h) % paletteSize;
 }
 
 export type AvatarProps = {
-  username: string;
+  /** Null or empty draws "?" rather than throwing. */
+  username: string | null | undefined;
   /** sm 32 · md 40 · lg 56 · xl 88. Default `md`. */
   size?: AvatarSize;
   /**

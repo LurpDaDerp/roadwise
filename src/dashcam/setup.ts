@@ -1069,8 +1069,10 @@ export function createSetupFlow(deps: SetupDeps): SetupFlow {
         await deps.sleep(500);
         continue;
       }
-      // Answered R_NOT_NOW (or nothing) twice with the link up: undo it and start over.
-      stage = 'hold';
+      // Twice without R_OK with the link up: undo it and start over. R_NOT_NOW means nothing was
+      // committed (a committed connection gets R_OK), so the hold is cancelled with COMMAND 9; with
+      // no answer the commit may be stored, so the stage stays 'commit' and the undo sends COMMAND 4.
+      if (r?.code === R.NOT_NOW) stage = 'hold';
       throw new Failed('error');
     }
   }

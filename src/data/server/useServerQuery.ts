@@ -6,6 +6,14 @@
  * so this refetches stale data when the screen gains focus and, if `pollMs` is set, polls only
  * while the screen stays focused and the app is active — a backgrounded tab or app costs no
  * requests. `keepPrevious` keeps the last data on screen while a changed key (filter) loads.
+ *
+ * A query mounted while the app is in the background fetches nothing until the app first comes to
+ * the front: iOS relaunches the app in the background (a drive wake) and mounts the screens, and
+ * their reads would feed a UI nobody sees. Once in front, a short 'inactive' (Control Center, the
+ * Face ID sheet) never turns a query off.
+ *
+ * A refusal the server would repeat (not found, not allowed or rate limited, bad input) is not
+ * retried; anything else (a network failure, a 5xx) gets one retry.
  */
 import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { useFocusEffect } from 'expo-router';
@@ -14,12 +22,21 @@ import { AppState } from 'react-native';
 
 import { useSession } from '@/data/supabase/session';
 
-import { callRpc } from './rpc';
+import { callRpc, RpcError } from './rpc';
 
 /** Server data is served from cache for this long before a focus refetches it. */
 export const SERVER_STALE_MS = 60_000;
 /** For data that changes rarely or only through this phone's own writes (which invalidate it). */
 export const SERVER_SLOW_STALE_MS = 10 * 60_000;
+
+/** Postgres codes of refusals a second try gets again: not allowed or rate limited, bad input, not found, raised. */
+const FINAL_CODES = new Set(['42501', '22023', 'P0002', 'P0001']);
+
+/** One retry, except for a refusal the server would repeat. */
+export function retryServerQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof RpcError && error.code !== null && FINAL_CODES.has(error.code)) return false;
+  return failureCount < 1;
+}
 
 export function serverKey(uid: string | null, ...parts: unknown[]): unknown[] {
   return ['server', uid, ...parts];
@@ -35,16 +52,24 @@ export function useServerQuery<T>(
   const uid = session?.user.id ?? null;
   const [focused, setFocused] = useState(true);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  // Latched: false only while a hook mounted in the background has not yet seen the app in front.
+  const [everActive, setEverActive] = useState(AppState.currentState !== 'background');
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
+    const onChange = (s: string) => {
+      setAppActive(s === 'active');
+      if (s === 'active') setEverActive(true);
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    // The app may have come to the front between the first render and this subscription.
+    if (AppState.currentState === 'active') onChange('active');
     return () => sub.remove();
   }, []);
   const query = useQuery<T>({
     queryKey: serverKey(uid, ...key),
     queryFn: () => callRpc<T>(fn, args),
-    enabled: uid !== null && (opts.enabled ?? true),
+    enabled: uid !== null && everActive && (opts.enabled ?? true),
     staleTime: opts.staleMs ?? SERVER_STALE_MS,
-    retry: 1,
+    retry: retryServerQuery,
     placeholderData: opts.keepPrevious ? keepPreviousData : undefined,
     // A backgrounded app or an unfocused screen never polls.
     refetchInterval: focused && appActive && opts.pollMs ? opts.pollMs : false,

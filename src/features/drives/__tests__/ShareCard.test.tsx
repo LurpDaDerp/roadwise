@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, within } from '@testing-library/react-native';
-import { processColor } from 'react-native';
+import { Platform, processColor } from 'react-native';
 import { useState } from 'react';
 
 import { ThemeProvider } from '@/ui';
@@ -14,6 +14,10 @@ import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
 jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(async () => 'file:///card.png') }));
+
+// The files a share leaves: which ones were deleted is the test's to read.
+const mockRemove = jest.fn<void, [string | null | undefined]>();
+jest.mock('@/lib/shareImages', () => ({ removeShareImage: (uri: string | null | undefined) => mockRemove(uri) }));
 
 const mockTakeSnapshot = jest.fn<Promise<string>, [unknown]>(async () => 'file:///map.png');
 
@@ -64,6 +68,7 @@ beforeEach(() => {
   mockTakeSnapshot.mockReset();
   mockTakeSnapshot.mockImplementation(async () => 'file:///map.png');
   sharing().shareAsync.mockClear();
+  mockRemove.mockClear();
 });
 
 test('Show map is off every time the sheet opens', async () => {
@@ -111,6 +116,59 @@ test('on: the snapshot of the route area is the backdrop, the route is drawn ove
   expect(screen.getByTestId('share-map-route', H)).toBeOnTheScreen();
   await press(screen.getByTestId('share-image'));
   expect(sharing().shareAsync).toHaveBeenCalledTimes(1);
+});
+
+test('the captured card image is deleted once the share sheet closes, shared or not', async () => {
+  await draw(sheet());
+  await press(screen.getByTestId('share-image'));
+  expect(sharing().shareAsync).toHaveBeenCalledTimes(1);
+  expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
+  mockRemove.mockClear();
+  sharing().shareAsync.mockRejectedValueOnce(new Error('dismissed'));
+  await press(screen.getByTestId('share-image'));
+  expect(screen.getByText("Couldn't share the image. Try again.")).toBeOnTheScreen();
+  expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
+});
+
+test('on Android the shared card image stays for the target app to read (the next wipe sweeps it)', async () => {
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    await draw(sheet());
+    await press(screen.getByTestId('share-image'));
+    expect(sharing().shareAsync).toHaveBeenCalledTimes(1);
+    expect(mockRemove).not.toHaveBeenCalledWith('file:///card.png');
+  } finally {
+    os.restore();
+  }
+});
+
+test('the map snapshot stays while the card shows it and is deleted when Show map goes off or the sheet closes', async () => {
+  const { rerender } = await draw(sheet());
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+  await mapLoads();
+  await press(screen.getByTestId('share-image'));
+  expect(mockRemove).toHaveBeenCalledTimes(1);
+  expect(mockRemove).not.toHaveBeenCalledWith('file:///map.png');
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', false);
+  expect(mockRemove).toHaveBeenCalledWith('file:///map.png');
+  mockRemove.mockClear();
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+  await mapLoads();
+  await rerender(themed(false));
+  expect(mockRemove).toHaveBeenCalledWith('file:///map.png');
+});
+
+test('a snapshot that arrives after Show map went off is deleted at once', async () => {
+  let arrive: (uri: string) => void = () => {};
+  mockTakeSnapshot.mockImplementation(() => new Promise<string>((resolve) => (arrive = resolve)));
+  await draw(sheet());
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+  await act(async () => {});
+  expect(mockTakeSnapshot).toHaveBeenCalledTimes(1);
+  await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', false);
+  expect(mockRemove).not.toHaveBeenCalledWith('file:///late.png');
+  await act(async () => arrive('file:///late.png'));
+  expect(mockRemove).toHaveBeenCalledWith('file:///late.png');
 });
 
 test('a map that fails to load says so and shares nothing; Share tries it again', async () => {

@@ -10,8 +10,9 @@ import { QUEUE_STATUSES, type QueueItem, type QueueStatus } from '@/data/db/type
  * server is idempotent on the item's key, so a retry that actually succeeded is harmless.
  *
  * An item moves `pending → inflight` when `nextDue` claims it and back out when `markAttempt`
- * closes the attempt. A process killed mid-upload leaves the claim open, so `nextDue` first
- * reclaims claims older than `RECLAIM_AFTER_S`.
+ * closes the attempt. A process killed mid-upload leaves the claim open: the sync runner reclaims
+ * every claim when it starts (only it claims, so any claim then is a dead process's), and `nextDue`
+ * reclaims claims older than `RECLAIM_AFTER_S` for one that hangs in a live process.
  */
 
 const FIRST_DELAY_S = 30;
@@ -288,9 +289,19 @@ export function createQueueRepo(db: Db) {
       return asNumber(rows[0] ?? {}, 'n');
     },
 
-    /** The earliest `next_attempt_at` of an item still owed, or null when none is. */
+    /**
+     * When the next item can go, or null when none can: the earliest `next_attempt_at` of a waiting
+     * item, or the time a claim becomes old enough for `nextDue` to reclaim (`RECLAIM_AFTER_S`).
+     */
     async nextPendingAt(): Promise<number | null> {
-      const { rows } = await db.execute("SELECT MIN(next_attempt_at) AS at FROM sync_queue WHERE status = 'pending'");
+      const { rows } = await db.execute(
+        `SELECT MIN(at) AS at FROM (
+           SELECT next_attempt_at AS at FROM sync_queue WHERE status = 'pending'
+           UNION ALL
+           SELECT COALESCE(claimed_at, 0) + ? AS at FROM sync_queue WHERE status = 'inflight'
+         )`,
+        [RECLAIM_AFTER_S * 1000]
+      );
       const at = rows[0]?.at;
       return typeof at === 'number' ? at : null;
     },

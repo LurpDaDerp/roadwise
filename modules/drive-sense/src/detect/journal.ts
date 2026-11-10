@@ -8,9 +8,9 @@
 //
 // `seq` starts at 1 and rises by one, except across a resume's `gap`, after which the rows go on
 // from its `lastSeq` + 1. A reader drops a torn last line (no `\n`, or not JSON) and any row whose
-// `seq` is not the last one plus one. A file with no `end` that is not the live drive is
-// an orphan, listed as ended (`listedEnd`). Used by the fake detector, the tests and the
-// diagnostics screen; native reads its own files.
+// `seq` is not above the last one; a hole (a row whose write failed) is skipped. A file with no
+// `end` that is not the live drive is an orphan, listed as ended (`listedEnd`). Used by the fake
+// detector, the tests and the diagnostics screen; native reads its own files.
 import type { DriveOrigin, EndCauseNative, JournaledDrive, StartSource } from './types';
 
 export interface JournalStart {
@@ -150,7 +150,7 @@ export function readJournal(text: string): ReadJournal {
       // A resume: the rows go on after its seq.
       if (line.lastSeq !== undefined && line.lastSeq > last) last = line.lastSeq;
     } else if (line.k === 'end') out.end = line;
-    else if (line.seq === last + 1) {
+    else if (line.seq > last) {
       out.rows.push(line.row);
       last = line.seq;
     } else out.dropped += 1;

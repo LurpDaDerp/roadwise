@@ -2,9 +2,10 @@ import type { MeritTier } from '@scoring';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
+import { Platform, Text as RNText, StyleSheet, View, type TextStyle } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
+import { removeShareImage } from '@/lib/shareImages';
 import type { Units } from '@/lib/units';
 import { mix } from '@/ui/sky/color';
 import { Banner, Button, SceneScope, Sheet, Text, ToggleRow, tokens, useTheme, withAlpha } from '@/ui';
@@ -211,8 +212,17 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
       if (stale()) return;
       if (!available) throw new Error('sharing unavailable');
       const uri = await captureRef(card, { format: 'png', quality: 1, result: 'tmpfile' });
-      if (stale()) return;
-      await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your drive', UTI: 'public.png' });
+      // The image carries the whole route: on iPhone it is deleted however the sheet ends (the sheet
+      // is done with it by then). Android's chooser answers once a target is picked, and the target
+      // may still be reading the file: there it stays in the cache for the next wipe or the system.
+      let handed = false;
+      try {
+        if (stale()) return;
+        handed = true;
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your drive', UTI: 'public.png' });
+      } finally {
+        if (Platform.OS === 'ios' || !handed) removeShareImage(uri);
+      }
       if (!stale()) setState('idle');
     } catch {
       if (!stale()) setState('error');

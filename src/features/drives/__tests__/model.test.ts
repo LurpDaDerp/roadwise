@@ -31,6 +31,7 @@ import {
   notDrivingRetryNote,
   REPORT_LABEL,
   reportReasons,
+  reportWindowOpen,
   scoreState,
   stateWord,
   toScoringEvent,
@@ -387,6 +388,14 @@ describe('summary', () => {
     expect(notDrivingRetryNote(drive({ status: 'not_driving', syncError: 'not_found' }))).toBeNull();
     expect(notDrivingRetryNote(drive({ syncError: 'too_old' }))).toBeNull();
     expect(canMarkNotDriving(drive({ status: 'failed', syncError: 'invalid_payload' }), ended)).toBe(false);
+  });
+
+  test('events can be reported until 7 days after the drive ended, measured from its end', () => {
+    const d = drive();
+    const ended = d.endedAt!;
+    expect(reportWindowOpen(d, ended + 7 * DAY)).toBe(true);
+    expect(reportWindowOpen(d, ended + 7 * DAY + 1)).toBe(false);
+    expect(reportWindowOpen(drive({ endedAt: null }), d.startedAt + 7 * DAY + 1)).toBe(false);
   });
 });
 

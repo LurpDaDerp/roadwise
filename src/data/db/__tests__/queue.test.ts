@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
-import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, REFUSED_NEVER, SERVER_REOPEN_AFTER_MS, TRANSPORT_FAILURE } from '@/data/db/queue';
+import { backoffSeconds, createQueueRepo, MAX_ATTEMPTS, RECLAIM_AFTER_S, REFUSED_NEVER, SERVER_REOPEN_AFTER_MS, TRANSPORT_FAILURE } from '@/data/db/queue';
 
 const T0 = 1_700_000_000_000;
 
@@ -200,4 +200,21 @@ test('deferUntil inside a transaction puts an item off; makeUntriedDue makes it 
   const backoff = (await queue.get(waiting.id))?.next_attempt_at;
   expect(await queue.makeUntriedDue(T0 + 30)).toBe(0);
   expect((await queue.get(waiting.id))?.next_attempt_at).toBe(backoff);
+});
+
+test('nextPendingAt is the earliest waiting item, or the time an open claim can be reclaimed', async () => {
+  expect(await queue.nextPendingAt()).toBeNull();
+  await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+  await queue.nextDue(T0);
+  // Only a claim: it can go once it is old enough for nextDue to reclaim.
+  expect(await queue.nextPendingAt()).toBe(T0 + RECLAIM_AFTER_S * 1000);
+  await queue.enqueue('finalize-trip', { clientTripId: 'b' }, 'trip:b', T0 + 60_000);
+  expect(await queue.nextPendingAt()).toBe(T0 + 60_000);
+});
+
+test('reclaimInflight with no age puts back every claim, due now', async () => {
+  const a = await queue.enqueue('finalize-trip', { clientTripId: 'a' }, 'trip:a', T0);
+  await queue.nextDue(T0);
+  expect(await queue.reclaimInflight(0, T0 + 1000)).toBe(1);
+  expect(await queue.get(a.id)).toMatchObject({ status: 'pending', claimed_at: null, next_attempt_at: T0 + 1000 });
 });

@@ -684,6 +684,10 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(tick).toMatch(/DetectPolicy\.suppressionDue\(since: since, until: until, lastOverStopTs: lastOverStopTs, walkSince: walkSince, now: now\) != nil/);
     expect(fn(detector(), 'func endSuppression()')).not.toMatch(/lastEnd =/);
     expect(fn(code('CaptureController.swift'), 'func beginSuppressedSensing()')).toMatch(/location\.start\(\.suppressed\)/);
+    // the rest only while detection is allowed; otherwise it settles at once and GPS stays off
+    expect(nd).toMatch(/let rest = allowed\(r\)\s*if rest \{\s*r\.state = "suppressed"[\s\S]*?\} else \{\s*settle\(&r, now\)\s*\}\s*save\(r\)\s*finishSensing\(\)/);
+    expect(nd).toMatch(/if rest \{\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)\s*\}/);
+    expect(nd.match(/capture\.beginSuppressedSensing\(\)/g)?.length).toBe(1);
   });
 
   it('a relaunch: a candidate never survives; a drive resumes with a gap line or ends as an orphan; a rest resumes until its cap', () => {
@@ -692,7 +696,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(launch).toMatch(/case "candidate":\s*settle\(&r, now\)/);
     expect(launch).toMatch(/resumeDrive\(driveId\)/);
     // a rest: kept until its cap (from when it began), its still clock from the relaunch (review M5)
-    expect(launch).toMatch(/if let moved = DetectPolicy\.suppressionResume\(until: r\.suppressedUntil, now: now\) \{\s*lastOverStopTs = moved\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)/);
+    expect(launch).toMatch(/if allowed\(r\), let moved = DetectPolicy\.suppressionResume\(until: r\.suppressedUntil, now: now\) \{\s*lastOverStopTs = moved\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)\s*\} else \{\s*settle\(&r, now\)\s*save\(r\)\s*\}/);
     expect(launch).not.toMatch(/suppressedSince =|suppressedUntil =/);
     // the rest's start and cap are in the record, saved when "Not driving?" begins it
     expect(code('DetectStateRecord.swift')).toMatch(/var suppressedSince: Double\?\s*var suppressedUntil: Double\?/);
@@ -760,6 +764,10 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(a).toMatch(/if current != \.authorizedWhenInUse \|\| defaults\.bool\(forKey: Self\.alwaysAskedKey\) \|\| pending != nil \{/);
     expect(a.indexOf('defaults.set(true, forKey: Self.alwaysAskedKey)')).toBeLessThan(a.indexOf('manager.requestAlwaysAuthorization()'));
     expect(a).toMatch(/private static let alwaysAskedKey = "drivesense\.detect\.alwaysAsked"/);
+    // no prompt within 1 s resolves the ask with the current answer
+    expect(fn(a, 'func requestAlways(')).toMatch(/asyncAfter\(deadline: \.now\(\) \+ 1\) \{\s*if !self\.resigned \{ self\.finish\(\) \}/);
+    // not determined again (a lapsed "Allow Once" grant, a reset): the ask is cleared
+    expect(fn(a, 'func locationManagerDidChangeAuthorization(')).toMatch(/if manager\.authorizationStatus == \.notDetermined \{ defaults\.removeObject\(forKey: Self\.alwaysAskedKey\) \}/);
     expect(a).toMatch(/liveActivities: ActivityAuthorizationInfo\(\)\.areActivitiesEnabled/);
     expect(a).toMatch(/UIApplication\.shared\.backgroundRefreshStatus/);
   });
@@ -936,7 +944,11 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     expect(row).toMatch(/self\.bytes \+ data\.count <= DetectPolicy\.JOURNAL_MAX_BYTES_PER_DRIVE/);
     expect(row).toMatch(/if self\.rowsSinceSync >= DetectPolicy\.JOURNAL_SYNC_EVERY_ROWS \{ self\.sync\(\) \}/);
     const marker = /func appendMarker\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
-    expect(marker).toMatch(/self\.bytes \+= data\.count\s*self\.sync\(\)/);
+    expect(marker).toMatch(/self\.bytes \+= data\.count\s*\} catch \{[^}]*\}\s*self\.sync\(\)/);
+    // a failed write cuts its torn bytes and leaves `bytes` at the last good offset
+    for (const f of [row, marker]) {
+      expect(f).toMatch(/try h\.write\(contentsOf: data\)\s*self\.bytes \+= data\.count\s*\} catch \{[^}]*try\? h\.truncate\(atOffset: UInt64\(self\.bytes\)\)\s*_ = try\? h\.seekToEnd\(\)/);
+    }
     expect(j).toMatch(/private func sync\(\) \{\s*try\? handle\?\.synchronize\(\)/);
     // rotation: the oldest undrained file by its start, ended or orphaned (review M6); never the new one
     const rotate = /private func rotate\([\s\S]*?\n {2}\}/.exec(j)?.[0] ?? '';
@@ -959,9 +971,10 @@ describe('iOS drive detector: the policy and the journal (text)', () => {
     expect(listed).toMatch(/var ended: Any = NSNull\(\)/);
   });
 
-  it('a reader never reads a torn last line, drops a seq out of order, and keeps its place; a resume cuts the torn tail off', () => {
+  it('a reader never reads a torn last line, drops a seq not above the last, skips a hole, and keeps its place; a resume cuts the torn tail off', () => {
     const r = code('RowJournalRead.swift');
-    expect(r).toMatch(/seq == last \+ 1/);
+    expect(r).toMatch(/let seq = \(o\["seq"\] as\? NSNumber\)\?\.intValue, seq > last \{/);
+    expect(r).not.toMatch(/seq == last \+ 1/);
     expect(r).toMatch(/while let nl = buf\[lineStart\.\.\.\]\.firstIndex\(of: 0x0A\)/);
     expect(r).toMatch(/cursors\[driveId\] = \(seq: seq, offset: lineEnd\)/);
     expect(r).toMatch(/s\.cleanEnd = from \+ UInt64/);

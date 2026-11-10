@@ -24,30 +24,35 @@ import { addressAt, type AddressLines } from './search';
 const DAY_MS = 86_400_000;
 /** The phone keeps a drive's start and end this long. */
 export const LEARN_WINDOW_DAYS = 183;
-const MAX_TRIPS = 4000;
+export const MAX_TRIPS = 4000;
 const NAME_NEAR_M = 60;
 const MAX_NAMES = 40;
 
-/** Every drive's raw ends in the window, oldest first; "Not driving" ones too (you were still there). */
+/**
+ * Every drive's raw ends in the window, oldest first; "Not driving" ones too (you were still there).
+ * Past `MAX_TRIPS` the newest are kept, since learning weights recent drives most.
+ */
 export async function readTripEnds(db: Db, now: number): Promise<TripEnds[]> {
   const { rows } = await db.execute(
     `SELECT client_trip_id, started_at, ended_at, tz, start_lat, start_lng, end_lat, end_lng
        FROM trips
       WHERE status IN ('scored', 'unscored', 'pending', 'not_driving') AND ended_at IS NOT NULL AND started_at >= ?
-      ORDER BY started_at ASC
+      ORDER BY started_at DESC
       LIMIT ?`,
     [now - LEARN_WINDOW_DAYS * DAY_MS, MAX_TRIPS]
   );
   const point = (lat: unknown, lng: unknown): LatLng | null =>
     typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
-  return rows.map((r) => ({
-    id: asText(r, 'client_trip_id'),
-    startedAt: asNumber(r, 'started_at'),
-    endedAt: asNumber(r, 'ended_at'),
-    tz: typeof r.tz === 'string' ? r.tz : '',
-    start: point(r.start_lat, r.start_lng),
-    end: point(r.end_lat, r.end_lng),
-  }));
+  return rows
+    .map((r) => ({
+      id: asText(r, 'client_trip_id'),
+      startedAt: asNumber(r, 'started_at'),
+      endedAt: asNumber(r, 'ended_at'),
+      tz: typeof r.tz === 'string' ? r.tz : '',
+      start: point(r.start_lat, r.start_lng),
+      end: point(r.end_lat, r.end_lng),
+    }))
+    .reverse();
 }
 
 interface NameEntry {

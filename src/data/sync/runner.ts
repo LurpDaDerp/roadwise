@@ -632,6 +632,9 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     async start() {
       if (started) return;
       started = true;
+      // Only this runner claims items, and the one before it settled its claims before it stopped:
+      // a claim still open now was left by a killed process, so it is due again at once.
+      await queue.reclaimInflight(0, now()).catch((error: unknown) => report(error, 'sync reclaim'));
       await queue.reopenRetryable(now()).catch((error: unknown) => report(error, 'sync reopen'));
       await queue.purgeDone(now() - PURGE_DONE_AFTER_MS).catch(noop);
       subscriptions.push(

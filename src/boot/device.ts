@@ -32,6 +32,7 @@ import { PLACE_NAMES_KEY, PLACES_KEY, PROMPT_DECLINED_KEY, PROMPT_OFF_KEY } from
 import { QUIET_HOURS_KEY } from '@/features/settings/notifications/quietHours';
 import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
 import { COMMUTE_HEADS_UP_KEY } from '@/features/weather/commuteSetting';
+import { sweepShareImages } from '@/lib/shareImages';
 
 import { autoDetectOff } from './autoDetect';
 
@@ -185,6 +186,8 @@ export async function wipeDevice(db: Db, deps: DeviceOwnerDeps = {}): Promise<vo
       }
     }
   });
+  // Share images a crash left (each carries a whole route) leave with the account.
+  sweepShareImages();
   // Screens still mounted (a deletion's, a sign-up straight after it in the same process) read the
   // empty phone, not the cache of the account that left; the units go back to the default with
   // the setting that held them.
@@ -209,6 +212,8 @@ export async function wipeForSignOut(db: Db): Promise<void> {
     // of retries but never refused included) stays for the next sign-in.
     await tx.execute("DELETE FROM sync_queue WHERE status = 'done' OR (status = 'failed' AND next_attempt_at = ?)", [REFUSED_NEVER]);
   });
+  // Share images a crash left (each carries a whole route) leave with the drives.
+  sweepShareImages();
   // The cached lists and stats would otherwise show the drives that just left until they went stale.
   emitDataChanged({ source: 'wipe' });
   restartDashcamLink();

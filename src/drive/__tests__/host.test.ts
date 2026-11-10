@@ -237,6 +237,8 @@ describe('the Start card (Android: the capture at once; the drive records from t
     for (const [perms, reason] of [
       [{ location: 'denied' }, 'permission'],
       [{ location: 'granted', services: false }, 'services'],
+      // iPhone: Location Services off reports every app's location denied.
+      [{ location: 'denied', services: false }, 'services'],
       [{ location: 'granted', precise: false }, 'precise'],
     ] as const) {
       const r = build({ permissions: async () => perms });

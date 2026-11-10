@@ -208,6 +208,12 @@ export function disputeText(e: LocalDriveEvent): string | null {
 /** "Wasn't driving" works only within this long after the drive ended. */
 export const NOT_DRIVING_WINDOW_MS = NOT_DRIVING_WINDOW_S * 1000;
 
+/** An event can be reported only within this long after its drive ended (the server's own line). */
+export const REPORT_WINDOW_MS = 7 * 24 * 3600 * 1000;
+
+/** Whether the drive's events can still be reported: it ended no more than 7 days ago. */
+export const reportWindowOpen = (d: LocalDrive, now: number): boolean => now - (d.endedAt ?? d.startedAt) <= REPORT_WINDOW_MS;
+
 /**
  * Whether to offer "Wasn't driving" on this drive: a kept drive the server holds or will hold
  * (scored, not scored, or still uploading: its upload goes ahead of the mark), within a day of its

@@ -71,12 +71,19 @@ export function HomeScreen() {
   // stopped from "Not driving?" won't count.
   const notice = useHomeNotice();
   const shownRefusal = notice !== null && notice !== 'notDriving' ? notice : refusal;
-  // A drive that started any way takes an old refusal down.
+  // A drive that started any way (a swipe, an automatic start, the session reminder) takes an old
+  // refusal and the "Not driving?" line down, so neither comes back once that drive is over.
   const [wasRecording, setWasRecording] = useState(recording);
   if (wasRecording !== recording) {
     setWasRecording(recording);
     if (recording) setRefusal(null);
   }
+  // Only on the move into a drive: "Not driving?" sets its line while its drive is still recording.
+  const startedRef = useRef(recording);
+  useEffect(() => {
+    if (recording && !startedRef.current) clearHomeNotice();
+    startedRef.current = recording;
+  }, [recording]);
 
   // The notice of a drive that was not kept: read on focus and whenever a drive closes.
   const db = useDb();

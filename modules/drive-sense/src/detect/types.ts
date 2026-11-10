@@ -257,7 +257,7 @@ export interface DriveDetectApi {
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
   getState(): Promise<DetectState>;
-  /** The one Always request, only from While Using, once per install; otherwise the current answer. */
+  /** The one Always request, only from While Using, once (cleared when the authorisation goes back to not determined); otherwise the current answer. */
   requestAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
   /**
    * The Start card: a manual drive opens at once, from the tap, journaled like any drive and announced

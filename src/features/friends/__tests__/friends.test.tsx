@@ -105,6 +105,15 @@ describe('Friends list', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/u/pal');
   });
 
+  it('a card with no username is left out instead of crashing the list', async () => {
+    const nameless = { ...card('ghost'), user_id: 'id-ghost', username: null as unknown as string };
+    answerRpc(mockRpc, { list_friends: { friends: [card('pal')], incoming: [nameless], outgoing: [] } });
+    const w = await appWorld();
+    await w.render(<FriendsScreen />);
+    expect(await screen.findByTestId('friend-pal')).toBeOnTheScreen();
+    expect(screen.queryByTestId('friends-incoming')).toBeNull();
+  });
+
   it('nobody yet: says how to add someone, and where ratings compare', async () => {
     answerRpc(mockRpc, { list_friends: { friends: [], incoming: [], outgoing: [] } });
     const w = await appWorld();
@@ -138,6 +147,30 @@ describe('Add friends', () => {
     expect(mockRpc).toHaveBeenCalledWith('search_users', { p_query: 'may' });
     expect(mockRouter.push).toHaveBeenCalledWith('/u/maya_16');
   });
+
+  it('ignores a leading @', async () => {
+    answerRpc(mockRpc, {
+      get_my_summary: { profile: { username: 'swift_fox' } },
+      search_users: [{ user_id: 'id-maya', username: 'maya_16', safety_rating: null }],
+    });
+    const w = await appWorld();
+    await w.render(<AddFriendsScreen debounceMs={0} />);
+    const input = screen.getByTestId('friends-search');
+    expect(input).toHaveProp('maxLength', 21);
+
+    // "@ma" is two letters: still the 3-letter hint
+    await act(async () => {
+      fireEvent.changeText(input, '@ma');
+    });
+    expect(screen.getByText(copy.searchHint)).toBeOnTheScreen();
+    expect(mockRpc).not.toHaveBeenCalledWith('search_users', expect.anything());
+
+    await act(async () => {
+      fireEvent.changeText(input, '@maya');
+    });
+    expect(await screen.findByTestId('result-maya_16')).toBeOnTheScreen();
+    expect(mockRpc).toHaveBeenCalledWith('search_users', { p_query: 'maya' });
+  });
 });
 
 describe('Scan', () => {
@@ -161,6 +194,18 @@ describe('Scan', () => {
     expect(await screen.findByTestId('scan-rejected')).toBeOnTheScreen();
     expect(mockRouter.replace).not.toHaveBeenCalled();
     expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  it('a camera that will not start says so in place of the viewfinder', async () => {
+    const w = await appWorld();
+    await w.render(<ScanScreen />);
+    const camera = await screen.findByTestId('scan-camera');
+    expect(screen.queryByTestId('scan-no-camera')).toBeNull();
+    await act(async () => {
+      camera.props.onMountError({ message: 'capture session failed' });
+    });
+    expect(within(screen.getByTestId('scan-no-camera')).getByText(copy.noCamera)).toBeOnTheScreen();
+    expect(screen.queryByTestId('scan-camera')).toBeNull();
   });
 
   it('asks for the camera only on this screen, and explains a refusal', async () => {
