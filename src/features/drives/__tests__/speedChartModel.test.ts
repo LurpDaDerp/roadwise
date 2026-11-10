@@ -83,28 +83,30 @@ describe('the axes', () => {
 });
 
 describe('the speed line', () => {
-  test('one run per stretch with a speed, each point in its bucket middle; a bucket with none breaks it', () => {
+  test('one unbroken run through every bucket with a speed, each point in its bucket middle; a bucket with none is bridged', () => {
     const rounded = speedRuns(TRACE, SC).map((run) => run.map((p) => ({ x: +p.x.toFixed(6), y: +p.y.toFixed(6) })));
     expect(rounded).toEqual([
       [
         { x: 14, y: 44 },
         { x: 34, y: 40 },
-      ],
-      [
         { x: 74, y: 24 },
         { x: 94, y: 22 },
       ],
     ]);
   });
 
-  test('missing rows between two buckets break it too', () => {
+  test('missing rows between two buckets are bridged too', () => {
     const gap: SpeedTrace = { widthS: 5, points: [{ t: 0, v: 20, l: null }, { t: 5, v: 20, l: null }, { t: 20, v: 20, l: null }] };
-    expect(speedRuns(gap, SC).map((r) => r.length)).toEqual([2, 1]);
+    expect(speedRuns(gap, SC).map((r) => r.length)).toEqual([3]);
+  });
+
+  test('no bucket with a speed: no run', () => {
+    expect(speedRuns({ widthS: 5, points: [{ t: 0, v: null, l: 25 }] }, SC)).toEqual([]);
   });
 
   test('the last bucket\'s middle never passes the drive\'s end', () => {
     const runs = speedRuns(TRACE, { ...SC, spanS: 21 });
-    expect(runs[1]![1]!.x).toBe(104);
+    expect(runs[0]![3]!.x).toBe(104);
   });
 
   test('a straight path through the points', () => {
@@ -122,6 +124,12 @@ describe('the limit', () => {
   test('a stretch with no limit starts the next one afresh', () => {
     const t: SpeedTrace = { widthS: 5, points: [{ t: 0, v: 20, l: 25 }, { t: 5, v: 20, l: null }, { t: 10, v: 20, l: 25 }] };
     expect(limitPath(t, SC)).toBe('M4.0,54.0 L24.0,54.0 M44.0,54.0 L64.0,54.0');
+  });
+
+  test('missing rows between two buckets with a limit hold the earlier limit across, then step', () => {
+    // 25 mph (y 54) from 0 to 5 s, rows missing from 5 to 10 s, then 35 mph (y 34) from 10 to 15 s.
+    const t: SpeedTrace = { widthS: 5, points: [{ t: 0, v: 20, l: 25 }, { t: 10, v: 20, l: 35 }] };
+    expect(limitPath(t, SC)).toBe('M4.0,54.0 L24.0,54.0 L44.0,54.0 L44.0,34.0 L64.0,34.0');
   });
 
   test('none at all: no path', () => {

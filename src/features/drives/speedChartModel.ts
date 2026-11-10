@@ -81,27 +81,17 @@ export const yAt = (mph: number, sc: ChartScale): number =>
 const next = (a: SpeedPoint, b: SpeedPoint, w: number): boolean => b.t === a.t + w;
 
 /**
- * The speed line's runs: each stretch of neighbouring buckets with a speed, every point at its
- * bucket's middle. A bucket with no trusted speed, or missing rows, breaks the line.
+ * The speed line: one run through every bucket with a speed, each point at its bucket's middle. A
+ * bucket with no speed (no GPS speed at all) or missing rows never breaks it: the line goes straight
+ * across to the next bucket with a speed. Returned as runs (at most one) for the view.
  */
 export function speedRuns(trace: SpeedTrace, sc: ChartScale): Pt[][] {
   const w = trace.widthS;
-  const runs: Pt[][] = [];
-  let run: Pt[] | null = null;
-  let prev: SpeedPoint | null = null;
+  const run: Pt[] = [];
   for (const p of trace.points) {
-    if (p.v === null) {
-      run = null;
-    } else {
-      if (run === null || prev === null || !next(prev, p, w)) {
-        run = [];
-        runs.push(run);
-      }
-      run.push({ x: xAt(Math.min(p.t + w / 2, sc.spanS), sc), y: yAt(p.v, sc) });
-    }
-    prev = p;
+    if (p.v !== null) run.push({ x: xAt(Math.min(p.t + w / 2, sc.spanS), sc), y: yAt(p.v, sc) });
   }
-  return runs;
+  return run.length === 0 ? [] : [run];
 }
 
 const n1 = (v: number): string => v.toFixed(1);
@@ -111,7 +101,8 @@ export const linePath = (pts: readonly Pt[]): string => pts.map((p, i) => `${i =
 
 /**
  * The speed limit as steps: a flat line across each bucket with a limit at that limit, joined
- * straight up or down to the next bucket's when they are neighbours. A bucket with none breaks it.
+ * straight up or down to the next bucket's. Missing rows between two buckets with a limit hold the
+ * earlier limit across the gap; a bucket with no limit (the sign at "-") breaks it.
  */
 export function limitPath(trace: SpeedTrace, sc: ChartScale): string {
   const w = trace.widthS;
@@ -122,8 +113,13 @@ export function limitPath(trace: SpeedTrace, sc: ChartScale): string {
       const y = n1(yAt(p.l, sc));
       const x0 = n1(xAt(p.t, sc));
       const x1 = n1(xAt(p.t + w, sc));
-      const joined = prev !== null && prev.l !== null && next(prev, p, w);
-      parts.push(`${joined ? 'L' : 'M'}${x0},${y} L${x1},${y}`);
+      if (prev !== null && prev.l !== null && !next(prev, p, w)) {
+        // Rows missing: carry the earlier limit across to this bucket's start, then step.
+        parts.push(`L${x0},${n1(yAt(prev.l, sc))} L${x0},${y} L${x1},${y}`);
+      } else {
+        const joined = prev !== null && prev.l !== null;
+        parts.push(`${joined ? 'L' : 'M'}${x0},${y} L${x1},${y}`);
+      }
     }
     prev = p;
   }

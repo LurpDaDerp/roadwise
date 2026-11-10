@@ -43,8 +43,16 @@ test('5 s buckets from the start: the mean trusted speed (1 dp) and the last sig
   expect(speedTraceJson(s)).toBe('{"w":5,"p":[[0,30,30],[5,33.1,45],[10,7,null]]}');
 });
 
-test('a bucket with no trusted speed reads null; an untrusted speed (speedAcc 3) is left out of the mean', () => {
-  const s = run([20, 20, 20, 20, 20, 90, 90, 90, 90, 90], () => null, (i) => (i >= 5 ? { speedAcc: 3 } : {}));
+test('an untrusted speed (speedAcc 3) is left out of a bucket with a trusted one, and is the mean of a bucket with none', () => {
+  const s = run([20, 20, 20, 20, 90, 50, 50, 60, 60, 60], () => null, (i) => (i >= 4 ? { speedAcc: 3 } : {}));
+  expect(speedTraceOf(s)?.points).toEqual([
+    { t: 0, v: 20, l: null },
+    { t: 5, v: 56, l: null },
+  ]);
+});
+
+test('a bucket with no known speed at all reads null', () => {
+  const s = run([20, 20, 20, 20, 20, null, null, null, null, null]);
   expect(speedTraceOf(s)?.points).toEqual([
     { t: 0, v: 20, l: null },
     { t: 5, v: null, l: null },
@@ -73,18 +81,18 @@ test('the state is frozen and replaced; the old one is untouched', () => {
 test('merge maths: neighbours on the doubled grid join, speeds time-weighted over the rows that had one, the later limit else the earlier', () => {
   const merged = mergeBuckets(
     [
-      { t: 0, sum: 100, n: 5, l: 25 },
-      { t: 5, sum: 60, n: 2, l: null },
-      { t: 10, sum: 0, n: 0, l: 35 },
-      { t: 15, sum: 0, n: 0, l: null },
-      { t: 25, sum: 30, n: 1, l: 45 },
+      { t: 0, sum: 100, n: 5, fsum: 0, fn: 0, l: 25 },
+      { t: 5, sum: 60, n: 2, fsum: 40, fn: 1, l: null },
+      { t: 10, sum: 0, n: 0, fsum: 30, fn: 1, l: 35 },
+      { t: 15, sum: 0, n: 0, fsum: 0, fn: 0, l: null },
+      { t: 25, sum: 30, n: 1, fsum: 0, fn: 0, l: 45 },
     ],
     10
   );
   expect(merged).toEqual([
-    { t: 0, sum: 160, n: 7, l: 25 },
-    { t: 10, sum: 0, n: 0, l: 35 },
-    { t: 20, sum: 30, n: 1, l: 45 },
+    { t: 0, sum: 160, n: 7, fsum: 40, fn: 1, l: 25 },
+    { t: 10, sum: 0, n: 0, fsum: 30, fn: 1, l: 35 },
+    { t: 20, sum: 30, n: 1, fsum: 0, fn: 0, l: 45 },
   ]);
 });
 

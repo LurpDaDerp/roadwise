@@ -43,9 +43,9 @@ test('titled "Speed" with its legend, the speed solid in the page ink and the li
   const light = plainBundle('light').colors;
   expect(screen.getByTestId('speed-chart-title')).toHaveTextContent('Speed');
   expect(screen.getByTestId('speed-chart-legend', H)).toHaveTextContent('Your speed·Speed limit');
-  // The missing minute splits the line in two.
+  // The missing minute never breaks the line: one unbroken path.
   const runs = screen.getAllByTestId('speed-chart-speed', H);
-  expect(runs).toHaveLength(2);
+  expect(runs).toHaveLength(1);
   expect(runs[0]!.props.stroke).toMatchObject(argb(light.text));
   const limit = screen.getByTestId('speed-chart-limit', H);
   expect(limit.props.stroke).toMatchObject(argb(light.textMuted));

@@ -1,5 +1,6 @@
 // A drive's speed over time, for the recap's speed chart: the drive cut into buckets of time, each
-// with the mean trusted GPS speed and the sign's limit. A pure, frozen reducer (like `exposure.ts`),
+// with the mean GPS speed (trusted readings only when the bucket has any, else every known reading)
+// and the sign's limit. A pure, frozen reducer (like `exposure.ts`),
 // so a live drive, a drive cut back to its last movement (each movement mark keeps the state as it
 // stood after its row) and a drive rebuilt from its stored rows all agree. Local only: never uploaded.
 //
@@ -21,6 +22,12 @@ export interface TraceBucket {
   /** Sum of the trusted speeds (mph) of its rows that had one, and how many rows that was. */
   readonly sum: number;
   readonly n: number;
+  /**
+   * Sum of the known but untrusted speeds (mph; accuracy worse than 2 m/s), and how many rows that
+   * was: the bucket's mean only when it has no trusted speed, so a stretch of poor GPS still draws.
+   */
+  readonly fsum: number;
+  readonly fn: number;
   /** The last sign limit (whole mph) seen in it; null when none. */
   readonly l: number | null;
 }
@@ -53,13 +60,26 @@ export interface SpeedTrace {
 
 const bucketOf = (t: number, w: number): number => Math.floor(t / w) * w;
 
-/** `b` with one more row (its trusted speed, or null, and its sign limit, or null). */
-const add = (b: Readonly<TraceBucket>, v: number | null, l: number | null): Readonly<TraceBucket> =>
-  Object.freeze({ t: b.t, sum: v === null ? b.sum : b.sum + v, n: v === null ? b.n : b.n + 1, l: l ?? b.l });
+/** A bucket with no rows yet. */
+const emptyBucket = (t: number): Readonly<TraceBucket> => Object.freeze({ t, sum: 0, n: 0, fsum: 0, fn: 0, l: null });
+
+/** `b` with one more row: its known speed (mph, or null), whether that speed is trusted, and its sign limit (or null). */
+const add = (b: Readonly<TraceBucket>, v: number | null, trusted: boolean, l: number | null): Readonly<TraceBucket> => {
+  const t = v !== null && trusted;
+  const f = v !== null && !trusted;
+  return Object.freeze({
+    t: b.t,
+    sum: t ? b.sum + v : b.sum,
+    n: t ? b.n + 1 : b.n,
+    fsum: f ? b.fsum + v : b.fsum,
+    fn: f ? b.fn + 1 : b.fn,
+    l: l ?? b.l,
+  });
+};
 
 /** Two buckets as one: speeds summed (the mean stays time-weighted), the later bucket's limit else the earlier's. */
 const join = (a: Readonly<TraceBucket>, b: Readonly<TraceBucket>, t: number): Readonly<TraceBucket> =>
-  Object.freeze({ t, sum: a.sum + b.sum, n: a.n + b.n, l: b.l ?? a.l });
+  Object.freeze({ t, sum: a.sum + b.sum, n: a.n + b.n, fsum: a.fsum + b.fsum, fn: a.fn + b.fn, l: b.l ?? a.l });
 
 /** The buckets on a grid `w` wide (twice theirs): neighbours in the same new bucket joined. Oldest first in, oldest first out. */
 export function mergeBuckets(buckets: readonly Readonly<TraceBucket>[], w: number): Readonly<TraceBucket>[] {
@@ -75,38 +95,42 @@ export function mergeBuckets(buckets: readonly Readonly<TraceBucket>[], w: numbe
 
 /**
  * One row. `startedAt`: the drive's start (epoch ms; a row before it counts at 0 s). `signMph`: the
- * limit the sign showed for the row (`limitShownMph`), or null. The speed is the row's GNSS speed,
- * read only when trusted (`exposure.ts`' rule). Returns a new frozen state; the input is untouched.
+ * limit the sign showed for the row (`limitShownMph`), or null. The speed is the row's known GNSS
+ * speed; a bucket's mean uses only its trusted ones (`exposure.ts`' rule) when it has any. Returns a new frozen state; the input is untouched.
  */
 export function noteSpeedTrace(state: Readonly<SpeedTraceState>, row: FeatureRow, startedAt: number, signMph: number | null | undefined): Readonly<SpeedTraceState> {
-  const v = speedTrusted(row) ? knownSpeedMph(row) : null;
+  const v = knownSpeedMph(row);
+  const trusted = speedTrusted(row);
   const l = typeof signMph === 'number' && Number.isFinite(signMph) && signMph > 0 ? Math.round(signMph) : null;
   const sec = Math.max(0, Math.floor((row.ts - startedAt) / 1000));
   const { open } = state;
   let { w } = state;
-  if (open !== null && bucketOf(sec, w) <= open.t) return Object.freeze({ w, closed: state.closed, open: add(open, v, l) });
+  if (open !== null && bucketOf(sec, w) <= open.t) return Object.freeze({ w, closed: state.closed, open: add(open, v, trusted, l) });
   let closed: readonly Readonly<TraceBucket>[] = open === null ? state.closed : [...state.closed, open];
-  let next: Readonly<TraceBucket> = Object.freeze({ t: bucketOf(sec, w), sum: 0, n: 0, l: null });
+  let next: Readonly<TraceBucket> = emptyBucket(bucketOf(sec, w));
   while (closed.length + 1 > MAX_BUCKETS) {
     w *= 2;
     const merged = mergeBuckets(closed, w);
     const t = bucketOf(sec, w);
     const last = merged[merged.length - 1];
     // The new row's bucket may now be the last closed one's: it stays open.
-    next = last !== undefined && last.t === t ? (merged.pop() as Readonly<TraceBucket>) : Object.freeze({ t, sum: 0, n: 0, l: null });
+    next = last !== undefined && last.t === t ? (merged.pop() as Readonly<TraceBucket>) : emptyBucket(t);
     closed = merged;
   }
   // `closed` is a fresh array here (or the old frozen one), so freezing it touches nobody's state.
-  return Object.freeze({ w, closed: Object.freeze(closed), open: add(next, v, l) });
+  return Object.freeze({ w, closed: Object.freeze(closed), open: add(next, v, trusted, l) });
 }
 
 const round1 = (v: number): number => Math.round(v * 10) / 10;
+
+/** A bucket's speed: the mean of its trusted speeds, else of its untrusted known ones, else null. */
+const meanOf = (b: Readonly<TraceBucket>): number | null => (b.n > 0 ? round1(b.sum / b.n) : b.fn > 0 ? round1(b.fsum / b.fn) : null);
 
 /** The trace as the views read it; null when no row went in. */
 export function speedTraceOf(state: Readonly<SpeedTraceState>): SpeedTrace | null {
   const all = state.open === null ? state.closed : [...state.closed, state.open];
   if (all.length === 0) return null;
-  return { widthS: state.w, points: all.map((b) => ({ t: b.t, v: b.n > 0 ? round1(b.sum / b.n) : null, l: b.l })) };
+  return { widthS: state.w, points: all.map((b) => ({ t: b.t, v: meanOf(b), l: b.l })) };
 }
 
 /** The trace as stored (`trips.speed_trace_json`): `{"w":<width s>,"p":[[t,v,l],...]}`; null when no row went in. */
