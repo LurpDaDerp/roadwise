@@ -1,13 +1,13 @@
 -- 0041_audit_fixes: user_tz reads the stored zone without scanning pg_timezone_names and falls back to
 -- New York for a zone of the wrong shape or one the server does not know; the friend RPCs refuse a
 -- caller who never finished setting up and list_friends leaves such accounts out; a refusal after the
--- rate-limit take is answered (PostgREST's error body and status), so the take stands; a
--- friend-request push whose request was cancelled or ended by a block is skipped at the claim, while a
--- standing one is sent.
+-- rate-limit take is answered (PostgREST's error body and status), so the take stands; a report about
+-- nobody stores nothing and still costs a report; a friend-request push whose request was cancelled or
+-- ended by a block is skipped at the claim, while a standing one is sent.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(20);
+select plan(21);
 
 -- ann (01), bob (02), cal (03), dee (06) and eve (05) are set up; 04 signed in and stopped there
 insert into auth.users (id, email)
@@ -76,8 +76,11 @@ select is((select count(*)::int from generate_series(1, 59) g, lateral (select p
 select throws_ok($$ select public.get_profile('bob') $$, '42501', 'too many requests', 'the 61st lookup in a minute is refused, misses included');
 select is(public.send_friend_request('00000000-0000-0000-0000-00000000dead'),
   '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'a request to nobody is answered not found');
+select lives_ok($$ select public.report_target('user', '00000000-0000-0000-0000-00000000dead', 'other', '') $$, 'a report about nobody is answered like any other');
 reset role;
-select is(pg_temp.taken(1, 'send_friend_request'), 1, 'and it costs a request');
+select is(array[pg_temp.taken(1, 'send_friend_request'), pg_temp.taken(1, 'report_target'),
+    (select count(*)::int from public.reports r where r.reporter_id = '00000000-0000-0000-0000-000000000001')],
+  array[1, 1, 0], 'both cost their budget, and the report stored nothing');
 
 -- ---------------------------------------------------------------------------
 -- a friend-request push only while the request stands
