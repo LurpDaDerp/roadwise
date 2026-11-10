@@ -763,7 +763,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       {sosOpen ? (
         <View testID="hud-sos-sheet" style={[styles.panel, styles.sosPanel, { ...at(layout.sosPanel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>
-          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={layout.sosPanel.h} width={layout.sosPanel.w} onCall={callSos} onClose={closeSos} />
+          <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={layout.sosPanel.h} onCall={callSos} onClose={closeSos} />
         </View>
       ) : waitPanel !== null ? (
         <View testID="hud-wait" style={[styles.panel, { ...at(layout.panel), backgroundColor: sheet.surface, borderColor: sheet.edge }]}>

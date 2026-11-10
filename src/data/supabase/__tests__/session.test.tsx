@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { Text, View } from 'react-native';
+import { AppState, Text, View, type AppStateStatus } from 'react-native';
 
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
@@ -601,5 +601,92 @@ describe('fix round 1', () => {
     await act(async () => { mockSessionGate.resolve?.({ data: { session: null } }); });
     await act(async () => { emit('SIGNED_IN', sessionFor('u1')); });
     await waitFor(async () => expect(await settings.get(PENDING_TERMS_KEY)).toMatchObject({ uid: 'u1' }));
+  });
+});
+
+describe('a launch in the background (an iOS drive wake) reads no profile from the server', () => {
+  const settings = () => createSettingsRepo(db);
+  let appStateListener: ((s: AppStateStatus) => void) | null = null;
+  const initialState = Object.getOwnPropertyDescriptor(AppState, 'currentState');
+
+  beforeEach(() => {
+    appStateListener = null;
+    Object.defineProperty(AppState, 'currentState', { value: 'background', configurable: true });
+    jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, l) => {
+      appStateListener = l as (s: AppStateStatus) => void;
+      return { remove: () => (appStateListener = null) };
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (initialState) Object.defineProperty(AppState, 'currentState', initialState);
+  });
+
+  test('the cached profile goes on screen, and the server is read the first time the app comes to the front', async () => {
+    await writeProfileCache(settings(), ava as never);
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    expect(screen.getByText('source:cache')).toBeTruthy();
+    // A token refresh in the background asks the server nothing either.
+    await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
+    expect(profileCalls).toEqual([]);
+
+    Object.defineProperty(AppState, 'currentState', { value: 'inactive', configurable: true });
+    await act(async () => { appStateListener?.('inactive'); });
+    expect(profileCalls).toEqual([]);
+
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    await act(async () => { appStateListener?.('active'); });
+    expect(profileCalls).toEqual(['u1']);
+    await act(async () => { mockProfileGate.resolve?.({ ...ava, username: 'ava_stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
+    expect(screen.getByText('source:network')).toBeTruthy();
+
+    // Once read, later trips to the front cost nothing.
+    await act(async () => { appStateListener?.('active'); });
+    expect(profileCalls).toEqual(['u1']);
+  });
+
+  test('with no cache it waits, still loading, for the first time the app comes to the front', async () => {
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    expect(screen.getByText('loading:-')).toBeTruthy();
+    expect(profileCalls).toEqual([]);
+
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    await act(async () => { appStateListener?.('active'); });
+    expect(profileCalls).toEqual(['u1']);
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+  });
+
+  test('coming to the front while the cache is read (the change heard by no one) still reads the server', async () => {
+    const execute = db.execute.bind(db);
+    jest.spyOn(db, 'execute').mockImplementation(async (...a: Parameters<Db['execute']>) => {
+      const result = await execute(...a);
+      Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+      return result;
+    });
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await waitFor(() => expect(profileCalls).toEqual(['u1']));
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+  });
+
+  test('a sign-out while waiting leaves nothing to read on the next trip to the front', async () => {
+    await writeProfileCache(settings(), ava as never);
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    await act(async () => { emit('SIGNED_OUT', null); });
+    await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+
+    Object.defineProperty(AppState, 'currentState', { value: 'active', configurable: true });
+    await act(async () => { appStateListener?.('active'); });
+    expect(profileCalls).toEqual([]);
+    expect(screen.getByText('signedOut:-')).toBeTruthy();
   });
 });

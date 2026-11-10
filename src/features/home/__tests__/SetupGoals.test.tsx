@@ -6,6 +6,7 @@ import { act, screen, waitFor, within } from '@testing-library/react-native';
 import { useEffect, useState } from 'react';
 
 import { SIGN_OUT_SETTINGS } from '@/boot/device';
+import { SERVER_SLOW_STALE_MS } from '@/data/server/useServerQuery';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import { PLACES_KEY } from '@/features/places/model';
@@ -213,14 +214,14 @@ describe('when the row is gone', () => {
     expect(screen.queryByTestId('home-setup')).toBeNull();
   });
 
-  it('the friends read asks for no freshness of its own, and is off during a drive', async () => {
+  it('the friends read is kept 10 minutes (no list_friends on every Home visit) and off during a drive', async () => {
     const w = await appWorld();
     const r = await w.render(<HomeSetupGoals hidden={false} />);
     await screen.findByTestId('home-setup');
-    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: true });
+    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: true, staleMs: SERVER_SLOW_STALE_MS });
     await r.unmount();
     await w.render(<HomeSetupGoals hidden />);
-    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: false });
+    expect(mockFriendsOpts[mockFriendsOpts.length - 1]).toEqual({ enabled: false, staleMs: SERVER_SLOW_STALE_MS });
   });
 
   it('copy has no dashes, exclamation marks or game words', () => {

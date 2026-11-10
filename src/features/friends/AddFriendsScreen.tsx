@@ -26,7 +26,7 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 /**
- * `/friends/add`: search by username (3+ letters, debounced), your own QR code (the
+ * `/friends/add`: search by username (3+ letters, debounced; a leading @ is ignored), your own QR code (the
  * `roadwise://add/<username>` link, also shareable), and the way to scan a friend's.
  */
 export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounceMs?: number }) {
@@ -35,9 +35,11 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
   const router = useRouter();
   const me = useMySummary().data?.profile.username ?? null;
   const [text, setText] = useState('');
-  const query = searchQuery(useDebounced(text, debounceMs));
+  // Usernames show as "@maya" across the app, so "@maya" searches for "maya".
+  const bare = text.trim().replace(/^@/, '');
+  const query = searchQuery(useDebounced(bare, debounceMs));
   const results = useSearchUsers(query);
-  const typed = text.trim().length;
+  const typed = bare.length;
 
   const link = me ? addLink(me) : null;
 
@@ -72,7 +74,7 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
             autoCorrect={false}
             autoComplete="off"
             spellCheck={false}
-            maxLength={20}
+            maxLength={21}
             allowFontScaling={false}
             returnKeyType="search"
             style={{ flex: 1, color: th.colors.text, fontSize: 17 * scale, paddingVertical: th.space.sm }}

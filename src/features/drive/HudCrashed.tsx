@@ -40,7 +40,7 @@ export function HudCrashed({ error, retry }: ErrorBoundaryProps) {
   const b = hudButtonColors(null, p, night);
   const sheet: WaitPanelColors = { surface: p.chrome, ink: p.ink, muted: p.inkMuted, edge: p.chromeEdge };
   const [sosOpen, setSosOpen] = useState(false);
-  const [sheetSize, setSheetSize] = useState({ w: 0, h: 0 });
+  const [sheetH, setSheetH] = useState(0);
   const closeSos = useCallback(() => setSosOpen(false), []);
   const callSos = useCallback(async (phone: string) => {
     const ok = await placeCall(phone);
@@ -51,7 +51,7 @@ export function HudCrashed({ error, retry }: ErrorBoundaryProps) {
     reportError(error, 'driving screen');
   }, [error]);
   const panel = (contacts: readonly EmergencyContact[] | undefined) => (
-    <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={sheetSize.h} width={sheetSize.w} onCall={callSos} onClose={closeSos} />
+    <EmergencyPanel contacts={contacts} palette={p} colors={sheet} height={sheetH} onCall={callSos} onClose={closeSos} />
   );
   return (
     <SafeAreaView style={[styles.ground, { backgroundColor: p.ground }]} testID="hud-crashed">
@@ -62,7 +62,7 @@ export function HudCrashed({ error, retry }: ErrorBoundaryProps) {
       {sosOpen ? (
         <View
           testID="hud-crashed-sos-sheet"
-          onLayout={(e) => setSheetSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+          onLayout={(e) => setSheetH(e.nativeEvent.layout.height)}
           style={[styles.sheet, { backgroundColor: sheet.surface, borderColor: sheet.edge }]}
         >
           <ContactsGuard fallback={panel(undefined)}>
