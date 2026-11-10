@@ -61,9 +61,11 @@ export const BOOTSTRAP_TIMEOUT_MS = 20_000;
 export const SESSION_TIMEOUT_MS = 1_500;
 /**
  * How long the identity stage waits on, past `SESSION_TIMEOUT_MS`, for a session read when the owner
- * may have changed; with no answer by then the owner stands, as on any slow read.
+ * may have changed. With no answer by then the stage fails: no owner's data is used until the
+ * session names one. As long as the launch's own deadline, so that deadline fires first; the wait
+ * only bounds a launch the deadline already abandoned, so the Retry behind it can start.
  */
-export const OWNER_SESSION_TIMEOUT_MS = 10_000;
+export const OWNER_SESSION_TIMEOUT_MS = BOOTSTRAP_TIMEOUT_MS;
 export const ZONE_REREAD_MS = 60_000;
 export const APP_CONFIG_INTERVAL_MS = 24 * 60 * 60_000;
 /** How often, while the app is in front, drives past the 183 days are archived (`archiveOldDrives`). */
@@ -370,8 +372,8 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     } else if (await ownerMayHaveChanged(db)) {
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
       const late = await withinMs(reading, deps.ownerSessionTimeoutMs ?? OWNER_SESSION_TIMEOUT_MS);
-      if (late !== TIMED_OUT) owner = await decide(late.data.session?.user.id ?? null);
-      else owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
+      if (late === TIMED_OUT) throw new Error('getSession did not answer while the account may have changed');
+      owner = await decide(late.data.session?.user.id ?? null);
     } else {
       owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
       onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');

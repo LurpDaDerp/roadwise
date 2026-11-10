@@ -584,7 +584,7 @@ test('a retry whose wait for a hung abandoned launch passes its own deadline fai
   await rt.stop();
 });
 
-test('a slow session read while the owner may have changed is bounded: the owner stands and the launch goes on', async () => {
+test('a slow session read while the owner may have changed is bounded and fails closed: the launch fails at identity, the owner unchanged', async () => {
   const seed = await bootstrapApp(deps().deps);
   await seed.stop();
   await createSettingsRepo(db).set('device.pendingOwner', 'user-2');
@@ -596,10 +596,8 @@ test('a slow session read while the owner may have changed is bounded: the owner
     ...d.supabase,
     auth: { ...d.supabase.auth, getSession: () => (reads++ === 0 ? new Promise(() => {}) : getSession()) },
   } as unknown as BootSupabase;
-  const rt = await bootstrapApp({ ...d.deps, supabase, sessionTimeoutMs: 5, ownerSessionTimeoutMs: 20, timeoutMs: 5_000 });
-  expect(rt.owner).toBe('same');
+  await expect(bootstrapApp({ ...d.deps, supabase, sessionTimeoutMs: 5, ownerSessionTimeoutMs: 20, timeoutMs: 5_000 })).rejects.toMatchObject({ stage: 'identity' });
   expect(await readDeviceOwner(db)).toBe('user-1');
-  await rt.stop();
 });
 
 test('a plain sign-out takes the DashPal events, boots and coverage with the drives; the pairing stays', async () => {
