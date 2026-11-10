@@ -60,6 +60,7 @@ supabase/data/import-hpms.sh
 By default the scripts target the local database, `postgresql://postgres:postgres@127.0.0.1:54622/postgres` (`supabase/config.toml` `[db] port`). Set `DB_URL` to target another database. Inside the container, `127.0.0.1` and `localhost` are rewritten to `host.docker.internal`.
 
 - **Wiping and restoring.** `import-osm.sh` replaces all of `osm.ways` by default (`REPLACE=1`). On a local stack that also removes `seed.sql`'s synthetic fixture. `npx supabase db reset` restores the clean fixture state, and `supabase test db` expects that state.
+- **`REPLACE=1` also resets the on-demand fill.** `osm.ways` holds the ways the `speed-limits` function fills from Overpass as well as the imported ones (cells outside the extract, the classes the import does not load), and the truncate removes them too. The same transaction therefore empties `osm.filled_cells`, so each of those cells is claimed and filled again the next time a lookup reaches it, paced by the fill's per-user budget and queue. A refill inside the extract replaces the imported rows with Overpass's version of them.
 - **Re-runs are safe.** Each import is one transaction, so a failed run leaves the tables as they were.
 - **A failed run leaves `roadwise_stage` behind.** The next run's `stage.sql` clears it, or run `drop schema roadwise_stage cascade`.
 
@@ -147,4 +148,5 @@ After loading more states:
    - `sslrootcert` is relative to `supabase/data`, where the scripts run. `sslmode=require` also passes the check but does not verify the server's identity.
    - The scripts refuse a remote `DB_URL` without `sslmode=verify-full`, `verify-ca` or `require`.
    - The import holds locks while it replaces the tables, and `CLUSTER` holds an exclusive lock for a few seconds per table. Run it when no drive depends on the tables.
+   - On a project that already serves on-demand fills, prefer `REPLACE=0` for OSM: it upserts and keeps the filled ways. A `REPLACE=1` import empties `osm.filled_cells` along with `osm.ways`, so every filled area is fetched from Overpass again as drivers reach it.
 5. Check the result by running `size_report.sql` in the dashboard's SQL editor, or with `psql` and the same TLS settings.

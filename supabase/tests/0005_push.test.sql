@@ -36,6 +36,8 @@ insert into public.inbox (user_id, kind, payload, dedupe_key) values
   ('00000000-0000-0000-0000-000000000002', 'friend_request', '{"from_user_id":"00000000-0000-0000-0000-000000000001"}', 'friend_request:00000000-0000-0000-0000-000000000001'),
   ('00000000-0000-0000-0000-000000000002', 'weekly_recap', '{"week":"2026-W40"}', 'weekly_recap:2026-W40');
 update public.inbox set push_after = now() + interval '1 hour' where dedupe_key = 'weekly_recap:2026-W40';
+-- the friend request that push stands for (a push whose request is gone is skipped at the claim)
+insert into public.friend_requests (from_id, to_id) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002');
 select throws_ok($$ insert into public.inbox (user_id, kind, payload, dedupe_key) values ('00000000-0000-0000-0000-000000000001', 'league_result', '{}', 'league:x') $$,
   '23514', null, 'a league result is no inbox kind any more');
 select is(private.dispatch_push(), 'unconfigured', 'with due rows and no vault secrets the sweep reports unconfigured');

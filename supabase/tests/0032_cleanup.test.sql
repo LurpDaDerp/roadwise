@@ -109,6 +109,8 @@ reset role;
 insert into public.notification_prefs (user_id, social) values ('00000000-0000-0000-0000-000000000002', false);
 insert into public.inbox (user_id, kind, payload, dedupe_key) values
   ('00000000-0000-0000-0000-000000000002', 'friend_request', '{"from_user_id":"00000000-0000-0000-0000-000000000001"}', 'friend_request:0032');
+insert into public.friend_requests (from_id, to_id) values ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002')
+  on conflict do nothing;
 set local role service_role;
 select is((select x -> 'ctx' -> 'enabled' from jsonb_array_elements(public.claim_push_batch(10, 60)) x where x ->> 'user_id' = '00000000-0000-0000-0000-000000000002'),
   'false'::jsonb, 'a friend request follows the social setting');

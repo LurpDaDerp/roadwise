@@ -41,7 +41,7 @@ select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.s
 select is(public.get_profile('ben') - 'user_id', '{"clan": null, "level": 1, "ranked": false, "scores": null, "streak": 0, "username": "ben", "league_tier": "bronze", "achievements": [], "relationship": "none", "safety_rating": null, "can_view_stats": false, "can_view_heatmap": false}'::jsonb,
   'a stranger''s public card: no stats, no heat map');
 select is(public.get_profile('ava') ->> 'relationship', 'self', 'own profile is self');
-select throws_ok($$ select public.get_profile('nobody') $$, 'P0002', 'profile not found', 'an unknown username is not found');
+select is(public.get_profile('nobody'), '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'an unknown username is not found');
 select throws_ok($$ select public.get_member_stats('00000000-0000-0000-0000-000000000002') $$, 'P0002', 'profile not found', 'a stranger''s stats are not found');
 select throws_ok($$ select public.get_heatmap('00000000-0000-0000-0000-000000000003') $$, 'P0002', 'profile not found', 'a stranger''s heat map is not found');
 
@@ -81,7 +81,7 @@ insert into public.friendships (user_a, user_b) select least(u.id, '00000000-000
   from auth.users u where u.email like 'f%@example.com';
 set local role authenticated;
 select pg_temp.as_user(4);
-select throws_ok($$ select public.send_friend_request('00000000-0000-0000-0000-000000000001') $$, '42501', 'you have reached the friend limit', 'dan at 200 friends cannot ask');
+select is(public.send_friend_request('00000000-0000-0000-0000-000000000001'), '{"code": "42501", "details": null, "hint": null, "message": "you have reached the friend limit"}'::jsonb, 'dan at 200 friends cannot ask');
 select pg_temp.as_user(1);
 select public.send_friend_request('00000000-0000-0000-0000-000000000004');
 select pg_temp.as_user(4);
@@ -97,12 +97,12 @@ select public.respond_friend_request('00000000-0000-0000-0000-000000000001', tru
 select pg_temp.as_user(1);
 select throws_ok($$ select public.block_user('00000000-0000-0000-0000-00000000dead') $$, 'P0002', 'profile not found', 'blocking an unknown id is the usual refusal, not an FK error');
 select lives_ok($$ select public.block_user('00000000-0000-0000-0000-000000000003') $$, 'A blocks cat');
-select throws_ok($$ select public.get_profile('cat') $$, 'P0002', 'profile not found', 'a blocked user is not found');
+select is(public.get_profile('cat'), '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'a blocked user is not found');
 select is((select array_agg(x ->> 'username') from jsonb_array_elements(public.search_users('cat')) x), null, 'nor searchable');
 select is(public.list_blocked(), jsonb_build_array(jsonb_build_object('user_id', '00000000-0000-0000-0000-000000000003', 'username', 'cat')), 'the blocked list');
 select pg_temp.as_user(3);
-select throws_ok($$ select public.get_profile('ava') $$, 'P0002', 'profile not found', 'the blocker is not found either');
-select throws_ok($$ select public.send_friend_request('00000000-0000-0000-0000-000000000001') $$, 'P0002', 'profile not found', 'and cannot be asked');
+select is(public.get_profile('ava'), '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'the blocker is not found either');
+select is(public.send_friend_request('00000000-0000-0000-0000-000000000001'), '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'and cannot be asked');
 select is((select count(*)::int from jsonb_array_elements(public.list_friends() -> 'friends')), 0, 'the friendship is gone');
 select pg_temp.as_user(1);
 select lives_ok($$ select public.unblock_user('00000000-0000-0000-0000-000000000003') $$, 'A unblocks');

@@ -2,7 +2,8 @@
 --
 -- psql variables (set by import-osm.sh / import-hpms.sh):
 --   source      'osm' or 'hpms'
---   replace     1: replace what this source holds (osm: every way; hpms: this state's sections)
+--   replace     1: replace what this source holds (osm: every way, and the on-demand Overpass fill
+--               state with them; hpms: this state's sections)
 --               0: upsert, for adding a neighbouring extract to what is already loaded
 --   state_code  hpms only: the state's FIPS code (53 for Washington); every staged row must match
 --   kmh_north_of  osm only: a latitude north of which the roads are Canadian ('' for none). An
@@ -38,6 +39,14 @@ do $$ begin raise exception 'kmh_north_of must be a latitude or empty'; end $$;
 \endif
 \if :is_replace
 truncate osm.ways;
+-- osm.ways also held every way the speed-limits function filled from Overpass, so the fill state
+-- goes with them: each cell is claimed and filled again the next time a lookup reaches it, instead
+-- of answering 'done' over an empty cell for up to 30 days
+do $$ begin
+  if to_regclass('osm.filled_cells') is not null then
+    delete from osm.filled_cells;
+  end if;
+end $$;
 \endif
 
 create temporary table osm_in on commit drop as
