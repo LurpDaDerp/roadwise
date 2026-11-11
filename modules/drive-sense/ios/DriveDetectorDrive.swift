@@ -205,10 +205,8 @@ extension DriveDetector {
     return DetectPolicy.lingerAfterJsEnd(endClock, startedAt: startedAt, now: DriveDetector.now(), walkSince: walkSince, waitUntil: r.waitUntil, carGoneSince: CarLink.shared.goneSince)
   }
 
-  /// "Not driving?": the drive is cancelled (its journal deleted, nothing kept). While detection is
-  /// allowed (armed, an owner, Always + Precise + Motion) it then rests on ten-metre GPS until a walk,
-  /// 5 min with nothing over 3 mph, or 3 h, so no automatic drive starts during the trip; otherwise
-  /// no automatic drive can start anyway, so it settles at once with GPS off. The last end stays as it was.
+  /// "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests
+  /// on ten-metre GPS until a walk, 5 min with nothing over 3 mph, or 3 h. The last end stays as it was.
   func notDriving() {
     guard var r = rec, isRecording, let driveId = r.driveId else { return }
     let now = DriveDetector.now()
@@ -217,35 +215,28 @@ extension DriveDetector {
     CarLink.shared.endDrive(driveId: driveId, endedAt: now, drove: false)
     pedometer.stop()
     journal.delete(driveId)
-    let rest = allowed(r)
-    if rest {
-      r.state = "suppressed"
-      r.since = now
-      r.origin = nil
-      r.waitUntil = nil
-      r.driveId = nil
-      r.startedAt = nil
-      r.startSource = nil
-      r.suppressedSince = now
-      r.suppressedUntil = now + DetectPolicy.SUPPRESS_MAX_MS
-    } else {
-      settle(&r, now)
-    }
+    r.state = "suppressed"
+    r.since = now
+    r.origin = nil
+    r.waitUntil = nil
+    r.driveId = nil
+    r.startedAt = nil
+    r.startSource = nil
+    r.suppressedSince = now
+    r.suppressedUntil = now + DetectPolicy.SUPPRESS_MAX_MS
     save(r)
     finishSensing()
     lastFix = nil
     lastOverStopTs = nil
     walkSince = nil
-    if rest {
-      capture.beginSuppressedSensing()
-      startClock()
-    }
+    capture.beginSuppressedSensing()
+    startClock()
     EventHub.detect.emit("driveEnded", [
       "driveId": driveId, "endedAt": DetectStateRecord.ms(now), "cause": "cancelled", "decidedAt": DetectStateRecord.ms(now),
       "lastSeq": lastSeq, "lastRowTs": DetectStateRecord.ms(rowTs),
     ])
     emitState("notDriving")
-    // The drive no longer holds the wakes on: unless detection is allowed, they stop.
+    // The drive no longer holds the wakes on: unarmed, they stop for the rest.
     syncWakes()
   }
 

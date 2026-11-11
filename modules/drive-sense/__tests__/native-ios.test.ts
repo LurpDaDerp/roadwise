@@ -684,10 +684,6 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(tick).toMatch(/DetectPolicy\.suppressionDue\(since: since, until: until, lastOverStopTs: lastOverStopTs, walkSince: walkSince, now: now\) != nil/);
     expect(fn(detector(), 'func endSuppression()')).not.toMatch(/lastEnd =/);
     expect(fn(code('CaptureController.swift'), 'func beginSuppressedSensing()')).toMatch(/location\.start\(\.suppressed\)/);
-    // the rest only while detection is allowed; otherwise it settles at once and GPS stays off
-    expect(nd).toMatch(/let rest = allowed\(r\)\s*if rest \{\s*r\.state = "suppressed"[\s\S]*?\} else \{\s*settle\(&r, now\)\s*\}\s*save\(r\)\s*finishSensing\(\)/);
-    expect(nd).toMatch(/if rest \{\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)\s*\}/);
-    expect(nd.match(/capture\.beginSuppressedSensing\(\)/g)?.length).toBe(1);
   });
 
   it('a relaunch: a candidate never survives; a drive resumes with a gap line or ends as an orphan; a rest resumes until its cap', () => {
@@ -696,7 +692,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(launch).toMatch(/case "candidate":\s*settle\(&r, now\)/);
     expect(launch).toMatch(/resumeDrive\(driveId\)/);
     // a rest: kept until its cap (from when it began), its still clock from the relaunch (review M5)
-    expect(launch).toMatch(/if allowed\(r\), let moved = DetectPolicy\.suppressionResume\(until: r\.suppressedUntil, now: now\) \{\s*lastOverStopTs = moved\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)\s*\} else \{\s*settle\(&r, now\)\s*save\(r\)\s*\}/);
+    expect(launch).toMatch(/if let moved = DetectPolicy\.suppressionResume\(until: r\.suppressedUntil, now: now\) \{\s*lastOverStopTs = moved\s*capture\.beginSuppressedSensing\(\)\s*startClock\(\)/);
     expect(launch).not.toMatch(/suppressedSince =|suppressedUntil =/);
     // the rest's start and cap are in the record, saved when "Not driving?" begins it
     expect(code('DetectStateRecord.swift')).toMatch(/var suppressedSince: Double\?\s*var suppressedUntil: Double\?/);

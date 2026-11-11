@@ -160,8 +160,8 @@ extension DriveDetector {
 
   /// didFinishLaunching (DriveDetectAppDelegate) and the first unlock after a reboot. The wakes are
   /// asked for again; a candidate never survives a process; a drive open in the last process resumes
-  /// from its journal or ends as an orphan; a rest resumes until its 3 h cap while detection is
-  /// allowed (else it settles), its still clock from the relaunch.
+  /// from its journal or ends as an orphan; a rest resumes until its 3 h cap, its still clock from
+  /// the relaunch.
   func resumeAtLaunch() {
     if let stored = DetectStateRecord.load() { rec = stored }
     CarLink.shared.reload()
@@ -185,10 +185,9 @@ extension DriveDetector {
         save(r)
       }
     case "suppressed":
-      // The rest goes on until its cap (from when it began) while detection is still allowed; nothing
-      // was sensed while RoadWise was not running, so its still clock starts again here (a relaunch
-      // never ends it at once).
-      if allowed(r), let moved = DetectPolicy.suppressionResume(until: r.suppressedUntil, now: now) {
+      // The rest goes on until its cap (from when it began); nothing was sensed while RoadWise was
+      // not running, so its still clock starts again here (a relaunch never ends it at once).
+      if let moved = DetectPolicy.suppressionResume(until: r.suppressedUntil, now: now) {
         lastOverStopTs = moved
         capture.beginSuppressedSensing()
         startClock()

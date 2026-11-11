@@ -851,7 +851,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `startWaiting()` | Start drive: a manual drive opens at once, from the tap (`recording`, origin `manual`, `startSource` `wake`, journaled, `driveStarted`; an auto candidate already open gives way to it, its rows dropped); While Using and Precise are enough. It waits for driving speed (two trusted rows at 10 mph or more in a row, as JS's wait) until `waitUntil` (5 min, `WAIT_MAX_MS`): meanwhile the safety stop never ends it on a walk, and on the still clock only once `waitUntil` has passed too (JS ends it unsaved at that deadline). A relaunch ends the wait, as JS takes the drive back without one. `{ ok: true, waitUntil, driveId, startedAt }`, or `{ ok: false, reason: 'permission' \| 'busy' \| 'unavailable' }`. A native build from before the drive opened at the tap answers `{ ok: true, waitUntil }`: the wrapper passes it on with `driveId` and `startedAt` null. |
 | `extendWaiting()` | Any touch while the Start-card drive waits: `waitUntil` = now + 5 min; `null` when it waits no more. |
 | `cancelWaiting()` | Ends a manual candidate quietly (none opens any more: JS ends a waiting drive through `stopCapture`). |
-| `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`). While detection is allowed (armed, an owner, Always + Precise + Motion) it then rests (`suppressed`); otherwise it settles at once (`off`), GPS off. No-op when nothing records. |
+| `notDriving()` | "Not driving?": the live drive is cancelled (its journal deleted, `driveEnded { cause: 'cancelled' }`) and detection rests (`suppressed`). No-op when nothing records. |
 | `listDrives()` | Every journal file as a `JournaledDrive` (its start line, last seq and row time, bytes, the end if any). A file with no end that is not the live drive is an orphan (the state record lost that drive, e.g. a power loss before it was saved): it is listed as ended, cause `orphan`, at its last row (else its start), so JS adopts and finishes it like any drive native ended. Before the first unlock (the record unreadable) nothing is called an orphan. |
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
 | `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
@@ -944,7 +944,7 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   10 mph or more in a row, the second at or after its arrival, drop it (the walk to the car, a
   misread at a light or at speed), so it never ends a drive or opens the linger at a later stop, and
   the next confident walking report starts a new one.
-- **`suppressed`** ("Not driving?", only while detection is allowed): ten-metre GPS, no IMU, no rows, the live motion activity. It
+- **`suppressed`** ("Not driving?"): ten-metre GPS, no IMU, no rows, the live motion activity. It
   ends on a walk standing 20 s, after 5 min with no trusted fix over 3 mph, or at its 3 h cap; then
   GPS off, the parked region at the last fix, `armed`. `lastEnd` is not touched.
 - **A relaunch** (`resumeAtLaunch`, at didFinishLaunching and at the first unlock): the wakes are
@@ -953,8 +953,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
   last row; its rows go on past `RESUME_SEQ_GAP` (1000) seqs after the journal's highest, which the
   `gap` line carries as `lastSeq`, because the last unsynced rows may be gone from the file while JS
   holds them, and a seq handed out twice would make JS drop the new row as a repeat); an older one ends as an `orphan` (`driveEnded`, for JS to
-  finalize); a rest resumes until its 3 h cap (measured from when it began) while detection is still
-  allowed (else it settles), its still clock starting again at the relaunch, so a relaunch never ends it at once.
+  finalize); a rest resumes until its 3 h cap (measured from when it began), its still clock
+  starting again at the relaunch, so a relaunch never ends it at once.
 
 ### The row journal
 
