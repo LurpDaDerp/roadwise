@@ -7,7 +7,7 @@ import { roundTo } from './num';
 import { DASHCAM_MIN_COVERAGE, DASHCAM_MIN_MOVING_S, DASHCAM_MIN_MPH, MIN_SCORED_MILES, MIN_SCORED_S, PHONE_SEVERE_S } from './thresholds';
 
 /** Bumped whenever the rules a drive is judged by change; stored with every drive. */
-export const SCORING_VERSION = 13;
+export const SCORING_VERSION = 12;
 
 export type EventType = 'speeding' | 'hard_brake' | 'hard_accel' | 'hard_corner' | 'phone_pickup' | 'eyes_off' | 'drowsy';
 
@@ -50,18 +50,6 @@ export type DriveEventMeasured = {
    * mean over (`LEGACY_MEAN_OVER_MPH`).
    */
   overMphS?: number;
-  /**
-   * harsh events: the minor line (g) the event was judged at, when the road's grip put it under its
-   * type's dry line (`hardLines`); absent on a dry road. Its weight reads the peak against it, held
-   * between the type's snow line and its dry line (`hardEventWeight`).
-   */
-  lineG?: number;
-  /**
-   * speeding: the speeding line (mph, 1 dp) at the peak row, when the road state judged that row
-   * against a lower limit than the sign's (`judgedLimitMph`); absent otherwise. Shown only: the
-   * Speed weight reads `overMphS`.
-   */
-  lineMph?: number;
   /** A DashPal event. */
   source?: 'dashcam';
 };

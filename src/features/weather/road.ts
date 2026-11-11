@@ -1,8 +1,9 @@
 /**
- * The road state a drive's lines are judged by: the grip and the sight cap at the car, from the
- * 15-minute weather series of its 0.1° cell. Pure: the series, a moment and a position in; a stamp
- * out (`{}` for a dry road in clear air), or null when the state is unknown. Unknown and `{}` both
- * judge by the normal lines; only a grip or a cap tightens them (`judgedLimitMph`, `hardLines`).
+ * The road state a drive's weather warnings are judged by: the grip and the sight cap at the car,
+ * from the 15-minute weather series of its 0.1° cell. Pure: the series, a moment and a position in;
+ * a stamp out (`{}` for a dry road in clear air), or null when the state is unknown. Unknown and `{}`
+ * both warn at the normal lines; only a grip or a cap moves the warning lines (`judgedLimitMph`,
+ * `hardLines`). The score never reads it.
  * Numbers and their sources are in `./thresholds.ts`.
  *
  * - Grip at a step, first match wins:
@@ -19,7 +20,7 @@
  * - Known only within 90 minutes of the fetch, with 6 hours of steps before the moment's step, and at
  *   the series' cell or one touching it. A missing field makes its rule not fire.
  */
-import { worseGrip, type RoadGrip, type RoadStamp, type SightCapMph } from '@scoring';
+import { worseGrip, type RoadGrip, type RoadStamp, type SightCapMph } from '@/core/road';
 
 import { roadTitle } from './copy';
 import {

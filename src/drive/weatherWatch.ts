@@ -26,7 +26,7 @@
 // A reading or alert lookup given in place of the request (`read`, `lookup`: test seams) holds no
 // series: it is asked once as the drive opens, then every 15 min and after each 20 km of the trip's
 // own odometer, never faster, and it has no road state.
-import type { RoadStamp } from '@scoring';
+import type { RoadStamp } from '@/core/road';
 
 import { createSettingsRepo, type Db } from '@/data/db';
 import { dangerFrom, type DangerAlert } from '@/features/weather/danger';
@@ -103,7 +103,7 @@ export interface WeatherWatch {
   onRow(row: { gnssValid: boolean; lat: number; lng: number }, distanceM: number): void;
   /** The road state at a moment and place: `{}` for a normal road, null when unknown (no serving answer). */
   roadAt(tsMs: number, lat: number, lng: number): RoadStamp | null;
-  /** The title for a road state at a moment and place ("Slippery roads" in the cold), or null when it tightens nothing. */
+  /** The title for a road state at a moment and place ("Slippery roads" in the cold), or null when it moves no line. */
   roadTitle(road: RoadStamp | null | undefined, tsMs: number, lat: number, lng: number): string | null;
   /** No more requests or answers (the drive ended). */
   stop(): void;

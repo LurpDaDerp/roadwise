@@ -60,3 +60,21 @@ test('a phone repeat (still in hand) is the tone and haptic only, never the voic
     intensity: 4,
   });
 });
+
+test('a weather warning sounds exactly like the regular warning of its kind: the same tone, voice line, haptic and held session', () => {
+  for (const voiceEnabled of [true, false]) {
+    for (const [type, road] of [
+      ['speeding', 'fog'],
+      ['speeding', 'water'],
+      ['hard_brake', 'wet'],
+      ['hard_accel', 'snow'],
+      ['hard_corner', 'ice'],
+    ] as const) {
+      const regular = decisionFor({ id: 'e1', type, tier: 'minor', at: 1000 }, { voiceEnabled });
+      const weather = decisionFor({ id: 'e1', type, tier: 'minor', at: 1000, road }, { voiceEnabled });
+      expect(weather).toEqual(regular);
+      const repeat = decisionFor({ id: 'e1', type, tier: 'minor', at: 1000, repeat: true, road }, { voiceEnabled });
+      expect(repeat).toEqual(decisionFor({ id: 'e1', type, tier: 'minor', at: 1000, repeat: true }, { voiceEnabled }));
+    }
+  }
+});

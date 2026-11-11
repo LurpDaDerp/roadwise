@@ -18,6 +18,7 @@ const state = (over: Partial<DriveState> = {}): DriveState =>
     speedingRatio: 30 / 35,
     speedingOver: false,
     speedingTier: null,
+    speedingWeather: null,
     lastShake: null,
     lastAlert: null,
     weatherAlert: null,
@@ -59,7 +60,7 @@ describe('selectLive: the driving screen re-renders only for what it draws', () 
     expect(shallow(selectLive(state({ waiting: wait() })), selectLive(state({ waiting: { ...wait(), phase: 'countdown', deadlineAt: 3000 } })))).toBe(false);
   });
 
-  test('on a tightened road the tint starts at the judged limit and is half way at its line; the spoken speed still says over the sign only past the sign', () => {
+  test('on a road whose weather lowered the limit the tint starts at the judged limit and is half way at its line; the spoken speed still says over the sign only past the sign', () => {
     // A wet 35: judged at 31.5, its line 35.7; the ratio is the speed over the judged limit.
     const wet = (mph: number) => state({ judgedLimitMph: 31.5, speedingRatio: mph / 31.5 });
     expect(selectLive(wet(31)).speedingTint).toBe(0);
@@ -75,6 +76,13 @@ describe('selectLive: the driving screen re-renders only for what it draws', () 
     const road = { road: { g: 'wet' as const }, title: 'Wet roads' };
     expect(shallow(selectLive(state({ weatherRoad: road })), selectLive(state({ weatherRoad: road })))).toBe(true);
     expect(selectLive(state({ weatherRoad: road })).weatherRoad).toBe(road);
+  });
+
+  test('the weather "Slow down" hold goes to the screen with its condition', () => {
+    expect(selectLive(state({ speedingOver: true, speedingWeather: 'fog' }))).toMatchObject({ speedingOver: true, speedingTier: null, speedingWeather: 'fog' });
+    expect(selectLive(state()).speedingWeather).toBeNull();
+    expect(shallow(selectLive(state({ speedingWeather: 'wet' })), selectLive(state({ speedingWeather: 'wet' })))).toBe(true);
+    expect(shallow(selectLive(state({ speedingWeather: 'wet' })), selectLive(state({ speedingWeather: 'water' })))).toBe(false);
   });
 
   test('a new row is a new slice', () => {

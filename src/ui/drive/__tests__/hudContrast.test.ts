@@ -12,9 +12,12 @@ import { opaque, over } from '@/ui/sky/color';
 import { plainBundle, skyBundle } from '@/ui/sky/palette';
 import type { Theme } from '@/ui/theme';
 
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+
 import { SOS_GLYPH_MIN, sosGlyphColor } from '@/features/drive/EmergencyButton';
 import { sosCallFace } from '@/features/drive/EmergencyPanel';
 import { hudButtonColors } from '@/features/drive/hudButtons';
+import { ROAD_CONDITIONS, ROAD_MARK, roadColor } from '@/features/drive/roadMark';
 
 const palettes: [string, HudPalette][] = [
   ['day', HUD.day],
@@ -37,6 +40,20 @@ describe.each(palettes)('the %s HUD palette', (_name, p) => {
   test('black print on every tier colour holds 7:1 (the alert chip)', () => {
     for (const tier of ['minor', 'moderate', 'severe'] as const) {
       expect(contrastRatio(p.ground, tierColor(p, tier))).toBeGreaterThanOrEqual(7);
+    }
+  });
+
+  test('black print and icons on every road condition’s colour hold 7:1 (a weather warning’s chip)', () => {
+    for (const road of ROAD_CONDITIONS) expect(contrastRatio(p.ground, roadColor(p, road))).toBeGreaterThanOrEqual(7);
+  });
+
+  test('the five road condition colours are distinct, cool (never the tiers’ warm yellow, orange or red) and none is a tier’s', () => {
+    const roads = ROAD_CONDITIONS.map((road) => roadColor(p, road));
+    expect(new Set(roads).size).toBe(5);
+    for (const hex of roads) {
+      const [r, , b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+      expect(b).toBeGreaterThan(r);
+      expect([p.minor, p.moderate, p.severe]).not.toContain(hex);
     }
   });
 
@@ -71,6 +88,14 @@ test('the night print and sign are neutral greys (no warm cast), the sign a near
   for (const key of ['ink', 'inkMuted', 'signFace'] as const) expect(spread(HUD.night[key])).toBeLessThanOrEqual(16);
   expect(relativeLuminance(HUD.night.signFace)).toBeGreaterThan(0.7);
   expect(HUD.day.signFace).toBe('#FFFFFF');
+});
+
+test('each road condition has its own icon, palette colour and spoken words', () => {
+  expect(ROAD_CONDITIONS).toEqual(['wet', 'water', 'snow', 'ice', 'fog']);
+  expect(ROAD_CONDITIONS.map((road) => ROAD_MARK[road].icon)).toEqual(['weather-rainy', 'weather-pouring', 'weather-snowy', 'snowflake', 'weather-fog']);
+  expect(ROAD_CONDITIONS.map((road) => ROAD_MARK[road].spoken)).toEqual(['wet road', 'heavy rain', 'snowy road', 'icy road', 'low visibility']);
+  for (const road of ROAD_CONDITIONS) expect(MaterialCommunityIcons.glyphMap[ROAD_MARK[road].icon]).toEqual(expect.any(Number));
+  expect(new Set(ROAD_CONDITIONS.map((road) => ROAD_MARK[road].color)).size).toBe(5);
 });
 
 test('small HUD labels follow Dynamic Type between 1x and 2x', () => {

@@ -166,28 +166,6 @@ describe('FinalizeTripPayloadV5Schema: accepts', () => {
   });
 });
 
-describe('FinalizeTripPayloadV5Schema: the weather lines', () => {
-  test('lineG on a hard event and lineMph on a speeding event, at their bounds', () => {
-    const p = mutate((x) => {
-      x.events[0].measured = { peakG: 0.33, speedMph: 30, lineG: 0.32 };
-      x.events[1].measured = { speedMph: 41, limitMph: 30, overMphS: 120.5, lineMph: 30.1 };
-    });
-    expect(FinalizeTripPayloadV5Schema.parse(p)).toEqual(p);
-    expect(ok(mutate((x) => ((x.events[0].measured.lineG = 0.2), (x.events[1].measured.lineMph = 0))))).toBe(true);
-    expect(ok(mutate((x) => ((x.events[0].measured.lineG = 1), (x.events[1].measured.lineMph = 150))))).toBe(true);
-  });
-  test('the contract leaves the type to the server (it drops a line from the wrong type)', () =>
-    expect(ok(mutate((x) => ((x.events[1].measured.lineG = 0.32), (x.events[0].measured.lineMph = 30))))).toBe(true));
-  test.each<[string, (p: Record<string, any>) => void]>([
-    ['a lineG under 0.2', (p) => (p.events[0].measured.lineG = 0.19)],
-    ['a lineG over 1', (p) => (p.events[0].measured.lineG = 1.01)],
-    ['a lineG that is not a number', (p) => (p.events[0].measured.lineG = '0.32')],
-    ['a null lineG', (p) => (p.events[0].measured.lineG = null)],
-    ['a negative lineMph', (p) => (p.events[1].measured.lineMph = -0.1)],
-    ['a lineMph over 150', (p) => (p.events[1].measured.lineMph = 150.1)],
-  ])('rejects %s', (_name, fn) => expect(ok(mutate(fn))).toBe(false));
-});
-
 describe('FinalizeTripPayloadV5Schema: phone pickups', () => {
   test('a moderate and a severe pickup, with or without their speeds', () => {
     const p = mutate((x) =>
@@ -305,8 +283,6 @@ describe('the v4 contract a build from before phone tracking sends', () => {
     ['v other than 4', (p) => (p.v = 5)],
     ['a phone pickup', (p) => p.events.push(eventV4(9, { type: 'phone_pickup' as PayloadEventV4['type'], tier: 'severe', durationS: 4 }))],
     ['a measured maxSpeedMph', (p) => (p.events[0].measured.maxSpeedMph = 30)],
-    ['a measured lineG (a v5 key)', (p) => (p.events[0].measured.lineG = 0.32)],
-    ['a measured lineMph (a v5 key)', (p) => (p.events[1].measured.lineMph = 30.1)],
     ['phoneS (a v5 key)', (p) => (p.exposure.phoneS = 0)],
     ['exposure limitS over movingS', (p) => (p.exposure.limitS = 1101)],
     ['a missing origin', (p) => delete p.origin],
@@ -520,8 +496,6 @@ const asExposureWire = (e: Exposure): ExposureWire => e;
 test('wire types are assignable to the scoring types', () => {
   expect(asDriveEvent(event(1)).type).toBe('hard_brake');
   expect(asDriveEvent(pickup(2)).measured?.maxSpeedMph).toBe(38.4);
-  expect(asDriveEvent(event(3, { measured: { peakG: 0.33, lineG: 0.32 } })).measured?.lineG).toBe(0.32);
-  expect(asDriveEvent(event(4, { type: 'speeding', measured: { overMphS: 3, lineMph: 30.1 } })).measured?.lineMph).toBe(30.1);
   expect(EVENT_TYPES.map(asEventType).map(asWireType)).toEqual(['speeding', 'hard_brake', 'hard_accel', 'hard_corner', 'phone_pickup', 'eyes_off', 'drowsy']);
   const e = { slowdowns: 1, speedups: 2, turns: 3, limitS: 4, movingS: 5, phoneS: 4 };
   expect(asExposureWire(asExposure(e))).toEqual(e);

@@ -112,10 +112,6 @@ test('a drive event keeps what it measured (speeding: overMphS; a phone pickup: 
     measured: { speedMph: 35, maxSpeedMph: 41.5 },
   });
   expect(toLocalDriveEvent(row({ measured_json: 'not json' })).measured).toEqual({});
-  // The line a weather-tightened event was judged at: on its own kind only.
-  expect(toLocalDriveEvent(row({ type: 'hard_brake', measured_json: '{"peakG":0.33,"lineG":0.32,"lineMph":35.7}' })).measured).toEqual({ peakG: 0.33, lineG: 0.32 });
-  expect(toLocalDriveEvent(row({ measured_json: '{"overMphS":4,"lineMph":35.7,"lineG":0.32}' })).measured).toEqual({ overMphS: 4, lineMph: 35.7 });
-  expect(toLocalDriveEvent(row({ type: 'phone_pickup', measured_json: '{"speedMph":30,"lineG":0.32}' })).measured).toEqual({ speedMph: 30 });
   expect(toLocalDriveEvent(row({ measured_json: null, status: 'removed' }))).toMatchObject({ measured: {}, removed: true });
 });
 

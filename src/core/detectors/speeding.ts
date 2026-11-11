@@ -7,15 +7,10 @@
 // once). Every episode is an event from its first
 // over row, however short: there is no grace, and every second over the line weighs on Speed.
 //
-// A row the host stamped with a road state (`row.road`: wet, snow, ice, low visibility) is judged
-// against the tightened limit (`judgedLimitMph`): the line and the tier run on it, the posted limit
-// stays the one the event names. An unstamped row is judged against the posted limit itself.
-//
 // The event: `startedAt` the first over row, `durationS` every over row, the tier by its peak,
-// `measured.overMphS` the mph past each row's own line summed over every over row (what the Speed
-// weight reads), and the peak speed with the posted limit there, plus `lineMph`, the line at the
-// peak (1 dp), when the road state tightened that row.
-import { judgedLimitMph, speedingLine, speedTier, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, type Tier } from '@scoring';
+// `measured.overMphS` the mph past the line summed over every over row (what the Speed weight
+// reads), and the peak speed with the limit there.
+import { speedingLine, speedTier, SPEEDING_END_BUFFER_MPH, SPEEDING_END_S, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, OpenEpisode, SpeedingEpisode, SpeedingReading } from '../engine/types';
 import { gnssPoor, knownSpeedMph, limitMphFor, round1, speedTrusted } from './common';
@@ -35,8 +30,6 @@ interface Episode {
   peak: Tier;
   peakSpeedMph: number;
   limitAtPeak: number;
-  /** The line at the peak when the road state tightened that row's limit, else null. */
-  lineAtPeak: number | null;
   /** The current row is beyond the line, at this tier. */
   current: Tier | null;
 }
@@ -67,12 +60,7 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
         tier: e.peak,
         startedAt: e.startedAt,
         durationS: e.overRows,
-        measured: {
-          speedMph: round1(e.peakSpeedMph),
-          limitMph: e.limitAtPeak,
-          overMphS: round1(e.overMphS),
-          ...(e.lineAtPeak === null ? {} : { lineMph: round1(e.lineAtPeak) }),
-        },
+        measured: { speedMph: round1(e.peakSpeedMph), limitMph: e.limitAtPeak, overMphS: round1(e.overMphS) },
       },
     ];
   };
@@ -81,29 +69,15 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
     push(row, limit) {
       const limitMph = limitMphFor(row, limit);
       const speedMph = knownSpeedMph(row);
-      // No warm-up: speeding is read off the GPS speed and the limit alone, from the first row.
+      // No warm-up: speeding is read off the GPS speed and the posted limit alone, from the first row.
       const usable = limitMph !== null && speedMph !== null && speedTrusted(row) && !gnssPoor(row);
-      // The limit the row is judged against: the posted one, tightened by the road state it carries.
-      const judged = limitMph === null ? null : judgedLimitMph(limitMph, row.road);
-      const line = usable && judged !== null ? speedingLine(judged) : null;
+      const line = usable ? speedingLine(limitMph) : null;
       now = usable && line !== null ? { ratio: speedMph / limitMph, overMph: speedMph - line } : null;
-      const tier = usable && judged !== null ? speedTier(speedMph, judged) : null;
-      const tightened = judged !== limitMph;
+      const tier = usable ? speedTier(speedMph, limitMph) : null;
 
       if (tier !== null && usable && line !== null) {
         if (ep === null) {
-          ep = {
-            id: newId(),
-            startedAt: row.ts,
-            overRows: 0,
-            overMphS: 0,
-            belowRows: 0,
-            peak: tier,
-            peakSpeedMph: speedMph,
-            limitAtPeak: limitMph,
-            lineAtPeak: tightened ? line : null,
-            current: tier,
-          };
+          ep = { id: newId(), startedAt: row.ts, overRows: 0, overMphS: 0, belowRows: 0, peak: tier, peakSpeedMph: speedMph, limitAtPeak: limitMph, current: tier };
         }
         ep.overRows += 1;
         ep.overMphS += Math.max(0, speedMph - line);
@@ -113,7 +87,6 @@ export function createSpeedingDetector(newId: () => string): SpeedingDetector {
           ep.peak = worse(tier, ep.peak);
           ep.peakSpeedMph = speedMph;
           ep.limitAtPeak = limitMph;
-          ep.lineAtPeak = tightened ? line : null;
         }
         return [];
       }

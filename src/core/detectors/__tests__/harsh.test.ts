@@ -234,71 +234,125 @@ describe('before the forward axis is learned, the GPS speed change stands in for
   });
 });
 
-describe('the road state on the row (row.road.g): wet and water judge at the wet lines, snow and ice at the snow lines', () => {
-  const events = (rows: FeatureRow[]) => drive(createHarshDetector(counterIds()), rows).all;
-  const wet = { g: 'wet' } as const;
-
-  test('a 0.33 g brake with a matching GNSS drop is no event on a dry road, a minor one at the 0.32 line on a wet one', () => {
-    expect(events(peakDrive({ aLonMin: -0.33 }, 10, 10, mph(35), mph(25)))).toEqual([]);
-    const e = only(events(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(35), mph(25))));
-    expect(e).toMatchObject({ type: 'hard_brake', tier: 'minor', startedAt: T0 + 10_000, durationS: 1 });
-    expect(e.measured).toEqual({ peakG: 0.33, speedMph: 25, lineG: 0.32 });
-    // Heavy rain judges at the wet lines too.
-    expect(only(events(peakDrive({ aLonMin: -0.33, road: { g: 'water' } }, 10, 10, mph(35), mph(25)))).measured.lineG).toBe(0.32);
-  });
-
-  test('snow and ice judge at the snow lines (brake 0.29, start 0.32, turn 0.38), and a stamp of sight alone changes nothing', () => {
-    for (const g of ['snow', 'ice'] as const) {
-      expect(only(events(peakDrive({ aLonMin: -0.3, road: { g } }, 10, 10, mph(35), mph(25)))).measured).toEqual({ peakG: 0.3, speedMph: 25, lineG: 0.29 });
-      expect(only(events(peakDrive({ aLonMax: 0.33, road: { g } }, 10, 10, mph(20), mph(30)))).measured.lineG).toBe(0.32);
-    }
-    expect(events(peakDrive({ aLonMin: -0.33, road: { cap: 35 } }, 10, 10, mph(35), mph(25)))).toEqual([]);
-  });
-
-  test('a stamp it does not know (from a stored row) judges at the dry lines; a dry event carries no lineG', () => {
-    const odd = { g: 'mud' } as unknown as FeatureRow['road'];
-    expect(events(peakDrive({ aLonMin: -0.33, road: odd }, 10, 10, mph(35), mph(25)))).toEqual([]);
-    expect(only(events(peakDrive({ aLonMin: -0.4, road: odd }, 10, 10, mph(35), mph(25)))).measured).toEqual({ peakG: 0.4, speedMph: 25 });
-  });
-
-  test('the severe line is the road state’s too: 0.52 g on a wet road is severe (0.50), on a dry one minor (0.55)', () => {
-    expect(only(events(peakDrive({ aLonMin: -0.52, road: wet }, 10, 10, mph(40), mph(25)))).tier).toBe('severe');
-    expect(only(events(peakDrive({ aLonMin: -0.52 }, 10, 10, mph(40), mph(25)))).tier).toBe('minor');
-  });
-
-  test('an episode keeps the lines of its first row for its tier, its alert and its lineG', () => {
-    // Opened wet at 0.33, peaking at 0.52 on a dry row: severe at the wet line, alerted minor (its tier so far).
-    const wetFirst = seq([10, { speed: mph(40) }], [1, { speed: mph(33), aLonMin: -0.33, road: wet }], [1, { speed: mph(26), aLonMin: -0.52 }], [10, { speed: mph(26) }]);
+describe('the hard events never read the road state (row.road): they are judged at the dry lines, whatever the weather', () => {
+  const ROADS: FeatureRow['road'][] = [{ g: 'wet' }, { g: 'water' }, { g: 'snow' }, { g: 'ice', cap: 35 }, { cap: 35 }];
+  const stamp = (rows: FeatureRow[], road: FeatureRow['road']): FeatureRow[] => rows.map((r) => ({ ...r, road }));
+  /** Every push and every alert, then the flush. */
+  const run = (rows: FeatureRow[]) => {
     const det = createHarshDetector(counterIds());
-    const told: string[] = [];
-    const all = wetFirst.flatMap((r) => {
-      const out = det.push(r, limit(mph(35)), ctx());
-      told.push(...det.alerts().map((a) => `${a.type}:${a.tier}`));
-      return out;
+    const pushed = rows.map((r) => ({ out: det.push(r, limit(mph(35)), ctx()), told: det.alerts() }));
+    return { pushed, flushed: det.flush() };
+  };
+  const drives: [string, FeatureRow[]][] = [
+    ['a 0.33 g brake (between the snow and dry lines)', peakDrive({ aLonMin: -0.33 }, 10, 10, mph(35), mph(25))],
+    ['a 0.40 g brake (past the dry line)', peakDrive({ aLonMin: -0.4 }, 10, 10, mph(35), mph(25))],
+    ['a 0.52 g brake (severe on a wet road’s lines, minor dry)', peakDrive({ aLonMin: -0.52 }, 10, 10, mph(40), mph(25))],
+    ['a 0.34 g start', peakDrive({ aLonMax: 0.34 }, 10, 10, mph(20), mph(30))],
+    ['a 0.45 g turn', seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: 135, yawRateMax: 0.8, aLatMin: -0.45 }], [10, { speed: mph(30), course: 135 }])],
+    ['a 0.60 g turn', seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: 135, yawRateMax: 1.2, aLatMin: -0.6 }], [10, { speed: mph(30), course: 135 }])],
+    ['the GNSS stand-in, 35 → 27.5 mph (0.34 g)', seq([10, { speed: mph(35) }], [10, { speed: mph(27.5) }])],
+  ];
+
+  test.each(drives)('%s: every push, alert and event is the unstamped one', (_name, rows) => {
+    const dry = run(rows);
+    for (const road of ROADS) expect(run(stamp(rows, road))).toEqual(dry);
+  });
+
+  test('no event names a weather line', () => {
+    for (const [, rows] of drives) {
+      for (const e of drive(createHarshDetector(counterIds()), stamp(rows, { g: 'ice' })).all) expect(Object.keys(e.measured).sort()).toEqual(['peakG', 'speedMph']);
+    }
+  });
+});
+
+describe('the alert-only weather instance (weather: true): the grip’s lines, warnings only', () => {
+  const wet = { g: 'wet' } as const;
+  /** Push every row through a weather instance (and a scoring one beside it), keeping what each told. */
+  const both = (rows: FeatureRow[], c = ctx()) => {
+    const weather = createHarshDetector(counterIds(), { weather: true });
+    const scoring = createHarshDetector(counterIds());
+    const out = rows.map((r) => {
+      const events = weather.push(r, limit(mph(35)), c);
+      scoring.push(r, limit(mph(35)), c);
+      return { events, weather: weather.alerts(), scoring: scoring.alerts() };
     });
-    const e = only([...all, ...det.flush()]);
-    expect(e).toMatchObject({ tier: 'severe', durationS: 2 });
-    expect(e.measured).toEqual({ peakG: 0.52, speedMph: 26, lineG: 0.32 });
-    expect(told).toEqual(['hard_brake:minor']);
-    // Opened dry at 0.40, peaking at 0.52 on a wet row: minor at the dry line, no lineG.
-    const dryFirst = seq([10, { speed: mph(40) }], [1, { speed: mph(33), aLonMin: -0.4 }], [1, { speed: mph(26), aLonMin: -0.52, road: wet }], [10, { speed: mph(26) }]);
-    const d = only(events(dryFirst));
-    expect(d).toMatchObject({ tier: 'minor', durationS: 2 });
-    expect(d.measured).toEqual({ peakG: 0.52, speedMph: 26 });
+    return {
+      events: [...out.flatMap((o) => o.events), ...weather.flush()],
+      weather: out.flatMap((o, i) => o.weather.map((a) => ({ ...a, row: i }))),
+      scoring: out.flatMap((o, i) => o.scoring.map((a) => ({ ...a, row: i }))),
+    };
+  };
+
+  test('a 0.33 g brake on a wet road is a weather warning (the 0.32 line): tier minor, naming the grip, never an event', () => {
+    const got = both(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(35), mph(25)));
+    expect(got.weather).toEqual([{ id: `wx-hard_brake-${T0 + 10_000}`, type: 'hard_brake', tier: 'minor', road: 'wet', row: 10 }]);
+    expect(got.events).toEqual([]);
+    expect(got.scoring).toEqual([]);
   });
 
-  test('before the forward axis is learned, the GNSS stand-in judges at the row’s lines: 35 → 27.5 mph (0.34 g) is a wet hard brake, nothing dry', () => {
-    expect(events(seq([10, { speed: mph(35) }], [10, { speed: mph(27.5) }]))).toEqual([]);
-    const e = only(events(seq([10, { speed: mph(35) }], [10, { speed: mph(27.5), road: wet }])));
-    expect(e).toMatchObject({ type: 'hard_brake', tier: 'minor', startedAt: T0 + 10_000 });
-    expect(e.measured).toEqual({ peakG: 0.34, speedMph: 27.5, lineG: 0.32 });
+  test('each grip names itself; wet and water warn at the wet lines, snow and ice at the snow lines', () => {
+    expect(both(peakDrive({ aLonMin: -0.33, road: { g: 'water' } }, 10, 10, mph(35), mph(25))).weather).toMatchObject([{ type: 'hard_brake', road: 'water' }]);
+    for (const g of ['snow', 'ice'] as const) {
+      expect(both(peakDrive({ aLonMin: -0.3, road: { g } }, 10, 10, mph(35), mph(25))).weather).toMatchObject([{ type: 'hard_brake', road: g }]);
+      expect(both(peakDrive({ aLonMax: 0.33, road: { g } }, 10, 10, mph(20), mph(30))).weather).toMatchObject([{ type: 'hard_accel', road: g }]);
+    }
+    // 0.30 g is under the wet brake line (0.32), 0.33 g under the wet start line (0.36).
+    expect(both(peakDrive({ aLonMin: -0.3, road: wet }, 10, 10, mph(35), mph(25))).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMax: 0.33, road: wet }, 10, 10, mph(20), mph(30))).weather).toEqual([]);
   });
 
-  test('a 0.45 g turn is no corner on a dry road (0.48), a minor one at 0.43 on a wet road', () => {
-    const turn = (road?: FeatureRow['road']) =>
-      seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: 135, yawRateMax: 0.8, aLatMin: -0.45, ...(road ? { road } : {}) }], [10, { speed: mph(30), course: 135 }]);
-    expect(events(turn())).toEqual([]);
-    expect(only(events(turn(wet))).measured).toEqual({ peakG: 0.45, speedMph: 30, lineG: 0.43 });
+  test('past the dry line it says nothing: the scoring detector alerts it, the event that counts', () => {
+    const got = both(peakDrive({ aLonMin: -0.4, road: wet }, 10, 10, mph(35), mph(25)));
+    expect(got.weather).toEqual([]);
+    expect(got.scoring).toEqual([{ id: 'e1', type: 'hard_brake', tier: 'minor', row: 10 }]);
+  });
+
+  test('an episode warned under the dry line that then passes it is alerted again by the scoring detector', () => {
+    const rows = seq(
+      [10, { speed: mph(40), road: wet }],
+      [1, { speed: mph(33), aLonMin: -0.33, road: wet }],
+      [1, { speed: mph(26), aLonMin: -0.45, road: wet }],
+      [10, { speed: mph(26), road: wet }]
+    );
+    const got = both(rows);
+    expect(got.weather).toMatchObject([{ type: 'hard_brake', road: 'wet', row: 10 }]);
+    expect(got.scoring).toMatchObject([{ type: 'hard_brake', tier: 'minor', row: 11 }]);
+  });
+
+  test('never on an unstamped row, a stamp of sight alone, or a stamp it does not know', () => {
+    expect(both(peakDrive({ aLonMin: -0.33 }, 10, 10, mph(35), mph(25))).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMin: -0.33, road: { cap: 35 } }, 10, 10, mph(35), mph(25))).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMin: -0.33, road: { g: 'mud' } as unknown as FeatureRow['road'] }, 10, 10, mph(35), mph(25))).weather).toEqual([]);
+  });
+
+  test('every gate holds: no GNSS confirmation, a spike, the warm-up, a poor fix, under 5 mph', () => {
+    expect(both(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10)).weather).toEqual([]);
+    const spiked = seq([10, { speed: mph(35) }], [1, { speed: mph(25), aLonMin: -0.33, road: wet, gravityStability: 0.2 }], [10, { speed: mph(25) }]);
+    expect(both(spiked).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(35), mph(25)), ctx({ warmupEndsAt: T0 + 30_000 })).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMin: -0.33, road: wet, hAcc: 30 }, 10, 10, mph(35), mph(25))).weather).toEqual([]);
+    expect(both(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(4), mph(2))).weather).toEqual([]);
+  });
+
+  test('a 0.45 g turn on a wet road warns at 0.43; under 10 mph it does not', () => {
+    const turn = (v: number) => seq([10, { speed: mph(v) }], [1, { speed: mph(v), course: 135, yawRateMax: 3, aLatMin: -0.45, road: wet }], [10, { speed: mph(v), course: 135 }]);
+    expect(both(turn(30)).weather).toMatchObject([{ type: 'hard_corner', tier: 'minor', road: 'wet', row: 10 }]);
+    expect(both(turn(30)).scoring).toEqual([]);
+    expect(both(turn(8)).weather).toEqual([]);
+  });
+
+  test('before the forward axis is learned, the GNSS stand-in warns too: 35 → 27.5 mph (0.34 g) on a wet road', () => {
+    const got = both(seq([10, { speed: mph(35), road: wet }], [10, { speed: mph(27.5), road: wet }]));
+    expect(got.weather).toMatchObject([{ type: 'hard_brake', road: 'wet', row: 10 }]);
+    expect(got.scoring).toEqual([]);
+  });
+
+  test('it never takes an event id', () => {
+    let taken = 0;
+    const det = createHarshDetector(() => `e${(taken += 1)}`, { weather: true });
+    for (const r of peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(35), mph(25))) det.push(r, limit(mph(35)), ctx());
+    det.flush();
+    expect(taken).toBe(0);
   });
 });
 
@@ -375,10 +429,16 @@ describe('before the forward axis is learned (no sideways extremes), speed × ya
     expect(events(turn(32, { speedAcc: 3 }))).toEqual([]);
   });
 
-  test('the road state’s line holds too: 0.45 g of yaw is a corner on a wet road (0.43), nothing on a dry one', () => {
+  test('the weather instance reads the yaw too: 0.45 g of yaw on a wet road is a weather warning (0.43), no event either way', () => {
     // 0.395 rad/s at 25 mph is 0.45 g; the course 23°/s (0.45 g).
     expect(events(turn(23, {}, 0.395))).toEqual([]);
-    expect(only(events(turn(23, { road: { g: 'wet' } }, 0.395))).measured).toEqual({ peakG: 0.45, speedMph: 25, lineG: 0.43 });
+    expect(events(turn(23, { road: { g: 'wet' } }, 0.395))).toEqual([]);
+    const det = createHarshDetector(counterIds(), { weather: true });
+    const told = turn(23, { road: { g: 'wet' } }, 0.395).flatMap((r) => {
+      expect(det.push(r, limit(mph(35)), ctx())).toEqual([]);
+      return det.alerts();
+    });
+    expect(told).toMatchObject([{ type: 'hard_corner', tier: 'minor', road: 'wet' }]);
   });
 
   test('a row with sideways extremes is judged by them alone, as before', () => {

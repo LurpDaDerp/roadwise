@@ -143,7 +143,6 @@ export const INVALID_PAYLOAD_SYNC_ERROR = 'invalid_payload';
 const MAX_SPEED = 300;
 
 const round3 = (v: number): number => Math.round(v * 1000) / 1000;
-const round1 = (v: number): number => Math.round(v * 10) / 10;
 const round4 = (v: number): number => Math.round(v * 1e4) / 1e4;
 const finite = (v: number, fallback = 0): number => (Number.isFinite(v) ? v : fallback);
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
@@ -252,9 +251,6 @@ export function sanitizeEvent(e: DetectedEvent, tripStartedAt: number, tripEnded
   if (finiteNumber(m.limitMph)) measured.limitMph = clamp(Math.round(m.limitMph), 0, 120);
   if (finiteNumber(m.peakG)) measured.peakG = clamp(round3(m.peakG), 0, 10);
   if (finiteNumber(m.overMphS)) measured.overMphS = clamp(round3(m.overMphS), 0, MAX_OVER_MPH_S);
-  // The line a weather-tightened event was judged at, on its own kind only, within the contract's bounds.
-  if (finiteNumber(m.lineG) && (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner')) measured.lineG = clamp(round3(m.lineG), 0.2, 1);
-  if (finiteNumber(m.lineMph) && e.type === 'speeding') measured.lineMph = clamp(round1(m.lineMph), 0, 150);
   // The contract's rule: a DashPal event carries source dashcam, and nothing else does.
   if (isDashcamType(e.type)) measured.source = 'dashcam';
   if (e.type === 'phone_pickup') {

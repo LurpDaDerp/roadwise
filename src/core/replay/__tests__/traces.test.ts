@@ -172,7 +172,7 @@ test.each([
   ['hard-corner-plausible', { g: 'snow' }],
   ['speeding-minor', { g: 'wet' }],
   ['speeding-hover', { g: 'ice', cap: 35 }],
-])('%s stamped %j rebuilds from its stored rows to the live events, each judged at its weather line', async (name, road) => {
+])('%s stamped %j rebuilds from its stored rows to the live events, the same events as the unstamped trace', async (name, road) => {
   const trace = stampedTrace(name, road);
   const t0 = trace.rows[0]!.ts;
   const limits = limitsByPlace(trace);
@@ -208,7 +208,7 @@ test.each([
   }))!;
   expect(live.length).toBeGreaterThan(0);
   expect([...rebuilt.session.events, ...rebuilt.detectors.flush()]).toEqual(live);
-  for (const e of live) expect(e.measured.lineG ?? e.measured.lineMph).toBeDefined();
-  // The harness judges the same rows alike.
+  // The road state changes no event: the harness judges the stamped rows as the unstamped ones.
+  expect(runTrace(trace).events).toEqual(runTrace(load(name)).events);
   expect(runTrace(trace).events.map((e) => e.measured)).toEqual(live.map((e) => e.measured));
 });

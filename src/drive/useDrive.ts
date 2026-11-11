@@ -4,6 +4,7 @@ import { useContext, useMemo } from 'react';
 
 import type { EventShake } from '@/core/engine/engine.types';
 import type { DropReason } from '@/core/engine/finalize';
+import type { RoadCondition } from '@/core/road';
 import type { SpotNudge } from '@/core/spots/types';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -79,22 +80,30 @@ export interface DriveLive {
   limitMph: number | null;
   /**
    * The halo's speeding tint (`speedingTint` of the speed shown over the sign's limit as the road
-   * state judges it, `judgedLimitMph`): 0 at or under that limit and while the sign shows "-", 0.5
-   * at its speeding line, 1 (full red) past it. On a normal road the judged limit is the sign's.
+   * state lowers it for the weather warnings, `judgedLimitMph`): 0 at or under that limit and while
+   * the sign shows "-", 0.5 at its speeding line, 1 (full red) past it. On a normal road the judged
+   * limit is the sign's.
    */
   speedingTint: number;
   /** The speed shown is over the limit the sign shows (the spoken speed says so). */
   overSign: boolean;
-  /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. */
+  /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8), or the weather "Slow down" holds: the halo pulses. */
   speedingOver: boolean;
   /** While over the speeding line, the episode's tier as of the current row ("Slow down" holds in its colour); else null. */
   speedingTier: Tier | null;
+  /**
+   * While over the weather line (the speeding line of the limit the road state lowered) and not over
+   * the speeding line itself, the road condition: "Slow down" holds in its colour with its icon (a
+   * warning only, no points). Null whenever `speedingTier` is set.
+   */
+  speedingWeather: RoadCondition | null;
   /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
-  lastAlert: { type: EventType; tier: Tier; at: number } | null;
+  /** The latest alert the chip flashes; `road` set on a weather warning (its condition). Null before the first. */
+  lastAlert: { type: EventType; tier: Tier; at: number; road?: RoadCondition } | null;
   /** The dangerous-weather alert at the car (unless dismissed this drive; while the card is up for the road state, whatever its kind), or null. */
   weatherAlert: DangerAlert | null;
-  /** The road state while it tightens the lines and the weather card shows it (until its ✕), with the road's title; else null. */
+  /** The road state while it moves the warning lines and the weather card shows it (until its ✕), with the road's title; else null. */
   weatherRoad: ShownRoad | null;
   /** The newest row's time (the row clock), or null before any row. */
   rowTs: number | null;
@@ -110,7 +119,7 @@ export interface DriveLive {
 
 /**
  * The speed shown is over the limit the sign shows. The ratio is over the judged limit, so on a
- * tightened road it is put back over the sign's own.
+ * road whose weather lowered it, it is put back over the sign's own.
  */
 const overSignOf = (s: DriveState): boolean => {
   const { speedingRatio: ratio, limitMph: limit, judgedLimitMph: judged } = s;
@@ -136,6 +145,7 @@ export const selectLive = (s: DriveState) => ({
   overSign: overSignOf(s),
   speedingOver: s.speedingOver,
   speedingTier: s.speedingTier,
+  speedingWeather: s.speedingWeather,
   lastShake: s.lastShake,
   lastAlert: s.lastAlert,
   weatherAlert: s.weatherAlert,
@@ -191,10 +201,11 @@ export function useBearing(): DriveBearing {
  */
 export function useDriveLive(): DriveLive {
   const { waitingSince, waitingPhase, waitingDeadlineAt, ...live } = useDrive(selectLive);
-  const lastAlert = useMemo(
-    () => (live.lastAlert === null ? null : { type: live.lastAlert.type, tier: live.lastAlert.tier, at: live.lastAlert.at }),
-    [live.lastAlert]
-  );
+  const lastAlert = useMemo(() => {
+    const a = live.lastAlert;
+    if (a === null) return null;
+    return a.road === undefined ? { type: a.type, tier: a.tier, at: a.at } : { type: a.type, tier: a.tier, at: a.at, road: a.road };
+  }, [live.lastAlert]);
   const waiting = useMemo<WaitingPublic | null>(
     () => (waitingSince === null || waitingPhase === null || waitingDeadlineAt === null ? null : { since: waitingSince, phase: waitingPhase, deadlineAt: waitingDeadlineAt }),
     [waitingSince, waitingPhase, waitingDeadlineAt]

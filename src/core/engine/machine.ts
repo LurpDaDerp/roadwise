@@ -26,13 +26,22 @@
 // a phone pickup and a speeding episode as they alert (never on a repeat); two on one row are one
 // shake, the later key's. Where a phone alert plays is the host's call.
 //
+// Weather warnings (alert-only, never events or points; `AlertEvent.road` names the condition): the
+// weather "Slow down" as the car first passes the speeding line of the limit the road state lowered,
+// once per stretch and only outside a speeding episode, then its chime on speeding's cadence while
+// the band holds it (`speedingWeather`: over the weather line, not over the speeding line; a speeding
+// episode that ends with the car still over the weather line falls back to it silently); and a hard
+// brake, start or turn confirmed at the grip's lines but under the dry one. They sound, show and
+// shake like the regular warning of their kind, at tier minor.
+//
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
 // persistence, sound, scoring — goes out through callbacks.
-import { judgedLimitMph, MOVING_MIN_MPH, type EventType, type Tier } from '@scoring';
+import { MOVING_MIN_MPH, type EventType, type Tier } from '@scoring';
 
 import { speedingRepeatS } from '@/core/alerts/policy';
 import { knownSpeed, limitShownMph, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
+import { judgedLimitMph, type RoadCondition } from '@/core/road';
 import { MAX_DRIVE_MS } from '@/data/sync/payload';
 
 import type { MotionActivity } from '@drive-sense';
@@ -77,7 +86,7 @@ export const MANUAL_CUT_AFTER_S = 120;
 /** The compass takes the GPS course only at this speed or faster (5 mph): slower, the course is noise and the last one holds. */
 export const COURSE_MIN_MPS = 5 * MPS_PER_MPH;
 
-/** The speeding episode the alerts follow, and its last sound. */
+/** The speeding episode (or the weather "Slow down" stretch) the alerts follow, and its last sound. */
 interface SpeedingAlerts {
   id: string;
   /** Row clock of its last sound (the first alert or a repeat). */
@@ -145,6 +154,8 @@ export function createEngine(deps: EngineDeps): Engine {
   let bearing: DisplayBearing = NO_BEARING;
   /** The speeding episode the alerts follow (`speedingAlertsOn`), or null. */
   let speeding: SpeedingAlerts | null = null;
+  /** The weather "Slow down" stretch the alerts follow (`weatherSpeedingAlertsOn`), or null. */
+  let weatherSpeeding: SpeedingAlerts | null = null;
 
   const listeners = new Set<(snapshot: EngineSnapshot) => void>();
   let version = 0;
@@ -190,6 +201,7 @@ export function createEngine(deps: EngineDeps): Engine {
     const speed = row === null ? null : knownSpeed(row);
     const recording = status === 'recording';
     const open = suite?.openSpeeding() ?? null;
+    const weather = recording && suite !== null ? weatherHold(suite) : null;
     // The sign's limit as the newest row's road state judges it: the tint starts there.
     const judged = shownLimit.mph === null ? null : judgedLimitMph(shownLimit.mph, row?.road);
     return Object.freeze({
@@ -209,7 +221,8 @@ export function createEngine(deps: EngineDeps): Engine {
       judgedLimitMph: judged,
       speedingTier: recording && open !== null ? open.tier : null,
       speedingRatio: recording ? tintRatio(shown?.mps ?? 0, judged) : null,
-      speedingOver: recording && open !== null,
+      speedingWeather: weather,
+      speedingOver: recording && (open !== null || weather !== null),
       courseDeg: recording ? course : null,
       bearingDeg: recording ? bearing.deg : null,
       bearingSource: recording && bearing.deg !== null ? 'track' : null,
@@ -241,6 +254,7 @@ export function createEngine(deps: EngineDeps): Engine {
     course = null;
     bearing = NO_BEARING;
     speeding = null;
+    weatherSpeeding = null;
     touch();
   }
 
@@ -267,8 +281,8 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /** An alert the HUD shows (`lastAlert`; never one on a replayed or unseen row) and the alert layer plays. */
-  function alert(id: string, type: EventType, tier: Tier, at: number): void {
-    const event: AlertEvent = { id, type, tier, at };
+  function alert(id: string, type: EventType, tier: Tier, at: number, road?: RoadCondition): void {
+    const event: AlertEvent = road === undefined ? { id, type, tier, at } : { id, type, tier, at, road };
     if (!replaying && !unseen) {
       lastAlert = event;
       touch();
@@ -318,6 +332,52 @@ export function createEngine(deps: EngineDeps): Engine {
     tell({ id: ep.id, type: 'speeding', tier: open.tier, at: row.ts, repeat: true });
   }
 
+  /**
+   * The weather "Slow down" the band holds: the stretch's condition while the row is over the
+   * weather line and not over the speeding line (the speeding "Slow down" holds then), else null.
+   */
+  function weatherHold(det: DetectorSuite): RoadCondition | null {
+    const st = det.weatherSpeeding();
+    return st !== null && st.over && det.openSpeeding() === null ? st.road : null;
+  }
+
+  /**
+   * The weather "Slow down": the alert and the halo's shake on the stretch's first over row, only
+   * when no speeding episode is open (in one, the speeding alert is the warning, and a speeding
+   * episode ending with the car still over the weather line falls back to it silently). Then, while
+   * the band holds it (`weatherHold`), the chime again on speeding's cadence (`speedingRepeatS`,
+   * from the stretch's start), its clock following speeding's chimes while the speeding line holds
+   * the band. Never an event. On a row a scored alert (a hard brake, start or turn) is shown, that
+   * one stays the one shown and shaken: the weather alert is only sounded.
+   */
+  function weatherSpeedingAlertsOn(row: FeatureRow, det: DetectorSuite): void {
+    const st = det.weatherSpeeding();
+    if (st === null) {
+      weatherSpeeding = null;
+      return;
+    }
+    if (weatherSpeeding === null || weatherSpeeding.id !== st.id) {
+      weatherSpeeding = { id: st.id, lastSoundAt: row.ts };
+      if (st.over && det.speedingEpisode() === null) {
+        if (lastAlert !== null && lastAlert.at === row.ts && lastAlert.road === undefined) {
+          tell({ id: st.id, type: 'speeding', tier: 'minor', at: row.ts, road: st.road });
+        } else {
+          alert(st.id, 'speeding', 'minor', row.ts, st.road);
+          shake(st.id, row.ts, 'minor');
+        }
+      }
+      return;
+    }
+    if (det.openSpeeding() !== null) {
+      weatherSpeeding.lastSoundAt = Math.max(weatherSpeeding.lastSoundAt, speeding?.lastSoundAt ?? row.ts);
+      return;
+    }
+    if (!st.over) return;
+    if (row.ts - weatherSpeeding.lastSoundAt < speedingRepeatS(st.overMph, (row.ts - st.startedAt) / 1000) * 1000) return;
+    weatherSpeeding.lastSoundAt = row.ts;
+    tell({ id: st.id, type: 'speeding', tier: 'minor', at: row.ts, repeat: true, road: st.road });
+  }
+
   // --- recording --------------------------------------------------------------------------------
 
   function maybePrefetch(row: FeatureRow, distanceM: number): void {
@@ -365,11 +425,17 @@ export function createEngine(deps: EngineDeps): Engine {
     // A hard brake, start or turn is told the row it is confirmed (one alert per episode, its tier
     // so far), never when its event is released after the veto window: the detector tells every
     // episode that counts on or before the row that releases it.
+    // A weather warning first: on the same row the scored one is the one shown.
+    for (const a of det.weatherHarshAlerts()) {
+      alert(a.id, a.type, a.tier, row.ts, a.road);
+      shake(a.id, row.ts, a.tier);
+    }
     for (const a of det.harshAlerts()) {
       alert(a.id, a.type, a.tier, row.ts);
       shake(a.id, row.ts, a.tier);
     }
     speedingAlertsOn(row, det);
+    weatherSpeedingAlertsOn(row, det);
     // A phone pickup: the alert (`lastAlert`) and the shake the row it confirms; a repeat is sounded only.
     for (const a of det.phoneAlerts()) {
       if (a.repeat) {

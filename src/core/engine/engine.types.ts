@@ -6,6 +6,8 @@
 import type { MotionActivity } from '@drive-sense';
 import type { EventType, Tier } from '@scoring';
 
+import type { RoadCondition } from '@/core/road';
+
 import type { SpeedFix } from './displaySpeed';
 import type { ExposureState } from './exposure';
 import type { LimitBuckets } from './limitBuckets';
@@ -232,12 +234,20 @@ export interface AlertEvent {
    * while the car stays over the line, a phone pickup's tone and haptic while the phone stays in hand.
    */
   repeat?: true;
+  /**
+   * A weather warning: the condition it is for (`speeding`: the one that lowered the limit, `fog`
+   * when the sight cap did; a hard brake, start or turn: the grip). It warns at the weather line,
+   * sooner than the regular one, and is never an event: no points. Tier minor; it sounds, shows and
+   * shakes like the regular warning of its type, the banner marking it with the condition's icon and
+   * colour. Absent on a regular alert.
+   */
+  road?: RoadCondition;
 }
 
 /**
  * The halo shakes on it: a hard brake, start or turn and a phone pickup as they are confirmed, a
- * speeding episode on its first over row. Two on the same row are one shake (the later key wins). Never
- * a DashPal alert, never a repeat.
+ * speeding episode on its first over row, and a weather warning as it alerts (tier minor). Two on the
+ * same row are one shake (the later key wins). Never a DashPal alert, never a repeat.
  */
 export interface EventShake {
   /** Unique per shake in a drive. */
@@ -301,7 +311,18 @@ export interface EngineSnapshot {
    * judged by the detector.
    */
   speedingRatio: number | null;
-  /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. False when not recording. */
+  /**
+   * The weather "Slow down" the band holds: the condition (`RoadCondition`) while the current row is
+   * over the speeding line of the limit the road state lowered (`judgedLimitMph`) and not over the
+   * speeding line itself; null whenever the speeding "Slow down" holds (`speedingTier` set), off the
+   * weather line, and when not recording. A warning only: never an event, no points.
+   */
+  speedingWeather: RoadCondition | null;
+  /**
+   * The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8), or the weather
+   * "Slow down" holds (`speedingWeather`): the halo pulses, and a speeding alert's sound is still
+   * wanted. False when not recording.
+   */
   speedingOver: boolean;
   /**
    * The last GPS course, degrees clockwise from true north, from a valid fix with a known course

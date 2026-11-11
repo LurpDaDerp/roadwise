@@ -2619,7 +2619,7 @@ describe('iOS: the car-link end (round 11)', () => {
   });
 });
 
-describe('the road state: weather-tightened lines', () => {
+describe('the road state: weather warnings', () => {
   /** The drive's weather series (Open-Meteo's 15-minute answer at the clock), each step's values from `stepAt` (unix seconds). */
   function seriesFetch(stepAt: (t: number) => StepValues = () => ({})) {
     const asked: string[] = [];
@@ -2727,36 +2727,70 @@ describe('the road state: weather-tightened lines', () => {
     expect(series.upload).not.toMatch(/lineG|lineMph/);
   });
 
-  test('on a wet road the rows are stamped from the answer on, and the same drive is judged at the stricter lines: the 37 mph stretch and the 0.33 g brake count, carrying their lines to the upload', async () => {
-    const wet = seriesFetch(() => WET);
-    const { dashcam, seen } = rowsSeen();
-    const h = buildRoad(wet.fetch, { dashcam });
-    await h.host.boot();
-    await drive(h, judged());
-    await settle(h);
-    const id = h.host.snapshot().clientTripId!;
-    // Stored with the state, so a relaunch replays the drive alike.
-    const kept = await stored(id);
-    expect(kept).toHaveLength(90);
-    expect(kept.slice(5).every((r) => r.road?.g === 'wet')).toBe(true);
-    expect(h.host.snapshot()).toMatchObject({ limitMph: 35, judgedLimitMph: 31.5, weatherRoad: { road: { g: 'wet' }, title: 'Wet roads' }, weather: { kind: 'wet_road', text: 'Wet roads' } });
-    expect(h.display.states.at(-1)).toMatchObject({ weatherKind: 'wet_road', weatherText: 'Wet roads', limit: 35 });
-    clock = T0 + 94_000;
-    await h.host.end();
-    // The first row came before any answer: unstamped. Every row once the answer is held carries the state.
-    expect(seen).toHaveLength(93);
-    expect(seen[0]!.road).toBeUndefined();
-    expect(seen.slice(5).every((r) => r.road?.g === 'wet' && r.road.cap === undefined)).toBe(true);
-    const events = await createEventsRepo(db).listByTrip(id);
-    const brake = events.find((e) => e.type === 'hard_brake')!;
-    const speeding = events.find((e) => e.type === 'speeding')!;
-    expect(JSON.parse(brake.measured_json!)).toMatchObject({ peakG: 0.33, lineG: 0.32 });
-    expect(speeding.started_at).toBe(T0 + 40_000);
-    expect(JSON.parse(speeding.measured_json!)).toMatchObject({ limitMph: 35, lineMph: 35.7 });
-    const upload = JSON.parse((await createQueueRepo(db).byKey(`trip:${id}`))!.payload_json) as { events: { type: string; measured: Record<string, unknown> }[] };
-    expect(upload.events.find((e) => e.type === 'hard_brake')!.measured).toMatchObject({ lineG: 0.32 });
-    expect(upload.events.find((e) => e.type === 'speeding')!.measured).toMatchObject({ limitMph: 35, lineMph: 35.7 });
-    await h.host.stop({ endOpenTrip: false });
+  test('on a wet road the rows are stamped from the answer on; the events, trip and upload are exactly those of the same drive on a dry road, and the 37 mph stretch and the 0.33 g brake only warn, marked wet', async () => {
+    async function run(stepAt: () => StepValues) {
+      await freshDb();
+      const { dashcam, seen } = rowsSeen();
+      const h = buildRoad(seriesFetch(stepAt).fetch, { dashcam, voiceEnabled: () => true });
+      // Every alert the driving screen was handed, as it was handed.
+      const shown: unknown[] = [];
+      const off = h.host.subscribe((st) => {
+        if (st.lastAlert !== null && shown.at(-1) !== st.lastAlert) shown.push(st.lastAlert);
+      });
+      await h.host.boot();
+      await drive(h, judged());
+      await settle(h);
+      const id = h.host.snapshot().clientTripId!;
+      const snap = h.host.snapshot();
+      const kept = await stored(id);
+      clock = T0 + 94_000;
+      await h.host.end();
+      await settle(h);
+      const out = await record(h, id, seen, kept.map((r) => JSON.stringify(r)));
+      off();
+      await h.host.stop({ endOpenTrip: false });
+      return { ...out, snap, seen, stored: kept, shown: [...new Set(shown)], delivered: h.player.delivered };
+    }
+    const wet = await run(() => WET);
+    const dry = await run(() => ({}));
+
+    // Stored with the state, so a relaunch replays the drive alike. The first row came before any answer: unstamped.
+    expect(wet.stored).toHaveLength(90);
+    expect(wet.stored.slice(5).every((r) => r.road?.g === 'wet')).toBe(true);
+    expect(wet.seen).toHaveLength(93);
+    expect(wet.seen[0]!.road).toBeUndefined();
+    expect(wet.seen.slice(5).every((r) => r.road?.g === 'wet' && r.road.cap === undefined)).toBe(true);
+    expect(dry.seen.some((r) => r.road !== undefined)).toBe(false);
+    expect(wet.snap).toMatchObject({ limitMph: 35, judgedLimitMph: 31.5, weatherRoad: { road: { g: 'wet' }, title: 'Wet roads' }, weather: { kind: 'wet_road', text: 'Wet roads' } });
+    expect(wet.display.at(-1)).toMatchObject({ weatherKind: 'wet_road', weatherText: 'Wet roads', limit: 35 });
+
+    // The score never reads the road: the same events, trip and upload (the drive's weather tag aside: rain against clear).
+    const noTag = <T extends object | null | undefined>(o: T) => {
+      const { weather: _w, ...rest } = (o ?? {}) as Record<string, unknown>;
+      return rest;
+    };
+    expect(wet.events).toEqual(dry.events);
+    expect(wet.events.map((e) => e.type)).toEqual(['speeding']);
+    expect(noTag(wet.trip)).toEqual(noTag(dry.trip));
+    expect(noTag(JSON.parse(wet.upload!) as object)).toEqual(noTag(JSON.parse(dry.upload!) as object));
+    expect(wet.upload).not.toMatch(/lineG|lineMph|"road"/);
+
+    // The regular alerts are the dry drive's; the weather warnings come on top, each like the regular one of its kind.
+    const regular = (list: unknown[]) => list.filter((d) => !String((d as { id: string }).id).startsWith('wx-'));
+    expect(regular(wet.alerts)).toEqual(dry.alerts);
+    expect(dry.alerts.some((d) => String((d as { id: string }).id).startsWith('wx-'))).toBe(false);
+    const wx = wet.delivered.filter((d) => d.id.startsWith('wx-'));
+    const brake = wx.find((d) => d.kind === 'hard_brake')!;
+    expect(brake).toMatchObject({ level: 2, voice: 'Hard brake', intensity: 2 });
+    expect(brake.ts).toBeGreaterThanOrEqual(T0 + 60_000);
+    expect(brake.ts).toBeLessThan(T0 + 63_000);
+    const slow = wx.find((d) => d.kind === 'speeding' && d.ts === T0 + 40_000)!;
+    expect(slow).toMatchObject({ level: 1, intensity: 1, holdSession: true });
+    expect(slow.voice).toBeUndefined();
+    // The driving screen was handed both, marked wet; the dry drive's screen never saw a road.
+    expect(wet.shown).toContainEqual({ id: expect.stringMatching(/^wx-speeding-/), type: 'speeding', tier: 'minor', at: T0 + 40_000, road: 'wet' });
+    expect(wet.shown).toContainEqual(expect.objectContaining({ id: brake.id, type: 'hard_brake', tier: 'minor', at: brake.ts, road: 'wet' }));
+    expect(dry.shown.some((x) => (x as { road?: string }).road !== undefined)).toBe(false);
   });
 
   test('the halo and the lock screen tint from the judged limit: 34 mph on a wet 35 is tinted, on a dry one plain', async () => {
@@ -2782,7 +2816,7 @@ describe('the road state: weather-tightened lines', () => {
     expect(dry.state.speedTint).toBeNull();
   });
 
-  test('the stamp tightens at once and eases only after the easier state has been read for 5 minutes of row time', async () => {
+  test('the stamp gets stricter at once and eases only after the easier state has been read for 5 minutes of row time', async () => {
     // Fog (100 m: a 45 mph cap) until the step 100 s in, clear after: the reading eases at 100 s.
     const { dashcam, seen } = rowsSeen();
     const h = buildRoad(seriesFetch((t) => (t < STEP_S ? { visibility: 100 } : {})).fetch, { dashcam });
@@ -2823,7 +2857,7 @@ describe('the road state: weather-tightened lines', () => {
     await fast.host.stop({ endOpenTrip: true });
   });
 
-  test('the card shows whenever the lines are tightened; its ✕ hides it for the drive (the lines stay tight) until the road gets stricter, once', async () => {
+  test('the card shows whenever the warning lines are moved; its ✕ hides it for the drive (the lines stay moved) until the road gets stricter, once', async () => {
     // A wet road now, heavy rain from the step 100 s in: the alert (heavy rain within 2 h) shows from the start.
     const h = buildRoad(seriesFetch((t) => (t < STEP_S ? WET : { rain: 2, weather_code: 65 })).fetch);
     await h.host.boot();

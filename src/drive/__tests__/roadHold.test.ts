@@ -1,4 +1,4 @@
-import type { RoadStamp } from '@scoring';
+import type { RoadStamp } from '@/core/road';
 
 import { nextRoadHold, NORMAL_ROAD, ROAD_EASE_MS, roadTightened, strictestRoad, type RoadHold } from '@/drive/roadHold';
 

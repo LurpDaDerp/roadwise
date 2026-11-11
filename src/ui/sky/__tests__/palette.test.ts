@@ -152,7 +152,7 @@ test("the driving screen's sky, in both HUD palettes: its print at 7:1, its aler
       expect(sky.stops).toHaveLength(3);
       for (const g of [...sky.stops, sky.chrome]) {
         for (const ink of [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted]) expectContrast(ink, g, 7, `${name(m)} ${which} ink`);
-        for (const t of [p.minor, p.moderate, p.severe]) expectContrast(t, g, AA, `${name(m)} ${which} tier`);
+        for (const t of [p.minor, p.moderate, p.severe, p.roadWet, p.roadWater, p.roadSnow, p.roadIce, p.roadFog]) expectContrast(t, g, AA, `${name(m)} ${which} chip`);
         expectContrast(p.haloSevere, g, 3, `${name(m)} ${which} halo red`);
       }
       expectContrast(p.ink, sky.chromeEdge, 7, `${name(m)} ${which} ink on chrome edge`);
@@ -262,7 +262,7 @@ describe.each(['light', 'dark'] as const)('the static %s look', (scheme) => {
       const sky = b.sky.hud[which];
       for (const g of [...sky.stops, sky.chrome]) {
         for (const ink of [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted]) expectContrast(ink, g, 7, `static ${which} ink`);
-        for (const t of [p.minor, p.moderate, p.severe]) expectContrast(t, g, AA, `static ${which} tier`);
+        for (const t of [p.minor, p.moderate, p.severe, p.roadWet, p.roadWater, p.roadSnow, p.roadIce, p.roadFog]) expectContrast(t, g, AA, `static ${which} chip`);
         expectContrast(p.haloSevere, g, 3, `static ${which} halo red`);
       }
       expectContrast(p.ink, sky.chromeEdge, 7, `static ${which} ink on chrome edge`);

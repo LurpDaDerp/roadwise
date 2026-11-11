@@ -21,12 +21,11 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
-  SIGHT_CAPS_MPH,
   SPEED_FACTOR,
-  SPEED_FACTOR_PCT,
   speedTolerance,
   type AxisKey,
 } from '@scoring';
+import { SIGHT_CAPS_MPH, SPEED_FACTOR_PCT } from '@/core/road';
 
 /** The driving screen's own words for its "Not driving?" link, quoted wherever the rules name it. */
 const ND = hudCopy.notDriving;
@@ -70,15 +69,16 @@ const IDLE_MIN = Math.round(IDLE_END_S / 60);
 const overAt = (limitMph: number): number => Math.round(speedTolerance(limitMph));
 
 /**
- * The stricter lines in rain, snow, ice and fog: the judged limit's share of the posted one for each
- * grip (`SPEED_FACTOR_PCT`) and the span of the visibility caps (`SIGHT_CAPS_MPH`).
+ * The sooner warnings in rain, snow, ice and fog: the share of the posted limit "Slow down" warns at
+ * for each grip (`SPEED_FACTOR_PCT`) and the span of the visibility caps (`SIGHT_CAPS_MPH`). They
+ * never change the score.
  */
 function weatherLine(): string {
   const f = SPEED_FACTOR_PCT;
   const caps = SIGHT_CAPS_MPH;
   return (
-    `In rain, snow, ice or fog the lines are stricter, because the car needs more room to stop. Speeding is judged against ${f.wet}% of the posted limit on a wet road, ${f.water}% in heavy rain, ${f.snow}% on snow and ${f.ice}% on ice, and against ${Math.max(...caps)} mph down to ${Math.min(...caps)} mph in fog, the less you can see the lower. ` +
-    'Hard brakes, starts and turns count from a lighter touch on a wet road, and lighter still on snow or ice. The weather comes from a forecast model for where you are, and when it isn’t known the usual lines apply.'
+    `In rain, snow, ice or fog RoadWise warns you sooner, because the car needs more room to stop. “${hudCopy.alert.speeding}” comes as if the limit were ${f.wet}% of the posted one on a wet road, ${f.water}% in heavy rain, ${f.snow}% on snow and ${f.ice}% on ice, and ${Math.max(...caps)} mph down to ${Math.min(...caps)} mph in fog, the less you can see the lower. ` +
+    'Hard brake, start and turn warnings come at a lighter touch on a wet road, and lighter still on snow or ice. These warnings show the weather’s icon and color, and they never change your score. The weather comes from a forecast model for where you are.'
   );
 }
 

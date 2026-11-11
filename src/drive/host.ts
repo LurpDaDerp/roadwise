@@ -45,7 +45,8 @@
 //   player, the waiting clock and the DashPal link moving.
 import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type CarLinkState, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type EndCauseNative, type JournaledDrive, type MotionActivity } from '@drive-sense';
 import type { LiveDriveState } from '@live-drive';
-import { isRoadGrip, MERGE_GAP_S, roadStricter, sameRoad, type RoadStamp } from '@scoring';
+import { MERGE_GAP_S } from '@scoring';
+import { isRoadGrip, roadStricter, sameRoad, type RoadStamp } from '@/core/road';
 import { Platform } from 'react-native';
 
 import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
@@ -133,7 +134,7 @@ export interface ShownWeather {
   text: string;
 }
 
-/** The road state the card shows while it tightens the lines, and the road's title ("Wet roads"). */
+/** The road state the card shows while it moves the warning lines, and the road's title ("Wet roads"). */
 export interface ShownRoad {
   road: RoadStamp;
   title: string;
@@ -176,8 +177,8 @@ export interface DriveState extends EngineSnapshot {
    */
   weatherAlert: DangerAlert | null;
   /**
-   * The road state while it tightens the lines and the card shows it: the card is up whenever the
-   * lines are tightened, until its ✕ (it comes back once the state is stricter than when hidden).
+   * The road state while it moves the warning lines and the card shows it: the card is up whenever
+   * the lines are moved, until its ✕ (it comes back once the state is stricter than when hidden).
    * Null on a normal road, while hidden and with no drive.
    */
   weatherRoad: ShownRoad | null;
@@ -657,7 +658,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let weatherWatch: WeatherWatch | null = null;
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
-  /** The road state the open drive's rows are stamped with (`roadHold.ts`), and the road's title while it tightens the lines. */
+  /** The road state the open drive's rows are stamped with (`roadHold.ts`), and the road's title while it moves the warning lines. */
   let roadHold: RoadHold = NORMAL_ROAD;
   let roadTitleNow: string | null = null;
   /** The strictest road state the card's ✕ hid it at; null while not hidden. */
@@ -1133,8 +1134,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /**
-   * The road state while it moves a line now: a grip (the hard-event lines and the judged limit), or a
-   * sight cap under the limit the sign shows (fog's 45 mph cap on a 35 road moves nothing). Else null.
+   * The road state while it moves a warning line now: a grip (the hard-event warning lines and the
+   * judged limit), or a sight cap under the limit the sign shows (fog's 45 mph cap on a 35 road moves nothing). Else null.
    */
   function roadMovingLines(): RoadStamp | null {
     if (!roadTightened(roadHold.road)) return null;
@@ -1157,7 +1158,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     return { alert: alert ?? weatherRaw, road };
   }
 
-  /** The road's title while it tightens the lines: the watch's ("Slippery roads" in the cold), else from the state alone. */
+  /** The road's title while it moves the warning lines: the watch's ("Slippery roads" in the cold), else from the state alone. */
   const roadTitleOf = (road: RoadStamp): string => roadTitleNow ?? roadTitle(road, null) ?? '';
 
   /** The card's kind and title, as the Live Activity carries them. */
@@ -2061,8 +2062,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /**
-   * The row with the road state the detectors judge it by (`FeatureRow.road`), only while the state
-   * tightens the lines: the watch's reading at the row's time and place (its last fix for a row
+   * The row with the road state the weather warnings judge it by (`FeatureRow.road`; the scoring
+   * detectors never read it), only while the state moves the warning lines: the watch's reading at the row's time and place (its last fix for a row
    * without one) through the ease rule (`roadHold.ts`). A journal row replayed at a start is stamped
    * only when a held answer covers its time (else the reading is unknown). A row that already carries
    * a state keeps it; rows rebuilt from storage carry theirs and never pass here.

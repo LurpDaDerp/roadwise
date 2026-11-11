@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 
@@ -210,6 +210,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     overSign: false,
     speedingOver: false,
     speedingTier: null,
+    speedingWeather: null,
     lastShake: null,
     lastAlert: null,
     weatherAlert: null,
@@ -869,13 +870,13 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.getByTestId('hud-weather-close')).toHaveStyle({ position: 'absolute', top: 5, right: 5 });
   });
 
-  test('while the road state tightens the lines it shows with no alert: the road’s title and "Stricter limits now"; the sign keeps the posted limit; the ✕ asks the host to hide it', async () => {
+  test('while the road state moves the warning lines it shows with no alert: the road’s title and "Warnings come sooner"; the sign keeps the posted limit; the ✕ asks the host to hide it', async () => {
     const h = await renderHud();
     await h.update({ weatherRoad: { road: { g: 'snow' }, title: 'Snowy roads' } });
     const card = within(screen.getByTestId('hud-weather-slot')).getByTestId('hud-weather');
     expect(card).toHaveTextContent(/Snowy roads/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding counts from a lower speed, and hard braking, starts and turns from a lighter touch.');
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
     expect(screen.getByTestId('hud-limit-value', HIDDEN)).toHaveTextContent('35');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Hide weather alert' }));
@@ -885,10 +886,10 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.queryByTestId('hud-weather')).toBeNull();
   });
 
-  test('with an alert and the lines tightened: the alert’s title over "Stricter limits now"', async () => {
+  test('with an alert and the warning lines moved: the alert’s title over "Warnings come sooner"', async () => {
     await renderHud({ weatherAlert: ICE, weatherRoad: { road: { g: 'ice' }, title: 'Icy roads' } });
     expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
   });
 });
 
@@ -940,6 +941,84 @@ describe('event alerts', () => {
     // Back under the line (the episode's 5-second end window still open): gone at once.
     await h.update({ rowTs: T + 21_000, speedMph: 39, speedingRatio: 39 / 35, speedingOver: false, speedingTier: null });
     expect(screen.queryByTestId('hud-alert')).toBeNull();
+  });
+
+  describe('a weather warning: the same chip in its road condition’s colour, the condition’s icon after the event’s', () => {
+    const chipColor = () => StyleSheet.flatten(screen.getByTestId('hud-alert').props.style).backgroundColor as string;
+    const glyph = (name: keyof typeof MaterialCommunityIcons.glyphMap) => String.fromCodePoint(Number(MaterialCommunityIcons.glyphMap[name]));
+
+    test('a hard brake on a wet road: its words, the rain icon, the rain blue, the condition spoken, and the burst of a regular one', async () => {
+      const h = await renderHud({ rowTs: T });
+      await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'minor', at: T + 1000, road: 'wet' } });
+      const chip = screen.getByTestId('hud-alert');
+      expect(chip).toHaveTextContent(/Hard brake/);
+      expect(chip).toHaveProp('accessibilityLabel', 'Hard brake, wet road');
+      expect(chipColor()).toBe(p.roadWet);
+      expect(screen.getByTestId('hud-alert-road', HIDDEN)).toHaveTextContent(glyph('weather-rainy'));
+      expect(screen.getByTestId('hud-alert-road', HIDDEN)).toHaveStyle({ color: p.ground });
+      // The event's icon first, then the condition's, then the words: one line.
+      expect(chip).toHaveTextContent(`${String.fromCodePoint(Number(Ionicons.glyphMap['stop-circle']))}${glyph('weather-rainy')}Hard brake`);
+      expect(StyleSheet.flatten(chip.props.style)).toMatchObject({ flexDirection: 'row' });
+      expect(halo()).toMatchObject({ mode: 'burst', burst: { key: `event:hard_brake:${T + 1000}` } });
+      await act(() => jest.advanceTimersByTime(1500));
+      expect(screen.queryByTestId('hud-alert')).toBeNull();
+    });
+
+    test.each([
+      ['speeding', 'water', 'Slow down, heavy rain', 'weather-pouring', 'roadWater'],
+      ['hard_corner', 'ice', 'Sharp turn, icy road', 'snowflake', 'roadIce'],
+      ['hard_accel', 'snow', 'Hard start, snowy road', 'weather-snowy', 'roadSnow'],
+      ['speeding', 'fog', 'Slow down, low visibility', 'weather-fog', 'roadFog'],
+    ] as const)('%s on %s: "%s"', async (type, road, label, icon, color) => {
+      const h = await renderHud({ rowTs: T });
+      await h.update({ rowTs: T + 1000, lastAlert: { type, tier: 'minor', at: T + 1000, road } });
+      expect(screen.getByTestId('hud-alert')).toHaveProp('accessibilityLabel', label);
+      expect(chipColor()).toBe(p[color]);
+      expect(screen.getByTestId('hud-alert-road', HIDDEN)).toHaveTextContent(glyph(icon));
+    });
+
+    test('the weather chip’s padding, icons and gaps take no more width than a regular chip’s, so its words get the same room in a 160 pt band', async () => {
+      const fixedW = () => {
+        const chip = StyleSheet.flatten(screen.getByTestId('hud-alert').props.style);
+        const icons = [screen.getByTestId('hud-alert-icon', HIDDEN), ...screen.queryAllByTestId('hud-alert-road', HIDDEN)];
+        const iconsW = icons.reduce((w, i) => w + (StyleSheet.flatten(i.props.style).fontSize as number), 0);
+        // The chip's gap falls between its children: the icon (or the pair of icons) and the words.
+        return 2 * (chip.paddingHorizontal as number) + iconsW + (chip.gap as number);
+      };
+      const h = await renderHud({ rowTs: T });
+      await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'minor', at: T + 1000 } });
+      const regular = fixedW();
+      await h.update({ rowTs: T + 2000, lastAlert: { type: 'hard_brake', tier: 'minor', at: T + 2000, road: 'wet' } });
+      expect(screen.queryAllByTestId('hud-alert-road', HIDDEN)).toHaveLength(1);
+      expect(fixedW()).toBeLessThanOrEqual(regular);
+    });
+
+    test('a regular alert has no condition icon and keeps its tier colour', async () => {
+      const h = await renderHud({ rowTs: T });
+      await h.update({ rowTs: T + 1000, lastAlert: { type: 'hard_brake', tier: 'minor', at: T + 1000 } });
+      expect(screen.getByTestId('hud-alert')).toHaveProp('accessibilityLabel', 'Hard brake');
+      expect(chipColor()).toBe(p.minor);
+      expect(screen.queryByTestId('hud-alert-road', HIDDEN)).toBeNull();
+    });
+
+    test('the weather "Slow down" holds while over the weather line; the regular one takes over in its tier colour, then the weather one is back, then gone', async () => {
+      const h = await renderHud({ rowTs: T });
+      await h.update({ rowTs: T + 1000, speedingOver: true, speedingWeather: 'fog' });
+      expect(screen.getByTestId('hud-alert')).toHaveTextContent(/Slow down/);
+      expect(screen.getByTestId('hud-alert')).toHaveProp('accessibilityLabel', 'Slow down, low visibility');
+      expect(chipColor()).toBe(p.roadFog);
+      expect(halo().burst).toBeNull();
+      // Past the regular line: the regular hold, no condition.
+      await h.update({ rowTs: T + 2000, speedingOver: true, speedingTier: 'moderate', speedingWeather: null });
+      expect(screen.getByTestId('hud-alert')).toHaveProp('accessibilityLabel', 'Slow down');
+      expect(chipColor()).toBe(p.moderate);
+      expect(screen.queryByTestId('hud-alert-road', HIDDEN)).toBeNull();
+      // Back between the lines: the weather hold again.
+      await h.update({ rowTs: T + 3000, speedingOver: true, speedingTier: null, speedingWeather: 'fog' });
+      expect(chipColor()).toBe(p.roadFog);
+      await h.update({ rowTs: T + 4000, speedingOver: false, speedingWeather: null });
+      expect(screen.queryByTestId('hud-alert')).toBeNull();
+    });
   });
 
   test('another event takes the chip for its 1.5 s while over the line, then "Slow down" is back', async () => {

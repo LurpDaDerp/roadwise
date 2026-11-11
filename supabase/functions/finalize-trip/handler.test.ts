@@ -79,7 +79,7 @@ Deno.test('happy path: a v5 upload is stored in one transaction with its origin,
   const e = envelopeOf(h);
   assertEquals(Object.keys(e).sort(), ENVELOPE_KEYS);
   assertEquals(Object.keys(e.payload).sort(), PAYLOAD_KEYS);
-  assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 13]);
+  assertEquals([e.user, e.scored, e.reason, e.scoringVersion], [USER, true, null, 12]);
   assertEquals([e.payload.origin, e.payload.notDrivingExpired], ['auto', false]);
   assertEquals(e.payload.exposure, { slowdowns: 18, speedups: 17, turns: 11, limitS: 1200, movingS: 1650, phoneS: 1500 });
   // no weather sent: none passed on
@@ -385,43 +385,6 @@ Deno.test("a speeding event's overMphS is stored at most 150 mph over per second
   assertEquals(clampMeasured(speeding(2, { overMphS: 400 })).overMphS, 300);
   assertEquals(clampMeasured(speeding(65, { overMphS: 9000 })).overMphS, 9000);
   assertEquals(clampMeasured({ ...speeding(5, { overMphS: 400 }), type: 'hard_brake', tier: 'minor' }).overMphS, 400);
-});
-
-Deno.test("a hard event's lineG is stored held between its type's snow line and its dry line; lineG off a hard event and lineMph off speeding are dropped", async () => {
-  const hard = (type: 'hard_brake' | 'hard_accel' | 'hard_corner', measured: Record<string, number>) => ({ ...speeding(2, measured), type });
-  // within the band: as sent
-  assertEquals(clampMeasured(hard('hard_brake', { peakG: 0.33, lineG: 0.32 })), { peakG: 0.33, lineG: 0.32 });
-  assertEquals(clampMeasured(hard('hard_accel', { peakG: 0.4, lineG: 0.36 })), { peakG: 0.4, lineG: 0.36 });
-  assertEquals(clampMeasured(hard('hard_corner', { peakG: 0.5, lineG: 0.38 })), { peakG: 0.5, lineG: 0.38 });
-  // under the snow line or over the dry line: held to the band, for each type
-  assertEquals(clampMeasured(hard('hard_brake', { peakG: 0.3, lineG: 0.2 })), { peakG: 0.3, lineG: 0.29 });
-  assertEquals(clampMeasured(hard('hard_accel', { peakG: 0.4, lineG: 0.2 })), { peakG: 0.4, lineG: 0.32 });
-  assertEquals(clampMeasured(hard('hard_corner', { peakG: 0.5, lineG: 0.2 })), { peakG: 0.5, lineG: 0.38 });
-  assertEquals(clampMeasured(hard('hard_brake', { peakG: 0.5, lineG: 1 })), { peakG: 0.5, lineG: 0.36 });
-  assertEquals(clampMeasured(hard('hard_accel', { peakG: 0.5, lineG: 0.9 })), { peakG: 0.5, lineG: 0.4 });
-  assertEquals(clampMeasured(hard('hard_corner', { peakG: 0.5, lineG: 0.6 })), { peakG: 0.5, lineG: 0.48 });
-  // the wrong type: dropped
-  assertEquals(clampMeasured(hard('hard_brake', { peakG: 0.4, lineG: 0.32, lineMph: 40 })), { peakG: 0.4, lineG: 0.32 });
-  assertEquals(clampMeasured(speeding(15, { limitMph: 35, speedMph: 42, overMphS: 30, lineG: 0.32, lineMph: 36.1 })), {
-    limitMph: 35,
-    speedMph: 42,
-    overMphS: 30,
-    lineMph: 36.1,
-  });
-  assertEquals(clampMeasured({ ...pickup(), measured: { speedMph: 31, maxSpeedMph: 40, lineG: 0.3, lineMph: 30 } }).lineG, undefined);
-  assertEquals('lineMph' in clampMeasured({ ...pickup(), measured: { speedMph: 31, maxSpeedMph: 40, lineG: 0.3, lineMph: 30 } }), false);
-  // through the handler: what apply_drive receives
-  const h = harness();
-  await handleFinalizeTrip(
-    post(payload({ events: [hard('hard_brake', { peakG: 0.31, speedMph: 30, lineG: 0.2 }), { ...pickup(), measured: { speedMph: 31, lineMph: 30 } }] })),
-    h.deps
-  );
-  assertEquals(envelopeOf(h).events.map((x) => x.measured), [{ peakG: 0.31, speedMph: 30, lineG: 0.29 }, { speedMph: 31 }]);
-  // a v5 upload without the keys is stored exactly as before: the very object, untouched
-  const plain = payload().events[0];
-  assertEquals(clampMeasured(plain) === plain.measured, true);
-  const legacy = speeding(15, { limitMph: 35, speedMph: 42, overMphS: 30 });
-  assertEquals(clampMeasured(legacy) === legacy.measured, true);
 });
 
 Deno.test('refusals before any database work: method, token, size, JSON, contract (an unknown version names v), zone, local day', async () => {

@@ -57,8 +57,6 @@ import {
   clampExposure,
   classifyDrive,
   dashcamDrive,
-  HARD_EVENT_MIN_G,
-  HARD_LINE_FLOOR_G,
   keepDashcamEvents,
   SCORING_VERSION,
   SPEEDING_MAX_OVER_MPH,
@@ -89,31 +87,13 @@ export interface FinalizeDeps {
 /**
  * What an uploaded event measured, as stored and rated: a speeding event's `overMphS` (mph-seconds
  * over the line) is capped at `SPEEDING_MAX_OVER_MPH` per charged second, as the
- * rating reads it, so a bad reading is never kept. A hard event's `lineG` is held between its
- * type's snow line (`HARD_LINE_FLOOR_G`) and its dry line (`HARD_EVENT_MIN_G`), as the rating reads
- * it; `lineG` on any other event and `lineMph` on anything but speeding are dropped. Every other key
- * travels untouched.
+ * rating reads it, so a bad reading is never kept. Every other key travels untouched.
  */
 export function clampMeasured(e: PayloadEvent): PayloadEvent['measured'] {
-  let m = e.measured;
-  if (e.type === 'speeding' && typeof m.overMphS === 'number') {
-    const cap = speedingChargedS(e.durationS) * SPEEDING_MAX_OVER_MPH;
-    if (m.overMphS > cap) m = { ...m, overMphS: cap };
-  }
-  if (m.lineMph !== undefined && e.type !== 'speeding') {
-    const { lineMph: _lineMph, ...rest } = m;
-    m = rest;
-  }
-  if (m.lineG !== undefined) {
-    if (e.type === 'hard_brake' || e.type === 'hard_accel' || e.type === 'hard_corner') {
-      const lineG = Math.min(HARD_EVENT_MIN_G[e.type], Math.max(HARD_LINE_FLOOR_G[e.type], m.lineG));
-      if (lineG !== m.lineG) m = { ...m, lineG };
-    } else {
-      const { lineG: _lineG, ...rest } = m;
-      m = rest;
-    }
-  }
-  return m;
+  const m = e.measured;
+  if (e.type !== 'speeding' || typeof m.overMphS !== 'number') return m;
+  const cap = speedingChargedS(e.durationS) * SPEEDING_MAX_OVER_MPH;
+  return m.overMphS > cap ? { ...m, overMphS: cap } : m;
 }
 
 /** An uploaded event, in the envelope's shape (always active). */

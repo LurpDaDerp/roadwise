@@ -1,18 +1,22 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import type { EventType, Tier } from '@scoring';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ALERT_GLOW_MS } from '@/core/alerts/policy';
+import type { RoadCondition } from '@/core/road';
 import { fontFamilies } from '@/ui/fonts';
 import { type HudPalette, tierColor } from '@/ui/drive';
 
 import { hudCopy } from './hudCopy';
+import { ROAD_MARK, roadColor } from './roadMark';
 
 export interface HudAlert {
   type: EventType;
   tier: Tier;
   at: number;
+  /** A weather warning's road condition (its icon and colour on the chip); absent on a regular alert. */
+  road?: RoadCondition;
 }
 
 const ICON: Record<EventType, keyof typeof Ionicons.glyphMap> = {
@@ -25,7 +29,7 @@ const ICON: Record<EventType, keyof typeof Ionicons.glyphMap> = {
   drowsy: 'moon',
 };
 
-const keyOf = (a: HudAlert | null): string | null => (a === null ? null : `${a.type}:${a.at}`);
+const keyOf = (a: HudAlert | null): string | null => (a === null ? null : `${a.type}:${a.at}${a.road === undefined ? '' : `:${a.road}`}`);
 
 /** An alert on screen, with the JS time its flash ends. */
 export type HudFlash = HudAlert & { until: number };
@@ -74,20 +78,30 @@ export function useAlertFlash(alert: HudAlert | null, rowTs: number | null, ms: 
 }
 
 /**
- * The event chip at the top: the tier's colour, an icon and one or two words. Static: it appears
- * and goes; the halo's pulses carry it peripherally.
+ * The event chip at the top: the tier's colour, an icon and one or two words. A weather warning's
+ * chip has the same words in its road condition's colour, the condition's icon after the event's
+ * (`roadMark.ts`), and its screen-reader label names the condition ("Hard brake, wet road"). Static:
+ * it appears and goes; the halo's pulses carry it peripherally.
  */
 function EventBannerView({ alert, palette }: { alert: HudAlert; palette: HudPalette }) {
   const words = hudCopy.alert[alert.type];
+  const mark = alert.road === undefined ? null : ROAD_MARK[alert.road];
   return (
     <View
       testID="hud-alert"
       accessible
       accessibilityRole="alert"
-      accessibilityLabel={words}
-      style={[styles.chip, { backgroundColor: tierColor(palette, alert.tier) }]}
+      accessibilityLabel={mark === null ? words : `${words}, ${mark.spoken}`}
+      style={[styles.chip, mark === null ? null : styles.roadChip, { backgroundColor: alert.road === undefined ? tierColor(palette, alert.tier) : roadColor(palette, alert.road) }]}
     >
-      <Ionicons name={ICON[alert.type]} size={28} color={palette.ground} />
+      {mark === null ? (
+        <Ionicons testID="hud-alert-icon" name={ICON[alert.type]} size={ICON_PT} color={palette.ground} />
+      ) : (
+        <View style={styles.icons}>
+          <Ionicons testID="hud-alert-icon" name={ICON[alert.type]} size={ROAD_ICON_PT} color={palette.ground} />
+          <MaterialCommunityIcons testID="hud-alert-road" name={mark.icon} size={ROAD_ICON_PT} color={palette.ground} />
+        </View>
+      )}
       <Text allowFontScaling={false} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={[styles.words, { color: palette.ground }]}>
         {words}
       </Text>
@@ -96,6 +110,15 @@ function EventBannerView({ alert, palette }: { alert: HudAlert; palette: HudPale
 }
 
 export const EventBanner = memo(EventBannerView);
+
+/** A regular chip's icon. */
+const ICON_PT = 28;
+/**
+ * A weather chip's two icons, side by side with no gap (each glyph's own margin parts them), and its
+ * tighter padding and gap: its fixed parts take no more width than a regular chip's (14 + 24 + 24 +
+ * 6 + 14 = 22 + 28 + 10 + 22), so its words get the same room in the narrowest (160 pt) band.
+ */
+const ROAD_ICON_PT = 24;
 
 const styles = StyleSheet.create({
   chip: {
@@ -108,5 +131,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     borderRadius: 28,
   },
+  roadChip: { gap: 6, paddingHorizontal: 14 },
+  icons: { flexDirection: 'row', alignItems: 'center' },
   words: { fontFamily: fontFamilies.fieldBold, fontSize: 28, lineHeight: 34, flexShrink: 1 },
 });

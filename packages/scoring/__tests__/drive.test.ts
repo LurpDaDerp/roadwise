@@ -219,9 +219,9 @@ describe('keepDashcamEvents passes a phone pickup untouched', () => {
   });
 });
 
-test('SCORING_VERSION is 13 and the barrel exports the API, and nothing about points or zones', () => {
-  expect(SCORING_VERSION).toBe(13);
-  expect(barrel.SCORING_VERSION).toBe(13);
+test('SCORING_VERSION is 12 and the barrel exports the API, and nothing about points or zones', () => {
+  expect(SCORING_VERSION).toBe(12);
+  expect(barrel.SCORING_VERSION).toBe(12);
   expect(barrel.speedingLine).toBe(speedingLine);
   expect(speedTolerance.length).toBe(1);
   expect(speedTier.length).toBe(2);

@@ -22,16 +22,25 @@
 //   the line), and its side is the course's;
 // - a phone sliding or dropping — an orientation spike or a lost gravity reference within two
 //   seconds — is ignored, whatever the IMU says.
-// The lines are the row's own (`hardLines`): a row the host stamped with a slippery road
-// (`row.road.g`) is judged at the wet or snow lines, an unstamped row at the ones above. An episode
-// keeps the lines of its first row for its tier, and its event names the minor line (`lineG`) when
-// it is under the dry one.
+// The lines are the ones above, whatever the road state on the row: the hard events, their tiers
+// and the points never read `row.road`.
+//
+// The same detector runs a second time, alert-only, for the weather warnings
+// (`HarshOptions.weather`): each row is judged at its grip's lines (`hardLines`; a row with no grip
+// is no signal), with every gate above, and it never releases an event. It alerts a confirmed
+// episode only when its peak is still under the dry minor line (above it, the scoring detector
+// alerts it itself), at tier minor, naming the grip. A weather warning whose brake later passes the
+// dry line is followed by the scoring detector's own alert, the event that counts. The two
+// instances share nothing: each keeps its own rows, episodes and ids (the weather one's are
+// `wx-<kind>-<first row ts>`, never an event id).
 // Each kind runs as an episode of consecutive signal rows. It is alerted the first row it is
 // confirmed (the GNSS vouched for it, no spike, the car at 5 mph or more: `alerts()`), once. The
 // event itself waits: a closed episode is held for two seconds so the row after it can still
 // confirm or veto it, then released as at most one event (an alerted episode a later spike vetoes
 // is alerted but never charged).
-import { hardLines, MOVING_MIN_MPH, type HardLines, type Tier } from '@scoring';
+import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, MOVING_MIN_MPH, type Tier } from '@scoring';
+
+import { hardLines, isRoadGrip, type HardLines, type RoadGrip } from '@/core/road';
 
 import type { DetectedEvent, Detector, FeatureRow, HarshAlert, HarshKind } from '../engine/types';
 import { G_MPS2, knownSpeed, knownSpeedMph, MPS_PER_MPH, round1, round2, rowEligible, speedTrusted } from './common';
@@ -75,8 +84,8 @@ interface Episode {
   peakSign: number;
   speedAtPeakMph: number | null;
   maxSpeedMph: number;
-  /** The lines of its first row: its tier and the event's `lineG`. */
-  lines: HardLines;
+  /** The weather instance: the grip of its first row (its alert names it); null on the scoring one. */
+  grip: RoadGrip | null;
   /** The GNSS vouched for it: a matching Δspeed (brake/accel) or a plausible course rate (corner). */
   confirmed: boolean;
   spike: boolean;
@@ -160,7 +169,24 @@ const courseDelta = (a: number, b: number): number => {
   return d;
 };
 
-const tierOf = (ep: Episode): Tier => (ep.peakG >= ep.lines.severe ? 'severe' : 'minor');
+/** The dry lines, the ones the events are judged at. */
+const DRY: Record<HarshKind, HardLines> = {
+  hard_brake: HARD_BRAKE_G,
+  hard_accel: HARD_ACCEL_G,
+  hard_corner: HARD_CORNER_G,
+};
+
+/** The event's tier, at the dry lines (a weather warning is always minor). */
+const tierOf = (ep: Episode): Tier => (ep.peakG >= DRY[ep.kind].severe ? 'severe' : 'minor');
+
+export interface HarshOptions {
+  /**
+   * The alert-only weather instance: rows judged at their grip's lines (no grip, no signal), no
+   * events ever, an alert only for an episode confirmed under the dry minor line (tier minor, with
+   * its grip). Default false: the scoring detector, at the dry lines.
+   */
+  weather?: boolean;
+}
 
 /** Hard events, plus their alerts as each episode is confirmed. */
 export interface HarshDetector extends Detector {
@@ -168,7 +194,8 @@ export interface HarshDetector extends Detector {
   alerts(): HarshAlert[];
 }
 
-export function createHarshDetector(newId: () => string): HarshDetector {
+export function createHarshDetector(newId: () => string, opts: HarshOptions = {}): HarshDetector {
+  const weather = opts.weather === true;
   let prev: FeatureRow | null = null;
   const open: Record<HarshKind, Episode | null> = { hard_brake: null, hard_accel: null, hard_corner: null };
   let pending: Episode[] = [];
@@ -218,7 +245,6 @@ export function createHarshDetector(newId: () => string): HarshDetector {
   function toEvent(ep: Episode): DetectedEvent {
     const measured: DetectedEvent['measured'] = { peakG: round2(ep.peakG) };
     if (ep.speedAtPeakMph !== null) measured.speedMph = round1(ep.speedAtPeakMph);
-    if (ep.lines.minor < hardLines(ep.kind).minor) measured.lineG = ep.lines.minor;
     return { id: ep.id, type: ep.kind, tier: tierOf(ep), startedAt: ep.startedAt, durationS: ep.rows, measured };
   }
 
@@ -235,9 +261,12 @@ export function createHarshDetector(newId: () => string): HarshDetector {
       if (!axisUnknown(row)) axisSeen = true;
       const gnss = !axisSeen && ev.gnssOnly && ev.deltaG !== null && Math.abs(ev.deltaG) <= GNSS_ONLY_MAX_G ? ev.deltaG : null;
 
+      const g = row.road?.g;
+      const grip = weather && isRoadGrip(g) ? g : null;
       for (const kind of KINDS) {
-        const lines = hardLines(kind, row.road?.g);
-        const peak = eligible ? peakOf(kind, row, gnss, lines.minor, ev) : null;
+        // The scoring detector: the dry lines. The weather one: the grip's, and no grip no signal.
+        const lines = weather ? (grip === null ? null : hardLines(kind, grip)) : DRY[kind];
+        const peak = eligible && lines !== null ? peakOf(kind, row, gnss, lines.minor, ev) : null;
         const cornerTooSlow = kind === 'hard_corner' && (speedMph === null || speedMph < CORNER_MIN_MPH);
         const signal = peak !== null && !cornerTooSlow;
         const ep = open[kind];
@@ -254,7 +283,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
           ep.spike = ep.spike || spike;
         } else if (signal) {
           const fresh: Episode = {
-            id: newId(),
+            id: weather ? `wx-${kind}-${row.ts}` : newId(),
             kind,
             startedAt: row.ts,
             lastTs: row.ts,
@@ -263,7 +292,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
             peakSign: cornerSide(row, ev),
             speedAtPeakMph: speedMph,
             maxSpeedMph: Math.max(speedMph ?? 0, prev === null ? 0 : (knownSpeedMph(prev) ?? 0)),
-            lines,
+            grip,
             confirmed: false,
             spike: spike || (lastSpikeTs !== null && row.ts - lastSpikeTs <= SPIKE_WINDOW_MS),
             alerted: false,
@@ -290,12 +319,17 @@ export function createHarshDetector(newId: () => string): HarshDetector {
       for (const ep of [...KINDS.map((k) => open[k]), ...pending]) {
         if (ep === null || ep.alerted || !counts(ep)) continue;
         ep.alerted = true;
-        told.push({ id: ep.id, type: ep.kind, tier: tierOf(ep) });
+        if (!weather) {
+          told.push({ id: ep.id, type: ep.kind, tier: tierOf(ep) });
+        } else if (ep.grip !== null && ep.peakG < DRY[ep.kind].minor) {
+          // Past the dry line the scoring detector alerts it itself.
+          told.push({ id: ep.id, type: ep.kind, tier: 'minor', road: ep.grip });
+        }
       }
       const released = pending.filter((ep) => row.ts > ep.lastTs + SPIKE_WINDOW_MS);
       pending = pending.filter((ep) => row.ts <= ep.lastTs + SPIKE_WINDOW_MS);
       prev = row;
-      return released.filter(counts).map(toEvent);
+      return weather ? [] : released.filter(counts).map(toEvent);
     },
     flush() {
       told = [];
@@ -306,7 +340,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
         if (ep !== null) closing.push(ep);
         open[kind] = null;
       }
-      return closing.filter(counts).map(toEvent);
+      return weather ? [] : closing.filter(counts).map(toEvent);
     },
     alerts: () => told,
   };

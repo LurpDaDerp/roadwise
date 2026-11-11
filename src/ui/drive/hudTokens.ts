@@ -7,7 +7,9 @@ import type { Tier } from '@scoring';
  * saturated red end, and a white speed inside it. `night` is the same palette dimmed for eyes adapted
  * to an unlit road: neutral greys and a near-white sign, no pure white, nothing warmed. Yellow is
  * the minor tier's, and the dangerous-weather banner's outline and glyph (always with its title and
- * a warning glyph, so colour never carries it alone); no other mark on the screen wears it.
+ * a warning glyph, so colour never carries it alone); no other mark on the screen wears it. A
+ * weather warning's chip wears its road condition's colour instead of a tier's (`road*`): cool blues,
+ * a cyan and a grey, never near the tiers' warm ones, always beside the condition's icon.
  *
  * Every foreground/background pair holds at least 7:1 (`HUD_CONTRAST_PAIRS`) and every graphic at
  * least 4.5:1 (`HUD_GRAPHIC_PAIRS`), measured in `__tests__/hudContrast.test.ts`. Literals only:
@@ -28,6 +30,16 @@ export type HudPalette = {
   minor: string;
   moderate: string;
   severe: string;
+  /**
+   * A weather warning's chip, one per road condition (`RoadCondition`, `src/features/drive/roadMark.ts`):
+   * a wet road rain blue, heavy rain a deeper periwinkle blue, a snowy road snow white-blue, an icy road
+   * ice cyan, low visibility fog grey. Black print on each, as on the tier chips.
+   */
+  roadWet: string;
+  roadWater: string;
+  roadSnow: string;
+  roadIce: string;
+  roadFog: string;
   /** The halo: its calm ring (light blue-white), its red end (a graphic), and the speed inside it. */
   haloCalm: string;
   haloSevere: string;
@@ -57,6 +69,11 @@ const day: HudPalette = {
   minor: '#FFC300', // school-bus yellow
   moderate: '#FF9A45',
   severe: '#FF7070', // soft red, so black print reads on it
+  roadWet: '#5CB8FF',
+  roadWater: '#8C9EFF',
+  roadSnow: '#E3EEFF',
+  roadIce: '#4FE8E0',
+  roadFog: '#B4BCC6',
   haloCalm: '#CFE6FF',
   haloSevere: '#FF3B3B',
   haloInk: '#F3F6FB',
@@ -77,6 +94,11 @@ const night: HudPalette = {
   minor: '#D99A30',
   moderate: '#E0884F',
   severe: '#EA7A7A',
+  roadWet: '#55A6E4',
+  roadWater: '#8A98EC',
+  roadSnow: '#C4CEDB',
+  roadIce: '#46C9C2',
+  roadFog: '#9CA3AC',
   haloCalm: '#A9BCD4',
   haloSevere: '#D63A3A',
   haloInk: '#D3D9E2',
@@ -107,6 +129,11 @@ export const HUD_CONTRAST_PAIRS: readonly (readonly [keyof HudPalette, keyof Hud
   ['minor', 'ground'],
   ['moderate', 'ground'],
   ['severe', 'ground'],
+  ['roadWet', 'ground'],
+  ['roadWater', 'ground'],
+  ['roadSnow', 'ground'],
+  ['roadIce', 'ground'],
+  ['roadFog', 'ground'],
   ['gain', 'ground'],
   ['ink', 'chrome'],
   ['inkMuted', 'chrome'],
@@ -128,6 +155,11 @@ export const HUD_LIT_KEYS: readonly (keyof HudPalette)[] = [
   'minor',
   'moderate',
   'severe',
+  'roadWet',
+  'roadWater',
+  'roadSnow',
+  'roadIce',
+  'roadFog',
   'gain',
   'haloCalm',
   'haloSevere',

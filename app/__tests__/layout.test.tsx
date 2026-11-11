@@ -182,6 +182,7 @@ function driveState(over: Partial<DriveState> = {}): DriveState {
     limit: UNKNOWN_LIMIT,
     limitMph: null,
     judgedLimitMph: null,
+    speedingWeather: null,
     speedingTier: null,
     stopped: false,
     autoEndAt: null,

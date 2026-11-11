@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { RoadStamp } from '@scoring';
+import type { RoadStamp } from '@/core/road';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -32,7 +32,7 @@ export function weatherBannerPt(compact: boolean): number {
   return Math.max(BAR_MIN_PT, t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT);
 }
 
-/** The road state while it tightens the lines, and the road's title ("Wet roads"). */
+/** The road state while it moves the warning lines, and the road's title ("Wet roads"). */
 export interface BannerRoad {
   road: RoadStamp;
   title: string;
@@ -41,9 +41,9 @@ export interface BannerRoad {
 /**
  * The weather card on the driving screen (plan D14): a yellow outline as on Home's card, the warning
  * glyph, the alert's title (one to three words; the road's, "Wet roads", with no alert) and under it
- * the warning, what to do in four words at most, or "Stricter limits now" while the road state
- * tightens the lines, with the ✕ in the top right corner. It fills its slot's width. The full line is
- * spoken with it (while the lines are tightened, what counts sooner). Its ✕ shows and takes a touch
+ * the warning, what to do in four words at most, or "Warnings come sooner" while the road state
+ * moves the warning lines, with the ✕ in the top right corner. It fills its slot's width. The full
+ * line is spoken with it (while the lines are moved, which warnings come sooner). Its ✕ shows and takes a touch
  * at any speed, moving or stopped: with End and the navigation button, the only touch targets while
  * moving.
  */
@@ -57,7 +57,7 @@ function WeatherBannerView({
 }: {
   /** The alert the card names; null for a road state alone (then `road` is set). */
   alert: DangerAlert | null;
-  /** The road state while it tightens the lines, or null (the default). */
+  /** The road state while it moves the warning lines, or null (the default). */
   road?: BannerRoad | null;
   units: Units;
   palette: HudPalette;
@@ -70,12 +70,12 @@ function WeatherBannerView({
   // Inside the outline: the card's inner height less the disc, split evenly when it can't spare the inset.
   const inset = Math.min(CLOSE_INSET_PT, Math.max(0, (weatherBannerPt(compact) - 2 * OUTLINE_PT - WEATHER_CLOSE_PT) / 2));
   const title = alert !== null ? weatherTitle(alert) : (road?.title ?? '');
-  const action = road !== null ? roadCopy.stricter : alert !== null ? weatherAction(alert) : '';
+  const action = road !== null ? roadCopy.sooner : alert !== null ? weatherAction(alert) : '';
   const label = road !== null ? roadSpoken(title, road.road) : alert !== null ? weatherLabel(alert, units) : '';
   return (
     <View testID="hud-weather" style={[styles.card, { backgroundColor: p.chrome, borderColor: p.minor, paddingVertical: t.pad }]}>
       <View accessible accessibilityRole="alert" accessibilityLabel={label} style={styles.words}>
-        {/* The HUD's warning yellow: this card shows only when the weather is dangerous or tightens the lines. */}
+        {/* The HUD's warning yellow: this card shows only when the weather is dangerous or moves the warning lines. */}
         <Ionicons testID="hud-weather-icon" name="warning" size={22} color={p.minor} />
         <View style={styles.lines}>
           <Text

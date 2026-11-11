@@ -1,10 +1,10 @@
-import { speedTier, speedingLine } from '../src/drive';
-import { roundTo } from '../src/num';
+import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, speedTier, speedingLine } from '@scoring';
+import { roundTo } from '@scoring/num';
+
 import {
   HARD_LINES_DRY_G,
   HARD_LINES_SNOW_G,
   HARD_LINES_WET_G,
-  HARD_LINE_FLOOR_G,
   ROAD_GRIPS,
   SIGHT_CAPS_MPH,
   SPEED_FACTOR_PCT,
@@ -19,9 +19,7 @@ import {
   type HardEventType,
   type RoadGrip,
   type RoadStamp,
-} from '../src/road';
-import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G } from '../src/thresholds';
-import * as barrel from '../src';
+} from '@/core/road';
 
 const TYPES: HardEventType[] = ['hard_brake', 'hard_accel', 'hard_corner'];
 
@@ -134,11 +132,6 @@ describe('hardLines — grip only, minor and severe alike', () => {
     }
   });
 
-  test('the floor is the snow minor line of each type', () => {
-    expect(HARD_LINE_FLOOR_G).toEqual({ hard_brake: 0.29, hard_accel: 0.32, hard_corner: 0.38 });
-    for (const t of TYPES) expect(HARD_LINE_FLOOR_G[t]).toBe(hardLines(t, 'ice').minor);
-  });
-
   test('an unknown grip is a dry road', () => {
     expect(hardLines('hard_brake', 'slush' as unknown as RoadGrip)).toBe(HARD_BRAKE_G);
   });
@@ -176,11 +169,4 @@ describe('stamp helpers', () => {
     expect(sameRoad({ g: 'ice' }, { g: 'snow' })).toBe(false);
     expect(sameRoad({ cap: 55 }, {})).toBe(false);
   });
-});
-
-test('the barrel exports the road API', () => {
-  expect(barrel.judgedLimitMph).toBe(judgedLimitMph);
-  expect(barrel.hardLines).toBe(hardLines);
-  expect(barrel.HARD_LINE_FLOOR_G).toBe(HARD_LINE_FLOOR_G);
-  expect(barrel.SPEED_FACTOR_PCT).toBe(SPEED_FACTOR_PCT);
 });

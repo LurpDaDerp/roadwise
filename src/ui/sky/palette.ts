@@ -293,7 +293,9 @@ export const HUD_SHADE: Readonly<Record<'day' | 'night', readonly [number, numbe
  */
 export function hudSky(stops: SkyStops, p: HudPalette, shade: readonly [number, number, number]): HudSky {
   const text = [p.ink, p.inkMuted, p.haloInk, p.haloInkMuted];
-  const fix = (g: string) => deepen(deepen(deepen(g, text, 7), [p.minor, p.moderate, p.severe], AA), [p.haloSevere], 3);
+  // The alert chips' colours (the tiers, and a weather warning's road conditions) carry the ground as their print.
+  const chips = [p.minor, p.moderate, p.severe, p.roadWet, p.roadWater, p.roadSnow, p.roadIce, p.roadFog];
+  const fix = (g: string) => deepen(deepen(deepen(g, text, 7), chips, AA), [p.haloSevere], 3);
   const deep = stops.map((st, i) => fix(mix(vivid(st, 0.55), '#000000', shade[i]!))) as SkyStops;
   return { stops: deep, chrome: fix(mix(deep[1], '#000000', 0.4)), chromeEdge: ensureGround(mix(deep[1], '#FFFFFF', 0.14), [p.ink], 7, '#000000') };
 }

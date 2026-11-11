@@ -7,7 +7,9 @@
 // play only while RoadWise is in front, and a phone alert only while the driving screen shows too
 // (the host marks the rest `suppressed`). The two DashPal types are never raised by the phone's
 // engine (the dashcam alerts on its own and through `src/dashcam`); their entries keep the maps
-// exhaustive and name their level and words.
+// exhaustive and name their level and words. A weather warning (an alert with `road`: rain, snow,
+// ice or fog moved the line it warns at) sounds exactly like the regular alert of its type; only the
+// driving screen's chip marks its condition.
 import type { EventType, Tier } from '@scoring';
 
 import type { AlertEvent } from '@/core/engine/engine.types';

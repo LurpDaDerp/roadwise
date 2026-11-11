@@ -175,15 +175,18 @@ export type HudScreenProps = {
  * - Band, under the top row: for 1.5 s after an event (or a DashPal alert start or level change)
  *   its icon and one or two words, across the whole band (the DashPal chip steps aside); while the
  *   car is over the speeding line, "Slow down" in the episode's colour stays up from its alert until
- *   the first row back under the line (another event's chip takes the band for its 1.5 s); else a
+ *   the first row back under the line (another event's chip takes the band for its 1.5 s). A weather
+ *   warning (rain, snow, ice or fog lowered the line it warns at; never points) shows the same chip in
+ *   its road condition's colour with the condition's icon after the event's, and its "Slow down"
+ *   holds the same way while the car is over only the weather line; else a
  *   failed end, "Not driving?" when it has no row of its own, for 4 s a problem spot's nudge
  *   ("Watch your speed here"), for 4 s the break reminder ("Take a break soon" with a cup, at a
  *   stop after 2 h of driving), and the dangerous-weather card where it has no slot of its own.
  *   With a DashPal paired, a small static chip top right.
  * - Weather (portrait): the dangerous-weather card in its own slot under the halo, above End (and
  *   the link's row), kept free whether it shows or not, so nothing moves when it appears: a yellow
- *   outline, the title and what to do ("Stricter limits now" while the road state tightens the
- *   lines, when it shows for a wet, snowy or icy road or low visibility too), its ✕ top right (live
+ *   outline, the title and what to do ("Warnings come sooner" while the road state moves the
+ *   warning lines, when it shows for a wet, snowy or icy road or low visibility too), its ✕ top right (live
  *   at any speed; hidden for the rest of the drive once dismissed). Alerts and nudges never cover it. A window too small for the slot
  *   (landscape, compact, a small phone) shows it in the band's line instead, last.
  *   Where the link lives in the band's line (compact windows), an event or DashPal banner yields to
@@ -310,10 +313,20 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
   // "Slow down" holds while the car is over the speeding line, in the episode's colour as it is now;
-  // a fresh alert (another event's, or speeding's own) takes the chip for its flash. Only the flash
-  // bursts the halo.
+  // over only the weather line, it holds as the weather warning (the road condition's colour and
+  // icon). A fresh alert (another event's, or speeding's own) takes the chip for its flash. Only the
+  // flash bursts the halo.
   const speedingTier = live.speedingTier;
-  const speedingHeld = useMemo<HudAlert | null>(() => (speedingTier === null ? null : { type: 'speeding', tier: speedingTier, at: 0 }), [speedingTier]);
+  const speedingWeather = live.speedingWeather;
+  const speedingHeld = useMemo<HudAlert | null>(
+    () =>
+      speedingTier !== null
+        ? { type: 'speeding', tier: speedingTier, at: 0 }
+        : speedingWeather !== null
+          ? { type: 'speeding', tier: 'minor', at: 0, road: speedingWeather }
+          : null,
+    [speedingTier, speedingWeather]
+  );
   const chip = alert ?? speedingHeld;
   const nudge = useSpotNudgeFlash(live.spotNudge, live.rowTs);
   const breakShown = useBreakFlash(live.breakReminder, live.rowTs);
@@ -571,8 +584,8 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const speeding = live.overSign;
   const busy = ending || live.status === 'finalizing';
 
-  // The halo: tinted from the sign's limit up (the judged limit on a tightened road), pulsing only
-  // over the speeding line; it shakes once for each event as it happens (fresh on the row clock,
+  // The halo: tinted from the sign's limit up (the limit the weather lowered, on such a road), pulsing
+  // only over the speeding line (or the weather line, while its "Slow down" holds); it shakes once for each event as it happens (fresh on the row clock,
   // never one from the background).
   const shake = useEventShake(live.lastShake, live.rowTs);
   const now = wallClock();
@@ -611,7 +624,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const linkInLine = showLink && layout.notDriving === 'line' && !endFailed;
   const bannerUp = (dashpal !== null || chip !== null) && !linkInLine;
   // The weather card: the alert at the car (the host leaves out a kind dismissed this drive), and the
-  // road state while it tightens the lines; its ✕ hides it for the rest of the drive (a more severe
+  // road state while it moves the warning lines; its ✕ hides it for the rest of the drive (a more severe
   // kind, or a stricter road, shows again). In its own slot under the halo where the window has one,
   // else in the band's line.
   const weather = live.weatherAlert;

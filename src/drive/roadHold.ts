@@ -4,7 +4,7 @@
 // runs that disagree, the stamped state tightens at once and eases only after an easier state has
 // been read for 5 minutes of row time. Grip and sight ease apart. An unknown reading (null: no
 // serving answer) is no easier state that has been read: the normal lines apply at once.
-import { isRoadGrip, isSightCap, roadStricter, tighterCap, worseGrip, type RoadStamp } from '@scoring';
+import { isRoadGrip, isSightCap, roadStricter, tighterCap, worseGrip, type RoadStamp } from '@/core/road';
 
 /** An easier grip or a looser cap is taken up once it has been read for this long (row time). */
 export const ROAD_EASE_MS = 5 * 60_000;
@@ -21,7 +21,7 @@ export interface RoadHold {
 /** A drive opens on a normal road. */
 export const NORMAL_ROAD: RoadHold = Object.freeze({ road: Object.freeze({}), gripSince: null, capSince: null });
 
-/** True when the state tightens any line (a grip or a sight cap). */
+/** True when the state moves any warning line (a grip or a sight cap). */
 export const roadTightened = (road: RoadStamp | null | undefined): road is RoadStamp => isRoadGrip(road?.g) || isSightCap(road?.cap);
 
 /** The hold after a row at `ts` whose reading is `read` (null: unknown). Pure. */

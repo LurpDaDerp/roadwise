@@ -108,14 +108,6 @@ export function eventKind(type: EventType, tier: Tier): string | null {
   return TIER_WORD[tier];
 }
 
-/** The mark on an event judged at a line the weather made stricter (a wet, snowy or icy road, or low visibility). */
-export const WEATHER_LINE_MARK = 'Weather line';
-/** The same mark, spoken. */
-export const WEATHER_LINE_SPOKEN = 'counted at the stricter line for the weather';
-
-/** The event was judged at a line the weather made stricter: it carries that line (`measured.lineG` or `lineMph`). */
-export const weatherLined = (e: Pick<LocalDriveEvent, 'measured'>): boolean => e.measured.lineG !== undefined || e.measured.lineMph !== undefined;
-
 /** "38 mph" or "61 km/h", whole. */
 export const formatSpeed = (mph: number, units: Units): string =>
   `${Math.round(distanceIn(Math.max(0, mph), units))} ${units === 'km' ? 'km/h' : 'mph'}`;

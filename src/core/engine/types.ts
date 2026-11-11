@@ -1,6 +1,8 @@
 // Contract between the native feature extractor, the detectors and the engine (product spec
 // "Event detection"; modes plan §3.9; phone plan P1).
-import type { DriveEvent, EventType, RoadStamp, Tier } from '@scoring';
+import type { DriveEvent, EventType, Tier } from '@scoring';
+
+import type { RoadCondition, RoadGrip, RoadStamp } from '@/core/road';
 
 /**
  * One second of fused sensing at 1 Hz: the GNSS fix, the IMU extremes over that second and the
@@ -74,8 +76,9 @@ export interface FeatureRow {
   exempt?: 'nav' | 'restart';
   /**
    * The road state the host stamps on the row from the drive's weather reading (`RoadStamp`: the
-   * grip, the sight cap), only while it tightens the lines. Stored with the row, so a replay judges
-   * it alike. Absent is a dry road in clear air: the normal lines.
+   * grip, the sight cap), only while it lowers the warning lines. Stored with the row. It drives the
+   * weather warnings only (`weatherSpeeding.ts`, the alert-only harsh detector): the events and the
+   * scores never read it. Absent is a dry road in clear air.
    */
   road?: RoadStamp;
 }
@@ -108,10 +111,6 @@ export interface EventMeasured {
   peakG?: number;
   /** speeding: mph past the speeding line summed over every over row (1 dp); the Speed weight reads it. */
   overMphS?: number;
-  /** hard_brake, hard_accel, hard_corner: the minor line it was judged at (g), only when the road's grip put it under the dry line. */
-  lineG?: number;
-  /** speeding: the speeding line at the peak row (mph, 1 dp), only when the road state tightened that row's limit. */
-  lineMph?: number;
   /** phone_pickup: the highest trusted GPS speed from the pickup's start through its last use row, mph (1 dp). */
   maxSpeedMph?: number;
   /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */
@@ -147,6 +146,11 @@ export interface HarshAlert {
   id: string;
   type: HarshKind;
   tier: Tier;
+  /**
+   * A weather warning (the alert-only harsh detector: confirmed at the grip's lines, under the dry
+   * one): the road's grip. Never an event. Absent on a regular alert.
+   */
+  road?: RoadGrip;
 }
 
 /**
@@ -181,6 +185,23 @@ export interface SpeedingReading {
   overMph: number;
 }
 
+/**
+ * The weather "Slow down" stretch in progress (`weatherSpeeding.ts`): rows over the speeding line of
+ * the limit the road state lowered, its end window included. Alert-only, never an event.
+ */
+export interface WeatherSpeedingStretch {
+  /** `wx-speeding-<first over row ts>`: unique in a drive, never an event id. */
+  id: string;
+  /** epoch ms of its first over row. */
+  startedAt: number;
+  /** The condition that lowered the limit on its latest over row. */
+  road: RoadCondition;
+  /** The current row is over the weather line. */
+  over: boolean;
+  /** mph past the weather line on the current row; 0 when not over. */
+  overMph: number;
+}
+
 /** Every detector behind one `push`/`flush`, plus what the engine reads per row. */
 export interface DetectorSuite extends Detector {
   /** The speeding episode in progress on the latest row, if any. */
@@ -194,6 +215,13 @@ export interface DetectorSuite extends Detector {
   speedingEpisode(): SpeedingEpisode | null;
   /** The hard brakes, starts and turns first confirmed on the latest row (each told once). */
   harshAlerts(): HarshAlert[];
+  /**
+   * The weather hard brake, start and turn warnings first confirmed on the latest row (each told
+   * once; `road` set, tier minor): alert-only, never events.
+   */
+  weatherHarshAlerts(): HarshAlert[];
+  /** The weather "Slow down" stretch on the latest row (its end window included), or null. */
+  weatherSpeeding(): WeatherSpeedingStretch | null;
   /** The phone pickup alerts the latest row raised (at most one; each told once). */
   phoneAlerts(): PhoneAlert[];
   /** A speeding episode is active on the latest row: its distance is not safe miles. */

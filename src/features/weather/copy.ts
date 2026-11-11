@@ -4,7 +4,7 @@
  * characters at most), and the driving screen's warning: what to do, in four words at most.
  * Numbers are in the driver's units.
  */
-import { isRoadGrip, isSightCap, type RoadStamp } from '@scoring';
+import { isRoadGrip, isSightCap, type RoadStamp } from '@/core/road';
 
 import { KMH_PER_MPH, type Units } from '@/lib/units';
 
@@ -136,11 +136,11 @@ export const commuteHeadsUpCopy = {
 } as const;
 
 /**
- * The driving screen's card while the road state tightens the lines (`./road.ts`): the road's title
- * when no alert names the weather, and the quiet line under the title in place of the advice.
+ * The driving screen's card while the road state moves the warning lines (`./road.ts`): the road's
+ * title when no alert names the weather, and the quiet line under the title in place of the advice.
  */
 export const roadCopy = {
-  stricter: 'Stricter limits now',
+  sooner: 'Warnings come sooner',
 } as const;
 
 /** The Live Activity's weather kind for a wet road (its glyph): the one road state no alert kind fits. */
@@ -152,7 +152,7 @@ export type RoadKind = 'black_ice' | 'snow_on_road' | 'heavy_rain' | typeof WET_
 /**
  * The road's title: the grip first (ice, snow, water, a wet film), then the sight cap. A wet road at
  * 1 °C or colder (`tempC`, the air now) reads "Slippery roads": it may be icing. Null when the
- * state tightens nothing.
+ * state moves no line.
  */
 export function roadTitle(road: RoadStamp | null | undefined, tempC: number | null): string | null {
   switch (road?.g) {
@@ -168,7 +168,7 @@ export function roadTitle(road: RoadStamp | null | undefined, tempC: number | nu
   return isSightCap(road?.cap) ? 'Low visibility' : null;
 }
 
-/** The Live Activity's weather kind for a road state, or null when it tightens nothing. */
+/** The Live Activity's weather kind for a road state, or null when it moves no line. */
 export function roadKind(road: RoadStamp | null | undefined): RoadKind | null {
   switch (road?.g) {
     case 'ice':
@@ -184,11 +184,12 @@ export function roadKind(road: RoadStamp | null | undefined): RoadKind | null {
 }
 
 /**
- * What a screen reader hears for the card while the lines are tightened: "Wet roads. Speeding counts
- * from a lower speed, and hard braking, starts and turns from a lighter touch." The second part only
- * when the grip tightens the hard-event lines (visibility alone changes only the speed).
+ * What a screen reader hears for the card while the warning lines are moved: "Wet roads. Speeding
+ * warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch."
+ * The second part only when a grip moves the hard-event lines (visibility alone moves only the
+ * speed's).
  */
 export function roadSpoken(title: string, road: RoadStamp): string {
-  const touch = isRoadGrip(road.g) ? ', and hard braking, starts and turns from a lighter touch' : '';
-  return `${title}. Speeding counts from a lower speed${touch}.`;
+  const touch = isRoadGrip(road.g) ? ', and hard braking, start and turn warnings at a lighter touch' : '';
+  return `${title}. Speeding warnings come at a lower speed${touch}.`;
 }

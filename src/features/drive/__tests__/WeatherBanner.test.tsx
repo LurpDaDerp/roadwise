@@ -38,22 +38,22 @@ test('the full lines and padding make a card whose top in the 56 pt band is a wh
   expect(weatherBannerPt(false)).toBe(HUD_WEATHER_PT);
 });
 
-describe('while the road state tightens the lines', () => {
+describe('while the road state moves the warning lines', () => {
   const fog: DangerAlert = { kind: 'dense_fog', gustMph: null, visibilityM: 150 };
 
-  test('with no alert: the road\'s title, "Stricter limits now", and what counts sooner spoken', async () => {
+  test('with no alert: the road\'s title, "Warnings come sooner", and which warnings come sooner spoken', async () => {
     await render(<WeatherBanner alert={null} road={{ road: { g: 'wet' }, title: 'Wet roads' }} units="mi" palette={HUD.day} compact={false} onDismiss={() => {}} />);
     expect(screen.getByText('Wet roads')).toBeOnTheScreen();
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Wet roads. Speeding counts from a lower speed, and hard braking, starts and turns from a lighter touch.');
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Wet roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
   });
 
-  test('with an alert: the alert\'s title over "Stricter limits now"; visibility alone tightens only the speed', async () => {
+  test('with an alert: the alert\'s title over "Warnings come sooner"; visibility alone moves only the speed', async () => {
     const onDismiss = jest.fn();
     await render(<WeatherBanner alert={fog} road={{ road: { cap: 55 }, title: 'Low visibility' }} units="mi" palette={HUD.day} compact onDismiss={onDismiss} />);
     expect(screen.getByText('Dense fog')).toBeOnTheScreen();
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Dense fog. Speeding counts from a lower speed.');
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Dense fog. Speeding warnings come at a lower speed.');
     await fireEvent.press(screen.getByTestId('hud-weather-close'));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });

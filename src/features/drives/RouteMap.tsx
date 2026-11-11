@@ -10,20 +10,7 @@ import type { Units } from '@/lib/units';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
 
 import { EventIcon } from './EventIcon';
-import {
-  DASHPAL_MARK,
-  EVENT_LABEL,
-  eventKind,
-  eventName,
-  formatClock,
-  formatEventDuration,
-  pickupDetail,
-  spokenEventDuration,
-  TIER_SIGNAL,
-  WEATHER_LINE_MARK,
-  WEATHER_LINE_SPOKEN,
-  weatherLined,
-} from './format';
+import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, pickupDetail, spokenEventDuration, TIER_SIGNAL } from './format';
 import type { LocalDriveEvent } from './model';
 import { PIN, PIN_PLACE, TeardropPin, useSettling } from './Pin';
 import {
@@ -120,35 +107,18 @@ export function mapLabel(marks: readonly Pick<EventMark, 'type'>[]): string {
   return `Route map, ${[...n].map(([type, k]) => `${k} ${SPOKEN[type][k === 1 ? 0 : 1]}`).join(', ')}`;
 }
 
-/**
- * A pin for a screen reader: "Hard brake, 2 seconds, moderate", "Phone pickup, in hand 24 seconds, at
- * 38 miles per hour"; an event judged at a stricter line for the weather says so at the end.
- */
+/** A pin for a screen reader: "Hard brake, 2 seconds, moderate", "Phone pickup, in hand 24 seconds, at 38 miles per hour". */
 export function pinLabel(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'measured'>, units: Units = 'mi'): string {
   if (e.type === 'phone_pickup') return `${EVENT_LABEL[e.type]}, ${pickupDetail(e, units).spoken}`;
   const kind = eventKind(e.type, e.tier);
   const tail = kind === null ? '' : `, ${kind === DASHPAL_MARK ? kind : kind.toLowerCase()}`;
-  const weather = weatherLined(e) ? `, ${WEATHER_LINE_SPOKEN}` : '';
-  return `${EVENT_LABEL[e.type]}, ${spokenEventDuration(e.durationS)}${tail}${weather}`;
+  return `${EVENT_LABEL[e.type]}, ${spokenEventDuration(e.durationS)}${tail}`;
 }
 
-/** The detail line's parts before its weather mark. */
-const detailParts = (e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'startedAt'>): string[] =>
-  [`Lasted ${formatEventDuration(e.durationS)}`, eventKind(e.type, e.tier), formatClock(e.startedAt)].filter((p): p is string => Boolean(p));
-
-/**
- * The second line of a pin's card: "Lasted 2 s · Moderate · 7:42 AM", "Lasted 2 s · Minor · 7:42 AM ·
- * Weather line" for an event judged at a stricter line for the weather, or a pickup's "In hand 24 s ·
- * 38 mph · 7:42 AM".
- */
+/** The second line of a pin's card: "Lasted 2 s · Moderate · 7:42 AM", or a pickup's "In hand 24 s · 38 mph · 7:42 AM". */
 export function eventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'startedAt' | 'measured'>, units: Units = 'mi'): string {
   if (e.type === 'phone_pickup') return `${pickupDetail(e, units).text} · ${formatClock(e.startedAt)}`;
-  return [...detailParts(e), ...(weatherLined(e) ? [WEATHER_LINE_MARK] : [])].join(' · ');
-}
-
-/** The detail line as a screen reader hears it, for an event judged at a stricter line for the weather; else undefined (the line itself). */
-export function spokenEventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'durationS' | 'startedAt' | 'measured'>): string | undefined {
-  return e.type === 'phone_pickup' || !weatherLined(e) ? undefined : `${detailParts(e).join(' · ')}, ${WEATHER_LINE_SPOKEN}`;
+  return [`Lasted ${formatEventDuration(e.durationS)}`, eventKind(e.type, e.tier), formatClock(e.startedAt)].filter(Boolean).join(' · ');
 }
 
 /** A map pin in its tier's colour with the event's icon, its tip on the spot. */
@@ -196,7 +166,7 @@ function EventCard({ event: e, onClose }: { event: LocalDriveEvent; onClose: () 
         <Text variant="headline" testID="map-event-title">
           {EVENT_LABEL[e.type]}
         </Text>
-        <Text variant="subhead" tone="muted" testID="map-event-detail" accessibilityLabel={spokenEventDetail(e)}>
+        <Text variant="subhead" tone="muted" testID="map-event-detail">
           {eventDetail(e, units)}
         </Text>
       </View>
