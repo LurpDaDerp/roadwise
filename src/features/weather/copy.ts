@@ -4,9 +4,12 @@
  * characters at most), and the driving screen's warning: what to do, in four words at most.
  * Numbers are in the driver's units.
  */
+import { isRoadGrip, isSightCap, type RoadStamp } from '@scoring';
+
 import { KMH_PER_MPH, type Units } from '@/lib/units';
 
 import type { DangerAlert, DangerKind } from './danger';
+import { SNOW_ROAD } from './thresholds';
 
 export const WEATHER_TITLES: Readonly<Record<DangerKind, string>> = {
   blizzard: 'Blizzard',
@@ -131,3 +134,61 @@ export const commuteHeadsUpCopy = {
   body: (kind: DangerKind, to: { kind: string; name: string }, clock: string): string =>
     `Expected around ${clock}, when you usually ${goingTo(to)}. ${kind === 'blizzard' ? 'Stay off the road if you can.' : 'Give yourself extra time.'}`,
 } as const;
+
+/**
+ * The driving screen's card while the road state tightens the lines (`./road.ts`): the road's title
+ * when no alert names the weather, and the quiet line under the title in place of the advice.
+ */
+export const roadCopy = {
+  stricter: 'Stricter limits now',
+} as const;
+
+/** The Live Activity's weather kind for a wet road (its glyph): the one road state no alert kind fits. */
+export const WET_ROAD_KIND = 'wet_road';
+
+/** The Live Activity's weather kind for a road state (its glyph): the alert kind closest to it. */
+export type RoadKind = 'black_ice' | 'snow_on_road' | 'heavy_rain' | typeof WET_ROAD_KIND | 'low_visibility';
+
+/**
+ * The road's title: the grip first (ice, snow, water, a wet film), then the sight cap. A wet road at
+ * 1 °C or colder (`tempC`, the air now) reads "Slippery roads": it may be icing. Null when the
+ * state tightens nothing.
+ */
+export function roadTitle(road: RoadStamp | null | undefined, tempC: number | null): string | null {
+  switch (road?.g) {
+    case 'ice':
+      return 'Icy roads';
+    case 'snow':
+      return 'Snowy roads';
+    case 'water':
+      return 'Heavy rain';
+    case 'wet':
+      return tempC !== null && tempC <= SNOW_ROAD.maxTempC ? 'Slippery roads' : 'Wet roads';
+  }
+  return isSightCap(road?.cap) ? 'Low visibility' : null;
+}
+
+/** The Live Activity's weather kind for a road state, or null when it tightens nothing. */
+export function roadKind(road: RoadStamp | null | undefined): RoadKind | null {
+  switch (road?.g) {
+    case 'ice':
+      return 'black_ice';
+    case 'snow':
+      return 'snow_on_road';
+    case 'water':
+      return 'heavy_rain';
+    case 'wet':
+      return WET_ROAD_KIND;
+  }
+  return isSightCap(road?.cap) ? 'low_visibility' : null;
+}
+
+/**
+ * What a screen reader hears for the card while the lines are tightened: "Wet roads. Speeding counts
+ * from a lower speed, and hard braking, starts and turns from a lighter touch." The second part only
+ * when the grip tightens the hard-event lines (visibility alone changes only the speed).
+ */
+export function roadSpoken(title: string, road: RoadStamp): string {
+  const touch = isRoadGrip(road.g) ? ', and hard braking, starts and turns from a lighter touch' : '';
+  return `${title}. Speeding counts from a lower speed${touch}.`;
+}

@@ -29,13 +29,16 @@ import {
   type PushToStartRequest,
 } from '@/drive/host';
 import { BREAK_KEY } from '@/drive/breakWatch';
+import { ROAD_EASE_MS } from '@/drive/roadHold';
+import { WEATHER_HOLD_KEY } from '@/drive/weatherWatch';
 import { CANCEL_KEY } from '@/drive/cancel';
 import { NOT_DRIVING_BUDGET_MS, NOT_DRIVING_KEY, readBudget } from '@/drive/notDriving';
 import type { Scheduler } from '@/drive/ticks';
 import { WAIT_COUNTDOWN_MS, WAIT_POPUP_MS, WAIT_TOTAL_MS } from '@/drive/waiting';
 import { PLACES_KEY } from '@/features/places/model';
+import { answer, seriesBody, type StepValues } from '@/features/weather/__fixtures__/roadSeries';
 import type { DangerAlert } from '@/features/weather/danger';
-import type { WeatherReading } from '@/features/weather/openMeteo';
+import type { FetchLike, WeatherReading } from '@/features/weather/openMeteo';
 import { attachSummaryNotifier, type SummaryNotificationPort, type SummaryRequest } from '@/features/drive/summaryNotifier';
 
 jest.mock('expo-notifications', () => ({}));
@@ -2613,5 +2616,268 @@ describe('iOS: the car-link end (round 11)', () => {
     expect(h.source.captureEnds.at(-1)).toMatchObject({ automatic: true });
     expect((await createTripsRepo(db).get(NATIVE))?.ended_at).toBeLessThanOrEqual(T0 + 40_000);
     await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('the road state: weather-tightened lines', () => {
+  /** The drive's weather series (Open-Meteo's 15-minute answer at the clock), each step's values from `stepAt` (unix seconds). */
+  function seriesFetch(stepAt: (t: number) => StepValues = () => ({})) {
+    const asked: string[] = [];
+    const fetch: FetchLike = async (url) => {
+      asked.push(url);
+      return answer(seriesBody(Math.floor(clock / 1000), stepAt));
+    };
+    return { fetch, asked };
+  }
+  /** A host whose weather watch asks for the series (the production path) through `fetch`. */
+  const buildRoad = (fetch: FetchLike, over: Over = {}) => build({ weather: undefined, weatherFetch: fetch, ...over });
+  /** A step boundary 100 s into every drive here (T0 is 100 s before one). */
+  const STEP_S = T0 / 1000 + 100;
+  /** Rain all along, 0.6 mm a step on a cool day: a wet road (the film full), no heavy rain. */
+  const WET: StepValues = { rain: 0.6, weather_code: 61 };
+  /** `list` laid end to end along the road east (each fixture call starts back at `START`). */
+  const along = (list: readonly FeatureRow[]): FeatureRow[] => {
+    let lng = START.lng;
+    return list.map((r) => {
+      const out = { ...r, lng };
+      lng += r.speed / M_PER_DEG_LNG;
+      return out;
+    });
+  };
+  const stored = async (id: string): Promise<FeatureRow[]> =>
+    (await createSamplesRepo(db).range(id, 0, Number.MAX_SAFE_INTEGER)).map((s) => JSON.parse(s.row_json) as FeatureRow);
+  /** Every row the drive took in, as the detectors judged it (the DashPal hook sees each). */
+  function rowsSeen(): { dashcam: DriveHostDashcam; seen: FeatureRow[] } {
+    const seen: FeatureRow[] = [];
+    return { seen, dashcam: { row: (r) => void seen.push(r), adopt: async () => {}, beforeFinalize: async () => {}, continuousAlertActive: () => false } };
+  }
+  const settle = async (h: H) => {
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+  };
+  async function freshDb(): Promise<void> {
+    db = await createSqlJsDb();
+    await migrate(db);
+    await createSettingsRepo(db).set('device.lastUserId', 'user-1');
+    clock = T0;
+    ids = 0;
+  }
+
+  /**
+   * One drive: 40 s at 34 mph (under the sign), 20 s at 37 mph (over a wet 35's line of 35.7, under
+   * the dry 39.8), a 0.33 g brake (over the wet 0.32, under the dry 0.36), then 30 s at 56 mph.
+   */
+  const judged = (): FeatureRow[] =>
+    along([
+      ...rows(40, { speedMps: 15 }),
+      ...rows(20, { t0: T0 + 40_000, speedMps: 16.5 }),
+      ...rows(3, { t0: T0 + 60_000, speedMps: 15, over: (i) => (i === 0 ? { speed: 13, aLonMin: -0.33 } : {}) }),
+      ...rows(30, { t0: T0 + 63_000, speedMps: 25 }),
+    ]);
+
+  /** Everything the drive left behind: the rows it took in and stored, its events and trip, the upload, the alerts and the lock screen's states. */
+  async function record(h: H, id: string, seen: FeatureRow[], kept: string[]) {
+    const events = await createEventsRepo(db).listByTrip(id);
+    return {
+      rows: seen.map((r) => JSON.stringify(r)),
+      kept,
+      events,
+      trip: await createTripsRepo(db).get(id),
+      upload: (await createQueueRepo(db).byKey(`trip:${id}`))?.payload_json ?? null,
+      alerts: h.player.delivered.map((d) => JSON.parse(JSON.stringify(d)) as unknown),
+      display: h.display.states,
+    };
+  }
+
+  test('golden: on a dry road in clear air the rows, events, alerts, lock screen and upload are exactly those of a drive with no road state', async () => {
+    const clear: WeatherReading = {
+      samples: [{ time: 0, code: 3, tempC: 8, rainMmH: 0, precipMmH: 0, snowCmH: 0, windMph: 5, gustMph: 9, visibilityM: 16000, isDay: true }],
+      recentRainMm: 0,
+      recentSnowCm: 0,
+    };
+    async function run(over: Over) {
+      await freshDb();
+      const { dashcam, seen } = rowsSeen();
+      const h = build({ dashcam, ...over });
+      await h.host.boot();
+      await drive(h, judged());
+      await settle(h);
+      const id = h.host.snapshot().clientTripId!;
+      const kept = (await createSamplesRepo(db).range(id, 0, Number.MAX_SAFE_INTEGER)).map((s) => s.row_json);
+      clock = T0 + 94_000;
+      await h.host.end();
+      await settle(h);
+      const out = await record(h, id, seen, kept);
+      await h.host.stop({ endOpenTrip: false });
+      return out;
+    }
+    // Today's path: a reading with no series (no road state at all).
+    const plain = await run({ weatherReading: async () => clear });
+    const dry = seriesFetch();
+    const series = await run({ weather: undefined, weatherFetch: dry.fetch });
+    expect(dry.asked).toHaveLength(1);
+    expect(series).toEqual(plain);
+    expect(series.rows).toHaveLength(93);
+    expect(series.kept).toHaveLength(90);
+    expect([...series.rows, ...series.kept].some((r) => r.includes('"road"'))).toBe(false);
+    // The drive did judge things: the 56 mph stretch is speeding, the alerts played, the drive uploaded.
+    expect(series.events.map((e) => e.type)).toEqual(['speeding']);
+    expect(series.alerts.length).toBeGreaterThan(0);
+    expect(JSON.parse(series.upload!)).toMatchObject({ weather: 'clear' });
+    expect(series.upload).not.toMatch(/lineG|lineMph/);
+  });
+
+  test('on a wet road the rows are stamped from the answer on, and the same drive is judged at the stricter lines: the 37 mph stretch and the 0.33 g brake count, carrying their lines to the upload', async () => {
+    const wet = seriesFetch(() => WET);
+    const { dashcam, seen } = rowsSeen();
+    const h = buildRoad(wet.fetch, { dashcam });
+    await h.host.boot();
+    await drive(h, judged());
+    await settle(h);
+    const id = h.host.snapshot().clientTripId!;
+    // Stored with the state, so a relaunch replays the drive alike.
+    const kept = await stored(id);
+    expect(kept).toHaveLength(90);
+    expect(kept.slice(5).every((r) => r.road?.g === 'wet')).toBe(true);
+    expect(h.host.snapshot()).toMatchObject({ limitMph: 35, judgedLimitMph: 31.5, weatherRoad: { road: { g: 'wet' }, title: 'Wet roads' }, weather: { kind: 'wet_road', text: 'Wet roads' } });
+    expect(h.display.states.at(-1)).toMatchObject({ weatherKind: 'wet_road', weatherText: 'Wet roads', limit: 35 });
+    clock = T0 + 94_000;
+    await h.host.end();
+    // The first row came before any answer: unstamped. Every row once the answer is held carries the state.
+    expect(seen).toHaveLength(93);
+    expect(seen[0]!.road).toBeUndefined();
+    expect(seen.slice(5).every((r) => r.road?.g === 'wet' && r.road.cap === undefined)).toBe(true);
+    const events = await createEventsRepo(db).listByTrip(id);
+    const brake = events.find((e) => e.type === 'hard_brake')!;
+    const speeding = events.find((e) => e.type === 'speeding')!;
+    expect(JSON.parse(brake.measured_json!)).toMatchObject({ peakG: 0.33, lineG: 0.32 });
+    expect(speeding.started_at).toBe(T0 + 40_000);
+    expect(JSON.parse(speeding.measured_json!)).toMatchObject({ limitMph: 35, lineMph: 35.7 });
+    const upload = JSON.parse((await createQueueRepo(db).byKey(`trip:${id}`))!.payload_json) as { events: { type: string; measured: Record<string, unknown> }[] };
+    expect(upload.events.find((e) => e.type === 'hard_brake')!.measured).toMatchObject({ lineG: 0.32 });
+    expect(upload.events.find((e) => e.type === 'speeding')!.measured).toMatchObject({ limitMph: 35, lineMph: 35.7 });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the halo and the lock screen tint from the judged limit: 34 mph on a wet 35 is tinted, on a dry one plain', async () => {
+    const tintAt = async (stepAt: () => StepValues) => {
+      await freshDb();
+      const h = buildRoad(seriesFetch(stepAt).fetch);
+      await h.host.boot();
+      const trip = along(rows(30, { speedMps: 15 }));
+      await drive(h, trip.slice(0, 10));
+      await settle(h);
+      await feed(h, trip.slice(10));
+      const s = h.host.snapshot();
+      const state = h.display.states.at(-1)!;
+      await h.host.stop({ endOpenTrip: true });
+      return { s, state };
+    };
+    const wet = await tintAt(() => WET);
+    expect(wet.s).toMatchObject({ limitMph: 35, judgedLimitMph: 31.5 });
+    expect(wet.state.speedTint).toBe(speedTintOf(wet.s.speedingRatio, 31.5, false));
+    expect(wet.state.speedTint).toMatch(/^#[0-9A-F]{6}$/);
+    const dry = await tintAt(() => ({}));
+    expect(dry.s).toMatchObject({ limitMph: 35, judgedLimitMph: 35, weatherRoad: null });
+    expect(dry.state.speedTint).toBeNull();
+  });
+
+  test('the stamp tightens at once and eases only after the easier state has been read for 5 minutes of row time', async () => {
+    // Fog (100 m: a 45 mph cap) until the step 100 s in, clear after: the reading eases at 100 s.
+    const { dashcam, seen } = rowsSeen();
+    const h = buildRoad(seriesFetch((t) => (t < STEP_S ? { visibility: 100 } : {})).fetch, { dashcam });
+    await h.host.boot();
+    await drive(h, rows(420, { speedMps: 15 }));
+    await h.host.end();
+    const byTs = new Map(seen.map((r) => [r.ts, r.road]));
+    expect(byTs.get(T0 + 10_000)).toEqual({ cap: 45 });
+    expect(byTs.get(T0 + 100_000)).toEqual({ cap: 45 });
+    expect(byTs.get(T0 + 100_000 + ROAD_EASE_MS - 1000)).toEqual({ cap: 45 });
+    expect(byTs.get(T0 + 100_000 + ROAD_EASE_MS)).toBeUndefined();
+    expect(byTs.get(T0 + 419_000)).toBeUndefined();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('a sight cap shows the card only while it is under the limit the sign shows (fog at a 45 cap on a 35 moves no line)', async () => {
+    // Fog at 100 m: a 45 mph cap, and the dense-fog alert, which names the card either way.
+    const fog = () => seriesFetch(() => ({ visibility: 100 })).fetch;
+    const slow = buildRoad(fog());
+    await slow.host.boot();
+    await drive(slow, along(rows(20, { speedMps: 15 })));
+    await settle(slow);
+    expect(slow.host.snapshot()).toMatchObject({ limitMph: 35, judgedLimitMph: 35, weatherAlert: { kind: 'dense_fog' }, weatherRoad: null });
+    await slow.host.stop({ endOpenTrip: true });
+
+    await freshDb();
+    const fast = buildRoad(fog(), { limits: fakeLimits(55 * 0.44704) });
+    await fast.host.boot();
+    await drive(fast, along(rows(20, { speedMps: 15 })));
+    await settle(fast);
+    expect(fast.host.snapshot()).toMatchObject({
+      limitMph: 55,
+      judgedLimitMph: 45,
+      weatherRoad: { road: { cap: 45 }, title: 'Low visibility' },
+      weatherAlert: { kind: 'dense_fog' },
+      weather: { kind: 'dense_fog', text: 'Dense fog' },
+    });
+    await fast.host.stop({ endOpenTrip: true });
+  });
+
+  test('the card shows whenever the lines are tightened; its ✕ hides it for the drive (the lines stay tight) until the road gets stricter, once', async () => {
+    // A wet road now, heavy rain from the step 100 s in: the alert (heavy rain within 2 h) shows from the start.
+    const h = buildRoad(seriesFetch((t) => (t < STEP_S ? WET : { rain: 2, weather_code: 65 })).fetch);
+    await h.host.boot();
+    const trip = along(rows(140, { speedMps: 15 }));
+    await drive(h, trip.slice(0, 60));
+    await settle(h);
+    expect(h.host.snapshot()).toMatchObject({
+      weatherAlert: { kind: 'heavy_rain' },
+      weatherRoad: { road: { g: 'wet' }, title: 'Wet roads' },
+      weather: { kind: 'heavy_rain', text: 'Heavy rain' },
+    });
+    h.host.dismissWeather();
+    expect(h.host.snapshot()).toMatchObject({ weatherAlert: null, weatherRoad: null, weather: null });
+    expect(h.display.log.at(-1)).toBe('refresh hint -');
+    // Still wet: hidden, and still judged wet.
+    await feed(h, trip.slice(60, 100));
+    expect(h.host.snapshot()).toMatchObject({ weatherAlert: null, weatherRoad: null, weather: null, judgedLimitMph: 31.5 });
+    // Heavy rain arrives: stricter than when hidden, so the card comes back (the alert's kind is still the dismissed one).
+    await feed(h, trip.slice(100, 110));
+    expect(h.host.snapshot()).toMatchObject({
+      weatherAlert: { kind: 'heavy_rain' },
+      weatherRoad: { road: { g: 'water' }, title: 'Heavy rain' },
+      weather: { kind: 'heavy_rain', text: 'Heavy rain' },
+      judgedLimitMph: 29.75,
+    });
+    expect(h.display.states.at(-1)).toMatchObject({ weatherKind: 'heavy_rain', weatherText: 'Heavy rain' });
+    h.host.dismissWeather();
+    await feed(h, trip.slice(110, 140));
+    expect(h.host.snapshot()).toMatchObject({ weatherAlert: null, weatherRoad: null, weather: null, judgedLimitMph: 29.75 });
+    await h.host.end();
+    expect(h.host.snapshot()).toMatchObject({ weatherRoad: null, weather: null, judgedLimitMph: null });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the road card keeps its object while unchanged, so the driving screen does not re-render for it', async () => {
+    const h = buildRoad(seriesFetch(() => WET).fetch);
+    await h.host.boot();
+    const trip = along(rows(30, { speedMps: 15 }));
+    await drive(h, trip.slice(0, 20));
+    await settle(h);
+    const first = h.host.snapshot().weatherRoad;
+    expect(first).toEqual({ road: { g: 'wet' }, title: 'Wet roads' });
+    await feed(h, trip.slice(20));
+    expect(h.host.snapshot().weatherRoad).toBe(first);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('a wet road at 1 °C or colder reads "Slippery roads"; the newest answer is saved for a relaunch', async () => {
+    const h = buildRoad(seriesFetch(() => ({ ...WET, temperature_2m: 1 })).fetch);
+    await h.host.boot();
+    await drive(h, along(rows(20, { speedMps: 15 })));
+    await settle(h);
+    expect(h.host.snapshot()).toMatchObject({ weatherRoad: { road: { g: 'wet' }, title: 'Slippery roads' } });
+    expect(await createSettingsRepo(db).get(WEATHER_HOLD_KEY)).toMatchObject({ fetchedAtMs: expect.any(Number) });
+    await h.host.stop({ endOpenTrip: true });
   });
 });

@@ -282,15 +282,23 @@ export interface EngineSnapshot {
    * which also refuses a fix worse than 20 m).
    */
   limitMph: number | null;
+  /**
+   * The sign's limit (`limitMph`) as the newest row's road state judges it (`judgedLimitMph`: a wet,
+   * snowy or icy road or low visibility tightens it; not rounded): exactly `limitMph` on an unstamped
+   * row, null with it. Display only: the tint starts at it.
+   */
+  judgedLimitMph: number | null;
   /** The speeding tier of the current row's episode, for the driving screen's halo. */
   speedingTier: Tier | null;
   /**
-   * The speed the screen shows (`speedMps`) over the limit the sign shows (`limitMph`), 1 at the
-   * limit (`machine.tintRatio`); null while the sign shows "-" and when not recording. Display only:
-   * the colour follows the two numbers the driver reads from the first row, with no warm-up and no
-   * gate past the sign's own (a class default, a sign-only match and a held limit tint like a posted
-   * one), so it starts to move the moment the speed passes the sign. The driving screen's halo and
-   * the Live Activity's speed colour tint from it; speeding itself is judged by the detector.
+   * The speed the screen shows (`speedMps`) over the sign's limit as the road state judges it
+   * (`judgedLimitMph`; `limitMph` itself on an unstamped row), 1 at that limit (`machine.tintRatio`);
+   * null while the sign shows "-" and when not recording. Display only: the colour follows the
+   * numbers the driver reads from the first row, with no warm-up and no gate past the sign's own (a
+   * class default, a sign-only match and a held limit tint like a posted one), so it starts to move
+   * the moment the speed passes the sign, or the tightened limit on a slippery road or in fog. The
+   * driving screen's halo and the Live Activity's speed colour tint from it; speeding itself is
+   * judged by the detector.
    */
   speedingRatio: number | null;
   /** The current row is over the speeding line (`speedingLine`, A = 1.16 L − 0.8): the halo pulses. False when not recording. */

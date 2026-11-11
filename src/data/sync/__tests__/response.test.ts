@@ -1,8 +1,8 @@
 /** @jest-environment node */
-import { classifyInvokeError, classifyStatus, NEWER_PAYLOAD_KEYS, SERVER_BEHIND_CODE } from '@/data/sync/response';
+import { classifyInvokeError, classifyStatus, NEWER_MEASURED_KEYS, NEWER_PAYLOAD_KEYS, SERVER_BEHIND_CODE } from '@/data/sync/response';
 import { functionsHttpError } from '@/data/sync/__fixtures__/fakes';
-import { payloadV5, uuid } from '@/data/sync/__fixtures__/drives';
-import { FinalizeTripPayloadV5Schema } from '@/data/sync/payload';
+import { payloadV5, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
+import { FinalizeTripPayloadV5Schema, MeasuredSchema, PayloadEventSchema, type PayloadEvent } from '@/data/sync/payload';
 import { z } from 'zod';
 
 test('a 404 is not a refusal: the function is not there (yet), so the item retries', async () => {
@@ -66,6 +66,54 @@ test('contract: what an old server (its strict v5 schema without weather, throug
   const issues = parsed.error!.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
   const answer = await classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload', issues }).error, 0);
   expect(answer).toEqual({ kind: 'retryable', code: SERVER_BEHIND_CODE, status: 400, retryAfterS: null });
+});
+
+test('a 400 whose only issues are newer measured keys the server does not know (lineG, lineMph) at events.<n>.measured is a server behind; mixed with any other issue it is a refusal', async () => {
+  const refusal = async (issues: unknown[]) => classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload', issues }).error, 0);
+  const behind = { kind: 'retryable', code: SERVER_BEHIND_CODE, status: 400, retryAfterS: null };
+  expect(NEWER_MEASURED_KEYS).toEqual(['lineG', 'lineMph']);
+  expect(await refusal([{ path: 'events.3.measured', message: 'Unrecognized key: "lineG"' }])).toEqual(behind);
+  expect(await refusal([{ path: 'events.0.measured', message: 'Unrecognized keys: "lineG", "lineMph"' }])).toEqual(behind);
+  expect(
+    await refusal([
+      { path: 'events.0.measured', message: 'Unrecognized key: "lineMph"' },
+      { path: 'events.12.measured', message: 'Unrecognized key: "lineG"' },
+      { path: '', message: 'Unrecognized key: "weather"' },
+    ])
+  ).toEqual(behind);
+  // Any other measured key, another place, or another issue beside it, is about the drive.
+  expect(await refusal([{ path: 'events.3.measured', message: 'Unrecognized keys: "lineG", "overMps"' }])).toMatchObject({ kind: 'terminal', code: 'invalid_payload' });
+  expect(await refusal([{ path: 'events.3.measured', message: 'Unrecognized key: "weather"' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: '', message: 'Unrecognized key: "lineG"' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: 'events.3', message: 'Unrecognized key: "lineG"' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: 'exposure', message: 'Unrecognized key: "lineG"' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: 'events.x.measured', message: 'Unrecognized key: "lineG"' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: 'events.3.measured.lineG', message: 'Too small' }])).toMatchObject({ kind: 'terminal' });
+  expect(await refusal([{ path: 'events.3.measured', message: 'Unrecognized key: "lineG"' }, { path: 'miles', message: 'Too big' }])).toMatchObject({
+    kind: 'terminal',
+  });
+});
+
+test('contract: what an old server (its strict v5 schema without the weather lines, through http.ts invalidPayload) answers to an upload with a tightened event reads as a server behind', async () => {
+  // The schema a server from before the weather lines holds uploads to: v5 with measured lacking both keys.
+  const { lineG: _lineG, lineMph: _lineMph, ...oldMeasured } = MeasuredSchema.shape;
+  const oldEvent = PayloadEventSchema.safeExtend({ measured: z.object(oldMeasured).strict() });
+  const oldServer = z.object({ ...FinalizeTripPayloadV5Schema.shape, events: z.array(oldEvent) }).strict();
+  const brake: PayloadEvent = { ...speeding(uuid(11), T0), type: 'hard_brake', tier: 'minor', durationS: 1, measured: { peakG: 0.33, speedMph: 30, lineG: 0.32 } };
+  const speed: PayloadEvent = { ...speeding(uuid(12), T0), measured: { speedMph: 50, limitMph: 40, overMphS: 30, lineMph: 40.6 } };
+  const upload = payloadV5(uuid(1), { events: [speeding(uuid(10), T0), brake, speed] });
+  expect(FinalizeTripPayloadV5Schema.safeParse(upload).success).toBe(true);
+  const parsed = oldServer.safeParse(upload);
+  expect(parsed.success).toBe(false);
+  const issues = parsed.error!.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
+  expect(issues).toEqual([
+    { path: 'events.1.measured', message: 'Unrecognized key: "lineG"' },
+    { path: 'events.2.measured', message: 'Unrecognized key: "lineMph"' },
+  ]);
+  const answer = await classifyInvokeError(functionsHttpError(400, { code: 'invalid_payload', issues }).error, 0);
+  expect(answer).toEqual({ kind: 'retryable', code: SERVER_BEHIND_CODE, status: 400, retryAfterS: null });
+  // A drive with no tightened event is the upload an old server already takes.
+  expect(oldServer.safeParse(payloadV5(uuid(1), { events: [speeding(uuid(10), T0)] })).success).toBe(true);
 });
 
 test('any other invalid_payload stays a refusal, and so does a version issue under another code', async () => {

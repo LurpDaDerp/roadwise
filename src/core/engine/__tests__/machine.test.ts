@@ -654,3 +654,40 @@ test('a held drive (a Start-card drive still waiting) ends only at the 12 h cap:
   held = false;
   expect(h.engine.snapshot().autoEndAt).toBeLessThan(T0 + 12 * 3600_000);
 });
+
+describe('judgedLimitMph: the sign’s limit as the newest row’s road state judges it; the tint follows it', () => {
+  test('equal to the sign’s limit on an unstamped row, the tint unchanged; tightened on a stamped one, the tint from it', async () => {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: null, judgedLimitMph: null, speedingRatio: null });
+    await feed(h, after(3, { speed: mph(33) }));
+    let s = h.engine.snapshot();
+    expect(s).toMatchObject({ limitMph: 35, judgedLimitMph: 35 });
+    expect(s.speedingRatio).toBe(tintRatio(s.speedMps, 35));
+    // A wet road: 35 × 0.90 = 31.5. The sign keeps 35; 33 mph is past the judged limit.
+    await feed(h, seq([1, { speed: mph(33), road: { g: 'wet' }, ts: T0 + 34_000 }]));
+    s = h.engine.snapshot();
+    expect(s).toMatchObject({ limitMph: 35, judgedLimitMph: 31.5 });
+    expect(s.speedingRatio).toBe(tintRatio(s.speedMps, 31.5));
+    expect(s.speedingRatio!).toBeGreaterThan(1);
+    // Fog's 45 cap on a 35 sign tightens nothing.
+    await feed(h, seq([1, { speed: mph(33), road: { cap: 45 }, ts: T0 + 35_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, judgedLimitMph: 35 });
+    // Back to an unstamped row: the sign's limit again.
+    await feed(h, seq([1, { speed: mph(33), ts: T0 + 36_000 }]));
+    s = h.engine.snapshot();
+    expect(s).toMatchObject({ limitMph: 35, judgedLimitMph: 35 });
+    expect(s.speedingRatio).toBe(tintRatio(s.speedMps, 35));
+    await h.engine.dispatch({ type: 'end', ts: T0 + 37_000 });
+    expect(h.engine.snapshot()).toMatchObject({ judgedLimitMph: null, speedingRatio: null });
+  });
+
+  test('a held sign is judged by the newest row’s road state', async () => {
+    const h = harness();
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+    await feed(h, after(1, { speed: mph(40) }));
+    // A 40 m fix: the sign holds 35, the snowy row judges it 28.
+    await feed(h, seq([1, { speed: mph(40), hAcc: 40, road: { g: 'snow' }, ts: T0 + 32_000 }]));
+    expect(h.engine.snapshot()).toMatchObject({ limitMph: 35, judgedLimitMph: 28 });
+  });
+});

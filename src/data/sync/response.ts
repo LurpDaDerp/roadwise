@@ -76,30 +76,45 @@ export const SERVER_BEHIND_CODE = 'server_behind';
  */
 export const NEWER_PAYLOAD_KEYS: readonly string[] = ['weather'];
 
+/**
+ * The optional keys of an event's `measured` added after the contract version itself (the weather
+ * lines): a server from before them refuses one as an unknown key at `events.<n>.measured`.
+ */
+export const NEWER_MEASURED_KEYS: readonly string[] = ['lineG', 'lineMph'];
+const MEASURED_PATH = /^events\.\d+\.measured$/;
+
 type Issue = { path?: unknown; message?: unknown };
 
 /**
- * The keys an unknown-key issue names: the server reports one at path '' with zod's message
- * (`Unrecognized key: "weather"`, `Unrecognized keys: "a", "b"`). Null for any other issue.
+ * The keys an unknown-key issue names: the server reports one at the object's dotted path ('' for
+ * the upload itself) with zod's message (`Unrecognized key: "weather"`, `Unrecognized keys: "a",
+ * "b"`). Null for any other issue.
  */
 function unknownKeys(issue: Issue): string[] | null {
-  if (issue.path !== '' || typeof issue.message !== 'string' || !/^Unrecognized keys?: /.test(issue.message)) return null;
+  if (typeof issue.message !== 'string' || !/^Unrecognized keys?: /.test(issue.message)) return null;
   const keys = [...issue.message.matchAll(/"([^"]*)"/g)].map((m) => m[1] ?? '');
   return keys.length > 0 ? keys : null;
 }
 
-/** An issue that only says the server does not know a newer optional field: an unknown key, or the field's own path. */
+/**
+ * An issue that only says the server does not know a newer optional field: an unknown key of the
+ * upload (`NEWER_PAYLOAD_KEYS`) or of an event's `measured` (`NEWER_MEASURED_KEYS`), or a newer
+ * upload field's own path.
+ */
 function newerFieldIssue(issue: Issue): boolean {
-  if (typeof issue.path === 'string' && NEWER_PAYLOAD_KEYS.includes(issue.path)) return true;
-  const keys = unknownKeys(issue);
-  return keys !== null && keys.every((k) => NEWER_PAYLOAD_KEYS.includes(k));
+  if (typeof issue.path !== 'string') return false;
+  if (NEWER_PAYLOAD_KEYS.includes(issue.path)) return true;
+  const newer = issue.path === '' ? NEWER_PAYLOAD_KEYS : MEASURED_PATH.test(issue.path) ? NEWER_MEASURED_KEYS : null;
+  const keys = newer === null ? null : unknownKeys(issue);
+  return newer !== null && keys !== null && keys.every((k) => newer.includes(k));
 }
 
 /**
  * Whether an `invalid_payload` refusal says the server is older than the upload: it names the
  * contract version (`path: 'v'`, a version it does not know yet), or every issue it names is a
- * newer optional field it does not know (`NEWER_PAYLOAD_KEYS`). Such a refusal is not about the
- * drive, and the same bytes go through once the server is updated, so it is retried rather than failed.
+ * newer optional field it does not know (`NEWER_PAYLOAD_KEYS`, `NEWER_MEASURED_KEYS`). Such a
+ * refusal is not about the drive, and the same bytes go through once the server is updated, so it
+ * is retried rather than failed.
  */
 function refusesVersion(body: unknown): boolean {
   if (typeof body !== 'object' || body === null) return false;

@@ -150,7 +150,8 @@ const finiteOrNull = (v: unknown): number | null => (typeof v === 'number' && Nu
  * that have a route, and the newest 3 000 events of theirs (`SPOT_READ`)
  * that can make a spot: active, not reported (or reported and turned down), one of the four kinds,
  * with a place (the exact one where the phone holds it, as `toLocalDriveEvent` reads it). "Wasn't
- * driving", recording, too-short and unscored drives are out.
+ * driving", recording, too-short and unscored drives are out, and so are events judged at a line the
+ * weather made stricter (they carry `lineG` or `lineMph`).
  */
 export async function readSpotInputs(db: Db, now: number): Promise<SpotInputs> {
   const since = now - SPOT_READ.windowDays * DAY_MS;
@@ -184,6 +185,8 @@ export async function readSpotInputs(db: Db, now: number): Promise<SpotInputs> {
     } catch {
       measured = {};
     }
+    // Judged at a line the weather made stricter: it says nothing about the place on a normal day.
+    if (measured.lineG !== undefined || measured.lineMph !== undefined) continue;
     events.push({
       id: asText(row, 'id'),
       clientTripId,

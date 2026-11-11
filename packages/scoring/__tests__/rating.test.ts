@@ -202,6 +202,34 @@ describe('the severity of the other events', () => {
     expect(hardEventWeight('hard_brake', 'moderate', Number.NaN)).toBe(1);
   });
 
+  test('hardEventWeight: (peak / the line it was judged at)², the line held between the snow line and the dry line', () => {
+    // At the wet and snow lines (supabase/tests/0043_weather_lines.test.sql pins the same digits).
+    expect(hardEventWeight('hard_brake', 'minor', 0.36, 0.32)).toBe(1.265625);
+    expect(hardEventWeight('hard_brake', 'minor', 0.36, 0.29)).toBe(1.5410225921521998);
+    expect(hardEventWeight('hard_brake', 'minor', 0.33, 0.32)).toBe(1.0634765625);
+    expect(hardEventWeight('hard_brake', 'severe', 0.45, 0.32)).toBe(1.9775390625);
+    expect(hardEventWeight('hard_accel', 'minor', 0.4, 0.36)).toBe(1.234567901234568);
+    expect(hardEventWeight('hard_accel', 'minor', 0.4, 0.32)).toBe(1.5625);
+    expect(hardEventWeight('hard_corner', 'minor', 0.5, 0.43)).toBe(1.3520822065981613);
+    expect(hardEventWeight('hard_corner', 'minor', 0.48, 0.38)).toBe(1.595567867036011);
+    // Under the band reads the snow line; over it, the dry line (a line can only raise a weight).
+    expect(hardEventWeight('hard_brake', 'minor', 0.36, 0.1)).toBe(hardEventWeight('hard_brake', 'minor', 0.36, 0.29));
+    expect(hardEventWeight('hard_brake', 'minor', 0.36, 0.5)).toBe(1);
+    expect(hardEventWeight('hard_accel', 'minor', 0.5, 0.9)).toBe(hardEventWeight('hard_accel', 'minor', 0.5));
+    // Still between 1 and 4, and the tier without a peak.
+    expect(hardEventWeight('hard_corner', 'severe', 0.9, 0.38)).toBe(4);
+    expect(hardEventWeight('hard_brake', 'minor', 0.3, 0.32)).toBe(1);
+    expect(hardEventWeight('hard_brake', 'severe', null, 0.32)).toBe(2);
+    // No line, or one that is not a finite number, is the dry line: today's weight exactly.
+    for (const [type, peak] of [['hard_brake', 0.45], ['hard_accel', 0.5], ['hard_corner', 0.6], ['hard_brake', 0.2]] as const) {
+      const dry = hardEventWeight(type, 'minor', peak);
+      expect(hardEventWeight(type, 'minor', peak, null)).toBe(dry);
+      expect(hardEventWeight(type, 'minor', peak, undefined)).toBe(dry);
+      expect(hardEventWeight(type, 'minor', peak, Number.NaN)).toBe(dry);
+      expect(hardEventWeight(type, 'minor', peak, Number.POSITIVE_INFINITY)).toBe(dry);
+    }
+  });
+
   test('phonePickupWeight: (10 + seconds in hand) × the speed factor of its top speed (else its start speed, else 1)', () => {
     expect(phonePickupWeight(ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5, measured: { speedMph: 20, maxSpeedMph: 30 } }))).toBe(15);
     expect(phonePickupWeight(ev({ type: 'phone_pickup', tier: 'severe', durationS: 20, measured: { speedMph: 40, maxSpeedMph: 60 } }))).toBe(60);
@@ -232,6 +260,10 @@ describe('eventWeight', () => {
     expect(eventWeight(ev({ type: 'hard_corner', tier: 'moderate' }))).toBe(1);
     expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.45 } }))).toBe((0.45 / 0.36) * (0.45 / 0.36));
     expect(eventWeight(ev({ type: 'hard_brake', tier: 'severe', measured: { peakG: 'x' as unknown as number } }))).toBe(2);
+    expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.36, lineG: 0.32 } }))).toBe(1.265625);
+    expect(eventWeight(ev({ type: 'hard_corner', tier: 'minor', measured: { peakG: 0.48, lineG: 0.2 } }))).toBe(1.595567867036011);
+    expect(eventWeight(ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.45, lineG: 'x' as unknown as number } }))).toBe((0.45 / 0.36) * (0.45 / 0.36));
+    expect(eventWeight(ev({ type: 'speeding', tier: 'minor', durationS: 30, measured: { overMphS: 125, lineG: 0.29, lineMph: 30.1 } }))).toBe(22.82177322938192);
   });
 
   test('speeding by its measured overMphS, else its tier mean', () => {

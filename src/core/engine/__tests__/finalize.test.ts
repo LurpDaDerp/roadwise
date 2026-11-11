@@ -301,6 +301,21 @@ test('sanitizeEvent clamps and rounds what a detector emitted, keeping only the 
   expect(sanitizeEvent(legacy, T0, T0 + 60_000).measured).toEqual({});
 });
 
+test('sanitizeEvent keeps the line a weather-tightened event was judged at, on its own kind only and within the contract', () => {
+  const at = (type: 'hard_brake' | 'hard_corner' | 'speeding' | 'phone_pickup', measured: Record<string, number>) =>
+    sanitizeEvent({ id: 'x', type, tier: 'minor', startedAt: T0, durationS: 2, measured }, T0, T0 + 60_000).measured;
+  expect(at('hard_brake', { peakG: 0.33, lineG: 0.32 })).toEqual({ peakG: 0.33, lineG: 0.32 });
+  expect(at('hard_corner', { peakG: 0.4, lineG: 0.38004 })).toEqual({ peakG: 0.4, lineG: 0.38 });
+  expect(at('hard_brake', { peakG: 0.33, lineG: 0.05 })).toEqual({ peakG: 0.33, lineG: 0.2 });
+  expect(at('hard_brake', { peakG: 0.33, lineG: Number.NaN })).toEqual({ peakG: 0.33 });
+  expect(at('speeding', { overMphS: 4, lineMph: 35.74 })).toEqual({ overMphS: 4, lineMph: 35.7 });
+  expect(at('speeding', { overMphS: 4, lineMph: 400 })).toEqual({ overMphS: 4, lineMph: 150 });
+  // On the wrong kind neither goes out.
+  expect(at('speeding', { overMphS: 4, lineG: 0.32 })).toEqual({ overMphS: 4 });
+  expect(at('hard_brake', { peakG: 0.4, lineMph: 35.7 })).toEqual({ peakG: 0.4 });
+  expect(at('phone_pickup', { speedMph: 30, lineG: 0.32, lineMph: 35.7 })).toEqual({ speedMph: 30 });
+});
+
 test('sanitizeEvent keeps a phone pickup in whole seconds in hand (1 to the drive, within its end), its tier by them, and its speeds', () => {
   const pickup = { id: 'p', type: 'phone_pickup', tier: 'moderate', startedAt: T0 + 10_000, durationS: 8, measured: { speedMph: 35.04, maxSpeedMph: 48.12345 } } as const;
   expect(sanitizeEvent(pickup, T0, T0 + 60_000)).toEqual({ ...pickup, measured: { speedMph: 35.04, maxSpeedMph: 48.123 } });

@@ -1,6 +1,6 @@
 // The dangerous-weather banner on the driving screen: its two lines never scale themselves (a fixed line on a
 // frame a hair short collapsed such text to 4 pt on iOS) and sit on whole points in the band.
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import { DANGER_ORDER, type DangerAlert } from '@/features/weather/danger';
@@ -36,4 +36,31 @@ test('the compact lines add up to the 36 pt box the bar leaves (40 less its outl
 test('the full lines and padding make a card whose top in the 56 pt band is a whole number of points, and that fills its slot under the halo', () => {
   expect(Number.isInteger((56 - weatherBannerPt(false)) / 2)).toBe(true);
   expect(weatherBannerPt(false)).toBe(HUD_WEATHER_PT);
+});
+
+describe('while the road state tightens the lines', () => {
+  const fog: DangerAlert = { kind: 'dense_fog', gustMph: null, visibilityM: 150 };
+
+  test('with no alert: the road\'s title, "Stricter limits now", and what counts sooner spoken', async () => {
+    await render(<WeatherBanner alert={null} road={{ road: { g: 'wet' }, title: 'Wet roads' }} units="mi" palette={HUD.day} compact={false} onDismiss={() => {}} />);
+    expect(screen.getByText('Wet roads')).toBeOnTheScreen();
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Wet roads. Speeding counts from a lower speed, and hard braking, starts and turns from a lighter touch.');
+  });
+
+  test('with an alert: the alert\'s title over "Stricter limits now"; visibility alone tightens only the speed', async () => {
+    const onDismiss = jest.fn();
+    await render(<WeatherBanner alert={fog} road={{ road: { cap: 55 }, title: 'Low visibility' }} units="mi" palette={HUD.day} compact onDismiss={onDismiss} />);
+    expect(screen.getByText('Dense fog')).toBeOnTheScreen();
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Dense fog. Speeding counts from a lower speed.');
+    await fireEvent.press(screen.getByTestId('hud-weather-close'));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  test('with no road state the card is the alert\'s alone, as it was given', async () => {
+    await render(<WeatherBanner alert={fog} road={null} units="mi" palette={HUD.day} compact={false} onDismiss={() => {}} />);
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Use your low beams');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Dense fog. Visibility 500 ft. Slow down and use your low beams.');
+  });
 });

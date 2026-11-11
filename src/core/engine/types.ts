@@ -1,6 +1,6 @@
 // Contract between the native feature extractor, the detectors and the engine (product spec
 // "Event detection"; modes plan §3.9; phone plan P1).
-import type { DriveEvent, EventType, Tier } from '@scoring';
+import type { DriveEvent, EventType, RoadStamp, Tier } from '@scoring';
 
 /**
  * One second of fused sensing at 1 Hz: the GNSS fix, the IMU extremes over that second and the
@@ -72,6 +72,12 @@ export interface FeatureRow {
    * now; kept optional so stored samples and traces still parse.
    */
   exempt?: 'nav' | 'restart';
+  /**
+   * The road state the host stamps on the row from the drive's weather reading (`RoadStamp`: the
+   * grip, the sight cap), only while it tightens the lines. Stored with the row, so a replay judges
+   * it alike. Absent is a dry road in clear air: the normal lines.
+   */
+  road?: RoadStamp;
 }
 
 /** The speed limit the map layer believes applies to a row. */
@@ -102,6 +108,10 @@ export interface EventMeasured {
   peakG?: number;
   /** speeding: mph past the speeding line summed over every over row (1 dp); the Speed weight reads it. */
   overMphS?: number;
+  /** hard_brake, hard_accel, hard_corner: the minor line it was judged at (g), only when the road's grip put it under the dry line. */
+  lineG?: number;
+  /** speeding: the speeding line at the peak row (mph, 1 dp), only when the road state tightened that row's limit. */
+  lineMph?: number;
   /** phone_pickup: the highest trusted GPS speed from the pickup's start through its last use row, mph (1 dp). */
   maxSpeedMph?: number;
   /** `dashcam` on (and only on) a DashPal event (`eyes_off`, `drowsy`); the phone's own detectors never set it. */

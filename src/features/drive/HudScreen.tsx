@@ -142,7 +142,8 @@ export type HudScreenProps = {
  *   otherwise). Calm: light blue-white, light moving slowly round it. Past the limit on the sign it
  *   tints toward yellow, orange and red with the speed shown over it, ever faster: 0 at the limit,
  *   half way at the speeding line (1.16 × the limit − 0.8 mph), full red about 1.47 times the line's
- *   margin over the limit (`speedingTint`), from the first moment the speed passes the sign; it
+ *   margin over the limit (`speedingTint`), from the first moment the speed passes the sign (on a
+ *   wet, snowy or icy road or in fog, the lower limit the road state judges by, and its line); it
  *   pulses only while the car is over the speeding line, faster the further over, and stops on the
  *   first row back under it. A DashPal alert
  *   (driver-not-visible included): warmer and faster the more serious and the longer. A hard brake,
@@ -181,8 +182,9 @@ export type HudScreenProps = {
  *   With a DashPal paired, a small static chip top right.
  * - Weather (portrait): the dangerous-weather card in its own slot under the halo, above End (and
  *   the link's row), kept free whether it shows or not, so nothing moves when it appears: a yellow
- *   outline, the title and what to do, its ✕ top right (live at any speed; hidden for the rest of
- *   the drive once dismissed). Alerts and nudges never cover it. A window too small for the slot
+ *   outline, the title and what to do ("Stricter limits now" while the road state tightens the
+ *   lines, when it shows for a wet, snowy or icy road or low visibility too), its ✕ top right (live
+ *   at any speed; hidden for the rest of the drive once dismissed). Alerts and nudges never cover it. A window too small for the slot
  *   (landscape, compact, a small phone) shows it in the band's line instead, last.
  *   Where the link lives in the band's line (compact windows), an event or DashPal banner yields to
  *   it while it is offered (the halo's burst and the sound still carry the alert), so no run of
@@ -569,8 +571,9 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   const speeding = live.overSign;
   const busy = ending || live.status === 'finalizing';
 
-  // The halo: tinted from the sign's limit up, pulsing only over the speeding line; it shakes once
-  // for each event as it happens (fresh on the row clock, never one from the background).
+  // The halo: tinted from the sign's limit up (the judged limit on a tightened road), pulsing only
+  // over the speeding line; it shakes once for each event as it happens (fresh on the row clock,
+  // never one from the background).
   const shake = useEventShake(live.lastShake, live.rowTs);
   const now = wallClock();
   // The compass: the drive's track bearing, held for the rest of the drive once shown (advanced once
@@ -607,10 +610,13 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
   // a run of alerts can never hide it for its whole budget. The halo still bursts and the sound plays.
   const linkInLine = showLink && layout.notDriving === 'line' && !endFailed;
   const bannerUp = (dashpal !== null || chip !== null) && !linkInLine;
-  // The weather alert at the car (the host leaves out a kind dismissed this drive); its ✕ hides it
-  // for the rest of the drive (a more severe kind shows again). In its own slot under the halo where
-  // the window has one, else in the band's line.
+  // The weather card: the alert at the car (the host leaves out a kind dismissed this drive), and the
+  // road state while it tightens the lines; its ✕ hides it for the rest of the drive (a more severe
+  // kind, or a stricter road, shows again). In its own slot under the halo where the window has one,
+  // else in the band's line.
   const weather = live.weatherAlert;
+  const road = live.weatherRoad ?? null;
+  const cardUp = weather !== null || road !== null;
   const dismissWeather = useCallback(() => controls.dismissWeather(), [controls]);
   const weatherSlot = layout.weather === 'line' ? null : layout.weather;
   // Stable handlers, so the memoised link and buttons (and End's swipe gesture) are not rebuilt per row.
@@ -659,14 +665,14 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
             <SpotNudgeLine nudge={nudge} palette={p} compact={compactBand} />
           ) : breakShown !== null ? (
             <BreakReminderLine palette={p} compact={compactBand} />
-          ) : weather !== null && weatherSlot === null ? (
-            <WeatherBanner alert={weather} units={units} palette={p} compact={compactBand} onDismiss={dismissWeather} />
+          ) : cardUp && weatherSlot === null ? (
+            <WeatherBanner alert={weather} road={road} units={units} palette={p} compact={compactBand} onDismiss={dismissWeather} />
           ) : null}
         </View>
       ) : null}
-      {weather !== null && weatherSlot !== null ? (
+      {cardUp && weatherSlot !== null ? (
         <View testID="hud-weather-slot" style={[styles.abs, styles.slot, at(weatherSlot)]}>
-          <WeatherBanner alert={weather} units={units} palette={p} compact={false} onDismiss={dismissWeather} />
+          <WeatherBanner alert={weather} road={road} units={units} palette={p} compact={false} onDismiss={dismissWeather} />
         </View>
       ) : null}
       {dashpalChip !== null && layout.chip !== null && !bannerUp ? (

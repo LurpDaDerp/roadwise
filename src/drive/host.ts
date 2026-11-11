@@ -45,7 +45,7 @@
 //   player, the waiting clock and the DashPal link moving.
 import { parseActivity, parseRow, parseSpeed, type CaptureEnd, type CarLinkState, type DriveDetectApi, type DriveStartedEvent, type DriveEndedEvent, type EndCauseNative, type JournaledDrive, type MotionActivity } from '@drive-sense';
 import type { LiveDriveState } from '@live-drive';
-import { MERGE_GAP_S } from '@scoring';
+import { isRoadGrip, MERGE_GAP_S, roadStricter, sameRoad, type RoadStamp } from '@scoring';
 import { Platform } from 'react-native';
 
 import { decisionFor, ALERT_GLOW_MS } from '@/core/alerts/policy';
@@ -70,9 +70,10 @@ import type { AppStateLike } from '@/data/foreground';
 import { readWatchSpots } from '@/data/queries/spots';
 import { clearParkedSpot, readParkedSpot, writeParkedSpot } from '@/features/parked/model';
 import { permitFinalizeDeps } from '@/features/permit/data';
-import { WEATHER_TITLES } from '@/features/weather/copy';
+import { roadKind, roadTitle, WEATHER_TITLES, type RoadKind } from '@/features/weather/copy';
 import { moreSevere, type DangerAlert, type DangerKind } from '@/features/weather/danger';
 import { worseWeather, type DriveWeather } from '@/features/weather/driveWeather';
+import type { FetchLike } from '@/features/weather/openMeteo';
 import { processTimers } from '@/lib/timers';
 import { dayKey, sunIsDown } from '@/lib/time';
 import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
@@ -90,10 +91,11 @@ import { readParkingSpots, readPlaceSpots } from './parkingSpots';
 import { PASSENGER_ASKED_KEY, PASSENGER_READ_EVERY_MS, passengerDue, passengerReady, readProvenCars, type PassengerFacts } from './passengerCheck';
 import { createPassengerNotePort, type PassengerNotePort } from './passengerNote';
 import { isBusyStatus } from './policy';
+import { nextRoadHold, NORMAL_ROAD, roadTightened, strictestRoad, type RoadHold } from './roadHold';
 import type { DriveSource } from './source';
 import { createTicker, realScheduler, type Scheduler } from './ticks';
 import { nextWaitingChange, WAIT_TOTAL_MS, waitingDeadline, waitingPhaseAt, type WaitingPublic } from './waiting';
-import { createWeatherWatch, type WeatherLookup, type WeatherReadingLookup, type WeatherWatch } from './weatherWatch';
+import { createWeatherWatch, weatherHoldIn, type WeatherLookup, type WeatherReadingLookup, type WeatherWatch } from './weatherWatch';
 
 export type { DriveSource } from './source';
 
@@ -122,10 +124,19 @@ export type LastFinalized =
   | { clientTripId: string; ok: false; at: number }
   | null;
 
-/** What the Live Activity and the driving screen show for the weather: the alert's kind and its title. */
+/**
+ * What the Live Activity and the driving screen show for the weather: the card's kind and its title
+ * (the alert's, else the road's: `roadKind`, `roadTitle`).
+ */
 export interface ShownWeather {
-  kind: DangerKind;
+  kind: DangerKind | RoadKind;
   text: string;
+}
+
+/** The road state the card shows while it tightens the lines, and the road's title ("Wet roads"). */
+export interface ShownRoad {
+  road: RoadStamp;
+  title: string;
 }
 
 /** The saved place a drive ended at on its own (the place-arrival end), for the driving screen's "Welcome" line. */
@@ -158,9 +169,19 @@ export interface DriveState extends EngineSnapshot {
   spotNudge: SpotNudge | null;
   /** The driving screen's "Take a break soon" line (shown once per key), the latest of the open drive, or null. */
   breakReminder: BreakReminder | null;
-  /** The dangerous-weather alert at the car, unless dismissed this drive (a more severe kind shows again); null with no drive. */
+  /**
+   * The dangerous-weather alert at the car, unless dismissed this drive (a more severe kind shows
+   * again); null with no drive. While the card is up for the road state (`weatherRoad`), the alert at
+   * the car whatever its kind, so the card names the weather.
+   */
   weatherAlert: DangerAlert | null;
-  /** The same alert as the Live Activity carries it: its kind and title. */
+  /**
+   * The road state while it tightens the lines and the card shows it: the card is up whenever the
+   * lines are tightened, until its ✕ (it comes back once the state is stricter than when hidden).
+   * Null on a normal road, while hidden and with no drive.
+   */
+  weatherRoad: ShownRoad | null;
+  /** The card as the Live Activity carries it: its kind and title. */
   weather: ShownWeather | null;
 }
 
@@ -338,6 +359,8 @@ export interface DriveHostDeps {
   weather?: WeatherLookup;
   /** The weather reading at a place (default Open-Meteo): the alert and the drive's weather tag. Wins over `weather`. */
   weatherReading?: WeatherReadingLookup;
+  /** The fetch the drive's weather series is asked with (default the global one); unused with `weather` or `weatherReading`. */
+  weatherFetch?: FetchLike;
   /**
    * iPhone with the car link: what "Are you driving?" needs of the phone (Bluetooth, the notification
    * permission, the note). Default: the phone's own on such a build; null turns the check off.
@@ -634,6 +657,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let weatherWatch: WeatherWatch | null = null;
   let weatherRaw: DangerAlert | null = null;
   let weatherDismissed: DangerKind | null = null;
+  /** The road state the open drive's rows are stamped with (`roadHold.ts`), and the road's title while it tightens the lines. */
+  let roadHold: RoadHold = NORMAL_ROAD;
+  let roadTitleNow: string | null = null;
+  /** The strictest road state the card's ✕ hid it at; null while not hidden. */
+  let roadHidden: RoadStamp | null = null;
+  /** The last published `weatherRoad`, kept while unchanged so the driving screen does not re-render for it. */
+  let shownRoad: ShownRoad | null = null;
   /** The open (or last) drive's worst weather so far (`driveWeather.ts`), kept by trip id; written to its trip row as it worsens. */
   let driveWeather: { clientTripId: string; tag: DriveWeather | null } | null = null;
   /** The weather row writes, in order. */
@@ -1102,12 +1132,51 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     return weatherDismissed === null || moreSevere(weatherRaw.kind, weatherDismissed) ? weatherRaw : null;
   }
 
+  /**
+   * The road state while it moves a line now: a grip (the hard-event lines and the judged limit), or a
+   * sight cap under the limit the sign shows (fog's 45 mph cap on a 35 road moves nothing). Else null.
+   */
+  function roadMovingLines(): RoadStamp | null {
+    if (!roadTightened(roadHold.road)) return null;
+    if (isRoadGrip(roadHold.road.g)) return roadHold.road;
+    const s = engine.snapshot();
+    return s.limitMph !== null && s.judgedLimitMph !== null && s.judgedLimitMph < s.limitMph ? roadHold.road : null;
+  }
+
+  /**
+   * The weather card: up for a shown alert, and whenever the road state moves a line unless its ✕
+   * hid it at a state as strict. It names the alert at the car if there is one, else the road.
+   * Null when nothing shows.
+   */
+  function shownCard(): { alert: DangerAlert | null; road: RoadStamp | null } | null {
+    if (engine.snapshot().status !== 'recording') return null;
+    const alert = shownWeather();
+    const road = roadMovingLines();
+    const roadUp = road !== null && (roadHidden === null || roadStricter(road, roadHidden));
+    if (alert === null && !roadUp) return null;
+    return { alert: alert ?? weatherRaw, road };
+  }
+
+  /** The road's title while it tightens the lines: the watch's ("Slippery roads" in the cold), else from the state alone. */
+  const roadTitleOf = (road: RoadStamp): string => roadTitleNow ?? roadTitle(road, null) ?? '';
+
+  /** The card's kind and title, as the Live Activity carries them. */
+  function shownLine(card: { alert: DangerAlert | null; road: RoadStamp | null } | null): ShownWeather | null {
+    if (card === null) return null;
+    if (card.alert !== null) return { kind: card.alert.kind, text: WEATHER_TITLES[card.alert.kind] };
+    const kind = roadKind(card.road);
+    return kind === null || card.road === null ? null : { kind, text: roadTitleOf(card.road) };
+  }
+
   /** Never while a Start-card drive still waits for driving speed: its Cancel is the one discard then. */
   const notDrivingAvailable = (): boolean =>
     waiting === null && budget !== null && !budget.expired && engine.snapshot().status === 'recording' && budget.clientTripId === engine.snapshot().clientTripId;
 
   function build(): DriveState {
-    const alertNow = shownWeather();
+    const card = shownCard();
+    const road = card?.road ?? null;
+    if (road === null) shownRoad = null;
+    else if (shownRoad === null || shownRoad.title !== roadTitleOf(road) || !sameRoad(shownRoad.road, road)) shownRoad = { road, title: roadTitleOf(road) };
     return Object.freeze({
       ...engine.snapshot(),
       arrival,
@@ -1120,8 +1189,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       notDrivingSpentMs: budget?.spentMs ?? 0,
       spotNudge,
       breakReminder,
-      weatherAlert: alertNow,
-      weather: alertNow === null ? null : { kind: alertNow.kind, text: WEATHER_TITLES[alertNow.kind] },
+      weatherAlert: card?.alert ?? null,
+      weatherRoad: shownRoad,
+      weather: shownLine(card),
     });
   }
 
@@ -1170,7 +1240,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    * 0), the limit, its tint, the hint and the weather.
    */
   function displayState(s: EngineSnapshot): DriveDisplayState {
-    const w = shownWeather();
+    const w = shownLine(shownCard());
     return {
       speed: s.speedKnown && s.speedAt !== null ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
       limit: inDisplayUnit(s.limitMph, displayUnit),
@@ -1178,11 +1248,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       points: null,
       pointsDelta: null,
       stopped: s.stopped,
-      speedTint: speedTintOf(s.speedingRatio, s.limitMph, night()),
+      speedTint: speedTintOf(s.speedingRatio, s.judgedLimitMph, night()),
       speeding: s.speedingTier !== null,
       notDrivingAvailable: notDrivingAvailable(),
       weatherKind: w?.kind ?? null,
-      weatherText: w === null ? null : WEATHER_TITLES[w.kind],
+      weatherText: w?.text ?? null,
     };
   }
 
@@ -1281,6 +1351,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     weatherWatch = null;
     weatherRaw = null;
     weatherDismissed = null;
+    roadHold = NORMAL_ROAD;
+    roadTitleNow = null;
+    roadHidden = null;
     lastFixAt = null;
     if (persist && linkWritten && !keepLink) void createSettingsRepo(db).remove(JOURNAL_LINK_KEY).catch((e: unknown) => report(e, 'journalLink'));
     linkWritten = false;
@@ -1401,6 +1474,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           now,
           read: deps.weatherReading,
           lookup: deps.weather,
+          fetch: deps.weatherFetch,
+          hold: weatherHoldIn(db),
           lastPosition: deps.lastPosition,
           onTag: (tag) => {
             // Frozen once the drive ends: finalize stores and uploads the tag it reads, so a check
@@ -1420,9 +1495,9 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
               .catch((e: unknown) => report(e, 'weather'));
           },
           onAlert: (a) => {
-            const before = shownWeather();
+            const before = shownCard()?.alert ?? null;
             weatherRaw = a;
-            const after = shownWeather();
+            const after = shownCard()?.alert ?? null;
             if (before?.kind !== after?.kind || before?.gustMph !== after?.gustMph || before?.visibilityM !== after?.visibilityM) {
               publish();
               refreshDisplay();
@@ -1919,6 +1994,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
     // Visible time first, so the state the row publishes carries it.
     if (!opts.replay && engine.snapshot().status === 'recording') accrueRow(row);
+    row = stampRoad(row);
     replayingRow = opts.replay === true;
     try {
       // RoadWise behind: the row's alerts are never shown or shaken, then or when the driver comes back.
@@ -1982,6 +2058,26 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       }
     }
     if (waiting !== null && recording) await waitingRow(snap.drove);
+  }
+
+  /**
+   * The row with the road state the detectors judge it by (`FeatureRow.road`), only while the state
+   * tightens the lines: the watch's reading at the row's time and place (its last fix for a row
+   * without one) through the ease rule (`roadHold.ts`). A journal row replayed at a start is stamped
+   * only when a held answer covers its time (else the reading is unknown). A row that already carries
+   * a state keeps it; rows rebuilt from storage carry theirs and never pass here.
+   */
+  function stampRoad(row: FeatureRow): FeatureRow {
+    if (weatherWatch === null || row.road !== undefined) return row;
+    const at = row.gnssValid ? row : lastFixAt;
+    const read = at === null ? null : weatherWatch.roadAt(row.ts, at.lat, at.lng);
+    roadHold = nextRoadHold(roadHold, read, row.ts);
+    if (!roadTightened(roadHold.road)) {
+      roadTitleNow = null;
+      return row;
+    }
+    roadTitleNow = at === null ? null : weatherWatch.roadTitle(roadHold.road, row.ts, at.lat, at.lng);
+    return { ...row, road: { ...roadHold.road } };
   }
 
   /**
@@ -2634,9 +2730,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     },
 
     dismissWeather() {
+      if (shownCard() === null) return;
       const shown = shownWeather();
-      if (shown === null) return;
-      weatherDismissed = weatherDismissed === null || moreSevere(shown.kind, weatherDismissed) ? shown.kind : weatherDismissed;
+      if (shown !== null) weatherDismissed = weatherDismissed === null || moreSevere(shown.kind, weatherDismissed) ? shown.kind : weatherDismissed;
+      if (roadTightened(roadHold.road)) roadHidden = strictestRoad(roadHidden, roadHold.road);
       publish();
       refreshDisplay();
     },

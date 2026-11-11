@@ -21,7 +21,9 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
+  SIGHT_CAPS_MPH,
   SPEED_FACTOR,
+  SPEED_FACTOR_PCT,
   speedTolerance,
   type AxisKey,
 } from '@scoring';
@@ -66,6 +68,19 @@ const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
 /** How far over a limit (mph) the speeding line sits, to the nearest mph: 3 at 25, 5 at 35, 10 at 65. */
 const overAt = (limitMph: number): number => Math.round(speedTolerance(limitMph));
+
+/**
+ * The stricter lines in rain, snow, ice and fog: the judged limit's share of the posted one for each
+ * grip (`SPEED_FACTOR_PCT`) and the span of the visibility caps (`SIGHT_CAPS_MPH`).
+ */
+function weatherLine(): string {
+  const f = SPEED_FACTOR_PCT;
+  const caps = SIGHT_CAPS_MPH;
+  return (
+    `In rain, snow, ice or fog the lines are stricter, because the car needs more room to stop. Speeding is judged against ${f.wet}% of the posted limit on a wet road, ${f.water}% in heavy rain, ${f.snow}% on snow and ${f.ice}% on ice, and against ${Math.max(...caps)} mph down to ${Math.min(...caps)} mph in fog, the less you can see the lower. ` +
+    'Hard brakes, starts and turns count from a lighter touch on a wet road, and lighter still on snow or ice. The weather comes from a forecast model for where you are, and when it isn’t known the usual lines apply.'
+  );
+}
 
 /** Each category as a sentence names it. */
 const AXIS_WORD: Record<AxisKey, string> = {
@@ -126,6 +141,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
         : `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`,
       'The score’s color and icon also weigh the drive’s length, so a short perfect drive stays modest while a long smooth drive earns the top.',
+      weatherLine(),
     ],
   },
   {

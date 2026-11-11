@@ -98,10 +98,13 @@ describe('inputs', () => {
       event(15, 1, { type: 'phone_pickup', tier: 'moderate', duration_s: 12, measured_json: '{"speedMph":35,"maxSpeedMph":40}' }),
       // hidden from the upload (a trimmed end or a zone) but placed exactly on the phone: a spot's like any other
       event(16, 2, { lat: null, lng: null, lat_full: 47.5961, lng_full: -122.3 }),
+      // judged at a line the weather made stricter: never a spot's (it says nothing of the place on a normal day)
+      event(17, 1, { measured_json: '{"speedMph":31,"peakG":0.33,"lineG":0.32}' }),
+      event(18, 1, { type: 'speeding', measured_json: '{"speedMph":38,"limitMph":35,"overMphS":4,"lineMph":35.7}', duration_s: 10 }),
     ]);
   });
 
-  test('only scored, long-enough drives of the last 120 days with a route (the whole one where the phone holds it), and their active, unreported (or turned down) events of the four kinds with a place, exact where the phone holds it (never a phone pickup)', async () => {
+  test('only scored, long-enough drives of the last 120 days with a route (the whole one where the phone holds it), and their active, unreported (or turned down) events of the four kinds with a place, exact where the phone holds it (never a phone pickup, nor an event judged at a stricter line for the weather)', async () => {
     const inputs = await readSpotInputs(db, T0);
     expect(inputs.drives).toEqual([
       { clientTripId: uuid(1), startedAt: T0 - DAY, polyline: ROAD },

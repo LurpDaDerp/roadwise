@@ -128,3 +128,67 @@ export const WMO = {
   thunderstorm: [95, 97],
   hail: [96, 99],
 } as const;
+
+/*
+ * The road state a drive's lines are judged by (`./road.ts`): the grip from the 15-minute series at
+ * the car, and a speed cap from visibility. These are the numbers that are not alert criteria above.
+ *
+ * Sources:
+ * - The water film is an engineering estimate, to tune against real wet and drying drives: a capped
+ *   bucket that rain fills and the air dries. Rain intensity drives the water film on a road (TRB,
+ *   water film depth models); a drizzle under about 0.3 mm an hour never wets the road in it, a
+ *   steady 1 mm an hour does within half an hour, and a road dries in about an hour on a warm day
+ *   and two to two and a half when it is cool or dark.
+ * - Snow's water: 7 cm of snowfall is 10 mm of water (Open-Meteo's snowfall definition,
+ *   https://open-meteo.com/en/docs), so a light snow that settles wets the road as rain would and a
+ *   few flurries do not.
+ * - Visibility caps: FHWA "Guidelines for the Use of Variable Speed Limit Systems in Wet Weather"
+ *   (FHWA-SA-12-022): Alabama's I-10 low-visibility system posts 65 mph under 900 ft (274 m) and
+ *   55 mph under 660 ft (201 m), in 10 mph steps down to 35. The 140 m and 85 m bands extend it so
+ *   each band is at least the AASHTO stopping sight distance of its cap (2.5 s to react, 11.2 ft/s²
+ *   to stop: 75 m at 35 mph, 110 m at 45, 150 m at 55, 196 m at 65).
+ * - The model updates hourly, so a reading older than 90 minutes no longer says what the road is;
+ *   the longest window above (snow, 6 hours) must be inside the series for the state to be known.
+ */
+
+/** The road's water film, mm. */
+export const WATER_FILM = {
+  /** The most the film holds: more runs off. */
+  capMm: 1,
+  /** The road is wet at this film or more. */
+  wetMm: 0.3,
+  /** Drying in a 15-minute step by day at `warmC` or warmer. */
+  dryWarmMm: 0.2,
+  /** Drying in a 15-minute step when it is cool, dark or unknown. */
+  dryCoolMm: 0.075,
+  /** Warm enough to dry fast, °C. */
+  warmC: 10,
+  /** Snow as water: 10 mm of water to 7 cm of snow. */
+  snowMmPerCm: 10 / 7,
+} as const;
+
+/** Visibility at or under `maxM` caps the judged limit at `capMph`; the tightest band first. */
+export const SIGHT_BANDS = [
+  { maxM: 85, capMph: 35 },
+  { maxM: 140, capMph: 45 },
+  { maxM: 200, capMph: 55 },
+  { maxM: 275, capMph: 65 },
+] as const;
+
+/** One step of the series, seconds. */
+export const ROAD_STEP_S = 900;
+
+/** A reading says what the road is for this long after it was fetched (and as long before). */
+export const ROAD_STALE_MS = 90 * 60_000;
+
+/** The steps the series must hold before the step a moment falls in: 6 hours, the snow window. */
+export const ROAD_HISTORY_STEPS = (SNOW_ROAD.lookbackHours * 3600) / ROAD_STEP_S;
+
+/** What the drive's request asks: 7 h of steps back and 2 h ahead, 6 h of hours back and 5 ahead. */
+export const ROAD_SERIES = {
+  pastSteps: 28,
+  aheadSteps: 8,
+  pastHours: PAST_HOURS,
+  /** 2 h ahead of a reading re-judged up to `ROAD_STALE_MS` after it came, rounded up. */
+  aheadHours: 5,
+} as const;

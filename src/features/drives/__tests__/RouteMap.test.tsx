@@ -6,7 +6,7 @@ import { contrastRatio, tokens } from '@/ui';
 import { draw, event, press, ROUTE } from '../__fixtures__/drives';
 import { EVENT_ICON } from '../format';
 import { pinAnchor, PIN_PLACE as PLACE } from '../Pin';
-import { PIN, PIN_PLACE, RECENTER_MS, resetMapsCache, RING_INK, RouteMap } from '../RouteMap';
+import { eventDetail, PIN, PIN_PLACE, pinLabel, RECENTER_MS, resetMapsCache, RING_INK, RouteMap } from '../RouteMap';
 
 /** The map is hidden from screen readers (the breakdown says it all), so queries must look inside. */
 const H = { includeHiddenElements: true } as const;
@@ -169,6 +169,23 @@ test('tapping a pin opens a card with the event, how long it lasted, its tier an
   await fireEvent(screen.getByTestId('map-view'), 'press', { nativeEvent: {} });
   clock.mockRestore();
   expect(screen.queryByTestId('map-event-card')).toBeNull();
+});
+
+test('an event judged at a stricter line for the weather is marked "Weather line" on its card, and says so spoken', async () => {
+  const brake = event({ tier: 'minor', durationS: 2, measured: { peakG: 0.33, lineG: 0.32 } });
+  await draw(<RouteMap runs={[ROUTE]} events={[brake]} highlighted={null} />);
+  const pin = screen.getByLabelText('Hard brake, 2 seconds, minor, counted at the stricter line for the weather');
+  await fireEvent.press(pin);
+  const detail = screen.getByTestId('map-event-detail');
+  expect(detail).toHaveTextContent(/^Lasted 2 s · Minor · 1:09\sPM · Weather line$/);
+  expect(detail.props.accessibilityLabel).toMatch(/^Lasted 2 s · Minor · 1:09\sPM, counted at the stricter line for the weather$/);
+  // Speeding carries its line in mph; an event with neither key reads as it always does, with no spoken label of its own.
+  const speeding = event({ type: 'speeding', tier: 'minor', durationS: 4, measured: { speedMph: 38, limitMph: 35, overMphS: 4, lineMph: 35.7 } });
+  expect(eventDetail(speeding)).toMatch(/ · Weather line$/);
+  expect(pinLabel(speeding)).toBe('Speeding, 4 seconds, minor, counted at the stricter line for the weather');
+  const plain = event({ tier: 'minor', durationS: 2, measured: { peakG: 0.4 } });
+  expect(eventDetail(plain)).toMatch(/^Lasted 2 s · Minor · 1:09\sPM$/);
+  expect(pinLabel(plain)).toBe('Hard brake, 2 seconds, minor');
 });
 
 test('the map pans and zooms freely; off its opening view a Recenter button brings the whole route back', async () => {

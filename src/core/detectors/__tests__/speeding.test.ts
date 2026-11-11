@@ -1,6 +1,7 @@
 import { createSpeedingDetector } from '@/core/detectors/speeding';
 import { round1 } from '@/core/detectors/common';
 import { counterIds, ctx, drive, limit, mph, NO_LIMIT, only, seq, T0 } from '@/core/detectors/__fixtures__/rows';
+import type { FeatureRow } from '@/core/engine/types';
 
 // On a 35, T = 4.8: the speeding line 1.16 L − 0.8 is 39.8 mph; minor above 39.8, moderate above
 // 43.8, severe above 48.8; the end buffer is under 37.8.
@@ -172,5 +173,69 @@ describe('speeding reads only trusted speeds (speed accuracy 2 m/s or better, or
     const det = createSpeedingDetector(counterIds());
     det.push(seq([1, { speed: mph(46), speedAcc: 3 }])[0]!, L35, ctx());
     expect(det.open()).toBeNull();
+  });
+});
+
+describe('the road state on the row (row.road): speeding is judged against the tightened limit', () => {
+  // A wet 35 is judged as 31.5: the line is 35.74 (1.16 × 31.5 − 0.8), moderate above 39.74, severe
+  // above 44.74. Snow 28 (line 31.68), ice 24.5 (27.62); a 45 cap on a 65 gives the line 51.4.
+  const wet = { g: 'wet' } as const;
+  const events = (rows: ReturnType<typeof seq>, lim = L35) => drive(createSpeedingDetector(counterIds()), rows, lim).all;
+
+  test('38 mph on a 35 is nothing on a dry road and a minor episode on a wet one, naming the posted limit and the line', () => {
+    expect(events(seq([10, { speed: mph(38) }], [10, { speed: mph(30) }]))).toEqual([]);
+    const e = only(events(seq([10, { speed: mph(38), road: wet }], [10, { speed: mph(30), road: wet }])));
+    expect(e).toMatchObject({ type: 'speeding', tier: 'minor', startedAt: T0, durationS: 10 });
+    expect(e.measured).toEqual({ speedMph: 38, limitMph: 35, overMphS: round1(10 * (38 - 35.74)), lineMph: 35.7 });
+  });
+
+  test('the tier runs on the judged limit: 45 on a wet 35 is severe, on a dry one moderate', () => {
+    expect(only(events(seq([5, { speed: mph(45), road: wet }], [10, { speed: mph(30) }]))).tier).toBe('severe');
+    expect(only(events(seq([5, { speed: mph(45) }], [10, { speed: mph(30) }]))).tier).toBe('moderate');
+  });
+
+  test('each grip and the sight cap give their line; a cap at or above the limit tightens nothing and adds no lineMph', () => {
+    const lineOf = (road: FeatureRow['road'], v: number, lim = L35) => only(events(seq([3, { speed: mph(v), road }], [10, { speed: mph(20) }]), lim)).measured.lineMph;
+    expect(lineOf({ g: 'water' }, 40)).toBe(33.7);
+    expect(lineOf({ g: 'snow' }, 40)).toBe(31.7);
+    expect(lineOf({ g: 'ice' }, 40)).toBe(27.6);
+    expect(lineOf({ cap: 45 }, 60, limit(mph(65)))).toBe(51.4);
+    // A 45 cap on a 35: the dry line, the dry event.
+    const capped = events(seq([3, { speed: mph(41), road: { cap: 45 } }], [10, { speed: mph(20) }]));
+    expect(capped).toEqual(events(seq([3, { speed: mph(41) }], [10, { speed: mph(20) }])));
+    expect(only(capped).measured).toEqual({ speedMph: 41, limitMph: 35, overMphS: 3.6 });
+  });
+
+  test('a stamp it does not know (from a stored row) judges against the posted limit', () => {
+    const odd = { g: 'mud', cap: 30 } as unknown as FeatureRow['road'];
+    expect(events(seq([10, { speed: mph(38), road: odd }], [10, { speed: mph(30) }]))).toEqual([]);
+  });
+
+  test('overMphS sums each row past its own line; lineMph is the peak row’s, only when that row was tightened', () => {
+    // 3 wet rows at 38 (2.26 each) then 3 dry rows at 41 (1.2 each): one minor episode whose peak is
+    // the faster dry row, so no lineMph.
+    const mixed = only(events(seq([3, { speed: mph(38), road: wet }], [3, { speed: mph(41) }], [10, { speed: mph(30) }])));
+    expect(mixed).toMatchObject({ tier: 'minor', durationS: 6 });
+    expect(mixed.measured).toEqual({ speedMph: 41, limitMph: 35, overMphS: round1(3 * 2.26 + 3 * 1.2) });
+    // 41 dry (minor) then 41 wet (moderate, 5.26 past 35.74): the peak is a wet row.
+    const peakWet = only(events(seq([3, { speed: mph(41) }], [3, { speed: mph(41), road: wet }], [10, { speed: mph(30) }])));
+    expect(peakWet).toMatchObject({ tier: 'moderate', durationS: 6 });
+    expect(peakWet.measured).toEqual({ speedMph: 41, limitMph: 35, overMphS: round1(3 * 1.2 + 3 * 5.26), lineMph: 35.7 });
+  });
+
+  test('the road easing mid-episode: 38 on a wet 35, then 38 dry hovers in the buffer (37.8 to 39.8) and the episode ends on the way down', () => {
+    const rows = seq([4, { speed: mph(38), road: wet }], [10, { speed: mph(38) }], [10, { speed: mph(30) }]);
+    const { pushed, all } = drive(createSpeedingDetector(counterIds()), rows, L35);
+    expect(only(all)).toMatchObject({ durationS: 4, startedAt: T0 });
+    // Closed on the fifth row under 37.8 (rows 14..18), not by the hovering dry rows.
+    expect(pushed.findIndex((p) => p.length > 0)).toBe(18);
+  });
+
+  test('the reading runs on the judged line, its ratio on the posted limit', () => {
+    const det = createSpeedingDetector(counterIds());
+    det.push(seq([1, { speed: mph(38), road: wet }])[0]!, L35, ctx());
+    expect(det.reading()!.overMph).toBeCloseTo(38 - 35.74, 9);
+    expect(det.reading()!.ratio).toBeCloseTo(38 / 35, 9);
+    expect(det.open()).toMatchObject({ tier: 'minor' });
   });
 });

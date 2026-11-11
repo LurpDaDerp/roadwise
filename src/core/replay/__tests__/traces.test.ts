@@ -151,3 +151,64 @@ test('parseTrace refuses an unknown key and a bad expectation', () => {
   expect(() => parseTrace({ ...ok, bogus: 1 })).toThrow(/Invalid trace/);
   expect(() => parseTrace({ ...ok, expected: [{ type: 'speeding', startsNear: 1, status: 'scored' }] })).toThrow(/Invalid trace/);
 });
+
+test('parseTrace takes a row’s road state and refuses one it does not know', () => {
+  const ok = TRACE_BUILDERS['clean-commute']!();
+  const stamped = { ...ok, rows: ok.rows.map((r) => ({ ...r, road: { g: 'wet', cap: 45 } })) };
+  expect(parseTrace(stamped).rows[0]!.road).toEqual({ g: 'wet', cap: 45 });
+  expect(() => parseTrace({ ...ok, rows: ok.rows.map((r) => ({ ...r, road: { g: 'mud' } })) })).toThrow(/Invalid trace/);
+  expect(() => parseTrace({ ...ok, rows: ok.rows.map((r) => ({ ...r, road: { cap: 40 } })) })).toThrow(/Invalid trace/);
+  expect(() => parseTrace({ ...ok, rows: ok.rows.map((r) => ({ ...r, road: { g: 'wet', fog: true } })) })).toThrow(/Invalid trace/);
+});
+
+/** The trace with every row stamped with `road`, through JSON as the stored rows are. */
+const stampedTrace = (name: string, road: object): Trace => {
+  const trace = load(name);
+  return parseTrace(JSON.parse(JSON.stringify({ ...trace, rows: trace.rows.map((r) => ({ ...r, road })) })));
+};
+
+test.each([
+  ['hard-brake-confirmed', { g: 'wet' }],
+  ['hard-corner-plausible', { g: 'snow' }],
+  ['speeding-minor', { g: 'wet' }],
+  ['speeding-hover', { g: 'ice', cap: 35 }],
+])('%s stamped %j rebuilds from its stored rows to the live events, each judged at its weather line', async (name, road) => {
+  const trace = stampedTrace(name, road);
+  const t0 = trace.rows[0]!.ts;
+  const limits = limitsByPlace(trace);
+  const finalized: Readonly<TripSession>[] = [];
+  const engine = createEngine({
+    now: () => t0,
+    newId: () => 'live',
+    limits: { lookup: (lat, lng) => limits.lookup(lat, lng), prefetch: () => {} },
+    createDetectors: () => createDetectors(() => 'x'),
+    ctx: () => ({ platform: trace.platform ?? 'ios' }),
+    onAlert: () => {},
+    onCheckpoint: async () => {},
+    onFinalize: async (s) => {
+      finalized.push(s);
+    },
+    onCancel: async () => {},
+  });
+  await engine.dispatch({ type: 'start', ts: t0, origin: 'manual', continues: false });
+  for (const row of trace.rows) await engine.dispatch({ type: 'row', row });
+  // Ended while moving: closed at the tap, every open episode flushed.
+  await engine.dispatch({ type: 'end', ts: trace.rows[trace.rows.length - 1]!.ts + 1000 });
+  const live = finalized[0]!.events;
+
+  const db = await createSqlJsDb();
+  await migrate(db);
+  await createTripsRepo(db).insert({ client_trip_id: 'live', started_at: t0, tz: 'America/Los_Angeles', status: 'recording', origin: 'manual' }, t0);
+  await createSamplesRepo(db).appendMany('live', trace.rows.map((row) => ({ ts: row.ts, row })));
+  const trip = (await createTripsRepo(db).get('live'))!;
+  const rebuilt = (await rebuildFromSamples(db, trip, {
+    createDetectors: () => createDetectors(() => 'x'),
+    platform: trace.platform ?? 'ios',
+    limits: { lookup: async (lat, lng) => limits.lookup(lat, lng) },
+  }))!;
+  expect(live.length).toBeGreaterThan(0);
+  expect([...rebuilt.session.events, ...rebuilt.detectors.flush()]).toEqual(live);
+  for (const e of live) expect(e.measured.lineG ?? e.measured.lineMph).toBeDefined();
+  // The harness judges the same rows alike.
+  expect(runTrace(trace).events.map((e) => e.measured)).toEqual(live.map((e) => e.measured));
+});

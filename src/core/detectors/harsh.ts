@@ -13,16 +13,25 @@
 //   `CORNER_YAW_SHARE` of the peak), the force is not a wobble (both sides past `CORNER_WOBBLE_G` in
 //   one second), and the GPS course turned the same way (left-positive lateral force against a
 //   clockwise course) at a rate × speed of at least `CORNER_PLAUSIBLE_SHARE` of the peak, read only
-//   from two known courses (an unknown one is −1) that did not jump (`COURSE_JUMP_DEG_S` at 10 mph
-//   or more);
+//   from two known courses (an unknown one is −1) that did not jump (at 10 mph or more, faster than
+//   `COURSE_JUMP_DEG_S` and implying more than `GNSS_ONLY_MAX_G` sideways);
+// - on a row with no sideways extremes (the phone has not learned the car's forward axis, or lost
+//   it), the gyroscope stands in for them: speed × yaw rate is the sideways force in a turn, whatever
+//   way the phone sits. It also turns with the phone in a hand or sliding in a cup holder, so the
+//   force is the lesser of it and the force the row's own GPS course turn implies (both must reach
+//   the line), and its side is the course's;
 // - a phone sliding or dropping — an orientation spike or a lost gravity reference within two
 //   seconds — is ignored, whatever the IMU says.
+// The lines are the row's own (`hardLines`): a row the host stamped with a slippery road
+// (`row.road.g`) is judged at the wet or snow lines, an unstamped row at the ones above. An episode
+// keeps the lines of its first row for its tier, and its event names the minor line (`lineG`) when
+// it is under the dry one.
 // Each kind runs as an episode of consecutive signal rows. It is alerted the first row it is
 // confirmed (the GNSS vouched for it, no spike, the car at 5 mph or more: `alerts()`), once. The
 // event itself waits: a closed episode is held for two seconds so the row after it can still
 // confirm or veto it, then released as at most one event (an alerted episode a later spike vetoes
 // is alerted but never charged).
-import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, MOVING_MIN_MPH, type Tier } from '@scoring';
+import { hardLines, MOVING_MIN_MPH, type HardLines, type Tier } from '@scoring';
 
 import type { DetectedEvent, Detector, FeatureRow, HarshAlert, HarshKind } from '../engine/types';
 import { G_MPS2, knownSpeed, knownSpeedMph, MPS_PER_MPH, round1, round2, rowEligible, speedTrusted } from './common';
@@ -39,7 +48,10 @@ export const GNSS_ONLY_MAX_G = 1;
 export const CORNER_PLAUSIBLE_SHARE = 0.5;
 /** Cornering is judged only at or above this speed; below it the course is noise. */
 export const CORNER_MIN_MPH = 10;
-/** A course turning faster than this (°/s) at `CORNER_MIN_MPH` or more is a jump in the fix, not the car. */
+/**
+ * A course turning faster than this (°/s) at `CORNER_MIN_MPH` or more is a jump in the fix, not the
+ * car, when it also implies more than `GNSS_ONLY_MAX_G` sideways (a tight turn at low speed does not).
+ */
 export const COURSE_JUMP_DEG_S = 60;
 /** The gyroscope must turn the phone enough: speed × yaw rate at least this share of the lateral peak. */
 export const CORNER_YAW_SHARE = 0.5;
@@ -63,18 +75,14 @@ interface Episode {
   peakSign: number;
   speedAtPeakMph: number | null;
   maxSpeedMph: number;
+  /** The lines of its first row: its tier and the event's `lineG`. */
+  lines: HardLines;
   /** The GNSS vouched for it: a matching Δspeed (brake/accel) or a plausible course rate (corner). */
   confirmed: boolean;
   spike: boolean;
   /** Its alert has been told (`alerts()`). */
   alerted: boolean;
 }
-
-const THRESHOLDS: Record<HarshKind, { minor: number; severe: number }> = {
-  hard_brake: HARD_BRAKE_G,
-  hard_accel: HARD_ACCEL_G,
-  hard_corner: HARD_CORNER_G,
-};
 
 interface Evidence {
   deltaG: number | null;
@@ -94,33 +102,53 @@ const wellRated = (row: FeatureRow): boolean => row.speedAcc >= 0 && row.speedAc
 /** A course the fix knows: degrees clockwise from north; −1 (or anything else out of range) is unknown. */
 const courseKnown = (course: number): boolean => course >= 0 && course <= 360;
 
+/** The row reports no sideways extremes (the forward axis is not learned): the gyroscope stands in. */
+const lateralUnknown = (row: FeatureRow): boolean => row.aLatMax === 0 && row.aLatMin === 0;
+
 /** The row's lateral force at its larger extreme, signed (left-positive). */
 const lateralPeak = (row: FeatureRow): number => (Math.abs(row.aLatMax) >= Math.abs(row.aLatMin) ? row.aLatMax : row.aLatMin);
 
 /**
- * The row's cornering signal, g, or null: past the threshold, not a wobble, and the gyroscope turned
- * the phone with it (speed × yaw rate ≥ `CORNER_YAW_SHARE` of the force).
+ * The side of the row's cornering force (+1 left, −1 right): its sideways extremes', else the
+ * course's (a clockwise turn is a right turn).
  */
-function cornerPeak(row: FeatureRow): number | null {
-  const lateral = Math.abs(lateralPeak(row));
-  if (!(lateral >= HARD_CORNER_G.minor)) return null;
-  if (row.aLatMax >= CORNER_WOBBLE_G && row.aLatMin <= -CORNER_WOBBLE_G) return null;
+const cornerSide = (row: FeatureRow, ev: Evidence): number => (lateralUnknown(row) ? -Math.sign(ev.turnDeg ?? 0) : Math.sign(lateralPeak(row)));
+
+/**
+ * The row's cornering signal at or past `minG`, g, or null. With sideways extremes: the force, not a
+ * wobble, and the gyroscope turned the phone with it (speed × yaw rate ≥ `CORNER_YAW_SHARE` of the
+ * force). With none (the forward axis not learned): the lesser of speed × yaw rate and the force the
+ * row's GPS course turn implies.
+ */
+function cornerPeak(row: FeatureRow, minG: number, ev: Evidence): number | null {
   const v = knownSpeed(row);
   if (v === null || !Number.isFinite(row.yawRateMax)) return null;
-  return (v * row.yawRateMax) / G_MPS2 >= CORNER_YAW_SHARE * lateral ? lateral : null;
+  const turning = (v * row.yawRateMax) / G_MPS2;
+  if (lateralUnknown(row)) {
+    if (ev.lateralG === null || ev.turnDeg === null || ev.turnDeg === 0) return null;
+    const bounded = Math.min(turning, ev.lateralG);
+    return bounded >= minG ? bounded : null;
+  }
+  const lateral = Math.abs(lateralPeak(row));
+  if (!(lateral >= minG)) return null;
+  if (row.aLatMax >= CORNER_WOBBLE_G && row.aLatMin <= -CORNER_WOBBLE_G) return null;
+  return turning >= CORNER_YAW_SHARE * lateral ? lateral : null;
 }
 
-/** `gnss`: the GNSS Δspeed (g) standing in for the forward IMU, or null. */
-function peakOf(kind: HarshKind, row: FeatureRow, gnss: number | null): number | null {
+/**
+ * `gnss`: the GNSS Δspeed (g) standing in for the forward IMU, or null; `minG`: the row's minor line;
+ * `ev`: the row's GNSS evidence.
+ */
+function peakOf(kind: HarshKind, row: FeatureRow, gnss: number | null, minG: number, ev: Evidence): number | null {
   switch (kind) {
     case 'hard_brake':
-      if (-row.aLonMin >= HARD_BRAKE_G.minor) return -row.aLonMin;
-      return gnss !== null && -gnss >= HARD_BRAKE_G.minor ? -gnss : null;
+      if (-row.aLonMin >= minG) return -row.aLonMin;
+      return gnss !== null && -gnss >= minG ? -gnss : null;
     case 'hard_accel':
-      if (row.aLonMax >= HARD_ACCEL_G.minor) return row.aLonMax;
-      return gnss !== null && gnss >= HARD_ACCEL_G.minor ? gnss : null;
+      if (row.aLonMax >= minG) return row.aLonMax;
+      return gnss !== null && gnss >= minG ? gnss : null;
     case 'hard_corner':
-      return cornerPeak(row);
+      return cornerPeak(row, minG, ev);
   }
 }
 
@@ -132,7 +160,7 @@ const courseDelta = (a: number, b: number): number => {
   return d;
 };
 
-const tierOf = (ep: Episode): Tier => (ep.peakG >= THRESHOLDS[ep.kind].severe ? 'severe' : 'minor');
+const tierOf = (ep: Episode): Tier => (ep.peakG >= ep.lines.severe ? 'severe' : 'minor');
 
 /** Hard events, plus their alerts as each episode is confirmed. */
 export interface HarshDetector extends Detector {
@@ -170,8 +198,8 @@ export function createHarshDetector(newId: () => string): HarshDetector {
     const turnDeg = courseDelta(prev.course, row.course);
     const rateDegS = Math.abs(turnDeg) / dtS;
     const meanMps = (speed + before) / 2;
-    if (rateDegS > COURSE_JUMP_DEG_S && meanMps >= CORNER_MIN_MPH * MPS_PER_MPH) return { deltaG, lateralG: null, turnDeg: null, gnssOnly };
     const lateralG = (meanMps * ((rateDegS * Math.PI) / 180)) / G_MPS2;
+    if (rateDegS > COURSE_JUMP_DEG_S && lateralG > GNSS_ONLY_MAX_G && meanMps >= CORNER_MIN_MPH * MPS_PER_MPH) return { deltaG, lateralG: null, turnDeg: null, gnssOnly };
     return { deltaG, lateralG, turnDeg, gnssOnly };
   }
 
@@ -190,6 +218,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
   function toEvent(ep: Episode): DetectedEvent {
     const measured: DetectedEvent['measured'] = { peakG: round2(ep.peakG) };
     if (ep.speedAtPeakMph !== null) measured.speedMph = round1(ep.speedAtPeakMph);
+    if (ep.lines.minor < hardLines(ep.kind).minor) measured.lineG = ep.lines.minor;
     return { id: ep.id, type: ep.kind, tier: tierOf(ep), startedAt: ep.startedAt, durationS: ep.rows, measured };
   }
 
@@ -207,7 +236,8 @@ export function createHarshDetector(newId: () => string): HarshDetector {
       const gnss = !axisSeen && ev.gnssOnly && ev.deltaG !== null && Math.abs(ev.deltaG) <= GNSS_ONLY_MAX_G ? ev.deltaG : null;
 
       for (const kind of KINDS) {
-        const peak = eligible ? peakOf(kind, row, gnss) : null;
+        const lines = hardLines(kind, row.road?.g);
+        const peak = eligible ? peakOf(kind, row, gnss, lines.minor, ev) : null;
         const cornerTooSlow = kind === 'hard_corner' && (speedMph === null || speedMph < CORNER_MIN_MPH);
         const signal = peak !== null && !cornerTooSlow;
         const ep = open[kind];
@@ -216,7 +246,7 @@ export function createHarshDetector(newId: () => string): HarshDetector {
           ep.lastTs = row.ts;
           if (peak > ep.peakG) {
             ep.peakG = peak;
-            ep.peakSign = Math.sign(lateralPeak(row));
+            ep.peakSign = cornerSide(row, ev);
             ep.speedAtPeakMph = speedMph;
           }
           ep.maxSpeedMph = Math.max(ep.maxSpeedMph, speedMph ?? 0);
@@ -230,9 +260,10 @@ export function createHarshDetector(newId: () => string): HarshDetector {
             lastTs: row.ts,
             rows: 1,
             peakG: peak,
-            peakSign: Math.sign(lateralPeak(row)),
+            peakSign: cornerSide(row, ev),
             speedAtPeakMph: speedMph,
             maxSpeedMph: Math.max(speedMph ?? 0, prev === null ? 0 : (knownSpeedMph(prev) ?? 0)),
+            lines,
             confirmed: false,
             spike: spike || (lastSpikeTs !== null && row.ts - lastSpikeTs <= SPIKE_WINDOW_MS),
             alerted: false,

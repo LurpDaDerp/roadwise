@@ -157,9 +157,11 @@ export interface LocalDriveEvent {
   removed: boolean;
   /**
    * What the detector measured; speeding's `overMphS` weighs it in the Speed score. A phone pickup:
-   * `speedMph` as it started, `maxSpeedMph` the highest while in hand.
+   * `speedMph` as it started, `maxSpeedMph` the highest while in hand. An event judged at a line the
+   * weather made stricter carries it: `lineG` on a hard event (its weight reads it), `lineMph` on
+   * speeding.
    */
-  measured: { speedMph?: number; maxSpeedMph?: number; limitMph?: number; peakG?: number; overMphS?: number; source?: 'dashcam' };
+  measured: { speedMph?: number; maxSpeedMph?: number; limitMph?: number; peakG?: number; overMphS?: number; lineG?: number; lineMph?: number; source?: 'dashcam' };
 }
 
 /** Counts of ACTIVE events, from a drive's event rows (or any wire events). */
@@ -295,7 +297,8 @@ const finiteOrUndefined = (v: unknown): number | undefined => (typeof v === 'num
 
 /**
  * The measured block as stored, keeping only the keys this build reads: `maxSpeedMph` on a phone
- * pickup only, and never an older build's `mounted`.
+ * pickup only, `lineG` on a hard event only, `lineMph` on speeding only, and never an older build's
+ * `mounted`.
  */
 function parseMeasured(json: string | null, type: EventType): LocalDriveEvent['measured'] {
   if (json === null) return {};
@@ -313,11 +316,15 @@ function parseMeasured(json: string | null, type: EventType): LocalDriveEvent['m
   const limitMph = finiteOrUndefined(r.limitMph);
   const peakG = finiteOrUndefined(r.peakG);
   const overMphS = finiteOrUndefined(r.overMphS);
+  const lineG = type === 'hard_brake' || type === 'hard_accel' || type === 'hard_corner' ? finiteOrUndefined(r.lineG) : undefined;
+  const lineMph = type === 'speeding' ? finiteOrUndefined(r.lineMph) : undefined;
   if (speedMph !== undefined) out.speedMph = speedMph;
   if (maxSpeedMph !== undefined) out.maxSpeedMph = maxSpeedMph;
   if (limitMph !== undefined) out.limitMph = limitMph;
   if (peakG !== undefined) out.peakG = peakG;
   if (overMphS !== undefined) out.overMphS = overMphS;
+  if (lineG !== undefined) out.lineG = lineG;
+  if (lineMph !== undefined) out.lineMph = lineMph;
   if (r.source === 'dashcam') out.source = 'dashcam';
   return out;
 }

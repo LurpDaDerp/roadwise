@@ -11,6 +11,7 @@ import {
   PHONE_PUTDOWN_QUIET_S,
   RANKED_MIN_MILES,
   RATING_WINDOW_DAYS,
+  SPEED_FACTOR_PCT,
 } from '@scoring';
 
 import { HERO, howItWorks, rules, type DriveNumbers } from '@/content/howScores';
@@ -93,6 +94,15 @@ test('Phone use: felt from motion alone, never the screen; every number from the
   expect(section(true, 'drive-score')[0]).toMatch(/speed and phone use/);
   expect(howItWorks(true)[1]!.body).toBe('Gentle stops, smooth starts, easy turns, staying near the limit and leaving your phone alone all help.');
   expect(section(true, 'mistakes').join(' ')).toContain('“phone was mounted”');
+});
+
+test('the stricter lines in rain, snow, ice and fog, every number from the scoring rules, the same for both kinds of drive', () => {
+  const line = section(true, 'drive-score').at(-1)!;
+  expect(line).toBe(
+    'In rain, snow, ice or fog the lines are stricter, because the car needs more room to stop. Speeding is judged against 90% of the posted limit on a wet road, 85% in heavy rain, 80% on snow and 70% on ice, and against 65 mph down to 35 mph in fog, the less you can see the lower. Hard brakes, starts and turns count from a lighter touch on a wet road, and lighter still on snow or ice. The weather comes from a forecast model for where you are, and when it isn’t known the usual lines apply.'
+  );
+  expect(section(false, 'drive-score').at(-1)).toBe(line);
+  expect(line).toContain(`${SPEED_FACTOR_PCT.wet}% of the posted limit`);
 });
 
 test('friends see the rating by default; the rest is private until shared', () => {

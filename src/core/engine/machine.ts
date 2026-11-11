@@ -29,7 +29,7 @@
 // A reducer over one explicit state, driven by 1 Hz rows and a few events through a serialised
 // `dispatch`; the only clock is the `ts` on what comes in. Everything the engine wants done —
 // persistence, sound, scoring — goes out through callbacks.
-import { MOVING_MIN_MPH, type EventType, type Tier } from '@scoring';
+import { judgedLimitMph, MOVING_MIN_MPH, type EventType, type Tier } from '@scoring';
 
 import { speedingRepeatS } from '@/core/alerts/policy';
 import { knownSpeed, limitShownMph, MPS_PER_MPH, ROW_MS, UNKNOWN_LIMIT } from '@/core/detectors/common';
@@ -190,6 +190,8 @@ export function createEngine(deps: EngineDeps): Engine {
     const speed = row === null ? null : knownSpeed(row);
     const recording = status === 'recording';
     const open = suite?.openSpeeding() ?? null;
+    // The sign's limit as the newest row's road state judges it: the tint starts there.
+    const judged = shownLimit.mph === null ? null : judgedLimitMph(shownLimit.mph, row?.road);
     return Object.freeze({
       status,
       clientTripId: session?.clientTripId ?? null,
@@ -204,8 +206,9 @@ export function createEngine(deps: EngineDeps): Engine {
       rowSpeedMps: speed,
       limit: Object.freeze({ ...(seen?.limit ?? UNKNOWN_LIMIT) }),
       limitMph: shownLimit.mph,
+      judgedLimitMph: judged,
       speedingTier: recording && open !== null ? open.tier : null,
-      speedingRatio: recording ? tintRatio(shown?.mps ?? 0, shownLimit.mph) : null,
+      speedingRatio: recording ? tintRatio(shown?.mps ?? 0, judged) : null,
       speedingOver: recording && open !== null,
       courseDeg: recording ? course : null,
       bearingDeg: recording ? bearing.deg : null,

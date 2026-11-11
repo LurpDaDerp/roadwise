@@ -1,5 +1,5 @@
 import { createHarshDetector } from '@/core/detectors/harsh';
-import { counterIds, ctx, drive, mph, only, seq, T0 } from '@/core/detectors/__fixtures__/rows';
+import { counterIds, ctx, drive, limit, mph, only, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { FeatureRow } from '@/core/engine/types';
 
 /** `n` cruise rows, one IMU peak row with the GNSS change the rows after it show, then a tail. */
@@ -94,7 +94,7 @@ describe('hard cornering (spec: sideways force, confirmed by the gyroscope and t
     expect(corner(after)).toEqual([]);
   });
 
-  test('a course jumping faster than 60°/s at 10 mph or more is the fix, not the car', () => {
+  test('a course jumping faster than 60°/s and past 1 g implied, at 10 mph or more, is the fix, not the car', () => {
     expect(corner(turn(150, { aLatMin: -0.6 }))).toHaveLength(1); // 60°/s: a turn
     expect(corner(turn(151, { aLatMin: -0.6 }))).toEqual([]);
     expect(corner(turn(200, { aLatMin: -0.6 }))).toEqual([]);
@@ -231,5 +231,158 @@ describe('before the forward axis is learned, the GPS speed change stands in for
   test('once a row has had forward extremes, only the IMU counts', () => {
     const rows = seq([5, { speed: mph(35) }], [1, { speed: mph(35), aLonMax: 0.02, aLonMin: -0.02 }], [5, { speed: mph(35) }], [10, { speed: mph(25) }]);
     expect(drive(createHarshDetector(counterIds()), rows).all).toEqual([]);
+  });
+});
+
+describe('the road state on the row (row.road.g): wet and water judge at the wet lines, snow and ice at the snow lines', () => {
+  const events = (rows: FeatureRow[]) => drive(createHarshDetector(counterIds()), rows).all;
+  const wet = { g: 'wet' } as const;
+
+  test('a 0.33 g brake with a matching GNSS drop is no event on a dry road, a minor one at the 0.32 line on a wet one', () => {
+    expect(events(peakDrive({ aLonMin: -0.33 }, 10, 10, mph(35), mph(25)))).toEqual([]);
+    const e = only(events(peakDrive({ aLonMin: -0.33, road: wet }, 10, 10, mph(35), mph(25))));
+    expect(e).toMatchObject({ type: 'hard_brake', tier: 'minor', startedAt: T0 + 10_000, durationS: 1 });
+    expect(e.measured).toEqual({ peakG: 0.33, speedMph: 25, lineG: 0.32 });
+    // Heavy rain judges at the wet lines too.
+    expect(only(events(peakDrive({ aLonMin: -0.33, road: { g: 'water' } }, 10, 10, mph(35), mph(25)))).measured.lineG).toBe(0.32);
+  });
+
+  test('snow and ice judge at the snow lines (brake 0.29, start 0.32, turn 0.38), and a stamp of sight alone changes nothing', () => {
+    for (const g of ['snow', 'ice'] as const) {
+      expect(only(events(peakDrive({ aLonMin: -0.3, road: { g } }, 10, 10, mph(35), mph(25)))).measured).toEqual({ peakG: 0.3, speedMph: 25, lineG: 0.29 });
+      expect(only(events(peakDrive({ aLonMax: 0.33, road: { g } }, 10, 10, mph(20), mph(30)))).measured.lineG).toBe(0.32);
+    }
+    expect(events(peakDrive({ aLonMin: -0.33, road: { cap: 35 } }, 10, 10, mph(35), mph(25)))).toEqual([]);
+  });
+
+  test('a stamp it does not know (from a stored row) judges at the dry lines; a dry event carries no lineG', () => {
+    const odd = { g: 'mud' } as unknown as FeatureRow['road'];
+    expect(events(peakDrive({ aLonMin: -0.33, road: odd }, 10, 10, mph(35), mph(25)))).toEqual([]);
+    expect(only(events(peakDrive({ aLonMin: -0.4, road: odd }, 10, 10, mph(35), mph(25)))).measured).toEqual({ peakG: 0.4, speedMph: 25 });
+  });
+
+  test('the severe line is the road state’s too: 0.52 g on a wet road is severe (0.50), on a dry one minor (0.55)', () => {
+    expect(only(events(peakDrive({ aLonMin: -0.52, road: wet }, 10, 10, mph(40), mph(25)))).tier).toBe('severe');
+    expect(only(events(peakDrive({ aLonMin: -0.52 }, 10, 10, mph(40), mph(25)))).tier).toBe('minor');
+  });
+
+  test('an episode keeps the lines of its first row for its tier, its alert and its lineG', () => {
+    // Opened wet at 0.33, peaking at 0.52 on a dry row: severe at the wet line, alerted minor (its tier so far).
+    const wetFirst = seq([10, { speed: mph(40) }], [1, { speed: mph(33), aLonMin: -0.33, road: wet }], [1, { speed: mph(26), aLonMin: -0.52 }], [10, { speed: mph(26) }]);
+    const det = createHarshDetector(counterIds());
+    const told: string[] = [];
+    const all = wetFirst.flatMap((r) => {
+      const out = det.push(r, limit(mph(35)), ctx());
+      told.push(...det.alerts().map((a) => `${a.type}:${a.tier}`));
+      return out;
+    });
+    const e = only([...all, ...det.flush()]);
+    expect(e).toMatchObject({ tier: 'severe', durationS: 2 });
+    expect(e.measured).toEqual({ peakG: 0.52, speedMph: 26, lineG: 0.32 });
+    expect(told).toEqual(['hard_brake:minor']);
+    // Opened dry at 0.40, peaking at 0.52 on a wet row: minor at the dry line, no lineG.
+    const dryFirst = seq([10, { speed: mph(40) }], [1, { speed: mph(33), aLonMin: -0.4 }], [1, { speed: mph(26), aLonMin: -0.52, road: wet }], [10, { speed: mph(26) }]);
+    const d = only(events(dryFirst));
+    expect(d).toMatchObject({ tier: 'minor', durationS: 2 });
+    expect(d.measured).toEqual({ peakG: 0.52, speedMph: 26 });
+  });
+
+  test('before the forward axis is learned, the GNSS stand-in judges at the row’s lines: 35 → 27.5 mph (0.34 g) is a wet hard brake, nothing dry', () => {
+    expect(events(seq([10, { speed: mph(35) }], [10, { speed: mph(27.5) }]))).toEqual([]);
+    const e = only(events(seq([10, { speed: mph(35) }], [10, { speed: mph(27.5), road: wet }])));
+    expect(e).toMatchObject({ type: 'hard_brake', tier: 'minor', startedAt: T0 + 10_000 });
+    expect(e.measured).toEqual({ peakG: 0.34, speedMph: 27.5, lineG: 0.32 });
+  });
+
+  test('a 0.45 g turn is no corner on a dry road (0.48), a minor one at 0.43 on a wet road', () => {
+    const turn = (road?: FeatureRow['road']) =>
+      seq([10, { speed: mph(30) }], [1, { speed: mph(30), course: 135, yawRateMax: 0.8, aLatMin: -0.45, ...(road ? { road } : {}) }], [10, { speed: mph(30), course: 135 }]);
+    expect(events(turn())).toEqual([]);
+    expect(only(events(turn(wet))).measured).toEqual({ peakG: 0.45, speedMph: 30, lineG: 0.43 });
+  });
+});
+
+describe('a course turning fast at low speed is a tight turn, not a jump: a jump also implies more than 1 g sideways', () => {
+  const events = (rows: FeatureRow[]) => drive(createHarshDetector(counterIds()), rows).all;
+  // 15 mph (6.7 m/s) on a 6 m radius: 1.12 rad/s, 64°/s, 0.76 g.
+  const tight = (to: number) =>
+    seq([10, { speed: mph(15) }], [1, { speed: mph(15), course: to, yawRateMax: 1.12, aLatMin: -0.76 }], [10, { speed: mph(15), course: to }]);
+
+  test('15 mph on a 6 m radius (64°/s, 0.76 g) is a hard corner', () => {
+    const e = only(events(tight(154)));
+    expect(e).toMatchObject({ type: 'hard_corner', tier: 'severe' });
+    expect(e.measured).toEqual({ peakG: 0.76, speedMph: 15 });
+  });
+
+  test('a course change past 60°/s that implies more than 1 g is still the fix: 150°/s at 15 mph (1.8 g)', () => {
+    expect(events(tight(240))).toEqual([]);
+  });
+});
+
+describe('before the forward axis is learned (no sideways extremes), speed × yaw rate is the turn, confirmed by the GPS course', () => {
+  const events = (rows: FeatureRow[], c = ctx()) => drive(createHarshDetector(counterIds()), rows, undefined, c).all;
+  // 25 mph (11.2 m/s) on a 20 m radius: 0.56 rad/s (32°/s), 0.64 g. The rows report no IMU extremes.
+  const turn = (step: number, over: Partial<FeatureRow> = {}, yaw = 0.56, v = 25) =>
+    seq(
+      [10, { speed: mph(v) }],
+      [3, (i) => ({ speed: mph(v), course: (360 + 90 + step * (i - 9)) % 360, yawRateMax: yaw, ...over })],
+      [10, { speed: mph(v), course: (360 + 90 + step * 3) % 360 }]
+    );
+
+  test('a 0.64 g right turn and a 0.64 g left turn are each one minor hard corner', () => {
+    for (const step of [32, -32]) {
+      const e = only(events(turn(step)));
+      expect(e).toMatchObject({ type: 'hard_corner', tier: 'minor', startedAt: T0 + 10_000, durationS: 3 });
+      expect(e.measured).toEqual({ peakG: 0.64, speedMph: 25 });
+    }
+  });
+
+  test('the phone turned in the hand with the course straight is nothing, with or without an orientation spike', () => {
+    expect(events(turn(0, {}, 1))).toEqual([]);
+    expect(events(turn(0, { orientationDelta: 0.9 }, 1))).toEqual([]);
+  });
+
+  test('the course must reach the line too: 1.1 g of yaw with the course turning 10°/s (0.23 g) is nothing', () => {
+    expect(events(turn(10, {}, 0.8, 30))).toEqual([]);
+  });
+
+  test('a phone turning in the hand or sliding in a cup holder during an ordinary bend is nothing: the course bounds the yaw', () => {
+    // 30 mph: 11°/s (0.26 g) under 0.38 rad/s of yaw (0.52 g); 15°/s (0.36 g) under 0.52 rad/s (0.71 g).
+    expect(events(turn(11, {}, 0.38, 30))).toEqual([]);
+    expect(events(turn(-11, {}, 0.38, 30))).toEqual([]);
+    expect(events(turn(15, {}, 0.52, 30))).toEqual([]);
+    // A 0.30 g bend (12.6°/s) with a 0.2 rad/s wobble on top of its 0.22 rad/s of yaw (0.57 g).
+    expect(events(turn(12.6, {}, 0.42, 30))).toEqual([]);
+    // 12 mph through an intersection at 26°/s (0.25 g) under 0.9 rad/s (0.49 g).
+    expect(events(turn(26, {}, 0.9, 12))).toEqual([]);
+  });
+
+  test('the force is the lesser of the two: 1.14 g of yaw over a 0.64 g course turn is a minor 0.64 g corner', () => {
+    expect(only(events(turn(32, {}, 1)))).toMatchObject({ tier: 'minor', measured: { peakG: 0.64, speedMph: 25 } });
+  });
+
+  test('15 mph on a 6 m radius (64°/s, 0.76 g) is a severe corner here too', () => {
+    expect(only(events(turn(64, {}, 1.12, 15)))).toMatchObject({ tier: 'severe', measured: { peakG: 0.76, speedMph: 15 } });
+  });
+
+  test('the corner gates still hold: under the line, under 10 mph, a spike, the warm-up, a poor fix, an untrusted speed', () => {
+    // 0.47 g of yaw at 25 mph.
+    expect(events(turn(32, {}, 0.41))).toEqual([]);
+    expect(events(turn(60, {}, 2, 8))).toEqual([]);
+    expect(events(turn(32, { gravityStability: 0.2 }))).toEqual([]);
+    expect(events(turn(32), ctx({ warmupEndsAt: T0 + 30_000 }))).toEqual([]);
+    expect(events(turn(32, { hAcc: 30 }))).toEqual([]);
+    expect(events(turn(32, { speedAcc: 3 }))).toEqual([]);
+  });
+
+  test('the road state’s line holds too: 0.45 g of yaw is a corner on a wet road (0.43), nothing on a dry one', () => {
+    // 0.395 rad/s at 25 mph is 0.45 g; the course 23°/s (0.45 g).
+    expect(events(turn(23, {}, 0.395))).toEqual([]);
+    expect(only(events(turn(23, { road: { g: 'wet' } }, 0.395))).measured).toEqual({ peakG: 0.45, speedMph: 25, lineG: 0.43 });
+  });
+
+  test('a row with sideways extremes is judged by them alone, as before', () => {
+    // The yaw says 0.64 g, the learned axis 0.30 g: no corner.
+    expect(events(turn(32, { aLatMin: -0.3 }))).toEqual([]);
   });
 });

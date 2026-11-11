@@ -11,6 +11,7 @@
 // Pure and deterministic. The SQL copy (`private.rating_at` and its helpers) matches it to the digit.
 import { isDashcamType, speedingChargedS, type DriveEvent, type Tier } from './drive';
 import { clamp, roundTo } from './num';
+import { HARD_LINE_FLOOR_G } from './road';
 import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G } from './thresholds';
 
 /** The Safety Rating's window, in days. */
@@ -106,7 +107,7 @@ export const SPEED_FACTOR = { minMph: 10, refMph: 30, maxMph: 80 } as const;
 export const HARD_EVENT_WEIGHT: Readonly<Record<'minor' | 'severe', number>> = { minor: 1, severe: 2 };
 /** A hard event's weight never passes this (its peak at twice its threshold). */
 export const HARD_EVENT_WEIGHT_MAX = 4;
-/** Each hard event type's threshold, g: its weight is (peak / this)². */
+/** Each hard event type's threshold (its dry line), g: its weight is (peak / this)² on a dry road. */
 export const HARD_EVENT_MIN_G: Readonly<Record<'hard_brake' | 'hard_accel' | 'hard_corner', number>> = {
   hard_brake: HARD_BRAKE_G.minor,
   hard_accel: HARD_ACCEL_G.minor,
@@ -233,7 +234,7 @@ export function speedingWeight(durationS: number, overMphS: number | null, tier:
 }
 
 /** The event's measured `key`, when it is a finite number. */
-function measuredOf(e: DriveEvent, key: 'overMphS' | 'peakG' | 'speedMph' | 'maxSpeedMph'): number | null {
+function measuredOf(e: DriveEvent, key: 'overMphS' | 'peakG' | 'lineG' | 'speedMph' | 'maxSpeedMph'): number | null {
   const m: unknown = e.measured;
   if (typeof m !== 'object' || m === null) return null;
   const v = (m as Record<string, unknown>)[key];
@@ -250,13 +251,23 @@ export function speedFactor(mph: number | null): number {
 }
 
 /**
- * A hard brake, start or turn's weight: (peakG / its type's threshold)², between 1 and
- * `HARD_EVENT_WEIGHT_MAX` (4): a brake at 0.36 g weighs 1, at 0.45 g 1.5625, at 0.72 g or more 4.
- * Without a finite peak, its tier's `HARD_EVENT_WEIGHT`. Written r * r, as the SQL copy is.
+ * A hard brake, start or turn's weight: (peakG / the line it was judged at)², between 1 and
+ * `HARD_EVENT_WEIGHT_MAX` (4). The line is `lineG` held between the type's snow line
+ * (`HARD_LINE_FLOOR_G`) and its threshold (`HARD_EVENT_MIN_G`, the dry line), and the threshold
+ * itself without a finite `lineG`: a brake at 0.36 g weighs 1 on a dry road, (0.36 / 0.32)² on a
+ * wet one and (0.36 / 0.29)² on snow; at 0.45 g dry 1.5625, at 0.72 g or more 4. Without a finite
+ * peak, its tier's `HARD_EVENT_WEIGHT`. Written r * r, as the SQL copy is.
  */
-export function hardEventWeight(type: 'hard_brake' | 'hard_accel' | 'hard_corner', tier: Tier, peakG: number | null): number {
+export function hardEventWeight(
+  type: 'hard_brake' | 'hard_accel' | 'hard_corner',
+  tier: Tier,
+  peakG: number | null,
+  lineG: number | null = null
+): number {
   if (peakG === null || !Number.isFinite(peakG)) return HARD_EVENT_WEIGHT[tier === 'severe' ? 'severe' : 'minor'];
-  const r = peakG / HARD_EVENT_MIN_G[type];
+  const dry = HARD_EVENT_MIN_G[type];
+  const line = lineG === null || !Number.isFinite(lineG) ? dry : Math.min(dry, Math.max(HARD_LINE_FLOOR_G[type], lineG));
+  const r = peakG / line;
   return Math.min(HARD_EVENT_WEIGHT_MAX, Math.max(1, r * r));
 }
 
@@ -300,7 +311,7 @@ export function eventWeight(e: DriveEvent): number {
     case 'hard_brake':
     case 'hard_accel':
     case 'hard_corner':
-      return hardEventWeight(e.type, e.tier, measuredOf(e, 'peakG'));
+      return hardEventWeight(e.type, e.tier, measuredOf(e, 'peakG'), measuredOf(e, 'lineG'));
     case 'speeding':
       return speedingWeight(e.durationS, measuredOf(e, 'overMphS'), e.tier);
     case 'phone_pickup':

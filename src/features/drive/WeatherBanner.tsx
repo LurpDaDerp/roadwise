@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
+import type { RoadStamp } from '@scoring';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { weatherAction, weatherCopy, weatherLabel, weatherTitle } from '@/features/weather/copy';
+import { roadCopy, roadSpoken, weatherAction, weatherCopy, weatherLabel, weatherTitle } from '@/features/weather/copy';
 import type { DangerAlert } from '@/features/weather/danger';
 import type { Units } from '@/lib/units';
 import { fontFamilies } from '@/ui/fonts';
@@ -31,21 +32,33 @@ export function weatherBannerPt(compact: boolean): number {
   return Math.max(BAR_MIN_PT, t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT);
 }
 
+/** The road state while it tightens the lines, and the road's title ("Wet roads"). */
+export interface BannerRoad {
+  road: RoadStamp;
+  title: string;
+}
+
 /**
- * The dangerous-weather card on the driving screen (plan D14): a yellow outline as on Home's card,
- * the warning glyph, the alert's title (one to three words) and under it the warning, what to do in
- * four words at most, with the ✕ in the top right corner. It fills its slot's width. The full line
- * is spoken with it. Its ✕ shows and takes a touch at any speed, moving or stopped: with End and the
- * navigation button, the only touch targets while moving.
+ * The weather card on the driving screen (plan D14): a yellow outline as on Home's card, the warning
+ * glyph, the alert's title (one to three words; the road's, "Wet roads", with no alert) and under it
+ * the warning, what to do in four words at most, or "Stricter limits now" while the road state
+ * tightens the lines, with the ✕ in the top right corner. It fills its slot's width. The full line is
+ * spoken with it (while the lines are tightened, what counts sooner). Its ✕ shows and takes a touch
+ * at any speed, moving or stopped: with End and the navigation button, the only touch targets while
+ * moving.
  */
 function WeatherBannerView({
   alert,
+  road = null,
   units,
   palette: p,
   compact,
   onDismiss,
 }: {
-  alert: DangerAlert;
+  /** The alert the card names; null for a road state alone (then `road` is set). */
+  alert: DangerAlert | null;
+  /** The road state while it tightens the lines, or null (the default). */
+  road?: BannerRoad | null;
   units: Units;
   palette: HudPalette;
   /** A compact window's narrow band: smaller type. */
@@ -56,10 +69,13 @@ function WeatherBannerView({
   const t = TYPE[compact ? 'compact' : 'full'];
   // Inside the outline: the card's inner height less the disc, split evenly when it can't spare the inset.
   const inset = Math.min(CLOSE_INSET_PT, Math.max(0, (weatherBannerPt(compact) - 2 * OUTLINE_PT - WEATHER_CLOSE_PT) / 2));
+  const title = alert !== null ? weatherTitle(alert) : (road?.title ?? '');
+  const action = road !== null ? roadCopy.stricter : alert !== null ? weatherAction(alert) : '';
+  const label = road !== null ? roadSpoken(title, road.road) : alert !== null ? weatherLabel(alert, units) : '';
   return (
     <View testID="hud-weather" style={[styles.card, { backgroundColor: p.chrome, borderColor: p.minor, paddingVertical: t.pad }]}>
-      <View accessible accessibilityRole="alert" accessibilityLabel={weatherLabel(alert, units)} style={styles.words}>
-        {/* The HUD's warning yellow: this card shows only when the weather is dangerous. */}
+      <View accessible accessibilityRole="alert" accessibilityLabel={label} style={styles.words}>
+        {/* The HUD's warning yellow: this card shows only when the weather is dangerous or tightens the lines. */}
         <Ionicons testID="hud-weather-icon" name="warning" size={22} color={p.minor} />
         <View style={styles.lines}>
           <Text
@@ -67,7 +83,7 @@ function WeatherBannerView({
             numberOfLines={1}
             style={[styles.title, { color: p.ink, fontSize: t.title, lineHeight: t.titleLine }]}
           >
-            {weatherTitle(alert)}
+            {title}
           </Text>
           <Text
             testID="hud-weather-action"
@@ -75,7 +91,7 @@ function WeatherBannerView({
             numberOfLines={1}
             style={[styles.action, { color: p.inkMuted, fontSize: t.action, lineHeight: t.actionLine }]}
           >
-            {weatherAction(alert)}
+            {action}
           </Text>
         </View>
       </View>

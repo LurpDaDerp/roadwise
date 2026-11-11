@@ -61,6 +61,12 @@ export const featureRowSchema: z.ZodType<FeatureRow> = z.strictObject({
   call: z.enum(['ring', 'live']).optional(),
   steps: z.number().int().nonnegative().optional(),
   exempt: z.enum(['nav', 'restart']).optional(),
+  road: z
+    .strictObject({
+      g: z.enum(['wet', 'water', 'snow', 'ice']).optional(),
+      cap: z.union([z.literal(35), z.literal(45), z.literal(55), z.literal(65)]).optional(),
+    })
+    .optional(),
 });
 
 export const limitEntrySchema: z.ZodType<LimitEntry> = z.strictObject({

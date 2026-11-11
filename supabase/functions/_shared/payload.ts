@@ -103,9 +103,16 @@ export const MeasuredSchema = z
     ...measuredFields,
     /** phone_pickup: the highest trusted GPS speed from its start to its last use row, mph. */
     maxSpeedMph: z.number().min(0).max(250).optional(),
+    /**
+     * harsh events: the minor line (g) the road's grip judged it at, only when under the dry line.
+     * The server holds it to its type's band (snow line to dry line) before storing it.
+     */
+    lineG: z.number().min(0.2).max(1).optional(),
+    /** speeding: the speeding line (mph) at the peak row, only when the road state lowered it. Shown only. */
+    lineMph: z.number().min(0).max(150).optional(),
   })
   .strict();
-/** A v4 event's measurements: v5's without `maxSpeedMph`. */
+/** A v4 event's measurements: v5's without `maxSpeedMph`, `lineG` and `lineMph`. */
 export const MeasuredV4Schema = z.object(measuredFields).strict();
 
 /** The fields of an event every upload version shares. */

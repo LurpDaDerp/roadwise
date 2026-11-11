@@ -14,7 +14,7 @@ import { speedingTint } from '@/ui/drive/halo';
 
 import type { BreakReminder } from './breakWatch';
 import { DriveContext, type DriveContextValue } from './DriveProvider';
-import type { DriveHost, DriveState, StartResult } from './host';
+import type { DriveHost, DriveState, ShownRoad, StartResult } from './host';
 import type { WaitingPublic } from './waiting';
 
 function useDriveContext(): DriveContextValue {
@@ -78,8 +78,9 @@ export interface DriveLive {
   /** The limit the sign shows (the last one held up to 10 s through a row without one); null → "-". */
   limitMph: number | null;
   /**
-   * The halo's speeding tint (`speedingTint` of the speed shown over the limit the sign shows): 0 at
-   * or under that limit and while the sign shows "-", 0.5 at its speeding line, 1 (full red) past it.
+   * The halo's speeding tint (`speedingTint` of the speed shown over the sign's limit as the road
+   * state judges it, `judgedLimitMph`): 0 at or under that limit and while the sign shows "-", 0.5
+   * at its speeding line, 1 (full red) past it. On a normal road the judged limit is the sign's.
    */
   speedingTint: number;
   /** The speed shown is over the limit the sign shows (the spoken speed says so). */
@@ -91,8 +92,10 @@ export interface DriveLive {
   /** The latest event the halo shakes on (a hard event, a phone pickup, a speeding episode as it alerts), with its tier; null before the first. */
   lastShake: EventShake | null;
   lastAlert: { type: EventType; tier: Tier; at: number } | null;
-  /** The dangerous-weather alert at the car (unless dismissed this drive), or null. */
+  /** The dangerous-weather alert at the car (unless dismissed this drive; while the card is up for the road state, whatever its kind), or null. */
   weatherAlert: DangerAlert | null;
+  /** The road state while it tightens the lines and the weather card shows it (until its ✕), with the road's title; else null. */
+  weatherRoad: ShownRoad | null;
   /** The newest row's time (the row clock), or null before any row. */
   rowTs: number | null;
   /** A Start-card drive still waiting for driving speed (it records from the tap), or null. */
@@ -104,6 +107,16 @@ export interface DriveLive {
   /** The break reminder to flash ("Take a break soon"), or null. */
   breakReminder: BreakReminder | null;
 }
+
+/**
+ * The speed shown is over the limit the sign shows. The ratio is over the judged limit, so on a
+ * tightened road it is put back over the sign's own.
+ */
+const overSignOf = (s: DriveState): boolean => {
+  const { speedingRatio: ratio, limitMph: limit, judgedLimitMph: judged } = s;
+  if (ratio === null) return false;
+  return judged === null || limit === null || judged === limit ? ratio > 1 : ratio * judged > limit;
+};
 
 /** The newest row's GPS speed as the driving screen reads it (mph, tenths), null when it had none. */
 export const rowSpeedMphOf = (s: DriveState): number | null => (s.rowSpeedMps === null ? null : Math.round(mpsToMph(s.rowSpeedMps) * 10) / 10);
@@ -119,13 +132,14 @@ export const selectLive = (s: DriveState) => ({
   clientTripId: s.clientTripId,
   rowSpeedMph: rowSpeedMphOf(s),
   limitMph: s.limitMph,
-  speedingTint: speedingTint(s.speedingRatio, s.limitMph),
-  overSign: s.speedingRatio !== null && s.speedingRatio > 1,
+  speedingTint: speedingTint(s.speedingRatio, s.judgedLimitMph),
+  overSign: overSignOf(s),
   speedingOver: s.speedingOver,
   speedingTier: s.speedingTier,
   lastShake: s.lastShake,
   lastAlert: s.lastAlert,
   weatherAlert: s.weatherAlert,
+  weatherRoad: s.weatherRoad,
   rowTs: s.lastRowTs,
   waitingSince: s.waiting?.since ?? null,
   waitingPhase: s.waiting?.phase ?? null,

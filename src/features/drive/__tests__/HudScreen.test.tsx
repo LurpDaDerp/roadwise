@@ -213,6 +213,7 @@ function live(over: Partial<DriveLive> = {}): DriveLive {
     lastShake: null,
     lastAlert: null,
     weatherAlert: null,
+    weatherRoad: null,
     rowTs: null,
     waiting: null,
     notDrivingAvailable: false,
@@ -866,6 +867,28 @@ describe('the dangerous-weather banner (plan D14)', () => {
   test('the ✕ sits in the card’s top right corner', async () => {
     await renderHud({ weatherAlert: ICE });
     expect(screen.getByTestId('hud-weather-close')).toHaveStyle({ position: 'absolute', top: 5, right: 5 });
+  });
+
+  test('while the road state tightens the lines it shows with no alert: the road’s title and "Stricter limits now"; the sign keeps the posted limit; the ✕ asks the host to hide it', async () => {
+    const h = await renderHud();
+    await h.update({ weatherRoad: { road: { g: 'snow' }, title: 'Snowy roads' } });
+    const card = within(screen.getByTestId('hud-weather-slot')).getByTestId('hud-weather');
+    expect(card).toHaveTextContent(/Snowy roads/);
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding counts from a lower speed, and hard braking, starts and turns from a lighter touch.');
+    expect(screen.getByTestId('hud-limit-value', HIDDEN)).toHaveTextContent('35');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Hide weather alert' }));
+    });
+    expect(mockControls.dismissWeather).toHaveBeenCalledTimes(1);
+    await h.update({ weatherRoad: null });
+    expect(screen.queryByTestId('hud-weather')).toBeNull();
+  });
+
+  test('with an alert and the lines tightened: the alert’s title over "Stricter limits now"', async () => {
+    await renderHud({ weatherAlert: ICE, weatherRoad: { road: { g: 'ice' }, title: 'Icy roads' } });
+    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
+    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Stricter limits now');
   });
 });
 
