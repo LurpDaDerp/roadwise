@@ -61,6 +61,12 @@ describe('deleteMyAccount', () => {
     expect(c.invoke).toHaveBeenCalledWith(ACCOUNT_DELETE_FUNCTION, { body: { confirm: 'DELETE' } });
   });
 
+  test("an Apple code rides along for the server to revoke the Apple sign-in", async () => {
+    const c = client({ data: { deleted: true }, error: null });
+    expect(await deleteMyAccount({ client: c.client, online: () => true }, 'c0de')).toEqual({ ok: true });
+    expect(c.invoke).toHaveBeenCalledWith(ACCOUNT_DELETE_FUNCTION, { body: { confirm: 'DELETE', apple_code: 'c0de' } });
+  });
+
   test('offline: no request; 401: the session proves no account; else failed', async () => {
     const c = client({ data: { deleted: true }, error: null });
     expect(await deleteMyAccount({ client: c.client, online: () => false })).toEqual({ ok: false, reason: 'offline' });

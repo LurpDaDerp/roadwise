@@ -2,9 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 
+import { getSharedOnline } from '@/data/net/net';
 import { useDb } from '@/data/queries/context';
 import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
+import { appleDeletionCode, hasAppleSignIn, type AppleDeletionCode } from '@/features/auth/appleDeletionCode';
 import { useDrive } from '@/drive/useDrive';
 import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
 
@@ -17,20 +19,27 @@ import { TopBar } from './parts';
 const copy = settingsCopy.deleteAccount;
 
 export interface DeleteAccountDeps extends ExportDeps {
-  remove?: () => Promise<DeleteResult>;
+  /** The server call; `appleCode` when Apple's sheet gave one. */
+  remove?: (appleCode?: string) => Promise<DeleteResult>;
   wipe?: () => Promise<void>;
+  /** Apple's sheet, for an account signed in with Apple (`appleDeletionCode`). */
+  appleCode?: () => Promise<AppleDeletionCode>;
+  online?: () => boolean;
 }
 
 /**
  * H13 · Delete account: the consequences first, the optional export, then the confirmation. The
  * button is live only once DELETE is typed, and never while a drive is recording (the drive must
- * end, and upload, under the account it belongs to). Deleted: the server has removed everything,
- * this phone signs out and is emptied, and the auth change moves the app to the welcome screen.
+ * end, and upload, under the account it belongs to). An account signed in with Apple confirms in
+ * Apple's sheet next (online only), whose code lets the server revoke the Apple sign-in; backing
+ * out of it deletes nothing. Deleted: the server has removed everything, this phone signs out and
+ * is emptied, and the auth change moves the app to the welcome screen.
  */
 export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps }) {
   const th = useTheme();
   const db = useDb();
-  const { signOut } = useSession();
+  const { session, signOut } = useSession();
+  const apple = hasAppleSignIn(session?.user.app_metadata);
   const busy = useDrive((s) => isBusyStatus(s.status));
   const exporter = useExport(deps);
   const { fontScale } = useWindowDimensions();
@@ -55,8 +64,18 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
     if (!confirmed || busy || working) return;
     setWorking(true);
     setFailure(null);
+    let appleCode: string | undefined;
+    if (apple && (deps.online ?? getSharedOnline)()) {
+      const answer = await (deps.appleCode ?? appleDeletionCode)();
+      if (answer.kind === 'cancelled') {
+        setWorking(false);
+        return;
+      }
+      if (answer.kind === 'code') appleCode = answer.code;
+    }
+    const remove = deps.remove ?? ((code?: string) => deleteMyAccount(deps.account, code));
     const result = await runAccountDeletion({
-      remove: deps.remove ?? (() => deleteMyAccount(deps.account)),
+      remove: () => remove(appleCode),
       signOut: () => signOut({ force: true }),
       wipe: deps.wipe ?? (() => wipeThisPhone(db)),
     });

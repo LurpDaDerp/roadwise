@@ -51,10 +51,14 @@ export async function exportMyData(deps: AccountDeps = {}): Promise<ExportResult
   return { ok: true, json: JSON.stringify(r.data, null, 2) };
 }
 
-/** Deletes the caller's account on the server. Only `{ ok: true }` means it is gone. */
-export async function deleteMyAccount(deps: AccountDeps = {}): Promise<DeleteResult> {
+/**
+ * Deletes the caller's account on the server. Only `{ ok: true }` means it is gone. `appleCode`, a
+ * fresh Sign in with Apple authorization code, lets the server revoke the Apple sign-in too.
+ */
+export async function deleteMyAccount(deps: AccountDeps = {}, appleCode?: string): Promise<DeleteResult> {
   if (!(deps.online ?? getSharedOnline)()) return { ok: false, reason: 'offline' };
-  const r = await call(ACCOUNT_DELETE_FUNCTION, { confirm: 'DELETE' }, deps);
+  const body = appleCode === undefined ? { confirm: 'DELETE' } : { confirm: 'DELETE', apple_code: appleCode };
+  const r = await call(ACCOUNT_DELETE_FUNCTION, body, deps);
   if ('status' in r) {
     if (r.status === null) return { ok: false, reason: 'offline' };
     return { ok: false, reason: r.status === 401 ? 'session_gone' : 'failed' };

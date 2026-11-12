@@ -588,6 +588,72 @@ describe('Delete account', () => {
     expect(scroll.props.automaticallyAdjustKeyboardInsets).toBe(true);
   });
 
+  describe('an account signed in with Apple', () => {
+    const typeAndTap = async () => {
+      await act(async () => {
+        fireEvent.changeText(await screen.findByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+      });
+      await tap('delete-confirm');
+    };
+    beforeEach(() => {
+      (mockSession.session.user as { app_metadata?: unknown }).app_metadata = { provider: 'apple', providers: ['apple'] };
+    });
+    afterEach(() => {
+      delete (mockSession.session.user as { app_metadata?: unknown }).app_metadata;
+    });
+
+    it("confirms in Apple's sheet and sends its code with the deletion", async () => {
+      const remove = jest.fn(async (_code?: string) => ({ ok: true as const }));
+      const appleCode = jest.fn(async () => ({ kind: 'code' as const, code: 'c0de' }));
+      const wipe = jest.fn(async () => {});
+      const w = await appWorld();
+      await w.render(<DeleteAccountScreen deps={{ remove, wipe, appleCode, online: () => true }} />);
+      await typeAndTap();
+      await waitFor(() => expect(wipe).toHaveBeenCalled());
+      expect(appleCode).toHaveBeenCalledTimes(1);
+      expect(remove).toHaveBeenCalledWith('c0de');
+    });
+
+    it("backing out of Apple's sheet deletes nothing and says nothing", async () => {
+      const remove = jest.fn(async (_code?: string) => ({ ok: true as const }));
+      const w = await appWorld();
+      await w.render(<DeleteAccountScreen deps={{ remove, wipe: async () => {}, appleCode: async () => ({ kind: 'cancelled' as const }), online: () => true }} />);
+      await typeAndTap();
+      await waitFor(() => expect(screen.getByTestId('delete-confirm')).toBeEnabled());
+      expect(remove).not.toHaveBeenCalled();
+      expect(mockSession.signOut).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('delete-failed')).toBeNull();
+    });
+
+    it('Apple unable to answer, or no connection: the deletion goes ahead without a code', async () => {
+      const remove = jest.fn(async (_code?: string) => ({ ok: true as const }));
+      const w = await appWorld();
+      await w.render(<DeleteAccountScreen deps={{ remove, wipe: async () => {}, appleCode: async () => ({ kind: 'none' as const }), online: () => true }} />);
+      await typeAndTap();
+      await waitFor(() => expect(remove).toHaveBeenCalledWith(undefined));
+
+      const offlineRemove = jest.fn(async (_code?: string) => ({ ok: false as const, reason: 'offline' as const }));
+      const appleCode = jest.fn(async () => ({ kind: 'code' as const, code: 'c0de' }));
+      await w.render(<DeleteAccountScreen deps={{ remove: offlineRemove, wipe: async () => {}, appleCode, online: () => false }} />);
+      await typeAndTap();
+      await waitFor(() => expect(offlineRemove).toHaveBeenCalledWith(undefined));
+      expect(appleCode).not.toHaveBeenCalled();
+    });
+  });
+
+  it("an account without Apple sign-in never sees Apple's sheet", async () => {
+    const remove = jest.fn(async (_code?: string) => ({ ok: true as const }));
+    const appleCode = jest.fn(async () => ({ kind: 'code' as const, code: 'c0de' }));
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove, wipe: async () => {}, appleCode, online: () => true }} />);
+    await act(async () => {
+      fireEvent.changeText(await screen.findByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    });
+    await tap('delete-confirm');
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(undefined));
+    expect(appleCode).not.toHaveBeenCalled();
+  });
+
   it('never during a drive', async () => {
     mockDrive.status = 'recording';
     const remove = jest.fn(async () => ({ ok: true as const }));

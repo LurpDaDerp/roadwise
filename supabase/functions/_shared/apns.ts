@@ -83,12 +83,12 @@ export function liveActivityStartPayload(args: { startedAt: number; state: LiveA
   };
 }
 
-const b64url = (bytes: Uint8Array): string => {
+export const b64url = (bytes: Uint8Array): string => {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
-const b64urlText = (text: string): string => b64url(new TextEncoder().encode(text));
+export const b64urlText = (text: string): string => b64url(new TextEncoder().encode(text));
 
 /** The PKCS#8 bytes of a PEM private key. */
 export function pemToPkcs8(pem: string): Uint8Array<ArrayBuffer> {
