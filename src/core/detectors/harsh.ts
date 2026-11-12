@@ -38,9 +38,9 @@
 // event itself waits: a closed episode is held for two seconds so the row after it can still
 // confirm or veto it, then released as at most one event (an alerted episode a later spike vetoes
 // is alerted but never charged).
-import { HARD_ACCEL_G, HARD_BRAKE_G, HARD_CORNER_G, MOVING_MIN_MPH, type Tier } from '@scoring';
+import { MOVING_MIN_MPH, type Tier } from '@scoring';
 
-import { hardLines, isRoadGrip, type HardLines, type RoadGrip } from '@/core/road';
+import { HARD_LINES_DRY_G, hardLines, isRoadGrip, type RoadGrip } from '@/core/road';
 
 import type { DetectedEvent, Detector, FeatureRow, HarshAlert, HarshKind } from '../engine/types';
 import { G_MPS2, knownSpeed, knownSpeedMph, MPS_PER_MPH, round1, round2, rowEligible, speedTrusted } from './common';
@@ -170,11 +170,7 @@ const courseDelta = (a: number, b: number): number => {
 };
 
 /** The dry lines, the ones the events are judged at. */
-const DRY: Record<HarshKind, HardLines> = {
-  hard_brake: HARD_BRAKE_G,
-  hard_accel: HARD_ACCEL_G,
-  hard_corner: HARD_CORNER_G,
-};
+const DRY = HARD_LINES_DRY_G;
 
 /** The event's tier, at the dry lines (a weather warning is always minor). */
 const tierOf = (ep: Episode): Tier => (ep.peakG >= DRY[ep.kind].severe ? 'severe' : 'minor');

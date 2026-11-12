@@ -2892,6 +2892,34 @@ describe('the road state: weather warnings', () => {
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('a road the ✕ hid stays hidden when a new alert brings the card back: the card names the alert, with its own advice', async () => {
+    // A wet road all along; from the step 100 s in, gusts to 60 mph at the car (High winds), none in the hours ahead.
+    const fetch: FetchLike = async () =>
+      answer(
+        seriesBody(
+          Math.floor(clock / 1000),
+          (t) => (t < STEP_S ? WET : { ...WET, wind_gusts_10m: 60 }),
+          () => ({ wind_gusts_10m: 9 })
+        )
+      );
+    const h = buildRoad(fetch);
+    await h.host.boot();
+    const trip = along(rows(140, { speedMps: 15 }));
+    await drive(h, trip.slice(0, 60));
+    await settle(h);
+    expect(h.host.snapshot()).toMatchObject({ weatherAlert: null, weatherRoad: { road: { g: 'wet' }, title: 'Wet roads' } });
+    h.host.dismissWeather();
+    expect(h.host.snapshot()).toMatchObject({ weatherAlert: null, weatherRoad: null, weather: null });
+    await feed(h, trip.slice(60, 140));
+    expect(h.host.snapshot()).toMatchObject({
+      weatherAlert: { kind: 'high_wind' },
+      weatherRoad: null,
+      weather: { kind: 'high_wind', text: 'High winds' },
+      judgedLimitMph: 31.5,
+    });
+    await h.host.stop({ endOpenTrip: true });
+  });
+
   test('the road card keeps its object while unchanged, so the driving screen does not re-render for it', async () => {
     const h = buildRoad(seriesFetch(() => WET).fetch);
     await h.host.boot();

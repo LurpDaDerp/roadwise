@@ -24,6 +24,7 @@ import { BREAK_KEY } from '@/drive/breakWatch';
 import { DROP_NOTICE_KEY } from '@/drive/dropNotice';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
+import { WEATHER_HOLD_KEY } from '@/drive/weatherWatch';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { PARKED_KEY } from '@/features/parked/model';
@@ -109,6 +110,8 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   // The drive that asked "Are you driving?", and where the car was parked (iPhone with the car link).
   PASSENGER_ASKED_KEY,
   PARKED_KEY,
+  // The last drive's weather answer (its 0.1° cell and time), kept for a relaunch mid-drive.
+  WEATHER_HOLD_KEY,
   // The weather heads-up switch, and this phone's copy of the driver's quiet hours.
   COMMUTE_HEADS_UP_KEY,
   QUIET_HOURS_KEY,

@@ -32,7 +32,7 @@ import { createSettingsRepo, type Db } from '@/data/db';
 import { dangerFrom, type DangerAlert } from '@/features/weather/danger';
 import { driveWeatherOf, type DriveWeather } from '@/features/weather/driveWeather';
 import type { FetchLike, WeatherReading } from '@/features/weather/openMeteo';
-import { inRoadCell, roadFresh, roadStateAt, roadTitleAt, stepIndexAt } from '@/features/weather/road';
+import { cellOf, inRoadCell, roadFresh, roadStateAt, roadTitleAt, stepIndexAt } from '@/features/weather/road';
 import { fetchRoadSeries, readingAt, reviveSeries, type RoadSeriesResult, type WeatherSeries } from '@/features/weather/roadSeries';
 
 /** A lookup seam is asked every 15 min while the drive records… */
@@ -116,8 +116,7 @@ export function createWeatherWatch(deps: WeatherWatchDeps): WeatherWatch {
 
 type Position = { lat: number; lng: number };
 
-const cell = (v: number): number => Math.round(v * 10);
-const sameCell = (s: WeatherSeries, lat: number, lng: number): boolean => cell(s.lat) === cell(lat) && cell(s.lng) === cell(lng);
+const sameCell = (s: WeatherSeries, lat: number, lng: number): boolean => cellOf(s.lat) === cellOf(lat) && cellOf(s.lng) === cellOf(lng);
 
 function createSeriesWatch(deps: WeatherWatchDeps): WeatherWatch {
   /** Newest first, one per cell. */

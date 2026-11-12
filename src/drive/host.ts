@@ -1155,7 +1155,8 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const road = roadMovingLines();
     const roadUp = road !== null && (roadHidden === null || roadStricter(road, roadHidden));
     if (alert === null && !roadUp) return null;
-    return { alert: alert ?? weatherRaw, road };
+    // A road its ✕ hid stays hidden: a card up for an alert alone names the alert, not the road.
+    return { alert: alert ?? weatherRaw, road: roadUp ? road : null };
   }
 
   /** The road's title while it moves the warning lines: the watch's ("Slippery roads" in the cold), else from the state alone. */

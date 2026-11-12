@@ -73,7 +73,7 @@ const atLeast = (v: number | null, min: number): boolean => v !== null && v >= m
 const atMost = (v: number | null, max: number): boolean => v !== null && v <= max;
 
 /** The 0.1° cell index of a coordinate. */
-const cellOf = (v: number): number => Math.round(v * 10);
+export const cellOf = (v: number): number => Math.round(v * 10);
 
 /** True when the position is in the series' cell or one touching it (0.1° either way). */
 export function inRoadCell(series: RoadSeries, lat: number, lng: number): boolean {
