@@ -1,7 +1,8 @@
 /**
  * Remote app config (the `app_config` table): the typed rows the app reads — the minimum app
  * version (`min_app_version`, the update gate), the legal document versions (`onboarding`) and
- * URLs (`legal_urls`), and the store links (`store_urls`).
+ * URLs (`legal_urls`), and the store links (`store_urls`). The app's Terms and Privacy Policy links
+ * no longer read `legal_urls`: both documents are bundled with the app (`@/features/legal`).
  *
  * `refreshAppConfig` reads the public rows and keeps the validated rows in device settings under
  * `APP_CONFIG_KEY`. `readConfig` answers from there, offline and instantly, with a compiled

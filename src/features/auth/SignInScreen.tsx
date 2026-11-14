@@ -2,13 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 
-import { useAppConfig } from '@/data/config/appConfig';
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
 import { t } from '@/i18n';
 import { Button, Screen, Text, useTheme } from '@/ui';
 
-import { legalState } from './legal';
 import { LegalLinks } from './LegalLinks';
 import { clearTermsAccepted, markTermsAccepted, startSignInVisit } from './pendingConsent';
 import { useAppleSignIn } from './useAppleSignIn';
@@ -34,8 +32,6 @@ export function SignInScreen() {
   const google = useGoogleSignIn();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
-  const { config } = useAppConfig();
-  const legal = useMemo(() => legalState(config), [config]);
 
   const [agreed, setAgreed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -135,7 +131,7 @@ export function SignInScreen() {
           </Text>
         </Pressable>
         <View style={{ paddingLeft: 24 * scale + th.space.md }}>
-          <LegalLinks legal={legal} />
+          <LegalLinks />
         </View>
       </View>
 

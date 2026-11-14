@@ -140,6 +140,15 @@ describe('resolveGate', () => {
     expect(resolveGate('signedIn', 'ready', 'required', ['(tabs)', 'home'], IDLE)).toBe('/update-required');
   });
 
+  test('the Terms and Privacy Policy screens are left alone in every session state, update aside', () => {
+    for (const status of STATUSES)
+      for (const gate of GATES)
+        for (const update of ['ok', 'unknown'] as const)
+          for (const doc of ['terms', 'privacy'])
+            expect(resolveGate(status, gate, update, ['legal', doc], IDLE)).toBeNull();
+    expect(resolveGate('signedOut', 'unknown', 'required', ['legal', 'terms'], IDLE)).toBe('/update-required');
+  });
+
   test('the launch router owns `/`', () => {
     for (const status of STATUSES)
       for (const gate of GATES)

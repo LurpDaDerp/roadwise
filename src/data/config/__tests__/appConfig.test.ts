@@ -21,7 +21,6 @@ import {
 import type { AppStateLike } from '@/data/foreground';
 import { createQueryClient } from '@/data/queries/client';
 import { DataProvider } from '@/data/queries/context';
-import { legalState } from '@/features/auth/legal';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
@@ -135,10 +134,6 @@ describe('the compiled defaults', () => {
       expect(APP_CONFIG_SCHEMAS[key].safeParse(CONFIG_DEFAULTS[key]).success).toBe(true);
     }
   });
-
-  test('leave the Terms and Privacy Policy unpublished (ruling I7)', () => {
-    expect(legalState(CONFIG_DEFAULTS).published).toBe(false);
-  });
 });
 
 describe('readConfig', () => {
@@ -157,7 +152,7 @@ describe('readConfig', () => {
     });
   });
 
-  test('carries a published Terms and Privacy Policy through to legalState', async () => {
+  test('carries the legal URLs row through', async () => {
     await refreshWith([
       ...MIGRATED.filter((r) => r.key !== 'legal_urls'),
       {
@@ -172,11 +167,6 @@ describe('readConfig', () => {
     expect(config.legal_urls).toEqual({
       terms: 'https://roadwise.app/terms',
       privacy: 'https://roadwise.app/privacy',
-    });
-    expect(legalState(config)).toEqual({
-      published: true,
-      tos: { version: '2026-09-21', url: 'https://roadwise.app/terms' },
-      privacy: { version: '2026-09-21', url: 'https://roadwise.app/privacy' },
     });
   });
 

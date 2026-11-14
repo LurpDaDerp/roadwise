@@ -52,6 +52,7 @@ const V3_ROUTES = [
   '(app)/wrapped/index.tsx',
   '(app)/wrapped/[month].tsx',
   '(app)/w/[id].tsx',
+  'legal/[doc].tsx',
 ];
 
 const REMOVED = [

@@ -62,3 +62,7 @@ npm-debug.log*
 
 # Gradle caches inside local Expo modules (machine-specific)
 .gradle/
+
+# Privacy Policy, Terms and the data audit: local drafts, never committed (the app carries its
+# own copy in src/features/legal/documents.ts, written by `npm run legal:sync`)
+/legal/

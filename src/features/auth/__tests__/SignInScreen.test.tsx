@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 
-import { CONFIG_DEFAULTS, type AppConfig } from '@/data/config/appConfig';
 import type { Db } from '@/data/db/driver';
 import { DataProvider } from '@/data/queries/context';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
@@ -13,10 +12,6 @@ import { ThemeProvider } from '@/ui/theme';
 const mockAppleSignIn = jest.fn(async () => {});
 const mockGoogleSignIn = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
-const mockConfig: { config: AppConfig; ready: boolean } = {
-  config: { ...CONFIG_DEFAULTS, fetchedAt: null },
-  ready: true,
-};
 const mockMarkTermsAccepted = jest.fn(async (..._args: unknown[]) => {});
 
 jest.mock('@/features/auth/useAppleSignIn', () => ({
@@ -30,22 +25,10 @@ jest.mock('@/features/auth/useGoogleSignIn', () => ({
 }));
 // The consent helpers import the app client; nothing here reaches the network.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-jest.mock('@/data/config/appConfig', () => ({
-  ...jest.requireActual('@/data/config/appConfig'),
-  useAppConfig: () => mockConfig,
-}));
 jest.mock('@/features/auth/pendingConsent', () => ({
   ...jest.requireActual('@/features/auth/pendingConsent'),
   markTermsAccepted: (...args: unknown[]) => mockMarkTermsAccepted(...args),
 }));
-
-const TERMS = 'https://roadwise.app/terms';
-const PRIVACY = 'https://roadwise.app/privacy';
-const PUBLISHED: AppConfig = {
-  ...CONFIG_DEFAULTS,
-  fetchedAt: 1,
-  legal_urls: { terms: TERMS, privacy: PRIVACY },
-};
 
 /** A settings table that only records what the screen removes; nothing else touches the db. */
 const executed: { sql: string; params: unknown[] }[] = [];
@@ -58,8 +41,6 @@ const fakeDb = {
 
 beforeEach(() => {
   mockWorld.googleReady = true;
-  mockConfig.config = { ...CONFIG_DEFAULTS, fetchedAt: null };
-  mockConfig.ready = true;
   mockAppleSignIn.mockReset().mockResolvedValue(undefined);
   mockGoogleSignIn.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
@@ -105,8 +86,7 @@ test('nothing on the screen asks for an age or a birth date', async () => {
   expect(JSON.stringify(screen.toJSON())).not.toMatch(/birth|date of birth|how old/i);
 });
 
-test('the 13+ checkbox: its words, a 44 pt target, and links to both documents when published', async () => {
-  mockConfig.config = PUBLISHED;
+test('the 13+ checkbox: its words, a 44 pt target, and links to both documents', async () => {
   await mount();
   const box = screen.getByRole('checkbox');
   expect(box.props.accessibilityLabel).toBe("I'm 13 or older and agree to the Terms and Privacy Policy");

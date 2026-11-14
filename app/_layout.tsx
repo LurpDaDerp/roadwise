@@ -324,6 +324,7 @@ function RootLayout() {
                         <Stack.Screen name="update-required" />
                         <Stack.Screen name="(tabs)" />
                         <Stack.Screen name="(app)" />
+                        <Stack.Screen name="legal/[doc]" />
                         {/* No swipe-back out of a drive: it is left through its own controls. */}
                         <Stack.Screen
                           name="drive"

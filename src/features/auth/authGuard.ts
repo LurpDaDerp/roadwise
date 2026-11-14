@@ -71,6 +71,8 @@ export const HOME = '/(tabs)/home';
 export const SIGN_IN = '/(auth)/sign-in';
 export const UPDATE_REQUIRED = '/update-required';
 export const DRIVE = '/drive';
+/** The legal documents' route (`app/legal/[doc].tsx`), open in every session state. */
+export const LEGAL_SEGMENT = 'legal';
 
 export type StartRoute =
   | typeof SIGN_IN
@@ -145,6 +147,10 @@ export function resolveGate(
 
   // Nothing is known yet. Moving now would throw a signed-in driver at sign-in on every warm start.
   if (status === 'loading') return null;
+
+  // The Terms and the Privacy Policy are read from the sign-in screen and from Settings alike: no
+  // session state moves anyone off them. Back returns to where they were opened.
+  if (segments[0] === LEGAL_SEGMENT) return null;
 
   const inAuthGroup = segments[0] === '(auth)';
   const inOnboarding = segments[0] === '(onboarding)';

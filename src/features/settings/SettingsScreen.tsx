@@ -15,6 +15,7 @@ import { NavAppSettingRow } from '@/features/navigation/NavAppSettingRow';
 import { PermitSettingRow } from '@/features/permit/PermitSettingRow';
 import { usePlaces } from '@/features/places/usePlaces';
 import { Banner, Card, ListRow, Screen, SegmentedControl, Sheet, Text, ToggleRow, useTheme } from '@/ui';
+import { LegalLinks } from '@/features/auth/LegalLinks';
 import { appearance as appAppearance, APPEARANCE_CHOICES, useAppearance, type AppearanceStore } from '@/ui/appearance';
 
 import { settingsCopy, shownVisibility, VISIBILITY_SEGMENTS } from './copy';
@@ -305,6 +306,9 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
       </Section>
 
       <DataCredits />
+
+      {/* The Terms and the Privacy Policy, last on the page, styled as on the sign-in screen. */}
+      <LegalLinks />
 
       <Sheet visible={lookSheet} onClose={() => setLookSheet(false)} title={copy.appearance.sheetTitle} scroll testID="settings-appearance-sheet">
         <View style={{ gap: th.space.sm }}>
