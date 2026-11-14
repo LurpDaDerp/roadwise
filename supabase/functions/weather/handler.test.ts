@@ -1,15 +1,11 @@
 import { assert, assertEquals } from '@std/assert';
+import { APP_QUERIES } from './app_queries.ts';
 import { createWeatherDb, handleWeather, MAX_CALL_COST, OPEN_METEO_LIMITS, RATE_LIMITS, OPEN_METEO_FORECAST, upstreamUrl, type WeatherDeps } from './handler.ts';
 
 const GOOD = 'good-token';
 const UID = '00000000-0000-4000-8000-000000000001';
 const VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day';
-const HOME_QUERY = `latitude=47.6&longitude=-122.3&current=${VARS}&hourly=${VARS}&past_hours=6&forecast_hours=3&wind_speed_unit=mph&timeformat=unixtime`;
-const SERIES_QUERY =
-  `latitude=47.6&longitude=-122.3&minutely_15=${VARS}&hourly=${VARS}` +
-  '&past_minutely_15=28&forecast_minutely_15=8&past_hours=6&forecast_hours=5&wind_speed_unit=mph&timeformat=unixtime';
-const SKY_QUERY = 'latitude=47.6&longitude=-122.3&current=weather_code,is_day,cloud_cover,precipitation';
-const FORECAST_QUERY = `latitude=47.6&longitude=-122.3&hourly=${VARS}&past_hours=6&forecast_hours=24&wind_speed_unit=mph&timeformat=unixtime`;
+const { home: HOME_QUERY, series: SERIES_QUERY, sky: SKY_QUERY, forecast: FORECAST_QUERY } = APP_QUERIES;
 
 const quiet = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -148,18 +144,35 @@ Deno.test('the budgets are pinned', () => {
   assertEquals(RATE_LIMITS, {
     user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
     global: [
-      { key: 'weather_relay_minute', window: '1 minute', max: 250, retryAfterS: 60 },
-      { key: 'weather_relay_hour', window: '1 hour', max: 2000, retryAfterS: 600 },
-      { key: 'weather_relay_day', window: '1 day', max: 4500, retryAfterS: 3600 },
+      { key: 'weather_relay_minute', window: '1 minute', max: 150, retryAfterS: 60 },
+      { key: 'weather_relay_hour', window: '1 hour', max: 1250, retryAfterS: 600 },
+      { key: 'weather_relay_day', window: '1 day', max: 2500, retryAfterS: 3600 },
     ],
   });
 });
 
-Deno.test("the app-wide budgets stay under Open-Meteo's free limits at the dearest query's cost", () => {
+Deno.test("the app-wide budgets stay under Open-Meteo's free limits at the dearest query's cost, even across a window boundary", () => {
   const [minute, hour, day] = RATE_LIMITS.global;
-  assert(minute.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.minute);
-  assert(hour.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.hour);
-  assert(day.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.day);
+  // A fixed window lets up to twice its max through in one window's length when a burst straddles a reset.
+  assert(2 * minute.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.minute);
+  assert(2 * hour.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.hour);
+  assert(2 * day.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.day);
+});
+
+Deno.test("only the app's own query shapes are relayed: a costlier variant of one is refused", () => {
+  const variants = [
+    HOME_QUERY.replace('past_hours=6', 'past_hours=48'),
+    HOME_QUERY.replace('forecast_hours=3', 'forecast_hours=2'),
+    SERIES_QUERY.replace('past_minutely_15=28', 'past_minutely_15=192'),
+    FORECAST_QUERY.replace('forecast_hours=24', 'forecast_hours=48'),
+    SKY_QUERY.replace('current=weather_code,is_day,cloud_cover,precipitation', `current=${VARS},cloud_cover`),
+    `${SKY_QUERY}&hourly=${VARS}`,
+    HOME_QUERY.replace('&wind_speed_unit=mph', ''),
+    `${FORECAST_QUERY}&minutely_15=${VARS}`,
+  ];
+  for (const q of variants) assertEquals(upstreamUrl(new URLSearchParams(q)), null, q);
+  // Any one-decimal position is fine.
+  assert(upstreamUrl(new URLSearchParams(HOME_QUERY.replace('latitude=47.6&longitude=-122.3', 'latitude=-33.9&longitude=151.2'))) !== null);
 });
 
 Deno.test('a spent user budget is a 429 that never spends the shared budget or reaches Open-Meteo', async () => {

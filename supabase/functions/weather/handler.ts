@@ -18,6 +18,7 @@
 //     one of those as "no weather", as it reads its own failed request.
 //   * Nothing about the position is logged: only the outcome and Open-Meteo's status.
 import { bearerToken, json, readJsonBody, requestId, requirePost, withRequestId } from '../_shared/http.ts';
+import { APP_QUERIES } from './app_queries.ts';
 
 export const OPEN_METEO_FORECAST = 'https://api.open-meteo.com/v1/forecast';
 /** Open-Meteo's answer is abandoned after this long (the phone gives the whole call 8 s). */
@@ -27,30 +28,23 @@ export const MAX_BODY_BYTES = 1_000_000;
 /** The request body: the app's longest query is about 400 characters. */
 export const MAX_REQUEST_BYTES = 2_048;
 
-/** Every variable the app asks for (WEATHER_VARS in src/features/weather/openMeteo.ts, and the sky's). */
-export const VARIABLES: ReadonlySet<string> = new Set([
-  'weather_code',
-  'temperature_2m',
-  'precipitation',
-  'rain',
-  'showers',
-  'snowfall',
-  'wind_speed_10m',
-  'wind_gusts_10m',
-  'visibility',
-  'is_day',
-  'cloud_cover',
-]);
+/** The region supabase-js names in the query when the phone asks for one (dropped, never forwarded). */
+export const REGION_PARAM = 'forceFunctionRegion';
 
-const LIST_PARAMS = ['current', 'hourly', 'minutely_15'] as const;
-/** The largest count each range parameter may ask for. */
-const COUNT_PARAMS: Readonly<Record<string, number>> = {
-  past_hours: 48,
-  forecast_hours: 48,
-  past_minutely_15: 192,
-  forecast_minutely_15: 192,
-};
-const FIXED_PARAMS: Readonly<Record<string, string>> = { wind_speed_unit: 'mph', timeformat: 'unixtime' };
+/** A query's parameters other than the position, in its own order. */
+type Shape = [string, string][];
+
+const shapeOf = (search: URLSearchParams): Shape => [...search].filter(([k]) => k !== 'latitude' && k !== 'longitude' && k !== REGION_PARAM);
+
+/** The app's four query shapes (app_queries.ts): the only ones relayed. */
+const SHAPES: readonly Shape[] = Object.values(APP_QUERIES).map((q) => shapeOf(new URLSearchParams(q)));
+
+/** Same parameters with the same values, in any order. */
+function sameShape(a: Shape, b: Shape): boolean {
+  if (a.length !== b.length) return false;
+  const want = new Map(b);
+  return a.every(([k, v]) => want.get(k) === v);
+}
 
 /** A coordinate with exactly one decimal inside `limit`, or null. */
 function coord(raw: string | null, limit: number): string | null {
@@ -60,8 +54,9 @@ function coord(raw: string | null, limit: number): string | null {
 }
 
 /**
- * The Open-Meteo URL for a query the app would send, or null when anything in it is not: an
- * unknown or repeated parameter, a finer position, an unknown variable, a count out of range.
+ * The Open-Meteo URL for one of the app's own queries, or null for anything else: a repeated
+ * parameter, a finer position, or any parameter, variable or count the app's queries don't hold.
+ * Accepting only the app's shapes holds every relayed call to the app's own cost.
  */
 export function upstreamUrl(search: URLSearchParams): string | null {
   const seen = new Set<string>();
@@ -72,34 +67,13 @@ export function upstreamUrl(search: URLSearchParams): string | null {
   const lat = coord(search.get('latitude'), 90);
   const lng = coord(search.get('longitude'), 180);
   if (lat === null || lng === null) return null;
-  const out = new URLSearchParams({ latitude: lat, longitude: lng });
-  const known = new Set(['latitude', 'longitude']);
-  let lists = 0;
-  for (const name of LIST_PARAMS) {
-    const raw = search.get(name);
-    known.add(name);
-    if (raw === null) continue;
-    const vars = raw.split(',');
-    if (vars.length === 0 || vars.length > VARIABLES.size || vars.some((v) => !VARIABLES.has(v))) return null;
-    out.set(name, vars.join(','));
-    lists += 1;
-  }
-  if (lists === 0) return null;
-  for (const [name, max] of Object.entries(COUNT_PARAMS)) {
-    const raw = search.get(name);
-    known.add(name);
-    if (raw === null) continue;
-    if (!/^\d{1,3}$/.test(raw) || Number(raw) > max) return null;
-    out.set(name, String(Number(raw)));
-  }
-  for (const [name, value] of Object.entries(FIXED_PARAMS)) {
-    const raw = search.get(name);
-    known.add(name);
-    if (raw === null) continue;
-    if (raw !== value) return null;
-    out.set(name, value);
-  }
-  for (const key of seen) if (!known.has(key)) return null;
+  // supabase-js adds the region the phone asked to run in; it is for the platform, not Open-Meteo.
+  const region = search.get(REGION_PARAM);
+  if (region !== null && !/^[a-z0-9-]{1,32}$/.test(region)) return null;
+  const shape = shapeOf(search);
+  const match = SHAPES.find((s) => sameShape(shape, s));
+  if (!match) return null;
+  const out = new URLSearchParams([['latitude', lat], ['longitude', lng], ...match]);
   // URLSearchParams would write the commas as %2C; Open-Meteo reads either, but plain is what the phone sends.
   return `${OPEN_METEO_FORECAST}?${out.toString().replaceAll('%2C', ',')}`;
 }
@@ -118,7 +92,9 @@ export interface WeatherLogger {
  * times a day. The app-wide lines keep the relay under Open-Meteo's free limits per address (600
  * a minute, 5,000 an hour, 10,000 a day, counted in its cost units) even if every call cost the
  * most any app query costs (`MAX_CALL_COST`: Home's and the drive's 20-variable queries; the sky's
- * and the forecast's cost 1). A spent budget is a 429, which the phone reads as "no weather";
+ * and the forecast's cost 1; `upstreamUrl` relays only those shapes) and even when a burst straddles
+ * two of the fixed windows (`take_global_rate_limit` resets at a window's end, so up to twice a
+ * row's max can pass in one window's length): each row is at most half the limit at that cost. A spent budget is a 429, which the phone reads as "no weather";
  * handler.test.ts pins the values.
  */
 export const MAX_CALL_COST = 2;
@@ -126,9 +102,9 @@ export const OPEN_METEO_LIMITS = { minute: 600, hour: 5000, day: 10000 } as cons
 export const RATE_LIMITS = {
   user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
   global: [
-    { key: 'weather_relay_minute', window: '1 minute', max: 250, retryAfterS: 60 },
-    { key: 'weather_relay_hour', window: '1 hour', max: 2000, retryAfterS: 600 },
-    { key: 'weather_relay_day', window: '1 day', max: 4500, retryAfterS: 3600 },
+    { key: 'weather_relay_minute', window: '1 minute', max: 150, retryAfterS: 60 },
+    { key: 'weather_relay_hour', window: '1 hour', max: 1250, retryAfterS: 600 },
+    { key: 'weather_relay_day', window: '1 day', max: 2500, retryAfterS: 3600 },
   ],
 } as const;
 

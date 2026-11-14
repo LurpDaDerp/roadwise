@@ -1,5 +1,8 @@
-import { fetchWeather } from '../openMeteo';
-import { fetchRoadSeries } from '../roadSeries';
+import { openMeteoUrl } from '@/ui/sky/weather';
+
+import { forecastUrl } from '../forecast';
+import { fetchWeather, weatherUrl } from '../openMeteo';
+import { fetchRoadSeries, roadSeriesUrl } from '../roadSeries';
 import { DIRECT_TIMEOUT_MS, edgeFallback, FALLBACK_TIMEOUT_MS, requestOpenMeteo, type FetchLike, type OpenMeteoFallback } from '../transport';
 import { okJson, openMeteoBody } from '../__fixtures__/openMeteo';
 
@@ -152,5 +155,25 @@ describe('edgeFallback', () => {
     expect(await edgeFallback(QUERY, FALLBACK_TIMEOUT_MS)).toBe(limited);
     mockClient.functions.invoke.mockResolvedValueOnce({ data: null, error: { context: new TypeError('Network request failed') } });
     expect(await edgeFallback(QUERY, FALLBACK_TIMEOUT_MS)).toBeNull();
+  });
+});
+
+describe("the relay's allowed queries are the app's own", () => {
+  // supabase/functions/weather relays only these shapes; a URL builder that drifts from them would
+  // lose its fallback, so it fails here first.
+  const { APP_QUERIES, APP_QUERY_PLACE } = jest.requireActual<typeof import('../../../../supabase/functions/weather/app_queries')>(
+    '../../../../supabase/functions/weather/app_queries'
+  );
+  const lat = Number(APP_QUERY_PLACE.latitude);
+  const lng = Number(APP_QUERY_PLACE.longitude);
+  const queryOf = (url: string) => url.slice(url.indexOf('?') + 1);
+
+  test.each([
+    ['sky', () => openMeteoUrl(lat, lng)],
+    ['home', () => weatherUrl(lat, lng)],
+    ['series', () => roadSeriesUrl(lat, lng)],
+    ['forecast', () => forecastUrl(lat, lng)],
+  ] as const)('%s', (name, build) => {
+    expect(queryOf(build())).toBe(APP_QUERIES[name]);
   });
 });
