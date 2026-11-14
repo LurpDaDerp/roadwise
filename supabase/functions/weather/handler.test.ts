@@ -1,5 +1,5 @@
 import { assert, assertEquals } from '@std/assert';
-import { handleWeather, OPEN_METEO_FORECAST, upstreamUrl, type WeatherDeps } from './handler.ts';
+import { createWeatherDb, handleWeather, RATE_LIMITS, OPEN_METEO_FORECAST, upstreamUrl, type WeatherDeps } from './handler.ts';
 
 const GOOD = 'good-token';
 const UID = '00000000-0000-4000-8000-000000000001';
@@ -18,6 +18,7 @@ function deps(over: Partial<WeatherDeps> = {}): WeatherDeps & { calls: string[] 
   return {
     calls,
     verifyJwt: (token) => Promise.resolve(token === GOOD ? UID : null),
+    db: { takeRateLimit: () => Promise.resolve(true), takeGlobalRateLimit: () => Promise.resolve(true) },
     fetch: (url) => {
       calls.push(url);
       return Promise.resolve(new Response('{"current":{"time":1}}', { status: 200 }));
@@ -141,4 +142,62 @@ Deno.test('a slow Open-Meteo is a 504 after the time-out', async () => {
   );
   assertEquals(res.status, 504);
   await res.body?.cancel();
+});
+
+Deno.test('the budgets are pinned', () => {
+  assertEquals(RATE_LIMITS, {
+    user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
+    global: { key: 'weather_relay', window: '1 day', max: 9000, retryAfterS: 3600 },
+  });
+});
+
+Deno.test('a spent user budget is a 429 that never spends the shared budget or reaches Open-Meteo', async () => {
+  const spent: string[] = [];
+  const d = deps({
+    db: {
+      takeRateLimit: (user, key, window, max) => {
+        spent.push(`user:${user}:${key}:${window}:${max}`);
+        return Promise.resolve(false);
+      },
+      takeGlobalRateLimit: () => {
+        spent.push('global');
+        return Promise.resolve(true);
+      },
+    },
+  });
+  const res = await handleWeather(call(HOME_QUERY), d);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('retry-after'), '600');
+  assertEquals(spent, [`user:${UID}:weather_relay:1 hour:120`]);
+  assertEquals(d.calls, []);
+  await res.body?.cancel();
+});
+
+Deno.test('a spent shared budget is a 429; an unreadable one a 503; neither reaches Open-Meteo', async () => {
+  const global = deps({ db: { takeRateLimit: () => Promise.resolve(true), takeGlobalRateLimit: () => Promise.resolve(false) } });
+  const limited = await handleWeather(call(HOME_QUERY), global);
+  assertEquals(limited.status, 429);
+  assertEquals(limited.headers.get('retry-after'), '3600');
+  await limited.body?.cancel();
+  const broken = deps({ db: { takeRateLimit: () => Promise.reject(new Error('db down')), takeGlobalRateLimit: () => Promise.resolve(true) } });
+  const down = await handleWeather(call(HOME_QUERY), broken);
+  assertEquals(down.status, 503);
+  await down.body?.cancel();
+  assertEquals([...global.calls, ...broken.calls], []);
+});
+
+Deno.test('the budget rows go through the service-role functions', async () => {
+  const rpcs: [string, Record<string, unknown>][] = [];
+  const db = createWeatherDb({
+    rpc: (fn, args) => {
+      rpcs.push([fn, args]);
+      return Promise.resolve({ data: true, error: null });
+    },
+  });
+  assertEquals(await db.takeRateLimit(UID, 'weather_relay', '1 hour', 120), true);
+  assertEquals(await db.takeGlobalRateLimit('weather_relay', '1 day', 9000), true);
+  assertEquals(rpcs, [
+    ['take_rate_limit', { p_user: UID, p_key: 'weather_relay', p_window: '1 hour', p_max: 120 }],
+    ['take_global_rate_limit', { p_key: 'weather_relay', p_window: '1 day', p_max: 9000 }],
+  ]);
 });

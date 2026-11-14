@@ -5,7 +5,8 @@
 // so a regional outage of Open-Meteo's own servers (or a broken route to one) does not blank the
 // weather.
 //
-//   * Signed-in callers only (the bearer token, checked with Auth), so this is no open proxy.
+//   * Signed-in callers only (the bearer token, checked with Auth), so this is no open proxy, and
+//     each within a per-user and an app-wide budget (`RATE_LIMITS`).
 //   * A POST whose JSON body carries the query (`{ "query": "latitude=47.6&longitude=-122.3&…" }`):
 //     the position is never part of the request's URL, which the platform's request logs keep.
 //   * Only `/v1/forecast` and only the parameters the app sends, each checked: a position with one
@@ -109,8 +110,44 @@ export interface WeatherLogger {
   error(...args: unknown[]): void;
 }
 
+/**
+ * The relay's budgets, so a signed-in account can't spend Open-Meteo's free allowance for every
+ * driver (the requests all leave from the platform's addresses). Honest use is far below the
+ * per-user line: the phone asks here only when its own request failed, Home at most every 15 min,
+ * the sky every 30 min, a drive about once per 10 km cell or 30 min, the commute heads-up a few
+ * times a day. The global line stays under Open-Meteo's 10,000 free calls a day. A spent budget is
+ * a 429, which the phone reads as "no weather"; handler.test.ts pins the values.
+ */
+export const RATE_LIMITS = {
+  user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
+  global: { key: 'weather_relay', window: '1 day', max: 9000, retryAfterS: 3600 },
+} as const;
+
+/** The two budget rows (`take_rate_limit`, `take_global_rate_limit`, service role only). */
+export interface WeatherDb {
+  takeRateLimit(userId: string, key: string, window: string, max: number): Promise<boolean>;
+  takeGlobalRateLimit(key: string, window: string, max: number): Promise<boolean>;
+}
+
+interface RpcClient {
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }>;
+}
+
+export function createWeatherDb(client: RpcClient): WeatherDb {
+  const call = async (fn: string, args: Record<string, unknown>): Promise<boolean> => {
+    const { data, error } = await client.rpc(fn, args);
+    if (error) throw error instanceof Error ? error : new Error(`${fn} failed`);
+    return data === true;
+  };
+  return {
+    takeRateLimit: (userId, key, window, max) => call('take_rate_limit', { p_user: userId, p_key: key, p_window: window, p_max: max }),
+    takeGlobalRateLimit: (key, window, max) => call('take_global_rate_limit', { p_key: key, p_window: window, p_max: max }),
+  };
+}
+
 export interface WeatherDeps {
   verifyJwt(token: string): Promise<string | null>;
+  db: WeatherDb;
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   log?: WeatherLogger;
   timeoutMs?: number;
@@ -144,6 +181,20 @@ export async function handleWeather(req: Request, deps: WeatherDeps): Promise<Re
   const query = (body.body as { query?: unknown } | null)?.query;
   const target = typeof query === 'string' ? upstreamUrl(new URLSearchParams(query)) : null;
   if (target === null) return finish(json(400, { code: 'bad_request' }), 'bad_request');
+
+  // The user's budget first (a spent one never touches the shared row), then everyone's.
+  const { user, global } = RATE_LIMITS;
+  try {
+    if (!(await deps.db.takeRateLimit(userId, user.key, user.window, user.max))) {
+      return finish(json(429, { code: 'too_many_requests' }, { 'retry-after': String(user.retryAfterS) }), 'rate_limited');
+    }
+    if (!(await deps.db.takeGlobalRateLimit(global.key, global.window, global.max))) {
+      return finish(json(429, { code: 'too_many_requests' }, { 'retry-after': String(global.retryAfterS) }), 'global_rate_limited');
+    }
+  } catch (err) {
+    log.error('weather rate limit failed', { requestId: id, error: err instanceof Error ? err.message : String(err) });
+    return finish(json(503, { code: 'retry' }, { 'retry-after': '30' }), 'rate_limit_unavailable');
+  }
 
   const doFetch = deps.fetch ?? fetch;
   const control = new AbortController();
