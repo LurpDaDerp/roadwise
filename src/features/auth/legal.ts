@@ -9,7 +9,7 @@
  * documents' "Last updated" dates (`src/features/legal/__tests__/documents.test.ts` holds it so).
  * Bump it with the text.
  */
-export const TERMS_VERSION = '2026-11-13';
+export const TERMS_VERSION = '2026-11-14';
 
 /** A short safety line for the how-it-works copy. */
 export const SAFETY_DISCLAIMER = 'RoadWise is a coaching aid and may miss or misreport events';

@@ -8,11 +8,13 @@
  *   exactly as they read a current-and-hourly answer, at any step of the series, with no request.
  * - The road state (`./road.ts`) reads the steps.
  * - The position is rounded to 0.1° before it leaves the phone. Every field may be missing; a body
- *   with no steps is no answer. One request, aborted after 5 s; it never throws.
+ *   with no steps is no answer. One request, aborted after 5 s, asked once more through the
+ *   `weather` edge function when Open-Meteo did not answer (`./transport.ts`); it never throws.
  */
-import { num, OPEN_METEO_TIMEOUT_MS, parseWeather, roundCoord, sum, WEATHER_VARS, type FetchLike, type WeatherReading } from './openMeteo';
+import { num, parseWeather, roundCoord, sum, WEATHER_VARS, type FetchLike, type WeatherReading } from './openMeteo';
 import { stepIndexAt, type RoadSeries, type RoadStep } from './road';
 import { ROAD_SERIES, ROAD_STEP_S } from './thresholds';
+import { requestOpenMeteo, type OpenMeteoFallback } from './transport';
 
 /** A cell's series with the hourly block (time and each variable, oldest first), as stored. */
 export type WeatherSeries = RoadSeries & { hourly: Record<string, (number | null)[]> };
@@ -146,19 +148,17 @@ export function retryAfterMs(header: string | null | undefined, nowMs: number): 
   return Number.isFinite(at) ? Math.max(0, at - nowMs) : null;
 }
 
-/** One request for the series at a place, aborted after the timeout. Never throws. */
+/** One request for the series at a place (with the edge function as its fallback), aborted after the timeout. Never throws. */
 export async function fetchRoadSeries(
   lat: number,
   lng: number,
-  deps: { fetch?: FetchLike; timeoutMs?: number; now?: () => number } = {}
+  deps: { fetch?: FetchLike; timeoutMs?: number; now?: () => number; fallback?: OpenMeteoFallback | null } = {}
 ): Promise<RoadSeriesResult> {
-  const doFetch = deps.fetch ?? globalThis.fetch;
   const now = deps.now ?? Date.now;
-  if (typeof doFetch !== 'function' || !Number.isFinite(lat) || !Number.isFinite(lng)) return { kind: 'failed' };
-  const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), deps.timeoutMs ?? OPEN_METEO_TIMEOUT_MS);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { kind: 'failed' };
+  const res = await requestOpenMeteo(roadSeriesUrl(lat, lng), deps);
+  if (res === null) return { kind: 'failed' };
   try {
-    const res = await doFetch(roadSeriesUrl(lat, lng), { signal: control.signal, headers: { Accept: 'application/json' } });
     if (res.status === 429) {
       const headers = res.headers as Headers | undefined;
       return { kind: 'limited', retryAfterMs: retryAfterMs(typeof headers?.get === 'function' ? headers.get('Retry-After') : null, now()) };
@@ -168,7 +168,5 @@ export async function fetchRoadSeries(
     return series === null ? { kind: 'failed' } : { kind: 'ok', series };
   } catch {
     return { kind: 'failed' };
-  } finally {
-    clearTimeout(timer);
   }
 }

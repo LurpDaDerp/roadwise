@@ -419,6 +419,9 @@ import_map = "./functions/deno.json"
 [functions.trip-actions]
 import_map = "./functions/deno.json"
 
+[functions.weather]
+import_map = "./functions/deno.json"
+
 [analytics]
 enabled = true
 port = 54627

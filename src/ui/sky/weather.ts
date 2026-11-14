@@ -7,8 +7,12 @@
  * - One answer serves 30 min for the same rounded place; it is kept on the phone so a cold launch
  *   paints the right sky at once.
  * - Every failure (no network, a slow answer, a malformed body) is silent and reads as `clear`,
- *   or as the last answer while it is under 3 h old.
+ *   or as the last answer while it is under 3 h old. A request Open-Meteo did not answer is asked
+ *   once more through the `weather` edge function (`@/features/weather/transport`).
  */
+import { requestOpenMeteo, type FetchLike, type OpenMeteoFallback } from '@/features/weather/transport';
+
+export type { FetchLike } from '@/features/weather/transport';
 
 export type WeatherKind = 'clear' | 'cloudy' | 'fog' | 'rain' | 'snow' | 'storm';
 /** Drizzle and light falls draw fewer streaks / flakes than heavy ones. */
@@ -21,7 +25,6 @@ export const CLEAR: SkyWeather = { kind: 'clear', intensity: 'light' };
 export const WEATHER_TTL_MS = 30 * 60_000;
 /** A stored answer older than this is not shown after a failed refresh. */
 export const WEATHER_STALE_MS = 3 * 60 * 60_000;
-export const OPEN_METEO_TIMEOUT_MS = 5_000;
 
 /**
  * WMO weather interpretation codes (the `weather_code` Open-Meteo reports) to a kind. Partly
@@ -88,21 +91,15 @@ export function openMeteoUrl(lat: number, lng: number): string {
   return `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current=weather_code,is_day,cloud_cover,precipitation`;
 }
 
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
-
-/** One request, aborted after the timeout. Null on any failure. */
+/** One request (with the edge function as its fallback), aborted after the timeout. Null on any failure. */
 export async function fetchSkyWeather(
   lat: number,
   lng: number,
-  deps: { fetch?: FetchLike; timeoutMs?: number } = {}
+  deps: { fetch?: FetchLike; timeoutMs?: number; fallback?: OpenMeteoFallback | null } = {}
 ): Promise<SkyWeather | null> {
-  const doFetch = deps.fetch ?? globalThis.fetch;
-  if (typeof doFetch !== 'function') return null;
-  const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), deps.timeoutMs ?? OPEN_METEO_TIMEOUT_MS);
+  const res = await requestOpenMeteo(openMeteoUrl(lat, lng), deps);
+  if (res === null || !res.ok) return null;
   try {
-    const res = await doFetch(openMeteoUrl(lat, lng), { signal: control.signal, headers: { Accept: 'application/json' } });
-    if (!res.ok) return null;
     const body = (await res.json()) as { current?: { weather_code?: unknown; cloud_cover?: unknown } } | null;
     const code = body?.current?.weather_code;
     if (typeof code !== 'number') return null;
@@ -110,8 +107,6 @@ export async function fetchSkyWeather(
     return weatherFromWmo(code, typeof cover === 'number' ? cover : null);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

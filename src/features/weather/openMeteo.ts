@@ -6,12 +6,16 @@
  *
  * - The position is rounded to one decimal (about 10 km) before it leaves the phone: fine enough
  *   for the weather, too coarse to say where the driver is.
- * - One request, aborted after 5 s. Every failure (no network, a slow answer, a malformed body)
- *   is `null`, which callers treat as "nothing to say".
+ * - One request, aborted after 5 s, asked once more through the `weather` edge function when
+ *   Open-Meteo did not answer (`./transport.ts`). Every failure (no network, a slow answer, a
+ *   malformed body) is `null`, which callers treat as "nothing to say".
  * - Wind comes back in mph so the thresholds read as the NWS writes them; precipitation in mm,
  *   snowfall in cm, visibility in metres (Open-Meteo's units); `is_day` says whether it is light.
  */
 import { ICE, LOOKAHEAD_HOURS, PAST_HOURS, SNOW_ROAD } from './thresholds';
+import { DIRECT_TIMEOUT_MS, requestOpenMeteo, type FetchLike, type OpenMeteoFallback } from './transport';
+
+export type { FetchLike } from './transport';
 
 /** One moment of weather. Rates are per hour; any field the model lacks is null. */
 export type WeatherSample = {
@@ -41,7 +45,7 @@ export type WeatherReading = {
   recentSnowCm: number;
 };
 
-export const OPEN_METEO_TIMEOUT_MS = 5_000;
+export const OPEN_METEO_TIMEOUT_MS = DIRECT_TIMEOUT_MS;
 
 /** The variables every Open-Meteo call here asks for (current and hourly). */
 export const WEATHER_VARS = 'weather_code,temperature_2m,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day';
@@ -128,25 +132,18 @@ export function parseWeather(body: unknown): WeatherReading | null {
   return { samples, recentRainMm, recentSnowCm };
 }
 
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
-
-/** One request, aborted after the timeout. Never throws: null on any failure. */
+/** One request (with the edge function as its fallback), aborted after the timeout. Never throws: null on any failure. */
 export async function fetchWeather(
   lat: number,
   lng: number,
-  deps: { fetch?: FetchLike; timeoutMs?: number } = {}
+  deps: { fetch?: FetchLike; timeoutMs?: number; fallback?: OpenMeteoFallback | null } = {}
 ): Promise<WeatherReading | null> {
-  const doFetch = deps.fetch ?? globalThis.fetch;
-  if (typeof doFetch !== 'function' || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), deps.timeoutMs ?? OPEN_METEO_TIMEOUT_MS);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const res = await requestOpenMeteo(weatherUrl(lat, lng), deps);
+  if (res === null || !res.ok) return null;
   try {
-    const res = await doFetch(weatherUrl(lat, lng), { signal: control.signal, headers: { Accept: 'application/json' } });
-    if (!res.ok) return null;
     return parseWeather(await res.json());
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }

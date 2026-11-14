@@ -9,11 +9,13 @@
  * - Each hourly stamp's sums cover the hour before it. A stamp's recent rain is the rain and showers
  *   of the stamps in the `ICE.lookbackHours` up to and including it, its recent snow the snowfall of
  *   the `SNOW_ROAD.lookbackHours` likewise: what `dangerAt` reads as "the last few hours".
- * - One request, aborted after 5 s. Every failure (no network, a slow answer, a malformed body) is
+ * - One request, aborted after 5 s, asked once more through the `weather` edge function when
+ *   Open-Meteo did not answer (`./transport.ts`). Every failure (no network, a slow answer, a malformed body) is
  *   null, which the planner reads as "unknown" (it never says the weather is fine on a failure).
  */
-import { num, OPEN_METEO_TIMEOUT_MS, roundCoord, sampleOf, sum, WEATHER_VARS, type FetchLike, type WeatherSample } from './openMeteo';
+import { num, roundCoord, sampleOf, sum, WEATHER_VARS, type FetchLike, type WeatherSample } from './openMeteo';
 import { ICE, PAST_HOURS, SNOW_ROAD } from './thresholds';
+import { requestOpenMeteo, type OpenMeteoFallback } from './transport';
 
 /** How far ahead the heads-up's forecast asks, in hours (a departure is at most 20 h away, plus its hour after). */
 export const FORECAST_HOURS = 24;
@@ -75,19 +77,18 @@ export function parseForecast(body: unknown): HourlyForecast | null {
   return { points };
 }
 
-/** One request, aborted after the timeout. Never throws: null on any failure. */
-export async function fetchForecast(lat: number, lng: number, deps: { fetch?: FetchLike; timeoutMs?: number } = {}): Promise<HourlyForecast | null> {
-  const doFetch = deps.fetch ?? globalThis.fetch;
-  if (typeof doFetch !== 'function' || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), deps.timeoutMs ?? OPEN_METEO_TIMEOUT_MS);
+/** One request (with the edge function as its fallback), aborted after the timeout. Never throws: null on any failure. */
+export async function fetchForecast(
+  lat: number,
+  lng: number,
+  deps: { fetch?: FetchLike; timeoutMs?: number; fallback?: OpenMeteoFallback | null } = {}
+): Promise<HourlyForecast | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const res = await requestOpenMeteo(forecastUrl(lat, lng), deps);
+  if (res === null || !res.ok) return null;
   try {
-    const res = await doFetch(forecastUrl(lat, lng), { signal: control.signal, headers: { Accept: 'application/json' } });
-    if (!res.ok) return null;
     return parseForecast(await res.json());
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
