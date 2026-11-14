@@ -1,5 +1,5 @@
 import { assert, assertEquals } from '@std/assert';
-import { createWeatherDb, handleWeather, RATE_LIMITS, OPEN_METEO_FORECAST, upstreamUrl, type WeatherDeps } from './handler.ts';
+import { createWeatherDb, handleWeather, MAX_CALL_COST, OPEN_METEO_LIMITS, RATE_LIMITS, OPEN_METEO_FORECAST, upstreamUrl, type WeatherDeps } from './handler.ts';
 
 const GOOD = 'good-token';
 const UID = '00000000-0000-4000-8000-000000000001';
@@ -147,8 +147,19 @@ Deno.test('a slow Open-Meteo is a 504 after the time-out', async () => {
 Deno.test('the budgets are pinned', () => {
   assertEquals(RATE_LIMITS, {
     user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
-    global: { key: 'weather_relay', window: '1 day', max: 9000, retryAfterS: 3600 },
+    global: [
+      { key: 'weather_relay_minute', window: '1 minute', max: 250, retryAfterS: 60 },
+      { key: 'weather_relay_hour', window: '1 hour', max: 2000, retryAfterS: 600 },
+      { key: 'weather_relay_day', window: '1 day', max: 4500, retryAfterS: 3600 },
+    ],
   });
+});
+
+Deno.test("the app-wide budgets stay under Open-Meteo's free limits at the dearest query's cost", () => {
+  const [minute, hour, day] = RATE_LIMITS.global;
+  assert(minute.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.minute);
+  assert(hour.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.hour);
+  assert(day.max * MAX_CALL_COST <= OPEN_METEO_LIMITS.day);
 });
 
 Deno.test('a spent user budget is a 429 that never spends the shared budget or reaches Open-Meteo', async () => {
@@ -174,7 +185,7 @@ Deno.test('a spent user budget is a 429 that never spends the shared budget or r
 });
 
 Deno.test('a spent shared budget is a 429; an unreadable one a 503; neither reaches Open-Meteo', async () => {
-  const global = deps({ db: { takeRateLimit: () => Promise.resolve(true), takeGlobalRateLimit: () => Promise.resolve(false) } });
+  const global = deps({ db: { takeRateLimit: () => Promise.resolve(true), takeGlobalRateLimit: (key) => Promise.resolve(key !== 'weather_relay_day') } });
   const limited = await handleWeather(call(HOME_QUERY), global);
   assertEquals(limited.status, 429);
   assertEquals(limited.headers.get('retry-after'), '3600');
@@ -195,9 +206,48 @@ Deno.test('the budget rows go through the service-role functions', async () => {
     },
   });
   assertEquals(await db.takeRateLimit(UID, 'weather_relay', '1 hour', 120), true);
-  assertEquals(await db.takeGlobalRateLimit('weather_relay', '1 day', 9000), true);
+  assertEquals(await db.takeGlobalRateLimit('weather_relay_day', '1 day', 4500), true);
   assertEquals(rpcs, [
     ['take_rate_limit', { p_user: UID, p_key: 'weather_relay', p_window: '1 hour', p_max: 120 }],
-    ['take_global_rate_limit', { p_key: 'weather_relay', p_window: '1 day', p_max: 9000 }],
+    ['take_global_rate_limit', { p_key: 'weather_relay_day', p_window: '1 day', p_max: 4500 }],
   ]);
+});
+
+Deno.test('a minute burst is refused before it spends the hour and day rows', async () => {
+  const taken: string[] = [];
+  const d = deps({
+    db: {
+      takeRateLimit: () => Promise.resolve(true),
+      takeGlobalRateLimit: (key) => {
+        taken.push(key);
+        return Promise.resolve(key !== 'weather_relay_minute');
+      },
+    },
+  });
+  const res = await handleWeather(call(HOME_QUERY), d);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get('retry-after'), '60');
+  assertEquals(taken, ['weather_relay_minute']);
+  assertEquals(d.calls, []);
+  await res.body?.cancel();
+});
+
+Deno.test('a call within every budget spends the user row then the minute, hour and day rows', async () => {
+  const taken: string[] = [];
+  const d = deps({
+    db: {
+      takeRateLimit: (_u, key) => {
+        taken.push(key);
+        return Promise.resolve(true);
+      },
+      takeGlobalRateLimit: (key) => {
+        taken.push(key);
+        return Promise.resolve(true);
+      },
+    },
+  });
+  const res = await handleWeather(call(HOME_QUERY), d);
+  assertEquals(res.status, 200);
+  assertEquals(taken, ['weather_relay', 'weather_relay_minute', 'weather_relay_hour', 'weather_relay_day']);
+  await res.body?.cancel();
 });

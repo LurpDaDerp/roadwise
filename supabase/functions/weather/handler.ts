@@ -6,7 +6,7 @@
 // weather.
 //
 //   * Signed-in callers only (the bearer token, checked with Auth), so this is no open proxy, and
-//     each within a per-user and an app-wide budget (`RATE_LIMITS`).
+//     each within a per-user budget and app-wide ones under Open-Meteo's free limits (`RATE_LIMITS`).
 //   * A POST whose JSON body carries the query (`{ "query": "latitude=47.6&longitude=-122.3&…" }`):
 //     the position is never part of the request's URL, which the platform's request logs keep.
 //   * Only `/v1/forecast` and only the parameters the app sends, each checked: a position with one
@@ -115,15 +115,24 @@ export interface WeatherLogger {
  * driver (the requests all leave from the platform's addresses). Honest use is far below the
  * per-user line: the phone asks here only when its own request failed, Home at most every 15 min,
  * the sky every 30 min, a drive about once per 10 km cell or 30 min, the commute heads-up a few
- * times a day. The global line stays under Open-Meteo's 10,000 free calls a day. A spent budget is
- * a 429, which the phone reads as "no weather"; handler.test.ts pins the values.
+ * times a day. The app-wide lines keep the relay under Open-Meteo's free limits per address (600
+ * a minute, 5,000 an hour, 10,000 a day, counted in its cost units) even if every call cost the
+ * most any app query costs (`MAX_CALL_COST`: Home's and the drive's 20-variable queries; the sky's
+ * and the forecast's cost 1). A spent budget is a 429, which the phone reads as "no weather";
+ * handler.test.ts pins the values.
  */
+export const MAX_CALL_COST = 2;
+export const OPEN_METEO_LIMITS = { minute: 600, hour: 5000, day: 10000 } as const;
 export const RATE_LIMITS = {
   user: { key: 'weather_relay', window: '1 hour', max: 120, retryAfterS: 600 },
-  global: { key: 'weather_relay', window: '1 day', max: 9000, retryAfterS: 3600 },
+  global: [
+    { key: 'weather_relay_minute', window: '1 minute', max: 250, retryAfterS: 60 },
+    { key: 'weather_relay_hour', window: '1 hour', max: 2000, retryAfterS: 600 },
+    { key: 'weather_relay_day', window: '1 day', max: 4500, retryAfterS: 3600 },
+  ],
 } as const;
 
-/** The two budget rows (`take_rate_limit`, `take_global_rate_limit`, service role only). */
+/** The budget rows (`take_rate_limit`, `take_global_rate_limit`, service role only). */
 export interface WeatherDb {
   takeRateLimit(userId: string, key: string, window: string, max: number): Promise<boolean>;
   takeGlobalRateLimit(key: string, window: string, max: number): Promise<boolean>;
@@ -188,8 +197,11 @@ export async function handleWeather(req: Request, deps: WeatherDeps): Promise<Re
     if (!(await deps.db.takeRateLimit(userId, user.key, user.window, user.max))) {
       return finish(json(429, { code: 'too_many_requests' }, { 'retry-after': String(user.retryAfterS) }), 'rate_limited');
     }
-    if (!(await deps.db.takeGlobalRateLimit(global.key, global.window, global.max))) {
-      return finish(json(429, { code: 'too_many_requests' }, { 'retry-after': String(global.retryAfterS) }), 'global_rate_limited');
+    // Shortest window first: a burst is refused before it spends the hour's and the day's rows.
+    for (const g of global) {
+      if (!(await deps.db.takeGlobalRateLimit(g.key, g.window, g.max))) {
+        return finish(json(429, { code: 'too_many_requests' }, { 'retry-after': String(g.retryAfterS) }), 'global_rate_limited');
+      }
     }
   } catch (err) {
     log.error('weather rate limit failed', { requestId: id, error: err instanceof Error ? err.message : String(err) });
