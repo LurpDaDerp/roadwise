@@ -164,7 +164,12 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
           ? { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY } }
           : undefined
       ),
-      adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#000814' },
+      // The logo split in two (scripts/make-app-icons.py): the mark on transparent over the logo's navy gradient.
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-icon.png',
+        backgroundImage: './assets/adaptive-icon-background.png',
+        backgroundColor: '#000814',
+      },
       // Left out when there is no FCM credential: see `googleServicesFile` above.
       ...optional('googleServicesFile', googleServicesFile(projectRoot)),
       // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) and BLUETOOTH_CONNECT on Android 12+,
