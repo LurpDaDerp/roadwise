@@ -111,6 +111,11 @@ describe('the recap card', () => {
     await tap('drive-place-yes');
     await waitFor(async () => expect(await readPlaces(w.settings)).toEqual([expect.objectContaining({ id: 'home', kind: 'home', address: '742 Evergreen Ter', area: 'Seattle, WA' })]));
     expect(await screen.findByTestId('drive-place-saved')).toBeOnTheScreen();
+    // Saving refetches the prompt, which has nothing left to ask here; the confirmation stays.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.getByTestId('drive-place-saved')).toHaveTextContent('Saved as Home. Change it in Settings › Places.');
     // Home's address was remembered, so it wasn't looked up again.
     expect(mockAddressAt).not.toHaveBeenCalledWith(HOME);
   });

@@ -183,6 +183,8 @@ extension DriveDetector {
       } else {
         settle(&r, now)
         save(r)
+        capture.clearStaleOpenFlag()
+        DriveDisplayBridge.postEnded()
       }
     case "suppressed":
       // The rest goes on until its cap (from when it began); nothing was sensed while RoadWise was
@@ -209,10 +211,11 @@ extension DriveDetector {
       guard let self = self, var r = self.rec, r.driveId == driveId, self.capture.sensing == .off else { return }
       let now = DriveDetector.now()
       guard let s = summary else {
-        // No journal: nothing to resume or hand over.
+        // No journal: nothing to resume or hand over. The Live Activity the launch kept for it ends too.
         self.settle(&r, now)
         self.save(r)
         self.capture.closeCapture()
+        DriveDisplayBridge.postEnded()
         self.syncWakes()
         self.emitState("ended")
         return

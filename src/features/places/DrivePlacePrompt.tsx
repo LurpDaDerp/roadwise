@@ -35,19 +35,22 @@ export function DrivePlacePrompt({ clientTripId }: { clientTripId: string }) {
   const settings = useMemo(() => createSettingsRepo(db), [db]);
   const prompt = useDrivePrompt(clientTripId);
   const { save } = usePlaces();
-  const [state, setState] = useState<'ask' | 'busy' | 'saved' | 'gone' | 'failed'>('ask');
+  const [state, setState] = useState<'ask' | 'busy' | 'gone' | 'failed'>('ask');
+  // The name Yes saved. Saving refetches the prompt, which then has nothing more to ask about this
+  // spot (or asks about the drive's other end), so the confirmation can't be read from it.
+  const [savedAs, setSavedAs] = useState<string | null>(null);
+
+  if (savedAs !== null) {
+    return (
+      <Text variant="footnote" tone="muted" accessibilityLiveRegion="polite" testID="drive-place-saved">
+        {copy.saved(savedAs)}
+      </Text>
+    );
+  }
 
   const p = prompt.data;
   if (!p || state === 'gone') return null;
   const name = FIXED_NAME[p.kind];
-
-  if (state === 'saved') {
-    return (
-      <Text variant="footnote" tone="muted" accessibilityLiveRegion="polite" testID="drive-place-saved">
-        {copy.saved(name)}
-      </Text>
-    );
-  }
 
   const settle = () => void client.invalidateQueries({ queryKey: PROMPT_QUERY });
 
@@ -66,7 +69,8 @@ export function DrivePlacePrompt({ clientTripId }: { clientTripId: string }) {
       // Not named: the address is unknown (it matches its drives by distance and parking spot only).
       ...(lines ? { ...(lines.number !== undefined ? { number: lines.number } : {}), ...(lines.street !== undefined ? { street: lines.street } : {}) } : { number: null, street: null, unknownAddress: true as const }),
     });
-    setState(ok ? 'saved' : 'failed');
+    if (ok) setSavedAs(name);
+    else setState('failed');
   };
 
   const no = () => {

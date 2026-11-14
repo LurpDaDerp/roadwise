@@ -18,7 +18,6 @@ import { activeDashcam, setActiveDashcam } from '@/dashcam/registry';
 import { INSTALL_ID_KEY, readInstallId } from '@/data/devices/installId';
 import { DROP_NOTICE_KEY, readDropNotice } from '@/drive/dropNotice';
 import type { DriveHost } from '@/drive/host';
-import { resetDriveScreenPresence } from '@/features/drive/hudPresence';
 import { QueryClient } from '@tanstack/react-query';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
 import { queryKeys } from '@/data/queries/keys';
