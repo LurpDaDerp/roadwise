@@ -3,7 +3,8 @@
 Input:  assets/logo.png   1024x1024 RGB, the yellow gauge arc and check mark (with a soft drop
         shadow) on a vertical navy gradient. The source of truth for the mark.
 Output (all in assets/):
-  icon.png                       the logo itself (iOS home screen, App Store, Android legacy icon)
+  icon.png                       the logo with the mark brightened (iOS home screen, App Store,
+                                 Android legacy icon)
   adaptive-icon.png              1024x1024 RGBA, Android adaptive foreground: the mark and its shadow
                                  on transparent, the logo scaled to the 72/108 visible area
   adaptive-icon-background.png   1024x1024 RGB, Android adaptive background: the logo's gradient,
@@ -22,16 +23,18 @@ How the mark is lifted off the gradient:
    filled in from nearby shadow pixels.
 4. Mark opacity, from the red channel against the shadowed background:
    a = (R - S_R) / (Y_R - S_R), S = (1-s) B + s K.
-5. Layer opacity = mark over shadow, a + (1-a) s (raised where a colour would leave 0..255), and
+5. Brighten: each channel of the mark's colour moves its BRIGHTEN share of the way to full (green
+   most, blue a little; red is already full), so the yellow lightens without washing out. Weighted
+   by the mark's opacity, P' = P + a (Y' - Y); background and shadow stay as drawn.
+6. Layer opacity = mark over shadow, a + (1-a) s (raised where a colour would leave 0..255), and
    each pixel's colour solved exactly from it: C = (P - (1-alpha) B) / alpha. Composited over B(y)
-   the layer gives back the logo (the script prints the error and fails above 3 levels).
+   the layer gives back the brightened logo (the script prints the error and fails above 3 levels).
 """
-import shutil
-
 import numpy as np
 from PIL import Image, ImageFilter
 
 SRC = 'assets/logo.png'
+BRIGHTEN = np.array([0.0, 0.18, 0.05])  # per channel (R, G, B): share of the way to full; red is already full
 logo = Image.open(SRC).convert('RGB')
 W, H = logo.size
 P = np.asarray(logo, dtype=np.float64)
@@ -77,7 +80,11 @@ Bs_R = (1 - s) * B[..., 0] + s * K[0]
 a = np.clip((P[..., 0] - Bs_R) / np.maximum(Y[..., 0] - Bs_R, 1e-6), 0, 1)
 a[~grown] = 0
 
-# 5. Layer and check. The opacity is the model's, raised where needed so the exact colour
+# 5. Brighten the mark only.
+Yb = Y + BRIGHTEN * (255 - Y)
+P = np.clip(P + a[..., None] * (Yb - Y), 0, 255).round()
+
+# 6. Layer and check. The opacity is the model's, raised where needed so the exact colour
 #    C = (P - (1-alpha) B) / alpha stays within 0..255; composited over B(y) the layer then gives
 #    back the logo pixel for pixel (up to 8-bit rounding).
 alpha = a + (1 - a) * s
@@ -93,8 +100,8 @@ if err.max() > 3:
     raise SystemExit('the lifted mark does not reproduce the logo')
 layer = Image.fromarray(np.dstack([rgb, alpha8 * 255]).round().clip(0, 255).astype(np.uint8))
 
-# icon.png: the logo as given.
-shutil.copyfile(SRC, 'assets/icon.png')
+# icon.png: the brightened logo.
+Image.fromarray(P.astype(np.uint8)).save('assets/icon.png', optimize=True)
 
 # adaptive-icon.png: the whole 1024 layer at 72/108 (= 2/3), centred, keeping the logo's proportions.
 inner = round(W * 2 / 3)
