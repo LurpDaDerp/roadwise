@@ -188,7 +188,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Once you’re over ${n.autoMinMph} mph, RoadWise starts recording after about ${n.autoMaxHoldS} s, ${n.autoStepS} s sooner for every ${n.autoStepMph} mph faster, and right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
           `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
-          `Riding along? Open the drive screen and tap “${ND}”. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Open RoadWise and tap “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],
       }

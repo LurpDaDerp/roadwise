@@ -196,8 +196,8 @@ export type HudScreenProps = {
  *   navigation button), shown while the drive's 2-minute budget lasts (the host counts the time this
  *   screen is focused with RoadWise in front; a Start drive's from driving speed); a tap discards the
  *   drive and goes Home. A touch that starts while the screen is dimmed only wakes it.
- * - Presence: while focused with RoadWise in front the screen tells `hudPresence` so (with the
- *   drive's id): the recap notifier and the lockout read it. Blur, the background and unmount say
+ * - Presence: while focused with RoadWise in front the screen tells `hudPresence` so: the recap
+ *   notifier reads it. Blur, the background and unmount say
  *   it is not.
  * - Waiting (a Start drive swipe, until the car reaches driving speed): the drive records from the
  *   tap (its speed, its limit, its halo and alerts); End is "Cancel", the one discard ("Not
@@ -297,19 +297,18 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
       mounted.current = false;
     };
   }, []);
-  // Presence (`hudPresence`): focused with RoadWise in front, for the open drive. Not for the
+  // Presence (`hudPresence`): focused with RoadWise in front. Not for the
   // diagnostics simulation, which is never the driving screen.
   const appActive = useAppActive();
   // In the background, not merely covered: Control Center or a call banner over the screen keeps
   // the compass on the phone's heading (`inactive` is still in front).
   const behind = useAppBehind();
   const present = !overlay && focused && appActive;
-  const presenceTripId = live.clientTripId;
   const [presenceOwner] = useState(() => ({}));
   useEffect(() => {
-    reportPresence(presenceOwner, present, presenceTripId);
-  }, [presenceOwner, present, presenceTripId]);
-  useEffect(() => () => reportPresence(presenceOwner, false, null), [presenceOwner]);
+    reportPresence(presenceOwner, present);
+  }, [presenceOwner, present]);
+  useEffect(() => () => reportPresence(presenceOwner, false), [presenceOwner]);
 
   const alert = useAlertFlash(live.lastAlert, live.rowTs);
   // "Slow down" holds while the car is over the speeding line, in the episode's colour as it is now;
@@ -837,17 +836,16 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 }
 
 /**
- * The driving screens present now (focused with RoadWise in front), each with its drive's id. Two
- * can overlap for a moment (one opening as the other goes), so the screen that goes never clears
- * the presence the other one holds.
+ * The driving screens present now (focused with RoadWise in front). Two can overlap for a moment
+ * (one opening as the other goes), so the screen that goes never clears the presence the other one
+ * holds.
  */
-const presentScreens = new Map<object, string | null>();
+const presentScreens = new Set<object>();
 
-function reportPresence(owner: object, present: boolean, tripId: string | null): void {
-  if (present) presentScreens.set(owner, tripId);
+function reportPresence(owner: object, present: boolean): void {
+  if (present) presentScreens.add(owner);
   else if (!presentScreens.delete(owner)) return;
-  const others = [...presentScreens.values()];
-  setDriveScreenFocused(others.length > 0, present ? tripId : (others.at(-1) ?? null));
+  setDriveScreenFocused(presentScreens.size > 0);
 }
 
 /**

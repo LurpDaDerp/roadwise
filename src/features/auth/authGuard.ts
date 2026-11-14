@@ -1,4 +1,4 @@
-import type { DriveOrigin, EngineStatus } from '@/core/engine/engine.types';
+import type { EngineStatus } from '@/core/engine/engine.types';
 import type { SettingsRepo } from '@/data/db/settings';
 import { isBusyStatus, tripRecords } from '@/drive/policy';
 import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
@@ -21,33 +21,18 @@ export type ProfileGate = 'unknown' | 'onboarding' | 'ready';
  * The drive, as the gates need it.
  * - `busy`: the host is busy (recording, ending or finalizing). No gate moves anyone then (rev1:
  *   I10): a setup or update screen must never replace a drive.
- * - `tripOpen`: a confirmed trip is open (recording or ending).
- * - `origin`: how that trip began; null with none open, or when it is not known.
- * - `entered`: the driving screen has been shown during that trip (kept across a relaunch by
- *   hudPresence); false with none open.
- * A relaunch goes back to the driving screen into an open trip not known to be automatic, or an
- * automatic one whose driving screen was shown during it (the lockout holds it there): an
- * automatic drive never opened opens on Home, where the Drive in progress strip leads to its
- * driving screen.
+ * - `tripOpen`: a confirmed trip is open (recording or ending). A relaunch then goes straight back
+ *   to the driving screen, whatever started the drive.
  */
 export interface DriveFacts {
   busy: boolean;
   tripOpen: boolean;
-  origin: DriveOrigin | null;
-  entered: boolean;
 }
 
-export function driveFacts(
-  snapshot: { status: EngineStatus; origin?: DriveOrigin | null },
-  hostBusy: boolean,
-  entered = false
-): DriveFacts {
-  const tripOpen = tripRecords(snapshot.status);
+export function driveFacts(snapshot: { status: EngineStatus }, hostBusy: boolean): DriveFacts {
   return {
     busy: hostBusy || isBusyStatus(snapshot.status),
-    tripOpen,
-    origin: tripOpen ? (snapshot.origin ?? null) : null,
-    entered: tripOpen && entered,
+    tripOpen: tripRecords(snapshot.status),
   };
 }
 
@@ -92,12 +77,9 @@ export function resolveStart(
   update: UpdateStatus | null,
   drive: DriveFacts
 ): StartRoute | null {
-  // A relaunch into an open manual trip goes straight back to it, before any other rule. Nothing
-  // else may stand between a driver and the drive under way. So does an automatic drive whose
-  // driving screen was already shown during it (the lockout holds the app there). One never opened
-  // takes the rules below (Home, with its Drive in progress strip): its driving screen opens only
-  // when asked for, and the Live Activity's link reaches `/drive` without passing here.
-  if (drive.tripOpen && (drive.origin !== 'auto' || drive.entered)) return DRIVE;
+  // A relaunch into an open trip goes straight back to its driving screen, before any other rule,
+  // automatic or Start drive alike. Nothing else may stand between a driver and the drive under way.
+  if (drive.tripOpen) return DRIVE;
   if (update === null) return null;
   if (update === 'required') return UPDATE_REQUIRED;
   // While the stored session is still being read nobody may be sent anywhere, or a warm start

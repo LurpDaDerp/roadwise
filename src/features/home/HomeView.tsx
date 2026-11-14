@@ -57,12 +57,8 @@ export type HomeViewProps = {
   onProfile?: () => void;
   refreshing?: boolean;
   onRefresh?: () => void;
-  /**
-   * A drive is recording or a Start is waiting for the car to move (the driver backed out to Home):
-   * the strip shows at the top, one tap back to the driving screen, and the drive card carries no Start.
-   */
+  /** A drive is recording or a Start is waiting for the car to move: the drive card carries no Start. */
   recording?: boolean;
-  inProgress?: ReactNode;
   /** The dangerous-weather card: the first action item under the drive card (it renders nothing when all is well). */
   weather?: ReactNode;
   /** "Where you parked" (iPhone with the car link), right after the weather card (it renders nothing without a spot, or during a drive). */
@@ -158,7 +154,6 @@ export function HomeView({ scrollRef: outerRef, ...p }: HomeViewProps) {
         >
           {name ? homeCopy.greeting(name) : 'Home'}
         </ScreenTitle>
-        {p.recording ? p.inProgress : null}
         {p.thisWeek ? <WeekPills drives={p.thisWeek.drives} miles={p.thisWeek.miles} units={units} goals={goals} onGoals={goalsShown ? showGoals : undefined} /> : null}
         <View style={{ gap: t.space.md }}>
           <HomeHeader

@@ -97,10 +97,6 @@ jest.mock('@/features/wrapped/HomeWrappedCard', () => ({ HomeWrappedCard: () => 
 // "Where you parked" has its own tests.
 jest.mock('@/features/parked/ParkedCard', () => ({ HomeParkedCard: () => null }));
 jest.mock('../SetupGoals', () => ({ HomeSetupGoals: () => null }));
-jest.mock('@/features/drive/DriveInProgressBanner', () => {
-  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
-  return { DriveInProgressBanner: () => <Text testID="drive-in-progress">Drive in progress</Text> };
-});
 
 function boardWith(read: unknown): MockBoard {
   return { status: read ? 'ready' : 'loading', read, prefs: { hidden: [], toSettings: {} }, refresh: jest.fn(async () => {}), fix: jest.fn(async () => null), hide: jest.fn(), show: jest.fn() };
@@ -161,7 +157,7 @@ describe('the notice of a drive that was not kept', () => {
     mockNotice = { ...notice };
     mockRecording = true;
     await draw(<HomeScreen />);
-    await waitFor(() => expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen());
+    await waitFor(() => expect(screen.getByTestId('home-header')).toBeOnTheScreen());
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
   });
 
@@ -221,10 +217,9 @@ test('a failed start set before Home mounts goes with OK too', async () => {
   expect(mockRouter.push).not.toHaveBeenCalled();
 });
 
-test('while a drive is recording, the in-progress strip replaces Start', async () => {
+test('while a drive is recording, Start is not shown', async () => {
   mockRecording = true;
   await draw(<HomeScreen />);
-  expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
   expect(screen.queryByTestId('start-drive')).toBeNull();
 });
 
@@ -505,10 +500,9 @@ describe('automatic drives and the waiting Start', () => {
     expect(screen.getByText('Start, then drive')).toBeOnTheScreen();
   });
 
-  test('a Start waiting for the car to move shows the strip in place of Start, like a recording drive', async () => {
+  test('a Start waiting for the car to move hides Start, like a recording drive', async () => {
     mockWaiting = true;
     await draw(<HomeScreen />);
-    expect(screen.getByTestId('drive-in-progress')).toBeOnTheScreen();
     expect(screen.queryByTestId('start-drive')).toBeNull();
   });
 

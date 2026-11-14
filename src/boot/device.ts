@@ -28,7 +28,6 @@ import { WEATHER_HOLD_KEY } from '@/drive/weatherWatch';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { PARKED_KEY } from '@/features/parked/model';
-import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 import { PLACE_NAMES_KEY, PLACES_KEY, PROMPT_DECLINED_KEY, PROMPT_OFF_KEY } from '@/features/places/model';
 import { QUIET_HOURS_KEY } from '@/features/settings/notifications/quietHours';
 import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
@@ -118,7 +117,6 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   SPOTS_META_KEY,
   RESTORED_AT_KEY,
   RESTORE_CURSOR_KEY,
-  DRIVE_SCREEN_ENTERED_KEY,
 ];
 
 /** How long a wipe waits for the drive summaries to be cancelled before going on without it. */

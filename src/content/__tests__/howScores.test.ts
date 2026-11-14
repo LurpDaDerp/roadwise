@@ -46,7 +46,7 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
   expect(section(true, 'drives')).toEqual([
     'Once you’re over 15 mph, RoadWise starts recording after about 25 s, 5 s sooner for every 3 mph faster, and right away from 30 mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.',
     `It ends once you park and walk away, or after ${IDLE_END_S / 60} min parked.`,
-    'Riding along? Open the drive screen and tap “Not driving?”. It appears once the car reaches driving speed and stays for your first 2 minutes on that screen.',
+    'Riding along? Open RoadWise and tap “Not driving?” on the drive screen. It appears once the car reaches driving speed and stays for your first 2 minutes on that screen.',
     'Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to 5 min for you to get moving.',
   ]);
   const other = rules(true, { autoMinMph: 12, autoMaxHoldS: 40, autoStepS: 4, autoStepMph: 2, autoInstantMph: 32, waitMin: 7, notDrivingMin: 3 });

@@ -22,7 +22,7 @@ import { clearHomeNotice, readHomeNotice } from '@/features/home/homeNotice';
 import { ARRIVAL_HOLD_MS } from '../ArrivalOverlay';
 import { DRIVE_HREF, hudCopy } from '../hudCopy';
 import { hudLayout } from '../hudLayout';
-import { driveScreenEnteredFor, isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
+import { isDriveScreenFocused, resetDriveScreenPresence } from '../hudPresence';
 import { EMERGENCY_IDLE_MS, HudScreen, hudNightOf, NO_DRIVE_LEAVE_MS } from '../HudScreen';
 import { WEATHER_CLOSE_PT, weatherBannerPt } from '../WeatherBanner';
 
@@ -2490,13 +2490,11 @@ describe('"Not driving?" (modes plan §3.6)', () => {
   });
 });
 
-describe('presence (hudPresence: the recap notifier and the lockout read it)', () => {
-  test('focused with RoadWise in front: the driving screen is focused, and entered for this drive', async () => {
+describe('presence (hudPresence: the recap notifier reads it)', () => {
+  test('focused with RoadWise in front: the driving screen is focused', async () => {
     expect(isDriveScreenFocused()).toBe(false);
     await renderHud({ clientTripId: 't1' });
     expect(isDriveScreenFocused()).toBe(true);
-    expect(driveScreenEnteredFor('t1')).toBe(true);
-    expect(driveScreenEnteredFor('t2')).toBe(false);
   });
 
   test('the background and back, a blur and back, then unmount', async () => {
@@ -2518,14 +2516,12 @@ describe('presence (hudPresence: the recap notifier and the lockout read it)', (
       expect(isDriveScreenFocused()).toBe(true);
       await screen.unmount();
       expect(isDriveScreenFocused()).toBe(false);
-      // it was entered during this drive all the same
-      expect(driveScreenEnteredFor('t1')).toBe(true);
     } finally {
       app.restore();
     }
   });
 
-  test('opened in the background (never in front): not focused, not entered', async () => {
+  test('opened in the background (never in front): not focused until RoadWise comes to the front', async () => {
     const app = appStateListeners();
     const was = AppState.currentState;
     const target = AppState as unknown as { currentState: unknown };
@@ -2533,21 +2529,18 @@ describe('presence (hudPresence: the recap notifier and the lockout read it)', (
     try {
       await renderHud({ clientTripId: 't1' });
       expect(isDriveScreenFocused()).toBe(false);
-      expect(driveScreenEnteredFor('t1')).toBe(false);
       await app.set('active');
       expect(isDriveScreenFocused()).toBe(true);
-      expect(driveScreenEnteredFor('t1')).toBe(true);
     } finally {
       target.currentState = was;
       app.restore();
     }
   });
 
-  test("a drive id that arrives after the screen opened is entered; the drive's end (its id cleared) keeps the screen focused until it goes", async () => {
+  test("the drive's end (its id cleared) keeps the screen focused until it goes", async () => {
     const h = await renderHud({ clientTripId: null });
     expect(isDriveScreenFocused()).toBe(true);
     await h.update({ clientTripId: 't7' });
-    expect(driveScreenEnteredFor('t7')).toBe(true);
     await h.update({ status: 'finalizing', clientTripId: null });
     expect(isDriveScreenFocused()).toBe(true);
   });
@@ -2594,7 +2587,6 @@ describe('presence (hudPresence: the recap notifier and the lockout read it)', (
     const r = await render(<HudScreen overlay />);
     await act(async () => {});
     expect(isDriveScreenFocused()).toBe(false);
-    expect(driveScreenEnteredFor('t1')).toBe(false);
     await r.unmount();
     expect(isDriveScreenFocused()).toBe(false);
   });

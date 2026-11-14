@@ -8,7 +8,7 @@ import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
 import { SessionProvider } from '@/data/supabase/session';
 import { writeProfileCache } from '@/features/auth/profileCache';
-import { markDriveScreenEntered, resetDriveScreenPresence } from '@/features/drive/hudPresence';
+import { resetDriveScreenPresence } from '@/features/drive/hudPresence';
 import { ThemeProvider } from '@/ui/theme';
 
 import Launch, { launchCopy } from '../index';
@@ -110,30 +110,10 @@ describe('an open trip on a cold start (rev1: I2, N-m3)', () => {
     expect(landed()).toBe('redirect:/drive');
   });
 
-  test('an automatic drive → Home, where its Drive in progress strip leads to the driving screen', async () => {
+  test('an automatic drive → the driving screen, as a manual one', async () => {
     Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', hostBusy: true });
     await launch();
-    expect(landed()).toBe('redirect:/(tabs)/home');
-  });
-
-  test('an automatic drive whose driving screen was shown during it (kept across the relaunch) → the driving screen', async () => {
-    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', driveTripId: 't-auto', hostBusy: true });
-    markDriveScreenEntered('t-auto');
-    await launch();
     expect(landed()).toBe('redirect:/drive');
-  });
-
-  test('an automatic drive: the driving screen shown for another drive does not count (Home)', async () => {
-    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', driveTripId: 't-auto', hostBusy: true });
-    markDriveScreenEntered('t-earlier');
-    await launch();
-    expect(landed()).toBe('redirect:/(tabs)/home');
-  });
-
-  test('an automatic drive takes the usual gates (signed out: sign-in)', async () => {
-    Object.assign(mockWorld, { driveStatus: 'recording', driveOrigin: 'auto', hostBusy: true, session: null });
-    await launch();
-    expect(landed()).toBe('redirect:/(auth)/sign-in');
   });
 
   test('finalizing is not a trip to go back to', async () => {

@@ -100,15 +100,6 @@ export const hudCopy = {
     school: 'Welcome to school',
     custom: (name: string) => `Welcome to ${name}`,
   },
-  /** The strip on other screens while a drive records, or while a Start drive swipe waits. */
-  banner: {
-    title: 'Drive in progress',
-    action: 'Back to drive',
-    label: 'Drive in progress. Go back to the driving screen.',
-    waitingTitle: 'Ready to roll',
-    waitingAction: 'Open',
-    waitingLabel: 'Waiting for you to drive. Go back to the driving screen.',
-  },
 } as const;
 
 /** The driving screen's route as `usePathname()` reports it. */

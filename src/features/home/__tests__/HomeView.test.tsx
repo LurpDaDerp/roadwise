@@ -214,7 +214,7 @@ describe('Start drive', () => {
   test('busy while a start is under way, and gone while a drive records or waits', async () => {
     await draw(<HomeView {...props({ starting: true })} />);
     expect(screen.getByTestId('start-drive')).toBeDisabled();
-    await draw(<HomeView {...props({ recording: true, autoDrives: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
+    await draw(<HomeView {...props({ recording: true, autoDrives: true })} />);
     expect(screen.queryByTestId('start-drive')).toBeNull();
     expect(screen.queryByTestId('start-caption')).toBeNull();
     expect(screen.getByTestId('home-header')).toBeOnTheScreen();
@@ -313,18 +313,14 @@ describe('the action items', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  test('the permission card and where you parked are not shown while a drive records (the in-progress strip shows under the greeting)', async () => {
-    await draw(<HomeView {...props({ permissions: card, parked, recording: true, inProgress: <Text testID="in-progress">Drive in progress</Text> })} />);
+  test('the permission card and where you parked are not shown while a drive records', async () => {
+    await draw(<HomeView {...props({ permissions: card, parked, recording: true })} />);
     expect(screen.queryByTestId('perm-card')).toBeNull();
     expect(screen.queryByTestId('parked-slot')).toBeNull();
-    expect(screen.getByTestId('in-progress')).toBeOnTheScreen();
-    const tree = treeJson();
-    expect(tree.indexOf('Drive in progress')).toBeGreaterThan(tree.indexOf('Hey, lurp'));
-    expect(tree.indexOf('Drive in progress')).toBeLessThan(tree.indexOf('4 drives'));
   });
 
   test('the DashPal slot stays while a drive records (it hides its own cards; a setup sheet it opened stays)', async () => {
-    await draw(<HomeView {...props({ permissions: card, dashpal, recording: true, inProgress: <Text>Drive in progress</Text> })} />);
+    await draw(<HomeView {...props({ permissions: card, dashpal, recording: true })} />);
     expect(screen.getByTestId('dashpal-slot')).toBeOnTheScreen();
   });
 

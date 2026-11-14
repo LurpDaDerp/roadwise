@@ -13,7 +13,6 @@ import { clearDropNotice, isManualDrop, readDropNotice, type DropNotice } from '
 import { useDrive, useDriveControls } from '@/drive/useDrive';
 import { useCoaching } from '@/features/analytics/useAnalytics';
 import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives';
-import { DriveInProgressBanner } from '@/features/drive/DriveInProgressBanner';
 import { sinceDays, weekStart } from '@/features/drives/format';
 import { useDriveScores } from '@/features/drives/useDriveScores';
 import { homeCard } from '@/features/permissions/board';
@@ -223,7 +222,6 @@ export function HomeScreen() {
         onAnalytics={() => router.navigate(ANALYTICS_HREF)}
         onProfile={() => router.navigate(PROFILE_HREF)}
         recording={recording}
-        inProgress={<DriveInProgressBanner />}
         weather={<WeatherAlertSlot feed={weather} />}
         parked={<HomeParkedCard hidden={recording} />}
         conditions={weather.conditions}

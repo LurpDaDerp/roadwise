@@ -183,16 +183,16 @@ test('in front, it posts unless the driving screen shows the end (it opens the r
   const pc = port();
   const appState = { currentState: 'active' as string | null };
   const nc = attach(c.host, { port: pc.p, appState });
-  setDriveScreenFocused(true, 'abc');
+  setDriveScreenFocused(true);
   c.set({ lastFinalized: kept('abc', 5) });
   await nc.settled();
   expect(pc.scheduled).toEqual([]);
-  setDriveScreenFocused(false, 'abc');
+  setDriveScreenFocused(false);
   c.set({ lastFinalized: kept('def', 6) });
   await nc.settled();
   expect(pc.scheduled.map((r) => r.clientTripId)).toEqual(['def']);
   // Behind, the screen's last focus never holds it.
-  setDriveScreenFocused(true, 'ghi');
+  setDriveScreenFocused(true);
   appState.currentState = 'background';
   c.set({ lastFinalized: kept('ghi', 7) });
   await nc.settled();

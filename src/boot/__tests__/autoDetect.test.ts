@@ -25,7 +25,6 @@ import { BREAK_KEY } from '@/drive/breakWatch';
 import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
 import { PARKED_KEY } from '@/features/parked/model';
-import { DRIVE_SCREEN_ENTERED_KEY } from '@/features/drive/hudPresence';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 
 jest.mock('expo-notifications', () => ({}));
@@ -159,14 +158,12 @@ test('both wipes disarm automatic drives (iPhone) and wipe native’s drive stat
   await wipeDevice(db, { detect: launch });
   expect(launch.snapshot.armed).toBe(false);
   expect(launchWipe).toHaveBeenCalledTimes(1);
-  expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining([NOT_DRIVING_KEY, BREAK_KEY, SPOTS_META_KEY, DRIVE_SCREEN_ENTERED_KEY]));
+  expect(SIGN_OUT_SETTINGS).toEqual(expect.arrayContaining([NOT_DRIVING_KEY, BREAK_KEY, SPOTS_META_KEY]));
   await createSettingsRepo(db).set(NOT_DRIVING_KEY, { clientTripId: 'x', spentMs: 1, expired: false, updatedAt: 1 });
   await createSettingsRepo(db).set(BREAK_KEY, { clientTripId: 'x', remindedH: 2 });
-  await createSettingsRepo(db).set(DRIVE_SCREEN_ENTERED_KEY, 'x');
   await wipeForSignOut(db);
   expect(await createSettingsRepo(db).get(NOT_DRIVING_KEY)).toBeNull();
   expect(await createSettingsRepo(db).get(BREAK_KEY)).toBeNull();
-  expect(await createSettingsRepo(db).get(DRIVE_SCREEN_ENTERED_KEY)).toBeNull();
 });
 
 test('a sign-out takes the emergency contacts with it', async () => {

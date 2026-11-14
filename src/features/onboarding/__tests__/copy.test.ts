@@ -40,11 +40,10 @@ describe('onboarding copy', () => {
     }
   });
 
-  it('tells an iPhone passenger to open the drive screen from the Drive in progress strip, then tap Not driving?', () => {
+  it('tells an iPhone passenger to open RoadWise, then tap Not driving? on the drive screen', () => {
     const row = onboardingCopy.how.rows.ios[1]!;
     expect(row.title).toBe('Just riding along?');
-    expect(row.body).toBe(`Open the drive screen from the "Drive in progress" strip in RoadWise, then tap "Not driving?" so that trip won't count.`);
-    expect(row.body).not.toMatch(/^Open RoadWise/);
+    expect(row.body).toBe(`Open RoadWise and tap "Not driving?" on the drive screen so that trip won't count.`);
     expect(onboardingCopy.how.rows.android[1]!.body).toBe(`Tap "Not driving?" on the drive screen so that trip won't count.`);
   });
 
