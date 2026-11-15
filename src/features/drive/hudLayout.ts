@@ -140,7 +140,7 @@ export const HUD_SOS_HALO_CLEAR_PT = 20;
  * The compact emergency panel takes the band's width, so this is also its narrowest there.
  */
 export const HUD_COMPACT_BAND_MIN_PT = 160;
-/** The weather card's slot under the halo: the card's two lines, padding and outline (`weatherBannerPt(false)`). */
+/** The weather card's slot under the halo: it holds the one-line card (`weatherBannerPt(false)`) centred, on whole points. */
 export const HUD_WEATHER_PT = 48;
 /**
  * The weather slot's gap above the link's row: the link's touch box reaches 10 pt up through its

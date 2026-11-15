@@ -1,6 +1,6 @@
 import { KMH_PER_MPH } from '@/lib/units';
 
-import { WEATHER_ACTIONS, WEATHER_TITLES, weatherAction, weatherLabel, weatherLine, weatherTitle } from '../copy';
+import { WEATHER_TITLES, weatherLabel, weatherLine, weatherTitle } from '../copy';
 import { DANGER_ORDER, dangerAt, dangerFrom, isDangerKind, moreSevere, type DangerAlert, type DangerKind } from '../danger';
 import type { WeatherReading, WeatherSample } from '../openMeteo';
 import { ICE, NIGHT_RAIN, QUARTER_MILE_M, RATE, SNOW_ROAD, STANDING_WATER, WIND } from '../thresholds';
@@ -246,21 +246,6 @@ describe('the words', () => {
           expect(line).not.toMatch(/[!—]/);
         }
       }
-    }
-  });
-
-  test('every warning is four words at most, with no end stop, and agrees with its line', () => {
-    for (const kind of DANGER_ORDER) {
-      const action = WEATHER_ACTIONS[kind];
-      expect(action.split(' ').length).toBeLessThanOrEqual(4);
-      expect(action).not.toMatch(/[.!—]$/);
-      expect(weatherAction(alert(kind))).toBe(action);
-    }
-    expect(weatherAction(alert('blizzard'))).toBe('Stay off the road');
-    expect(weatherAction(alert('black_ice'))).toBe('Easy on the brakes');
-    // Every line but the blizzard's and black ice's says the warning in the same words.
-    for (const kind of DANGER_ORDER.filter((k) => k !== 'blizzard' && k !== 'black_ice')) {
-      expect(weatherLine(alert(kind), 'mi').toLowerCase()).toContain(weatherAction(alert(kind)).toLowerCase());
     }
   });
 

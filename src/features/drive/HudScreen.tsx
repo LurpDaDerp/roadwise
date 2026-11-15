@@ -185,8 +185,9 @@ export type HudScreenProps = {
  *   With a DashPal paired, a small static chip top right.
  * - Weather (portrait): the dangerous-weather card in its own slot under the halo, above End (and
  *   the link's row), kept free whether it shows or not, so nothing moves when it appears: a yellow
- *   outline, the title and what to do ("Warnings come sooner" while the road state moves the
- *   warning lines, when it shows for a wet, snowy or icy road or low visibility too), its ✕ top right (live
+ *   outline, the warning glyph and the title on one line, only as wide as its words and centred (it
+ *   shows for a wet, snowy or icy road or low visibility too, while the road state moves the
+ *   warning lines), its ✕ at its right end (live
  *   at any speed; hidden for the rest of the drive once dismissed). Alerts and nudges never cover it. A window too small for the slot
  *   (landscape, compact, a small phone) shows it in the band's line instead, last.
  *   Where the link lives in the band's line (compact windows), an event or DashPal banner yields to

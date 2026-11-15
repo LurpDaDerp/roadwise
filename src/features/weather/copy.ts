@@ -30,26 +30,6 @@ export const WEATHER_TITLES: Readonly<Record<DangerKind, string>> = {
   rain_at_night: 'Rain at night',
 };
 
-/** The driving screen's warning under the title: what to do, at a glance (four words at most). */
-export const WEATHER_ACTIONS: Readonly<Record<DangerKind, string>> = {
-  blizzard: 'Stay off the road',
-  freezing_rain: 'Easy on the brakes',
-  black_ice: 'Easy on the brakes',
-  freezing_drizzle: 'Easy on the brakes',
-  hail: 'Pull over somewhere safe',
-  high_wind: 'Hold the wheel firmly',
-  heavy_snow: 'Leave extra room',
-  snow_on_road: 'Take it slow',
-  freezing_fog: 'Use your low beams',
-  dense_fog: 'Use your low beams',
-  low_visibility: 'Use your low beams',
-  thunderstorm: 'Take it slow',
-  heavy_rain: 'Ease off the gas',
-  standing_water: 'Slow down for puddles',
-  strong_wind: 'Hold the wheel firmly',
-  rain_at_night: 'Leave extra room',
-};
-
 const GRIP = 'Hold the wheel firmly.';
 const LOW_BEAMS = 'Slow down and use your low beams.';
 const ICE = 'Go easy on the brakes.';
@@ -102,8 +82,6 @@ export function weatherLine(a: DangerAlert, units: Units): string {
 
 export const weatherTitle = (a: DangerAlert): string => WEATHER_TITLES[a.kind];
 
-export const weatherAction = (a: DangerAlert): string => WEATHER_ACTIONS[a.kind];
-
 /** What a screen reader hears for the whole alert. */
 export const weatherLabel = (a: DangerAlert, units: Units): string => `Weather alert. ${weatherTitle(a)}. ${weatherLine(a, units)}`;
 
@@ -133,14 +111,6 @@ export const commuteHeadsUpCopy = {
   title: (kind: DangerKind): string => WEATHER_TITLES[kind],
   body: (kind: DangerKind, to: { kind: string; name: string }, clock: string): string =>
     `Expected around ${clock}, when you usually ${goingTo(to)}. ${kind === 'blizzard' ? 'Stay off the road if you can.' : 'Give yourself extra time.'}`,
-} as const;
-
-/**
- * The driving screen's card while the road state moves the warning lines (`./road.ts`): the road's
- * title when no alert names the weather, and the quiet line under the title in place of the advice.
- */
-export const roadCopy = {
-  sooner: 'Warnings come sooner',
 } as const;
 
 /** The Live Activity's weather kind for a wet road (its glyph): the one road state no alert kind fits. */

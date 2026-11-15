@@ -3,7 +3,7 @@ import type { RoadStamp } from '@/core/road';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { roadCopy, roadSpoken, weatherAction, weatherCopy, weatherLabel, weatherTitle } from '@/features/weather/copy';
+import { roadSpoken, weatherCopy, weatherLabel, weatherTitle } from '@/features/weather/copy';
 import type { DangerAlert } from '@/features/weather/danger';
 import type { Units } from '@/lib/units';
 import { fontFamilies } from '@/ui/fonts';
@@ -16,20 +16,22 @@ const OUTLINE_PT = 2;
 const BAR_MIN_PT = 40;
 /** The ✕ sits this far inside the outline from the card's top right corner (less in a card too short for it). */
 const CLOSE_INSET_PT = 5;
+/** The space between the title and the ✕. */
+const CLOSE_GAP_PT = 8;
 /**
- * The two lines' type: the full card (its slot under the halo, or the band), and a compact window's narrow band between the sign
- * and the navigation button. The lines are whole points and the compact pair (20 + 16) fills the words' 36 pt box, so every Text
- * frame lands on whole points in any slot; the texts never scale themselves (a long line gets a tail ellipsis).
+ * The title's type: the full card (its slot under the halo, or the band), and a compact window's narrow band between the sign
+ * and the navigation button. The lines are whole points, centred in the words' 36 pt box, so every Text frame lands on whole
+ * points in any slot; the text never scales itself (a long title gets a tail ellipsis).
  */
 const TYPE = {
-  full: { title: 20, titleLine: 24, action: 15, actionLine: 18, pad: 1 },
-  compact: { title: 16, titleLine: 20, action: 13, actionLine: 16, pad: 0 },
+  full: { title: 20, titleLine: 24 },
+  compact: { title: 16, titleLine: 20 },
 } as const;
 
-/** The card's height: its two lines, padding and outline, or its floor (its slot or the band must hold it). */
+/** The card's height: its line and outline, or its floor (its slot or the band must hold it). */
 export function weatherBannerPt(compact: boolean): number {
   const t = TYPE[compact ? 'compact' : 'full'];
-  return Math.max(BAR_MIN_PT, t.titleLine + t.actionLine + 2 * t.pad + 2 * OUTLINE_PT);
+  return Math.max(BAR_MIN_PT, t.titleLine + 2 * OUTLINE_PT);
 }
 
 /** The road state while it moves the warning lines, and the road's title ("Wet roads"). */
@@ -40,9 +42,8 @@ export interface BannerRoad {
 
 /**
  * The weather card on the driving screen (plan D14): a yellow outline as on Home's card, the warning
- * glyph, the alert's title (one to three words; the road's, "Wet roads", with no alert) and under it
- * the warning, what to do in four words at most, or "Warnings come sooner" while the road state
- * moves the warning lines, with the ✕ in the top right corner. It fills its slot's width. The full
+ * glyph and the alert's title (one to three words; the road's, "Wet roads", with no alert) on one
+ * line, with the ✕ at its right end. It is only as wide as its words, centred in its slot. The full
  * line is spoken with it (while the lines are moved, which warnings come sooner). Its ✕ shows and takes a touch
  * at any speed, moving or stopped: with End and the navigation button, the only touch targets while
  * moving.
@@ -70,30 +71,23 @@ function WeatherBannerView({
   // Inside the outline: the card's inner height less the disc, split evenly when it can't spare the inset.
   const inset = Math.min(CLOSE_INSET_PT, Math.max(0, (weatherBannerPt(compact) - 2 * OUTLINE_PT - WEATHER_CLOSE_PT) / 2));
   const title = alert !== null ? weatherTitle(alert) : (road?.title ?? '');
-  const action = road !== null ? roadCopy.sooner : alert !== null ? weatherAction(alert) : '';
   const label = road !== null ? roadSpoken(title, road.road) : alert !== null ? weatherLabel(alert, units) : '';
   return (
-    <View testID="hud-weather" style={[styles.card, { backgroundColor: p.chrome, borderColor: p.minor, paddingVertical: t.pad }]}>
+    <View
+      testID="hud-weather"
+      style={[styles.card, { backgroundColor: p.chrome, borderColor: p.minor, paddingRight: inset + WEATHER_CLOSE_PT + CLOSE_GAP_PT }]}
+    >
       <View accessible accessibilityRole="alert" accessibilityLabel={label} style={styles.words}>
         {/* The HUD's warning yellow: this card shows only when the weather is dangerous or moves the warning lines. */}
         <Ionicons testID="hud-weather-icon" name="warning" size={22} color={p.minor} />
-        <View style={styles.lines}>
-          <Text
-            allowFontScaling={false}
-            numberOfLines={1}
-            style={[styles.title, { color: p.ink, fontSize: t.title, lineHeight: t.titleLine }]}
-          >
-            {title}
-          </Text>
-          <Text
-            testID="hud-weather-action"
-            allowFontScaling={false}
-            numberOfLines={1}
-            style={[styles.action, { color: p.inkMuted, fontSize: t.action, lineHeight: t.actionLine }]}
-          >
-            {action}
-          </Text>
-        </View>
+        <Text
+          testID="hud-weather-title"
+          allowFontScaling={false}
+          numberOfLines={1}
+          style={[styles.title, { color: p.ink, fontSize: t.title, lineHeight: t.titleLine }]}
+        >
+          {title}
+        </Text>
       </View>
       <Pressable
         testID="hud-weather-close"
@@ -116,19 +110,16 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'stretch',
+    // Only as wide as its words (at most its slot's width), centred in the slot.
+    alignSelf: 'center',
     minHeight: BAR_MIN_PT,
     paddingLeft: 14,
-    // Room for the ✕ in the corner.
-    paddingRight: CLOSE_INSET_PT + WEATHER_CLOSE_PT + 8,
     borderRadius: 16,
     borderCurve: 'continuous',
     borderWidth: OUTLINE_PT,
   },
-  words: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
-  lines: { flexShrink: 1 },
-  title: { fontFamily: fontFamilies.fieldBold },
-  action: { fontFamily: fontFamilies.field },
+  words: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
+  title: { flexShrink: 1, fontFamily: fontFamilies.fieldBold },
   close: {
     position: 'absolute',
     width: WEATHER_CLOSE_PT,

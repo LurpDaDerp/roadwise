@@ -1,6 +1,6 @@
 import type { RoadStamp } from '@/core/road';
 
-import { roadCopy, roadKind, roadSpoken, roadTitle, WET_ROAD_KIND } from '../copy';
+import { roadKind, roadSpoken, roadTitle, WET_ROAD_KIND } from '../copy';
 import { inRoadCell, roadStateAt, roadTitleAt, sightCapOf, stepIndexAt, type RoadSeries, type RoadStep } from '../road';
 import { ROAD_HISTORY_STEPS, ROAD_STALE_MS, SIGHT_BANDS, WATER_FILM } from '../thresholds';
 
@@ -250,8 +250,7 @@ describe('the road’s words', () => {
     expect(WET_ROAD_KIND).toMatch(/^[a-z][a-z_]{0,31}$/);
   });
 
-  test('the quiet line and what a screen reader hears', () => {
-    expect(roadCopy.sooner).toBe('Warnings come sooner');
+  test('what a screen reader hears', () => {
     expect(roadSpoken('Wet roads', { g: 'wet' })).toBe('Wet roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
     expect(roadSpoken('Low visibility', { cap: 45 })).toBe('Low visibility. Speeding warnings come at a lower speed.');
   });

@@ -762,7 +762,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
   const ICE = { kind: 'freezing_rain', gustMph: null, visibilityM: null } as const;
   const GUSTS = { kind: 'strong_wind', gustMph: 52, visibilityM: null } as const;
 
-  test('only while an alert is active: in its slot under the halo, a yellow outline, the warning glyph in yellow, the title and the warning; the line is spoken', async () => {
+  test('only while an alert is active: in its slot under the halo, a yellow outline, the warning glyph in yellow and the title alone; the line is spoken', async () => {
     const h = await renderHud();
     expect(screen.queryByTestId('hud-weather')).toBeNull();
     await h.update({ weatherAlert: ICE });
@@ -770,12 +770,14 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.getByTestId('hud-weather')).toHaveStyle({ borderColor: p.minor, backgroundColor: p.chrome, borderWidth: 2 });
     expect(screen.getByTestId('hud-weather-icon', HIDDEN)).toHaveStyle({ color: p.minor });
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Freezing rain. Rain is freezing on the road. Go easy on the brakes.');
-    // Under the title, the warning in quiet print, one line, fixed size; the full line is only spoken.
-    const action = screen.getByTestId('hud-weather-action');
-    expect(action).toHaveTextContent('Easy on the brakes');
-    expect(action).toHaveStyle({ color: p.inkMuted, fontSize: 15 });
-    expect(action).toHaveProp('allowFontScaling', false);
-    expect(action).toHaveProp('numberOfLines', 1);
+    // The title alone, one line, fixed size, centred in the slot; the full line is only spoken.
+    expect(screen.getByTestId('hud-weather-title')).toHaveTextContent('Freezing rain', { exact: true });
+    expect(screen.getByTestId('hud-weather')).not.toHaveTextContent(/sooner|beams|brakes|wheel|extra room|take it|stay off/i);
+    expect(screen.getByTestId('hud-weather')).toHaveStyle({ alignSelf: 'center' });
+    const title = screen.getByTestId('hud-weather-title');
+    expect(title).toHaveStyle({ color: p.ink, fontSize: 20 });
+    expect(title).toHaveProp('allowFontScaling', false);
+    expect(title).toHaveProp('numberOfLines', 1);
     expect(screen.queryByText(/Rain is freezing/)).toBeNull();
     expect(screen.getByText('Freezing rain').props.children.split(' ').length).toBeLessThanOrEqual(3);
     await h.update({ weatherAlert: null });
@@ -791,7 +793,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
     }
   });
 
-  test('its two lines and the ✕ fit the top band, full (56 pt) and compact (40 pt), so it never reaches the halo or the row', () => {
+  test('its line and the ✕ fit the top band, full (56 pt) and compact (40 pt), so it never reaches the halo or the row', () => {
     const insets = { top: 0, bottom: 0, left: 0, right: 0 };
     const full = hudLayout({ width: 375, height: 667, insets, fontScale: 1, chip: false, units: 'mi' });
     const compact = hudLayout({ width: 400, height: 300, insets, fontScale: 1, chip: false, units: 'mi' });
@@ -808,7 +810,6 @@ describe('the dangerous-weather banner (plan D14)', () => {
     const dims = require('react-native/Libraries/Utilities/useWindowDimensions') as { default: () => unknown };
     jest.spyOn(dims, 'default').mockReturnValue({ width: 400, height: 300, scale: 2, fontScale: 1 });
     await renderHud({ weatherAlert: ICE, speedMph: 60 });
-    expect(screen.getByTestId('hud-weather-action')).toHaveStyle({ fontSize: 13 });
     expect(screen.getByTestId('hud-weather-close')).toBeOnTheScreen();
     expect(screen.getByText('Freezing rain')).toHaveStyle({ fontSize: 16 });
     jest.restoreAllMocks();
@@ -818,7 +819,6 @@ describe('the dangerous-weather banner (plan D14)', () => {
     mockUnits = 'km';
     await renderHud({ weatherAlert: GUSTS });
     expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Strong winds/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Hold the wheel firmly');
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Weather alert. Strong winds. Gusts to 84 km/h. Hold the wheel firmly.');
   });
 
@@ -867,15 +867,16 @@ describe('the dangerous-weather banner (plan D14)', () => {
 
   test('the ✕ sits in the card’s top right corner', async () => {
     await renderHud({ weatherAlert: ICE });
-    expect(screen.getByTestId('hud-weather-close')).toHaveStyle({ position: 'absolute', top: 5, right: 5 });
+    // Centred in the one-line card's 36 pt inside: (40 - 4 - 34) / 2.
+    expect(screen.getByTestId('hud-weather-close')).toHaveStyle({ position: 'absolute', top: 1, right: 1 });
   });
 
-  test('while the road state moves the warning lines it shows with no alert: the road’s title and "Warnings come sooner"; the sign keeps the posted limit; the ✕ asks the host to hide it', async () => {
+  test('while the road state moves the warning lines it shows with no alert: the road’s title alone; the sign keeps the posted limit; the ✕ asks the host to hide it', async () => {
     const h = await renderHud();
     await h.update({ weatherRoad: { road: { g: 'snow' }, title: 'Snowy roads' } });
     const card = within(screen.getByTestId('hud-weather-slot')).getByTestId('hud-weather');
-    expect(card).toHaveTextContent(/Snowy roads/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
+    expect(within(card).getByTestId('hud-weather-title')).toHaveTextContent('Snowy roads', { exact: true });
+    expect(card).not.toHaveTextContent(/sooner/i);
     expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
     expect(screen.getByTestId('hud-limit-value', HIDDEN)).toHaveTextContent('35');
     await act(async () => {
@@ -886,10 +887,10 @@ describe('the dangerous-weather banner (plan D14)', () => {
     expect(screen.queryByTestId('hud-weather')).toBeNull();
   });
 
-  test('with an alert and the warning lines moved: the alert’s title over "Warnings come sooner"', async () => {
+  test('with an alert and the warning lines moved: the alert’s title alone', async () => {
     await renderHud({ weatherAlert: ICE, weatherRoad: { road: { g: 'ice' }, title: 'Icy roads' } });
-    expect(screen.getByTestId('hud-weather')).toHaveTextContent(/Freezing rain/);
-    expect(screen.getByTestId('hud-weather-action')).toHaveTextContent('Warnings come sooner');
+    expect(screen.getByTestId('hud-weather-title')).toHaveTextContent('Freezing rain', { exact: true });
+    expect(screen.getByTestId('hud-weather')).not.toHaveTextContent(/sooner|beams|brakes|wheel|extra room|take it|stay off/i);
   });
 });
 
