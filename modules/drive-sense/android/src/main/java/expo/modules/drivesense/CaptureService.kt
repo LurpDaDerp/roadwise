@@ -231,12 +231,6 @@ class CaptureService : Service() {
     /** The service runs in the foreground in this process (a detector start then needs no new start). */
     fun foregroundRunning(): Boolean = instance?.inForeground == true
 
-    /** The headless JS host for a resumed drive with no RoadWise screen open (the service is in the foreground). */
-    fun ensureHeadless() {
-      val inst = instance ?: return
-      main.post { if (isCapturing && detectorCapture) inst.startHeadless() }
-    }
-
     private fun resolveStarts(code: String?) {
       val waiting = synchronized(pendingStarts) { pendingStarts.toList().also { pendingStarts.clear() } }
       for (p in waiting) p.onResult(code)
@@ -507,7 +501,7 @@ class CaptureService : Service() {
   }
 
   /** The headless JS task that runs the drive host while the app is not open (rev1: I15). */
-  internal fun startHeadless() {
+  private fun startHeadless() {
     cancelHeadlessStop()
     try {
       startService(Intent(this, DriveSenseHeadlessService::class.java))

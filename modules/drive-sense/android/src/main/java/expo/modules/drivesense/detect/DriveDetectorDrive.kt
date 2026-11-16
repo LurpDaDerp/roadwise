@@ -113,7 +113,11 @@ internal fun DriveDetector.beginDrive(startedAt: Double, startSource: String, st
 fun DriveDetector.onRow(row: FeatureRow, body: Map<String, Any?>) {
   handler.post {
     val r = rec
-    if (!sensing || r == null || !r.recording) return@post
+    if (!sensing || r == null || !r.recording) {
+      // A capture with no drive behind it (a start that answered too late, after its refusal): it stops.
+      if (!sensing && !starting && !resuming && r?.recording != true) CaptureService.stopDetector(app, 0L)
+      return@post
+    }
     record(DetectRow.of(row), body)
     if (rec?.waitUntil != null) endWaitAtDrivingSpeed()
   }
@@ -349,8 +353,6 @@ private fun DriveDetector.onResumeSensing(driveId: String, s: JournalSummary, st
   carStanding = false
   sensing = true
   startClock()
+  // With no RoadWise screen open, the service has started the headless JS host to take it in.
   emitState("resumed")
-  // Nobody may be there to take it in: the headless JS host runs it (the service started it if no
-  // RoadWise screen is open).
-  if (!AppVisibility.visible()) CaptureService.ensureHeadless()
 }
