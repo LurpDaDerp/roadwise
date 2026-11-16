@@ -1016,7 +1016,7 @@ DriveSense events and methods stay the same on both platforms; on iOS it does no
 | Function (sync) | What it does |
 |---|---|
 | `available()` | the phone has a `TYPE_ROTATION_VECTOR` sensor |
-| `start()` | registers the sensor (true), or false without one; counted, so two callers share one sensor |
+| `start()` | registers the sensor (and the magnetometer for its calibration status) (true), or false without one; counted, so two callers share one sensor |
 | `stop()` | one caller is done; the sensor goes with the last one, and with the JS runtime whatever the count |
 
 | Event | Payload | When |
@@ -1033,8 +1033,12 @@ device's +Y, +X, −Y or −X at display rotation 0, 90, 180 or 270 (read at sta
 `trueHeading` adds `GeomagneticField`'s declination at the newest location the location service
 has cached (fused, GPS, network or passive; with location permission; read again every 10 s until
 one is known; no fix is ever asked for), else `-1`. `accuracy` is expo-location's 0-3 scale: 0 when
-the sensor rates the reading `SENSOR_STATUS_UNRELIABLE` (or has no contact), else its status,
-lowered by its own heading-error estimate (`values[4]`, radians) when given: over 50° → 0, over 35°
-→ 1, over 20° → 2. JS ignores a reading under 1, as an uncalibrated iOS compass. The capture never
-reads it: `SensorSource` stays accelerometer + gyroscope only (a magnetic mount cannot bend the
-frame).
+the magnetometer rates its calibration `SENSOR_STATUS_UNRELIABLE` (or has no contact), else that
+status, lowered by the rotation vector's own heading-error estimate (`values[4]`, radians) when given:
+over 50° → 0, over 35° → 1, over 20° → 2. The calibration status is the magnetometer's
+(`TYPE_MAGNETIC_FIELD` at 200 000 µs, registered beside the rotation vector only while the heading
+runs and read only for its status), because Android's event dispatch sends every rotation-vector
+event as `SENSOR_STATUS_ACCURACY_HIGH`; before the magnetometer's first report, or on a phone without
+one, the rotation vector's status stands. JS ignores a reading under 1, as an uncalibrated iOS
+compass. The capture never reads either: `SensorSource` stays accelerometer + gyroscope only (a
+magnetic mount cannot bend the frame).

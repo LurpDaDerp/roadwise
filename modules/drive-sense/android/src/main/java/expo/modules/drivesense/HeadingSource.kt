@@ -33,8 +33,16 @@ import kotlin.math.sqrt
  * most every [EMIT_MIN_INTERVAL_MS] on its own thread. Each reading is the heading of the phone's
  * forward direction ([HeadingMath.heading]): magnetic, and true north too once a location is known
  * (`GeomagneticField`'s declination at the last known fix, read from the location service's cache:
- * no fix is asked for). A reading the sensor rates unreliable, or more than 50° out, is sent with
- * accuracy 0 (JS ignores it), as iOS's uncalibrated compass is.
+ * no fix is asked for). A reading taken while the magnetometer rates its calibration unreliable, or
+ * one the rotation vector's own error estimate puts more than 50° out, is sent with accuracy 0 (JS
+ * ignores it), as iOS's uncalibrated compass is.
+ *
+ * The calibration comes from `TYPE_MAGNETIC_FIELD`, registered beside the rotation vector at
+ * [MAGNETOMETER_PERIOD_US] only for its status: Android's event dispatch passes a real status only
+ * for the raw sensor types (magnetic field among them) and sends every rotation-vector event as
+ * `SENSOR_STATUS_ACCURACY_HIGH`, so the rotation vector's own `accuracy` says nothing. The rotation
+ * vector already runs the magnetometer, so this adds only its events. Until the magnetometer's first
+ * report (a fraction of a second), or on a phone without one, the rotation vector's status stands.
  *
  * "The top" is the top of the screen, not of the device: the display's rotation (read at start and
  * again whenever the display changes, through a `DisplayManager.DisplayListener` on the heading
@@ -50,6 +58,9 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     /** …and at most 5 a second to JS, whose compass steps toward the newest reading 4 times a second. */
     const val EMIT_MIN_INTERVAL_MS = 200L
 
+    /** The magnetometer, read only for its calibration status, 5 times a second. */
+    const val MAGNETOMETER_PERIOD_US = 200_000
+
     /** With no declination yet, the location cache is read again this often (the drive's GPS fills it). */
     private const val DECLINATION_RETRY_MS = 10_000L
 
@@ -63,6 +74,10 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
   private val displayManager = app.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager?
   private var thread: HandlerThread? = null
   private var running: Sensor? = null
+  private var magnetometer: Sensor? = null
+
+  /** The magnetometer's newest `SENSOR_STATUS_*`, or null before its first report (or without one). */
+  @Volatile private var magnetStatus: Int? = null
 
   // The heading thread's, reset by start before the thread exists.
   private var lastEmitAt = 0L
@@ -91,6 +106,7 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     lastEmitAt = 0L
     declination = null
     declinationTriedAt = 0L
+    magnetStatus = null
     rotation = readRotation()
     val t = HandlerThread("drive-sense-heading").also { it.start() }
     val handler = Handler(t.looper)
@@ -102,6 +118,13 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     if (!ok) {
       t.quitSafely()
       return false
+    }
+    magnetometer = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.takeIf { m ->
+      try {
+        sm.registerListener(this, m, MAGNETOMETER_PERIOD_US, handler)
+      } catch (_: Exception) {
+        false
+      }
     }
     try {
       displayManager?.registerDisplayListener(displayListener, handler)
@@ -121,6 +144,15 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     } catch (_: Exception) {
       // already unregistered
     }
+    magnetometer?.let { m ->
+      try {
+        sensorManager?.unregisterListener(this, m)
+      } catch (_: Exception) {
+        // already unregistered
+      }
+    }
+    magnetometer = null
+    magnetStatus = null
     try {
       displayManager?.unregisterDisplayListener(displayListener)
     } catch (_: Exception) {
@@ -132,6 +164,10 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
   }
 
   override fun onSensorChanged(event: SensorEvent) {
+    if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+      magnetStatus = event.accuracy
+      return
+    }
     if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
     val now = SystemClock.elapsedRealtime()
     if (lastEmitAt != 0L && now - lastEmitAt < EMIT_MIN_INTERVAL_MS) return
@@ -148,12 +184,14 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
       linkedMapOf(
         "trueHeading" to (declination?.let { HeadingMath.norm(mag + it) } ?: -1.0),
         "magHeading" to mag,
-        "accuracy" to HeadingMath.accuracyLevel(event.accuracy, estimate)
+        "accuracy" to HeadingMath.accuracyLevel(HeadingMath.status(event.accuracy, magnetStatus), estimate)
       )
     )
   }
 
-  override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+  override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+    if (sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) magnetStatus = accuracy
+  }
 
   /** The default display's rotation from its natural orientation (`Surface.ROTATION_*`), 0 if unknown. */
   private fun readRotation(): Int =
@@ -257,8 +295,16 @@ object HeadingMath {
   }
 
   /**
+   * The status a reading is rated by: the lower of the rotation vector's (which Android always
+   * delivers as high) and the magnetometer's calibration status, or the rotation vector's alone
+   * before the magnetometer has reported ([magnetStatus] null).
+   */
+  fun status(rotationStatus: Int, magnetStatus: Int?): Int =
+    if (magnetStatus == null) rotationStatus else minOf(rotationStatus, magnetStatus)
+
+  /**
    * expo-location's accuracy scale (iOS `normalizeAccuracy`: 3 high, 2 medium, 1 low, 0 none):
-   * none when the sensor rates the reading unreliable (or has no contact), else the sensor's status
+   * none when [status] ([HeadingMath.status]) is unreliable (or no contact), else that status
    * (low, medium, high), lowered by its own heading-error estimate in radians when it gives one
    * (`values[4]`; negative is none): over 50° none, over 35° low, over 20° medium.
    */

@@ -133,6 +133,22 @@ class HeadingMathTest {
   }
 
   @Test
+  fun `the magnetometer's calibration rates the reading, since the rotation vector always comes as high`() {
+    // Android delivers every rotation-vector event at status 3: an uncalibrated magnetometer is none.
+    assertEquals(0, HeadingMath.accuracyLevel(HeadingMath.status(3, 0), null))
+    assertEquals(0, HeadingMath.accuracyLevel(HeadingMath.status(3, -1), null))
+    assertEquals(1, HeadingMath.accuracyLevel(HeadingMath.status(3, 1), null))
+    assertEquals(2, HeadingMath.accuracyLevel(HeadingMath.status(3, 2), null))
+    assertEquals(3, HeadingMath.accuracyLevel(HeadingMath.status(3, 3), null))
+    // the lower of the two, and the estimate still lowers a calibrated magnetometer's reading
+    assertEquals(1, HeadingMath.status(1, 3))
+    assertEquals(0, HeadingMath.accuracyLevel(HeadingMath.status(3, 3), Math.toRadians(60.0)))
+    // before the magnetometer's first report (or without one) the rotation vector's status stands
+    assertEquals(3, HeadingMath.status(3, null))
+    assertEquals(0, HeadingMath.status(0, null))
+  }
+
+  @Test
   fun `norm keeps degrees in 0 to 360`() {
     assertEquals(350.0, HeadingMath.norm(-10.0), 1e-9)
     assertEquals(0.0, HeadingMath.norm(360.0), 1e-9)

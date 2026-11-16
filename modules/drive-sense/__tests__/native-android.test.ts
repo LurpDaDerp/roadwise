@@ -656,14 +656,14 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
 });
 
 describe('native-android: sensors and location (README §7, rev1: O8, I5)', () => {
-  it('the capture uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer; the rotation vector only in the compass heading', () => {
+  it("the capture uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer; the rotation vector and the magnetometer's status only in the compass heading", () => {
     const src = code(kt('SensorSource'));
     expect(src).toMatch(/Sensor\.TYPE_ACCELEROMETER\b/);
     expect(src).toMatch(/Sensor\.TYPE_GYROSCOPE\b/);
     for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt'))) {
       const banned =
         f === 'HeadingSource.kt'
-          ? /TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/
+          ? /TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/
           : /TYPE_ROTATION_VECTOR|TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/;
       expect({ f, banned: banned.test(read(join(KT_DIR, f))) }).toEqual({ f, banned: false });
     }
@@ -1117,7 +1117,7 @@ describe('native-android: the phone heading for the driving-screen compass (Phon
     expect(src).toMatch(/SAMPLING_PERIOD_US = 100_000/);
     expect(src).toMatch(/EMIT_MIN_INTERVAL_MS = 200L/);
     expect(src).toMatch(/sm\.registerListener\(this, s, SAMPLING_PERIOD_US, handler\)/);
-    expect(src.match(/\bregisterListener\(/g)).toHaveLength(1);
+    expect(src.match(/\bregisterListener\(/g)).toHaveLength(2); // the rotation vector and the magnetometer
     expect(src).toMatch(/fun stop\(\) \{[\s\S]*?unregisterListener\(this, s\)/);
     expect(allKotlin().match(/HeadingSource\(/g)?.length).toBe(2); // the class and the module's one instance
   });
@@ -1130,9 +1130,20 @@ describe('native-android: the phone heading for the driving-screen compass (Phon
     expect(src).toMatch(/if \(!DriveSensePermissions\.hasForegroundLocation\(app\)\) return null/);
     expect(src).toMatch(/"trueHeading" to \(declination\?\.let \{ HeadingMath\.norm\(mag \+ it\) \} \?: -1\.0\)/);
     expect(src).toMatch(/"magHeading" to mag/);
-    expect(src).toMatch(/"accuracy" to HeadingMath\.accuracyLevel\(event\.accuracy, estimate\)/);
+    expect(src).toMatch(/"accuracy" to HeadingMath\.accuracyLevel\(HeadingMath\.status\(event\.accuracy, magnetStatus\), estimate\)/);
     expect(src).toMatch(/if \(status <= SENSOR_STATUS_UNRELIABLE\) return 0/);
     expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'HeadingMathTest.kt'))).toBe(true);
+  });
+
+  it("the calibration is the magnetometer's status (Android sends every rotation-vector event as high), registered slow beside it and only while the heading runs", () => {
+    const src = HEADING();
+    expect(src).toMatch(/MAGNETOMETER_PERIOD_US = 200_000/);
+    expect(src).toMatch(/getDefaultSensor\(Sensor\.TYPE_MAGNETIC_FIELD\)[\s\S]*?sm\.registerListener\(this, m, MAGNETOMETER_PERIOD_US, handler\)/);
+    expect(src).toMatch(/if \(event\.sensor\.type == Sensor\.TYPE_MAGNETIC_FIELD\) \{\s*magnetStatus = event\.accuracy\s*return/);
+    expect(src).toMatch(/if \(sensor\?\.type == Sensor\.TYPE_MAGNETIC_FIELD\) magnetStatus = accuracy/);
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?sensorManager\?\.unregisterListener\(this, m\)[\s\S]*?magnetStatus = null/);
+    expect(src).toMatch(/magnetStatus = null\s*rotation = readRotation\(\)/);
+    expect(src).toMatch(/if \(magnetStatus == null\) rotationStatus else minOf\(rotationStatus, magnetStatus\)/);
   });
 
   it('the top is the top of the screen: the display rotation, read at start and on every display change, is handed to the arithmetic', () => {
