@@ -1031,3 +1031,27 @@ describe('native-android: DashPal alerts on the phone (README §2: the link serv
     expect(src).not.toMatch(/MODE_IN_CALL|MODE_RINGTONE|activeRecordingConfigurations/);
   });
 });
+
+describe('native-android: the navigation bar ink (SystemBarsModule, src/ui/systemBars.ts)', () => {
+  const src = () => code(kt('SystemBarsModule'));
+
+  it('is its own module, registered for Android beside DriveSense, under the name the JS looks up', () => {
+    const config = JSON.parse(read(join(__dirname, '..', 'expo-module.config.json'))) as { android: { modules: string[] } };
+    expect(config.android.modules).toContain('expo.modules.drivesense.SystemBarsModule');
+    expect(src()).toMatch(/class SystemBarsModule : Module\(\)/);
+    expect(src()).toContain('Name("RoadWiseSystemBars")');
+  });
+
+  it('one main-thread call that only flips the bar appearance (a scrim below API 29), re-applied on each return to the front', () => {
+    const s = src();
+    expect(s).toMatch(/AsyncFunction\("setNavigationBarInk"\) \{ ink: String ->[\s\S]*?\}\.runOnQueue\(Queues\.MAIN\)/);
+    expect(s).toMatch(/OnActivityEntersForeground \{/);
+    expect(s).toMatch(/isAppearanceLightNavigationBars = !light/);
+    expect(s).toMatch(/if \(sdk < 26 \|\| sdk >= 29\) null/);
+    expect(s).not.toMatch(/Handler|postDelayed|Timer|setDecorFitsSystemWindows|systemUiVisibility/);
+  });
+
+  it('its pure half has JVM tests', () => {
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'NavBarInkTest.kt'))).toBe(true);
+  });
+});
