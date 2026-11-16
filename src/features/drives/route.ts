@@ -179,6 +179,16 @@ export const MIN_MARK_PX = 12;
 export const markShape = (lengthM: number, metersPerPx: number): 'line' | 'dot' =>
   metersPerPx > 0 && lengthM / metersPerPx >= MIN_MARK_PX ? 'line' : 'dot';
 
+/**
+ * Where `point` falls on screen from `origin`, in points (x to the right, y up), on a map at
+ * `metersPerPx`; null before the map is laid out (no scale yet).
+ */
+export function screenOffset(origin: LatLng, point: LatLng, metersPerPx: number): { x: number; y: number } | null {
+  if (!(metersPerPx > 0)) return null;
+  const k = Math.cos((((origin.lat + point.lat) / 2) * Math.PI) / 180);
+  return { x: ((point.lng - origin.lng) * k * M_PER_DEG) / metersPerPx, y: ((point.lat - origin.lat) * M_PER_DEG) / metersPerPx };
+}
+
 export interface Region {
   latitude: number;
   longitude: number;
