@@ -1,3 +1,4 @@
+import { PhoneHeading } from '@drive-sense/heading';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -151,7 +152,7 @@ export type HudScreenProps = {
  *   pulse it quickly a few times. Each event (a speeding episode as it alerts too) shakes the
  *   ring sideways once, more for a more serious one. Around it a compass turns with the car's track
  *   bearing (the engine's, from where the car went; heading up, never growing or moving with the
- *   ring); before the drive's first one, in portrait on iOS, with the phone's own heading, smoothed
+ *   ring); before the drive's first one, in portrait, with the phone's own heading, smoothed
  *   (`useDeviceHeading`); once a track bearing has shown, never the phone's again that drive. With
  *   neither (landscape before the first track bearing) it sits north-up, its letters dimmed. Rules
  *   in `src/ui/drive/halo.ts`; drawing in `HaloRing.tsx` and `HaloCompass.tsx`.
@@ -752,6 +753,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
           track={nextTrack}
           deviceWanted={deviceHeadingWanted({
             ios: Platform.OS === 'ios',
+            android: Platform.OS === 'android' && PhoneHeading.available(),
             focused,
             active: !behind,
             recording: live.status === 'recording',

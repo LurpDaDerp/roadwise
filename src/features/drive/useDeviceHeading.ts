@@ -1,14 +1,18 @@
 // The driving screen's compass (round 8 plan, decision 7): the card turns to where the car is going,
 // worked out by the engine from where it went (`useBearing`: the track bearing, held while stopped).
-// Before the drive's first track bearing it follows the phone's own compass (expo-location's heading:
-// true north when iOS knows it, else magnetic), smoothed so it doesn't jitter. Once a track bearing
-// has shown it stays for the rest of the drive: never back to the phone's heading. The phone's
-// heading is read only on iOS, in portrait (iOS measures it from the top of the phone held upright,
-// so it is a quarter turn off in landscape), while the driving screen is focused with RoadWise in
-// front (Control Center, a call banner or Siri over it included: only the background stops it) and
-// the compass is drawn; with no heading to show the card sits north-up, its letters dimmed.
+// Before the drive's first track bearing it follows the phone's own compass (true north when the
+// phone knows it, else magnetic), smoothed so it doesn't jitter: on iOS expo-location's heading, on
+// Android DriveSense's `PhoneHeading` (the rotation-vector sensor, read as iOS reads a phone held
+// upright; expo-location's Android heading allows for no upright phone). Once a track bearing has
+// shown it stays for the rest of the drive: never back to the phone's heading. The phone's heading
+// is read only in portrait (it is measured from the top of the phone held upright, so it is a
+// quarter turn off in landscape), while the driving screen is focused with RoadWise in front
+// (Control Center, a call banner or Siri over it included: only the background stops it) and the
+// compass is drawn; with no heading to show the card sits north-up, its letters dimmed.
+import { PhoneHeading } from '@drive-sense/heading';
 import * as Location from 'expo-location';
 import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 
 /** How often the smoothed heading steps toward the newest reading, ms. */
 export const DEVICE_HEADING_TICK_MS = 250;
@@ -30,7 +34,7 @@ export function headingDelta(from: number, to: number): number {
   return d > 180 ? d - 360 : d;
 }
 
-/** The fields of expo-location's `LocationHeadingObject` read here. */
+/** The fields of expo-location's `LocationHeadingObject` read here (and of `PhoneHeading`'s readings, the same shape). */
 export interface HeadingReading {
   trueHeading?: unknown;
   magHeading?: unknown;
@@ -41,8 +45,8 @@ const valid = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 
 /**
  * A reading's heading, degrees clockwise from north in [0, 360): true north when it is known (≥ 0),
- * else magnetic; null when the reading is unusable (iOS's accuracy 0: uncalibrated or more than 50°
- * out, or no heading at all).
+ * else magnetic; null when the reading is unusable (accuracy 0: uncalibrated, rated unreliable or
+ * more than 50° out, or no heading at all).
  */
 export function headingOf(h: HeadingReading | null | undefined): number | null {
   if (h === null || h === undefined) return null;
@@ -85,10 +89,19 @@ export function tickHeading(f: HeadingFilter): HeadingFilter {
 }
 
 /**
+ * The phone's heading stream: expo-location's on iOS, `PhoneHeading`'s on Android (which has no
+ * error stream: it either starts or rejects).
+ */
+function watchPhoneHeading(onReading: (h: HeadingReading) => void, onError: (reason: string) => void): Promise<{ remove(): void }> {
+  if (Platform.OS === 'android') return PhoneHeading.watch(onReading);
+  return Location.watchHeadingAsync(onReading, onError);
+}
+
+/**
  * The phone's heading while `enabled` (degrees clockwise from north, smoothed), else null. It
- * subscribes to expo-location's heading only while enabled and removes the subscription as soon as
- * it is not (and on unmount). A refused permission, a phone with no compass or a failed stream
- * leaves it null, silently.
+ * subscribes to the phone's heading only while enabled and removes the subscription as soon as it
+ * is not (and on unmount). A refused permission, a phone with no compass or a failed stream leaves
+ * it null, silently.
  */
 export function useDeviceHeading(enabled: boolean): number | null {
   const [heading, setHeading] = useState<number | null>(null);
@@ -131,7 +144,7 @@ export function useDeviceHeading(enabled: boolean): number | null {
       setHeading(null);
     };
     Promise.resolve()
-      .then(() => Location.watchHeadingAsync(onReading, onError))
+      .then(() => watchPhoneHeading(onReading, onError))
       .then(
         (s) => {
           if (live && !failed) sub = s;
@@ -179,12 +192,15 @@ export function compassHeadingOf(track: HeldTrack | null, device: number | null)
 }
 
 /**
- * Whether the phone's heading is read now (iOS, portrait, the compass drawn, the screen focused with
- * RoadWise in front, a drive recording, no track bearing yet). `active`: RoadWise is not in the
- * background (an overlay such as Control Center over the screen still counts as in front).
+ * Whether the phone's heading is read now (iOS, or Android with `PhoneHeading`; portrait, the
+ * compass drawn, the screen focused with RoadWise in front, a drive recording, no track bearing
+ * yet). `active`: RoadWise is not in the background (an overlay such as Control Center over the
+ * screen still counts as in front). `android`: an Android phone with the native heading
+ * (`PhoneHeading.available()`).
  */
 export function deviceHeadingWanted(o: {
   ios: boolean;
+  android?: boolean;
   focused: boolean;
   active: boolean;
   recording: boolean;
@@ -192,5 +208,5 @@ export function deviceHeadingWanted(o: {
   portrait: boolean;
   hasTrack: boolean;
 }): boolean {
-  return o.ios && o.focused && o.active && o.recording && o.ring && o.portrait && !o.hasTrack;
+  return (o.ios || o.android === true) && o.focused && o.active && o.recording && o.ring && o.portrait && !o.hasTrack;
 }

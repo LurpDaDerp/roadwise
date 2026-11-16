@@ -71,6 +71,8 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'AlertWakeLock',
     'AudioOutput',
     'PedometerSource',
+    'HeadingSource',
+    'PhoneHeadingModule',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -654,11 +656,17 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
 });
 
 describe('native-android: sensors and location (README §7, rev1: O8, I5)', () => {
-  it('uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer', () => {
-    const src = code(allKotlin());
+  it('the capture uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer; the rotation vector only in the compass heading', () => {
+    const src = code(kt('SensorSource'));
     expect(src).toMatch(/Sensor\.TYPE_ACCELEROMETER\b/);
     expect(src).toMatch(/Sensor\.TYPE_GYROSCOPE\b/);
-    expect(allKotlin()).not.toMatch(/TYPE_ROTATION_VECTOR|TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/);
+    for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt'))) {
+      const banned =
+        f === 'HeadingSource.kt'
+          ? /TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/
+          : /TYPE_ROTATION_VECTOR|TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/;
+      expect({ f, banned: banned.test(read(join(KT_DIR, f))) }).toEqual({ f, banned: false });
+    }
   });
 
   it('registers at 40 000 µs with 1 s of FIFO batching', () => {
@@ -1078,5 +1086,52 @@ describe('native-android: the capture feed iOS has (steps, the call event; WP04)
     // Below API 31 the row tick re-reads the mode, before the row goes out.
     const svc = code(kt('CaptureService'));
     expect(svc).toMatch(/if \(Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.S\) phone\.checkCall\(\)\s*val body = LinkedHashMap/);
+  });
+});
+
+describe('native-android: the phone heading for the driving-screen compass (PhoneHeading; WP08)', () => {
+  const HEADING = () => code(kt('HeadingSource'));
+  const PH = () => code(kt('PhoneHeadingModule'));
+
+  it('its own Android-only module, so the shared DriveSense surface stays the same on both platforms', () => {
+    const config = JSON.parse(read(join(__dirname, '..', 'expo-module.config.json'))) as { apple: { modules: string[] }; android: { modules: string[] } };
+    expect(config.android.modules).toEqual(['expo.modules.drivesense.DriveSenseModule', 'expo.modules.drivesense.PhoneHeadingModule']);
+    expect(config.apple.modules).not.toContain('PhoneHeadingModule');
+    expect(PH()).toMatch(/Name\("PhoneHeading"\)/);
+    expect(PH()).toMatch(/Events\("heading"\)/);
+    for (const f of ['available', 'start', 'stop']) expect(PH()).toContain(`Function("${f}")`);
+    expect(PH()).not.toMatch(/AsyncFunction/);
+    expect(PH()).toMatch(/OnDestroy \{ stopAll\(\) \}/);
+    // Never on the DriveSense module (its events and methods are the shared lists).
+    expect(MODULE()).not.toMatch(/HeadingSource|"heading"/);
+  });
+
+  it('starts and stops are counted: one sensor for every screen asking, off with the last stop', () => {
+    const src = PH();
+    expect(src).toMatch(/if \(!s\.start\(\)\) return@Function false\s*users \+= 1/);
+    expect(src).toMatch(/if \(users > 0\) \{\s*users -= 1\s*if \(users == 0\) source\?\.stop\(\)/);
+  });
+
+  it('the rotation vector at 10 Hz, live, to JS at most 5 a second, registered only between start and stop', () => {
+    const src = HEADING();
+    expect(src).toMatch(/SAMPLING_PERIOD_US = 100_000/);
+    expect(src).toMatch(/EMIT_MIN_INTERVAL_MS = 200L/);
+    expect(src).toMatch(/sm\.registerListener\(this, s, SAMPLING_PERIOD_US, handler\)/);
+    expect(src.match(/\bregisterListener\(/g)).toHaveLength(1);
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?unregisterListener\(this, s\)/);
+    expect(allKotlin().match(/HeadingSource\(/g)?.length).toBe(2); // the class and the module's one instance
+  });
+
+  it('true north from the declination at the cached location (no fix asked for), else magnetic; unreliable readings carry accuracy 0', () => {
+    const src = HEADING();
+    expect(src).toMatch(/GeomagneticField\(/);
+    expect(src).toMatch(/getLastKnownLocation\(p\)/);
+    expect(src).not.toMatch(/requestLocationUpdates|getCurrentLocation|FusedLocationProviderClient/);
+    expect(src).toMatch(/if \(!DriveSensePermissions\.hasForegroundLocation\(app\)\) return null/);
+    expect(src).toMatch(/"trueHeading" to \(declination\?\.let \{ HeadingMath\.norm\(mag \+ it\) \} \?: -1\.0\)/);
+    expect(src).toMatch(/"magHeading" to mag/);
+    expect(src).toMatch(/"accuracy" to HeadingMath\.accuracyLevel\(event\.accuracy, estimate\)/);
+    expect(src).toMatch(/if \(status <= SENSOR_STATUS_UNRELIABLE\) return 0/);
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'HeadingMathTest.kt'))).toBe(true);
   });
 });

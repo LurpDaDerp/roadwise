@@ -1001,3 +1001,38 @@ the motion gate); a drive costs what a manual drive did.
 fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
 rest's end, a rest resumed at a relaunch, a relaunch's decision and seq, the status) runs through the production `DetectPolicy` on the
 phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
+
+---
+
+## 12. The phone heading (`PhoneHeading`, Android only)
+
+The driving screen's compass follows the phone's own heading before a drive's first direction of
+travel, in portrait with the screen in front (PRODUCT "The driving screen"). iOS reads it from
+expo-location (CLHeading). Android has its own small module, `PhoneHeading`
+(`PhoneHeadingModule.kt`, registered for Android only in `expo-module.config.json`), so the shared
+DriveSense events and methods stay the same on both platforms; on iOS it does not exist. JS:
+`src/heading.ts` (`PhoneHeading.available()`, `PhoneHeading.watch(onReading, onError)`).
+
+| Function (sync) | What it does |
+|---|---|
+| `available()` | the phone has a `TYPE_ROTATION_VECTOR` sensor |
+| `start()` | registers the sensor (true), or false without one; counted, so two callers share one sensor |
+| `stop()` | one caller is done; the sensor goes with the last one, and with the JS runtime whatever the count |
+
+| Event | Payload | When |
+|---|---|---|
+| `heading` | `{ trueHeading, magHeading, accuracy }` (expo-location's heading shape) | while started, at most 5 a second, live only (never buffered) |
+
+`HeadingSource.kt`: `TYPE_ROTATION_VECTOR` at 100 000 µs (10 Hz), no batching, on its own thread.
+The heading is the phone's forward direction (`HeadingMath.heading`): its top (+Y) and out of
+its back (−Z) together, so lying flat it is where the top points, upright in a mount where the back
+faces (the road ahead, as iOS's compass reads a portrait phone), and tilted between the two agree;
+only a phone tipped about 45° face down has none (no reading). `magHeading` is magnetic;
+`trueHeading` adds `GeomagneticField`'s declination at the newest location the location service
+has cached (fused, GPS, network or passive; with location permission; read again every 10 s until
+one is known; no fix is ever asked for), else `-1`. `accuracy` is expo-location's 0-3 scale: 0 when
+the sensor rates the reading `SENSOR_STATUS_UNRELIABLE` (or has no contact), else its status,
+lowered by its own heading-error estimate (`values[4]`, radians) when given: over 50° → 0, over 35°
+→ 1, over 20° → 2. JS ignores a reading under 1, as an uncalibrated iOS compass. The capture never
+reads it: `SensorSource` stays accelerometer + gyroscope only (a magnetic mount cannot bend the
+frame).
