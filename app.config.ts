@@ -55,9 +55,11 @@ export const LINK_HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?
  * The web domain of RoadWise's share links (a shared monthly Wrapped's `https://<domain>/w/<id>`),
  * from `ROADWISE_LINK_DOMAIN`: a bare host name, or nothing when unset or blank (any other value
  * fails the config). None is set yet.
- * When set, the app reads it as `extra.linkDomain` (`src/lib/linkDomain.ts`) and iOS opens those
- * links in the app (`applinks:<domain>`, with `web/link-site/.well-known/apple-app-site-association`
- * served at the domain's root). It changes the native fingerprint: a new build.
+ * When set, the app reads it as `extra.linkDomain` (`src/lib/linkDomain.ts`) and both phones open
+ * those links in the app: iOS through `applinks:<domain>` (with
+ * `web/link-site/.well-known/apple-app-site-association` served at the domain's root), Android
+ * through a verified App Link (`androidAppLinks`, with `web/link-site/.well-known/assetlinks.json`).
+ * It changes the native fingerprint: a new build.
  */
 export function linkDomainFrom(env: Record<string, string | undefined> = process.env): string | undefined {
   const raw = env.ROADWISE_LINK_DOMAIN?.trim().toLowerCase();
@@ -66,6 +68,24 @@ export function linkDomainFrom(env: Record<string, string | undefined> = process
   // of shipping a broken applinks entry the app then ignores.
   if (!LINK_HOST_RE.test(raw)) throw new Error(`ROADWISE_LINK_DOMAIN must be a bare host name like roadwise.app (no scheme, port or path), got "${raw}"`);
   return raw;
+}
+
+/**
+ * Android's counterpart of `applinks:<domain>`: `https://<domain>/w/...` opens RoadWise (the same
+ * `/w/*` paths the apple-app-site-association names), verified (`autoVerify`) against the
+ * domain's `/.well-known/assetlinks.json`, so Android opens the app without asking which app to use.
+ * None without a link domain.
+ */
+export function androidAppLinks(linkDomain: string | undefined) {
+  if (linkDomain === undefined) return undefined;
+  return [
+    {
+      action: 'VIEW',
+      autoVerify: true,
+      data: [{ scheme: 'https', host: linkDomain, pathPrefix: '/w/' }],
+      category: ['BROWSABLE', 'DEFAULT'],
+    },
+  ];
 }
 
 export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
@@ -146,7 +166,8 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // — lives in the app's files directory, which Android auto-backup and `adb backup` would
       // otherwise copy off the device (security review I-4), and it survives the uninstall and the
       // in-app delete that are supposed to be final. Nothing this app stores locally is worth restoring: every synced drive
-      // comes back from the server on the next sign-in.
+      // comes back from the server on the next sign-in. Android 12+ moves app data to a new phone
+      // whatever allowBackup says: plugins/withAndroidNoDataExtraction.js excludes everything there too.
       allowBackup: false,
       // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
       // tile and nothing crashes. iOS uses Apple Maps and needs no key.
@@ -159,11 +180,15 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
           : undefined
       ),
       // The logo split in two (scripts/make-app-icons.py): the mark on transparent over the logo's navy gradient.
+      // Android 13+ themed icons: the same mark as a white glyph on transparent, in the same place.
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
         backgroundImage: './assets/adaptive-icon-background.png',
+        monochromeImage: './assets/adaptive-icon-monochrome.png',
         backgroundColor: '#000814',
       },
+      // A shared Wrapped's https link opens the app (a verified App Link), only once a link domain is set.
+      ...optional('intentFilters', androidAppLinks(linkDomain)),
       // Left out when there is no FCM credential: see `googleServicesFile` above.
       ...optional('googleServicesFile', googleServicesFile(projectRoot)),
       // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) and BLUETOOTH_CONNECT on Android 12+,
@@ -181,18 +206,26 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // permission its Android 14 callback needs). Shared storage (Android 12 and older, declared by
       // expo-file-system, expo-image and expo-screen-capture) is blocked too: the data export goes
       // to the app's cache or a folder the driver picks (the system picker needs no permission).
+      // Drawing over other apps (React Native's template declares it) is never used. Media playback
+      // as a foreground service is expo-audio's lock-screen controls, never started: alerts play in
+      // the background on the drive's and the DashPal link's services
+      // (plugins/withAndroidNoMediaPlaybackService.js removes the service itself).
       blockedPermissions: [
         'android.permission.RECORD_AUDIO',
         'android.permission.READ_MEDIA_IMAGES',
         'android.permission.READ_EXTERNAL_STORAGE',
         'android.permission.WRITE_EXTERNAL_STORAGE',
+        'android.permission.SYSTEM_ALERT_WINDOW',
+        'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
       ],
     },
     extra: { eas: { projectId: EAS_PROJECT_ID }, ...optional('linkDomain', linkDomain) },
     plugins: [
       'expo-router',
       'expo-apple-authentication',
-      'expo-secure-store',
+      // Android: its backup rules (which copy every other preference to a new phone) are off;
+      // plugins/withAndroidNoDataExtraction.js keeps everything on the phone instead.
+      ['expo-secure-store', { configureAndroidBackup: false }],
       'expo-sqlite',
       // Alerts must sound with the screen locked (plan R14): background playback adds the iOS
       // `audio` background mode. The app never records, so no microphone prompt and no
@@ -229,6 +262,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       ['expo-splash-screen', { image: './assets/splash.png', imageWidth: 160, resizeMode: 'contain', backgroundColor: '#000814' }],
       // Apple extension targets from /targets: the Live Activity widget (targets/live-drive-widget).
       '@bacons/apple-targets',
+      // Android only (plugins/): nothing is backed up or moved to a new phone; no unused
+      // media-playback service.
+      './plugins/withAndroidNoDataExtraction',
+      './plugins/withAndroidNoMediaPlaybackService',
     ],
     experiments: { typedRoutes: true },
   };

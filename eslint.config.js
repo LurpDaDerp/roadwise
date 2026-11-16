@@ -10,8 +10,9 @@ module.exports = defineConfig([
   // Maintenance scripts run under Node, not in the app bundle, so they need Node's globals
   // (`__dirname`) rather than the React Native ones. This *declares globals*; it ignores nothing
   // and disables no rule.
+  // The app's own config plugins (plugins/) run under Node too, at prebuild.
   {
-    files: ['scripts/**/*.js', 'modules/**/scripts/**/*.js'],
+    files: ['scripts/**/*.js', 'modules/**/scripts/**/*.js', 'plugins/**/*.js'],
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
   },
 ]);
