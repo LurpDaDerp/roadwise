@@ -398,9 +398,6 @@ import_map = "./functions/deno.json"
 [functions.account-export]
 import_map = "./functions/deno.json"
 
-[functions.app-attest]
-import_map = "./functions/deno.json"
-
 [functions.finalize-trip]
 import_map = "./functions/deno.json"
 

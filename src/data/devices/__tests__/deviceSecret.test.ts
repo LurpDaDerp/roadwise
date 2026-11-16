@@ -1,4 +1,4 @@
-import { clearDeviceSecret, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, preloadDeviceSecret, resetDeviceSecretForTests, type SecretStore, type SecretStoreOptions } from '@/data/devices/deviceSecret';
+import { clearDeviceSecret, clearOldAppAttestRecord, DEVICE_SECRET_KEY, deviceTrimSeed, getDeviceSecret, OLD_APP_ATTEST_KEY, preloadDeviceSecret, resetDeviceSecretForTests, type SecretStore, type SecretStoreOptions } from '@/data/devices/deviceSecret';
 import { trimPlan } from '@/core/engine/privacy';
 import { hmacSha256Hex, sha256Hex } from '@/lib/sha256';
 
@@ -89,4 +89,16 @@ test('the trim seed is deterministic on one device and differs between devices f
   expect(trimPlan(s1, [])).not.toEqual(trimPlan(s2, []));
   // The seed is not the clientTripId or anything computable from the upload alone.
   expect(s1).not.toContain(id);
+});
+
+test('the record older builds kept for App Attest is deleted, the secret stays, and a failing store never throws', async () => {
+  const store = memoryStore();
+  const secret = await getDeviceSecret(store);
+  store.items.set(OLD_APP_ATTEST_KEY, JSON.stringify({ uid: 'user-a', keyId: 'key-a' }));
+  await clearOldAppAttestRecord(store);
+  expect(store.items.has(OLD_APP_ATTEST_KEY)).toBe(false);
+  expect(store.items.get(DEVICE_SECRET_KEY)).toBe(secret);
+  await expect(clearOldAppAttestRecord(store)).resolves.toBeUndefined(); // nothing left: still fine
+  const broken = { ...memoryStore(), deleteItemAsync: async () => { throw new Error('keychain locked'); } };
+  await expect(clearOldAppAttestRecord(broken)).resolves.toBeUndefined();
 });

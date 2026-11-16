@@ -19,8 +19,7 @@ import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimit
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
 import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
 import { createExpoDb, createQueueRepo, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
-import { createDefaultAppAttest } from '@/data/devices/appAttest';
-import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
+import { clearOldAppAttestRecord, preloadDeviceSecret } from '@/data/devices/deviceSecret';
 import { getInstallId } from '@/data/devices/installId';
 import { createPushToStart } from '@/data/devices/liveActivity';
 import { onDataChanged } from '@/data/events';
@@ -358,6 +357,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
   // The privacy-trim secret into memory while the phone is in hand: a locked-phone auto-end or a
   // background recovery finalizes from the cache (expo-secure-store, AFTER_FIRST_UNLOCK).
   void preloadDeviceSecret(undefined, (error) => onError(error, 'device secret'));
+  void clearOldAppAttestRecord();
 
   // iPhone's drive detector: the identity stage's wipe (an account switch) clears its state too.
   const detect = deps.detect === undefined ? nativeDriveDetect() : deps.detect;
@@ -694,8 +694,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         mayDrain: deps.mayDrain ?? drainPolicy({ appState }),
         isRecording: isBusy,
         appState,
-        // iPhone drive uploads carry App Attest over their exact bytes (src/data/devices/appAttest.ts)
-        attest: createDefaultAppAttest((name, options) => identity.supabase.functions.invoke(name, options), onError),
         now,
         onError,
       });
