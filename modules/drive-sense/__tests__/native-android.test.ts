@@ -627,7 +627,7 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(d).toMatch(/WakeFile\.parkedOwed\(r\.state == "off", r\.parked != null, store\.getBoolean\(FENCE_OWED_KEY, false\)\) \{ wakes\.parkedOnFile\(\) \}/);
     const fg = /fun appForeground\(\) \{[\s\S]*?\n {2}\}/.exec(d)?.[0] ?? '';
     expect(fg).toMatch(/refreshParked\(\)\s*onWake\(WakeReason\.APP\)/);
-    const launch = /fun resumeAtLaunch\(\) \{[\s\S]*?\n {2}\}/.exec(d)?.[0] ?? '';
+    const launch = /fun resumeAtLaunch\(sticky: Boolean = false\) \{[\s\S]*?\n {2}\}/.exec(d)?.[0] ?? '';
     expect(launch.match(/refreshParked\(\)/g)?.length).toBe(2);
   });
 
@@ -934,9 +934,10 @@ describe("native-android: the drive notification, Android's Live Activity (plan 
     expect(svc).toMatch(/private fun goForeground\(restart: Boolean = false, watch: Boolean = false\): String\?/);
     expect(svc).toMatch(/val notification = if \(watch\) WatchNotification\.build\(this\) else DriveNotificationController\.foreground\(this, display, restart\)/);
     // only the START_STICKY restart (no intent) restores the kept state
-    // (a detector drive's, then a plain capture's), and a detector drive resumed in a new process
-    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?if \(prefs\.detectorOwned\) \{\s*if \(goForeground\(restart = true\) != null\)[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
-    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(2);
+    // (a detector drive's, then a plain capture's), and a detector drive resumed in a new process;
+    // a drive the launch already ended as an orphan goes to the foreground as a watch, not a drive
+    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?val owned = prefs\.detectorOwned\s*if \(owned [^\n]*\{\s*if \(goForeground\(restart = owned, watch = !owned\) != null\)[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
+    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(1);
     expect(svc).toMatch(/ACTION_DETECT -> \{\s*val restart = intent\.getBooleanExtra\(EXTRA_RESTART, false\)\s*val refused = goForeground\(restart = restart\)/);
     expect(svc).toMatch(/display\?\.let \{ DriveNotificationController\.update\(this, it\) \}/);
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';

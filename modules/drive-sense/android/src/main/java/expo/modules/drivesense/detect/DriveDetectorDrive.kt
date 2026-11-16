@@ -372,8 +372,12 @@ internal fun DriveDetector.resumeDrive(driveId: String) {
   journal.reopen(driveId) { summary ->
     handler.post {
       resuming = false
-      val sticky = CaptureService.foregroundRunning() && !CaptureService.isCapturing
+      // The sticky restart asked while the journal was read, or its service is already in the
+      // foreground. A restart whose service comes later still gets its `app` wake ([HeldWakes.owed]).
+      val sticky = stickyResume || (CaptureService.foregroundRunning() && !CaptureService.isCapturing)
+      stickyResume = false
       if (sticky) CaptureService.holdRelease()
+      heldWakes.settling(sticky)
       val ended = settleResume(driveId, summary)
       for ((reason, done) in heldWakes.drain(ended, sticky, noop = {})) onWake(reason, done)
       if (sticky) CaptureService.endReleaseHold()

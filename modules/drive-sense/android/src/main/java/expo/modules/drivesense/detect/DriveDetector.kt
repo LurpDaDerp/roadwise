@@ -101,6 +101,9 @@ class DriveDetector private constructor(context: Context) {
   /** The wakes that came while [resuming], replayed once the resume settles. */
   internal val heldWakes = HeldWakes<() -> Unit>()
 
+  /** The sticky restart came while the resume read the journal: it settles as the restart's. */
+  internal var stickyResume = false
+
   /** A resume Android refused to start sensing for: tried again at the next foreground or process start. */
   internal var resumePending = false
 
@@ -609,15 +612,28 @@ class DriveDetector private constructor(context: Context) {
    * an orphan; a rest goes on until its end (Android senses it through the transitions Play
    * services kept delivering, so nothing restarts its clocks). The wakes are synced (registrations
    * from an earlier boot, or ones a force stop cancelled, are made again; the parked geofence too,
-   * [refreshParked]). Already sensing in this process: nothing to do.
+   * [refreshParked]). Already sensing in this process: nothing to do. The [sticky] restart (its
+   * service in the foreground and kept, [CaptureService.holdRelease]) settles here whichever came
+   * first, its service's start or the launch's journal read: a resume still reading settles as the
+   * restart's; one that already ended the drive before the service was in the foreground has its
+   * motion-gated `app` wake taken now; else the hold ends.
    */
-  fun resumeAtLaunch() {
+  fun resumeAtLaunch(sticky: Boolean = false) {
     handler.post {
-      if (sensing || resuming || starting || watching) return@post
+      if (sticky && heldWakes.takeOwed()) {
+        onWake(WakeReason.APP)
+        CaptureService.endReleaseHold()
+        return@post
+      }
+      if (sensing || resuming || starting || watching) {
+        if (sticky) stickySettles(release = false)
+        return@post
+      }
       val r = rec
       if (r == null) {
         clearStaleCapture()
         CaptureService.releaseIfIdle()
+        if (sticky) stickySettles()
         return@post
       }
       val now = now()
@@ -627,6 +643,7 @@ class DriveDetector private constructor(context: Context) {
           val id = r.driveId
           if (id != null) {
             resumeDrive(id)
+            if (sticky) stickySettles()
             syncWakes()
             refreshParked()
             return@post
@@ -639,10 +656,26 @@ class DriveDetector private constructor(context: Context) {
       }
       clearStaleCapture()
       CaptureService.releaseIfIdle()
+      if (sticky) stickySettles()
       syncWakes()
       refreshParked()
     }
   }
+
+  /**
+   * The sticky restart's part of [resumeAtLaunch]: a resume reading the journal settles as the
+   * restart's (it keeps the service through its wakes, then ends the hold); else the hold ends here,
+   * letting an idle service go when [release].
+   */
+  private fun stickySettles(release: Boolean = true) {
+    if (resuming) stickyResume = true else CaptureService.endReleaseHold(release)
+  }
+
+  /**
+   * The launch's resume ended the drive before the sticky restart's service was in the foreground,
+   * with no wake to replay: that restart still takes its `app` wake ([resumeAtLaunch]). Any thread.
+   */
+  internal fun owesStickyWake(): Boolean = heldWakes.owed
 
   /** The capture-open flags a dead process left for a detector drive go, when nothing captures now. */
   internal fun clearStaleCapture() {

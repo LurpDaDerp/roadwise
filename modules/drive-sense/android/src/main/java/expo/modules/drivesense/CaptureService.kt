@@ -228,7 +228,7 @@ class CaptureService : Service() {
           onResult("E_FGS_REFUSED")
           return
         }
-        inst.handler.post { inst.beginWatch() }
+        inst.handler.post { inst.beginWatch(inPlace = true) }
         onResult(null)
         return
       }
@@ -316,9 +316,10 @@ class CaptureService : Service() {
 
     /**
      * The replayed wakes are in: the hold ends on the service's thread, behind any watch they began
-     * there (so that watch is capturing by then), and an idle service is let go.
+     * there (so that watch is capturing by then), and an idle service is let go ([release]; not
+     * while the detector is busy, a Start-card drive about to take the service).
      */
-    fun endReleaseHold() {
+    fun endReleaseHold(release: Boolean = true) {
       val inst = instance
       if (inst == null) {
         releaseHeld = false
@@ -326,7 +327,7 @@ class CaptureService : Service() {
       }
       inst.handler.post {
         releaseHeld = false
-        releaseIfIdle()
+        if (release) releaseIfIdle()
       }
     }
 
@@ -485,13 +486,18 @@ class CaptureService : Service() {
     if (intent == null) {
       // A detector drive: in the foreground first (Android may refuse that behind; the drive stays
       // journaled and the detector's next process start or foreground resumes or ends it), then the
-      // detector decides from its journal: resume (it starts sensing here) or orphan (this stops).
-      if (prefs.detectorOwned) {
-        if (goForeground(restart = true) != null) {
+      // detector decides from its journal: resume (it starts sensing here) or orphan (this stops,
+      // after its motion-gated `app` wake). A drive this process's launch already ended as an orphan,
+      // before this service was in the foreground, still gets that wake ([DriveDetector.owesStickyWake]),
+      // under "Checking for a drive". The service is kept until the detector has settled the restart.
+      val owned = prefs.detectorOwned
+      if (owned || DriveDetector.peek()?.owesStickyWake() == true) {
+        if (goForeground(restart = owned, watch = !owned) != null) {
           stopSelf(startId)
           return START_NOT_STICKY
         }
-        DriveDetector.get(this).resumeAtLaunch()
+        holdRelease()
+        DriveDetector.get(this).resumeAtLaunch(sticky = true)
         return START_STICKY
       }
       if (!prefs.captureOpen) {
@@ -669,9 +675,11 @@ class CaptureService : Service() {
   /**
    * The detector's watch (capture thread): the sensors on, every row to the candidate. A capture
    * already running is left as it is (the detector never asks then). No capture-open flag, no step
-   * count, no watchdog, no headless JS.
+   * count, no watchdog, no headless JS. [inPlace]: the service was already in the foreground (the
+   * sticky restart's, under the ended drive's kept notification): "Checking for a drive" replaces
+   * that notification, as at a demote.
    */
-  private fun beginWatch() {
+  private fun beginWatch(inPlace: Boolean = false) {
     main.post {
       main.removeCallbacks(endHold)
       holding = false
@@ -679,6 +687,12 @@ class CaptureService : Service() {
     if (isCapturing) return
     isCapturing = true
     beginCapture("auto", "full", System.currentTimeMillis(), nativeStart = false, detector = true, watch = true)
+    if (inPlace) {
+      main.post {
+        DriveNotificationController.endDrive(this)
+        postNotification(WatchNotification.build(this))
+      }
+    }
   }
 
   /**

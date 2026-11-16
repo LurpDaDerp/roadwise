@@ -165,7 +165,8 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
     // Wakes that came while the journal was read wait for it (held with their done), then are
     // replayed; a sticky restart's service is kept through them, so a drive that ended can watch.
     const resume = fn(drive(), 'internal fun DriveDetector.resumeDrive(');
-    expect(resume).toMatch(/if \(sticky\) CaptureService\.holdRelease\(\)\s*val ended = settleResume\(driveId, summary\)\s*for \(\(reason, done\) in heldWakes\.drain\(ended, sticky, noop = \{\}\)\) onWake\(reason, done\)\s*if \(sticky\) CaptureService\.endReleaseHold\(\)/);
+    expect(resume).toMatch(/val sticky = stickyResume \|\| \(CaptureService\.foregroundRunning\(\) && !CaptureService\.isCapturing\)\s*stickyResume = false/);
+    expect(resume).toMatch(/if \(sticky\) CaptureService\.holdRelease\(\)\s*heldWakes\.settling\(sticky\)\s*val ended = settleResume\(driveId, summary\)\s*for \(\(reason, done\) in heldWakes\.drain\(ended, sticky, noop = \{\}\)\) onWake\(reason, done\)\s*if \(sticky\) CaptureService\.endReleaseHold\(\)/);
     expect(fn(det('DriveDetectorWatch'), 'internal fun DriveDetector.onWake(')).toMatch(/if \(resuming\) \{\s*heldWakes\.hold\(reason, done\)\s*return\s*\}/);
     expect(kt('CaptureService')).toMatch(/main\.post \{ if \(!releaseHeld && !isCapturing/);
     const sensed = fn(drive(), 'private fun DriveDetector.onResumeSensing(');
@@ -181,7 +182,34 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
   it('every process start hands itself to the detector (DriveSensePackage), and the sticky restart too', () => {
     expect(kt('DriveSensePackage')).toMatch(/DriveDetector\.get\(application\)\.resumeAtLaunch\(\)/);
     const svc = kt('CaptureService');
-    expect(svc).toMatch(/if \(prefs\.detectorOwned\) \{\s*if \(goForeground\(restart = true\) != null\) \{\s*stopSelf\(startId\)\s*return START_NOT_STICKY\s*\}\s*DriveDetector\.get\(this\)\.resumeAtLaunch\(\)\s*return START_STICKY/);
+    expect(svc).toMatch(
+      /val owned = prefs\.detectorOwned\s*if \(owned \|\| DriveDetector\.peek\(\)\?\.owesStickyWake\(\) == true\) \{\s*if \(goForeground\(restart = owned, watch = !owned\) != null\) \{\s*stopSelf\(startId\)\s*return START_NOT_STICKY\s*\}\s*holdRelease\(\)\s*DriveDetector\.get\(this\)\.resumeAtLaunch\(sticky = true\)\s*return START_STICKY/,
+    );
+  });
+
+  it("the sticky restart settles whichever comes first, its service's start or the launch's journal read", () => {
+    const d = det('DriveDetector');
+    const launch = fn(d, '  fun resumeAtLaunch(', 2);
+    // The launch's resume already ended the drive before the service was up: its app wake now.
+    expect(launch).toMatch(/if \(sticky && heldWakes\.takeOwed\(\)\) \{\s*onWake\(WakeReason\.APP\)\s*CaptureService\.endReleaseHold\(\)\s*return@post\s*\}/);
+    // Busy: the hold ends without letting the service go; a resume reading settles as the restart's.
+    expect(launch).toMatch(/if \(sensing \|\| resuming \|\| starting \|\| watching\) \{\s*if \(sticky\) stickySettles\(release = false\)\s*return@post\s*\}/);
+    expect(launch).toMatch(/resumeDrive\(id\)\s*if \(sticky\) stickySettles\(\)/);
+    expect(launch.match(/if \(sticky\) stickySettles\(/g)?.length).toBe(4);
+    expect(fn(d, '  private fun stickySettles(', 2)).toMatch(/if \(resuming\) stickyResume = true else CaptureService\.endReleaseHold\(release\)/);
+    expect(d).toMatch(/internal fun owesStickyWake\(\): Boolean = heldWakes\.owed/);
+    expect(det('DriveDetectRecord')).toMatch(/@Volatile var owed = false/);
+    expect(kt('CaptureService')).toMatch(/releaseHeld = false\s*if \(release\) releaseIfIdle\(\)/);
+  });
+
+  it("a watch begun on a service already in the foreground swaps the ended drive's notification for \"Checking for a drive\"", () => {
+    const svc = kt('CaptureService');
+    expect(svc).toMatch(/inst\.handler\.post \{ inst\.beginWatch\(inPlace = true\) \}/);
+    expect(fn(svc, '  private fun beginWatch(', 2)).toMatch(
+      /beginCapture\("auto"[^\n]*watch = true\)\s*if \(inPlace\) \{\s*main\.post \{\s*DriveNotificationController\.endDrive\(this\)\s*postNotification\(WatchNotification\.build\(this\)\)/,
+    );
+    // The ACTION_WATCH path posts it as it goes to the foreground.
+    expect(svc).toMatch(/handler\.post \{ beginWatch\(\) \}/);
   });
 
   it('"Not driving?" deletes the journal and rests (no GPS); the wipe deletes every file and empties the record', () => {

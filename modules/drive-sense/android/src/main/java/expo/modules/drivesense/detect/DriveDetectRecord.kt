@@ -237,8 +237,29 @@ fun captureRowFate(sensing: Boolean, starting: Boolean, resuming: Boolean, recor
 class HeldWakes<D> {
   private val held = mutableListOf<Pair<WakeReason, D>>()
 
+  /**
+   * The resume ended the drive with no wake held and no sticky service in the foreground yet (the
+   * journal read beat the service's start): the sticky restart that comes after owes the `app` wake
+   * ([takeOwed]). True from [settling] until [drain] decides, so the service, reading it from the
+   * main thread while the drive's flags go, never misses it. Read from any thread.
+   */
+  @Volatile var owed = false
+    private set
+
   fun hold(reason: WakeReason, done: D) {
     held += reason to done
+  }
+
+  /** The resume settles now, [sticky] as it stands: until [drain], a later sticky restart may be owed. */
+  fun settling(sticky: Boolean) {
+    owed = !sticky
+  }
+
+  /** The sticky restart takes the `app` wake owed to it (once). */
+  fun takeOwed(): Boolean {
+    val o = owed
+    owed = false
+    return o
   }
 
   /**
@@ -250,6 +271,7 @@ class HeldWakes<D> {
   fun drain(ended: Boolean, sticky: Boolean, noop: D): List<Pair<WakeReason, D>> {
     val out = held.toList()
     held.clear()
+    owed = out.isEmpty() && ended && !sticky
     return if (out.isEmpty() && ended && sticky) listOf(WakeReason.APP to noop) else out
   }
 }

@@ -154,4 +154,32 @@ class DriveDetectRecordTest {
     assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = true, sticky = false, noop = "noop"))
     assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = false, sticky = true, noop = "noop"))
   }
+
+  @Test
+  fun aResumeThatEndsTheDriveBeforeTheStickyServiceIsUp_owesItsAppWakeToTheLaterRestart() {
+    val h = HeldWakes<String>()
+    // Owed from the moment the resume settles (the service may read it as the drive's flags go)...
+    h.settling(sticky = false)
+    assertEquals(true, h.owed)
+    // ...and still owed once it ended the drive with nothing held: the later sticky restart takes it, once.
+    assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = true, sticky = false, noop = "noop"))
+    assertEquals(true, h.owed)
+    assertEquals(true, h.takeOwed())
+    assertEquals(false, h.owed)
+    assertEquals(false, h.takeOwed())
+    // The drive resumed: nothing owed.
+    h.settling(sticky = false)
+    h.drain(ended = false, sticky = false, noop = "noop")
+    assertEquals(false, h.takeOwed())
+    // A held wake was replayed instead: nothing owed.
+    h.settling(sticky = false)
+    h.hold(WakeReason.SLC, "slc")
+    h.drain(ended = true, sticky = false, noop = "noop")
+    assertEquals(false, h.takeOwed())
+    // The sticky service was already up: the replay took the app wake, nothing owed.
+    h.settling(sticky = true)
+    assertEquals(false, h.owed)
+    assertEquals(listOf(WakeReason.APP to "noop"), h.drain(ended = true, sticky = true, noop = "noop"))
+    assertEquals(false, h.takeOwed())
+  }
 }
