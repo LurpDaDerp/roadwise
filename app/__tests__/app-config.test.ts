@@ -7,7 +7,7 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 import { HOST_RE } from '@/lib/linkDomain';
 
-import appConfig, { ALWAYS_LOCATION_COPY, googleServicesFile, LINK_HOST_RE, PERMISSION_COPY } from '../../app.config';
+import appConfig, { ALWAYS_LOCATION_COPY, androidAppLinks, googleServicesFile, LINK_HOST_RE, PERMISSION_COPY } from '../../app.config';
 
 // Local shapes: the app's tsconfig carries no Node types.
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module app.config reads
@@ -135,6 +135,15 @@ describe('permissions', () => {
     expect(manifest).toContain('<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />');
   });
 
+  test('Android: no drawing over other apps, no media-playback foreground service (alerts play on the drive and DashPal services)', () => {
+    expect(build().android?.blockedPermissions).toEqual(
+      expect.arrayContaining(['android.permission.SYSTEM_ALERT_WINDOW', 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK'])
+    );
+    expect(build().plugins).toContain('./plugins/withAndroidNoMediaPlaybackService');
+    // iOS keeps expo-audio's background playback (the `audio` background mode).
+    expect(plugin('expo-audio')).toMatchObject({ enableBackgroundPlayback: true });
+  });
+
   test('Android never gets photo access: expo-screen-capture only keeps the aiming picture out of screenshots', () => {
     expect(build().android?.blockedPermissions).toContain('android.permission.READ_MEDIA_IMAGES');
     // Nor shared storage on Android 12 and older (expo-file-system, expo-image and expo-screen-capture declare it).
@@ -234,9 +243,9 @@ describe('Bluetooth (DashPal and the car check)', () => {
   });
 });
 
-// No DashPal link: the app declares no App Link and no DashPal domain. The one link domain is the
-// share links' (`ROADWISE_LINK_DOMAIN`): unset, there is no associated domain and no extra.linkDomain;
-// set, both name it.
+// No DashPal link: the app declares no DashPal domain. The one link domain is the share links'
+// (`ROADWISE_LINK_DOMAIN`): unset, there is no associated domain, no Android App Link and no
+// extra.linkDomain; set, all three name it.
 describe('the link domain', () => {
   const keys = ['DASHPAL_LINK_DOMAIN', 'ROADWISE_LINK_DOMAIN'] as const;
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
@@ -260,16 +269,48 @@ describe('the link domain', () => {
     process.env.ROADWISE_LINK_DOMAIN = '  ';
     const c = build();
     expect(c.ios).not.toHaveProperty('associatedDomains');
+    expect(c.android).not.toHaveProperty('intentFilters');
     expect(c.extra).not.toHaveProperty('linkDomain');
   });
 
-  test('set: iOS opens its links in the app (applinks) and the app reads it as extra.linkDomain; still no Android App Link', () => {
+  test('set: both phones open its links in the app (iOS applinks, an Android verified App Link) and the app reads it as extra.linkDomain', () => {
     process.env.ROADWISE_LINK_DOMAIN = ' RoadWise.app ';
     const c = build();
     expect(c.ios?.associatedDomains).toEqual(['applinks:roadwise.app']);
     expect(c.extra?.linkDomain).toBe('roadwise.app');
     expect(c.extra?.eas).toEqual({ projectId: expect.any(String) });
-    expect(c.android).not.toHaveProperty('intentFilters');
+    // https only, the one host, the /w/ paths the apple-app-site-association names, verified.
+    expect(c.android?.intentFilters).toEqual([
+      {
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'https', host: 'roadwise.app', pathPrefix: '/w/' }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      },
+    ]);
+    expect(androidAppLinks(undefined)).toBeUndefined();
+  });
+
+  test("the link site's association files name the same paths for both phones, and ship no real fingerprint", () => {
+    const ROOT_DIR = path.join(__dirname, '..', '..');
+    const site = (rel: string) => fs.readFileSync(path.join(ROOT_DIR, 'web', 'link-site', '.well-known', rel), 'utf8');
+    const aasa = JSON.parse(site('apple-app-site-association')) as {
+      applinks: { details: { components: { '/': string }[] }[] };
+    };
+    expect(aasa.applinks.details[0]!.components[0]!['/']).toBe('/w/*');
+    const links = JSON.parse(site('assetlinks.json')) as {
+      relation: string[];
+      target: { namespace: string; package_name: string; sha256_cert_fingerprints: string[] };
+    }[];
+    expect(links).toHaveLength(1);
+    expect(links[0]!.relation).toEqual(['delegate_permission/common.handle_all_urls']);
+    expect(links[0]!.target.namespace).toBe('android_app');
+    expect(links[0]!.target.package_name).toBe(build().android?.package);
+    // Each entry is a placeholder the owner replaces (web/link-site/README.md) or a real SHA-256
+    // certificate fingerprint (32 colon-separated upper-case hex pairs), never anything in between.
+    const fingerprints = links[0]!.target.sha256_cert_fingerprints;
+    expect(fingerprints).toHaveLength(2);
+    for (const f of fingerprints) expect(f).toMatch(/^(PLAY_APP_SIGNING_SHA256|UPLOAD_KEY_SHA256|([0-9A-F]{2}:){31}[0-9A-F]{2})$/);
   });
 
   test.each(['https://roadwise.app', 'roadwise.app/', 'roadwise.app:443', 'roadwise', 'road wise.app'])('a value that is not a bare host name (%s) fails the config', (v) => {
@@ -314,5 +355,82 @@ describe('iOS privacy manifest', () => {
     // An app-group suite would need reason 1C8F.1, and these categories need their own entries.
     expect(swift).not.toMatch(/UserDefaults\(suiteName/);
     expect(swift).not.toMatch(/creationDate|modificationDate|attributesOfItem|volumeAvailableCapacity|activeInputModes|mach_absolute_time/);
+  });
+});
+
+// Android's own pieces of the config (Play readiness): the themed icon, the backup rules and the
+// removed media-playback service. Each plugin only touches the Android project.
+describe('Android: themed icon, no backup or phone-to-phone copy, no media service', () => {
+  const ROOT_DIR = path.join(__dirname, '..', '..');
+  type Service = { $: Record<string, string> };
+  type Manifest = { manifest: { $: Record<string, string>; application: { $: Record<string, string>; service?: Service[] }[] } };
+  const manifest = (service?: Service[]): Manifest => ({
+    manifest: {
+      $: {},
+      application: [{ $: { 'android:name': '.MainApplication', 'android:allowBackup': 'false' }, ...(service ? { service } : {}) }],
+    },
+  });
+  /* eslint-disable @typescript-eslint/no-require-imports -- the plugins are CommonJS, run by prebuild */
+  const noData = require('../../plugins/withAndroidNoDataExtraction') as {
+    applyNoDataExtraction(m: Manifest): Manifest;
+    BACKUP_XML: string;
+    EXTRACTION_XML: string;
+    DOMAINS: string[];
+  };
+  const noMedia = require('../../plugins/withAndroidNoMediaPlaybackService') as {
+    removeMediaPlaybackService(m: Manifest): Manifest;
+    SERVICE: string;
+  };
+  /* eslint-enable @typescript-eslint/no-require-imports */
+
+  test('the monochrome icon: a 1024 x 1024 PNG with alpha, the same canvas as the foreground', () => {
+    expect(build().android?.adaptiveIcon).toEqual({
+      foregroundImage: './assets/adaptive-icon.png',
+      backgroundImage: './assets/adaptive-icon-background.png',
+      monochromeImage: './assets/adaptive-icon-monochrome.png',
+      backgroundColor: '#000814',
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- a Node read in a test
+    const { readFileSync } = require('node:fs') as { readFileSync(file: string): Uint8Array };
+    const ihdr = (file: string) => {
+      const b = readFileSync(path.join(ROOT_DIR, 'assets', file));
+      const u32 = (at: number) => ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0;
+      return { width: u32(16), height: u32(20), colourType: b[25] };
+    };
+    // Colour type 6: RGBA.
+    expect(ihdr('adaptive-icon-monochrome.png')).toEqual({ width: 1024, height: 1024, colourType: 6 });
+    expect(ihdr('adaptive-icon.png')).toMatchObject({ width: 1024, height: 1024 });
+  });
+
+  test('the backup rules: allowBackup stays false, and every domain is excluded from cloud backup, the device transfer and the old full backup', () => {
+    expect(build().android?.allowBackup).toBe(false);
+    expect(build().plugins).toContain('./plugins/withAndroidNoDataExtraction');
+    // expo-secure-store's rules (which copy every other preference) are off.
+    expect(build().plugins).toContainEqual(['expo-secure-store', { configureAndroidBackup: false }]);
+    const app = noData.applyNoDataExtraction(manifest()).manifest.application[0]!.$;
+    expect(app).toMatchObject({
+      'android:allowBackup': 'false',
+      'android:fullBackupContent': '@xml/roadwise_backup_rules',
+      'android:dataExtractionRules': '@xml/roadwise_data_extraction_rules',
+    });
+    const cloud = noData.EXTRACTION_XML.split('<cloud-backup>')[1]!.split('</cloud-backup>')[0]!;
+    const transfer = noData.EXTRACTION_XML.split('<device-transfer>')[1]!.split('</device-transfer>')[0]!;
+    for (const part of [cloud, transfer, noData.BACKUP_XML]) {
+      expect(part).not.toContain('<include');
+      for (const d of noData.DOMAINS) expect(part).toContain(`<exclude domain="${d}" path="." />`);
+    }
+    expect(noData.DOMAINS).toEqual(expect.arrayContaining(['root', 'file', 'database', 'sharedpref', 'external']));
+  });
+
+  test("expo-audio's lock-screen service is removed whichever plugin runs first", () => {
+    const marker = { $: { 'android:name': noMedia.SERVICE, 'tools:node': 'remove' } };
+    const listed = noMedia.removeMediaPlaybackService(
+      manifest([{ $: { 'android:name': noMedia.SERVICE, 'android:foregroundServiceType': 'mediaPlayback' } }])
+    );
+    expect(listed.manifest.application[0]!.service).toEqual([marker]);
+    expect(listed.manifest.$['xmlns:tools']).toBe('http://schemas.android.com/tools');
+    expect(noMedia.removeMediaPlaybackService(manifest()).manifest.application[0]!.service).toEqual([marker]);
+    const other = { $: { 'android:name': '.Other' } };
+    expect(noMedia.removeMediaPlaybackService(manifest([other])).manifest.application[0]!.service).toEqual([other, marker]);
   });
 });

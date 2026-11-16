@@ -11,6 +11,10 @@ Output (all in assets/):
                                  stretched so the visible area shows exactly the logo's top-to-bottom range
   splash.png                     RGBA, the mark and its shadow on transparent, cropped square
   notification-icon.png          96x96 RGBA, the mark as a white glyph on transparent (80x80 live area)
+  adaptive-icon-monochrome.png   1024x1024 RGBA, Android 13+ themed icon: the mark alone (no shadow)
+                                 as a white glyph on transparent, exactly where adaptive-icon.png
+                                 draws it (same canvas, same 72/108 scale), so it sits in the same
+                                 safe zone; the launcher tints it with the wallpaper's colours
 
 Usage (from the repo root; dev-only, never bundled; needs Pillow and numpy):
     python scripts/make-app-icons.py
@@ -141,5 +145,12 @@ na.paste(glyph, ((96 - tw) // 2, (96 - th) // 2))
 note = Image.new('RGBA', (96, 96), (255, 255, 255, 0))
 note.putalpha(na)
 note.save('assets/notification-icon.png', optimize=True)
+
+# adaptive-icon-monochrome.png: the mark's opacity alone, placed as the foreground places the layer.
+mono_a = Image.new('L', (W, H), 0)
+mono_a.paste(mask.resize((inner, inner), Image.LANCZOS), ((W - inner) // 2, (H - inner) // 2))
+mono = Image.new('RGBA', (W, H), (255, 255, 255, 0))
+mono.putalpha(mono_a)
+mono.save('assets/adaptive-icon-monochrome.png', optimize=True)
 
 print('mark box', mask.getbbox(), 'splash', sq.size, 'notification glyph', (tw, th))

@@ -34,6 +34,45 @@ jobs:
       - run: npm test -- --ci --maxWorkers=2
       - run: npm run lock:check
 
+  android:
+    name: Android (prebuild, Kotlin tests, debug build, 16 KB pages)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The Gradle the Expo SDK pins runs on JDK 17. The runner's own Android SDK (platforms,
+      # build-tools, NDK, CMake) builds the app; Gradle fetches any missing piece itself.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # Caches ~/.gradle (wrapper, dependencies, build cache) between runs.
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      # The native project is generated (CNG), as EAS does. No secret is needed: without a
+      # google-services.json the config leaves Firebase out, and without a Maps key the trip map is
+      # blank, which a compile never sees.
+      - run: npx expo prebuild --platform android --no-install
+      # drive-sense's JVM unit tests (the time base, the drive detector's policy and decisions),
+      # google-credential's Kotlin, and the whole app as a debug APK (no JS bundle: debug builds
+      # load it from Metro). The 64-bit ABIs only: the ones the 16 KB check reads, in half the time.
+      - name: Gradle (unit tests, compile, assembleDebug)
+        working-directory: android
+        run: ./gradlew --console=plain :drive-sense:testDebugUnitTest :google-credential:compileDebugKotlin :app:assembleDebug -PreactNativeArchitectures=arm64-v8a,x86_64
+      # Google Play requires every native library to load on 16 KB-page phones (Android 15+ targets).
+      # The script reads each 64-bit .so's LOAD segment alignment and its offset in the APK;
+      # zipalign checks the same offsets with the SDK's own tool.
+      - name: 16 KB page alignment
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          python3 scripts/check-16kb-pages.py "$APK"
+          ZIPALIGN="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/zipalign"
+          "$ZIPALIGN" -c -P 16 4 "$APK"
+
   functions:
     name: Edge functions (deno lint, check, test)
     runs-on: ubuntu-latest

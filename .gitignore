@@ -60,8 +60,16 @@ npm-debug.log*
 # user-provided DMS design spec (local reference, never committed or uploaded)
 /Driver Monitoring System (DMS) Design Spec.md
 
-# Gradle caches inside local Expo modules (machine-specific)
+# Gradle caches and build output inside local Expo modules (machine-specific, written by every
+# Android compile of modules/*/android)
 .gradle/
+modules/*/android/build/
+modules/*/android/.gradle/
+
+# The Google Play service account key `eas submit` uses (GOOGLE_PLAY_SERVICE_ACCOUNT_KEY_PATH):
+# kept outside the repo; never committed or uploaded if one lands here by mistake.
+google-play-service-account*.json
+*-service-account*.json
 
 # Privacy Policy, Terms and the data audit: local drafts, never committed (the app carries its
 # own copy in src/features/legal/documents.ts, written by `npm run legal:sync`)
