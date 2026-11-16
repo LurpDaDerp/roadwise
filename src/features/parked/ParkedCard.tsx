@@ -1,8 +1,9 @@
-// Home's "Where you parked" (iPhone with the car link): the spot the drive host stored when the
-// paired car went off with the car stopped and the driver walked away (`src/drive/parkedWatch.ts`).
-// The drive's end label and the time, "Walk back" (walking directions in the driver's navigation
-// app, or Apple Maps), and the ✕ top right. Gone on ✕, once a later drive is kept, and after 3
-// days. Never during a drive; never on Android.
+// Home's "Where you parked" (a build with the car link, both phones): the spot the drive host stored
+// when the paired car went off with the car stopped and the driver walked away
+// (`src/drive/parkedWatch.ts`; only a host with the car link ever stores one). The drive's end label
+// and the time, "Walk back" (walking directions in the driver's navigation app, or Apple Maps on
+// iPhone and Google Maps on Android), and the ✕ top right. Gone on ✕, once a later drive is kept,
+// and after 3 days. Never during a drive.
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -56,10 +57,11 @@ export function HomeParkedCard({ hidden }: { hidden: boolean }) {
   const { db, now } = useDataSource();
   const lastFinalized = useDrive((d) => d.lastFinalized);
   const [spot, setSpot] = useState<ParkedSpot | null>(null);
-  const ios = Platform.OS === 'ios';
+  // Both phones (a spot exists only where the car link stored one); nothing on web.
+  const native = Platform.OS === 'ios' || Platform.OS === 'android';
 
   const reload = useCallback(() => {
-    if (!ios) return () => {};
+    if (!native) return () => {};
     let live = true;
     void (async () => {
       const s = await readParkedSpot(db);
@@ -75,12 +77,12 @@ export function HomeParkedCard({ hidden }: { hidden: boolean }) {
     return () => {
       live = false;
     };
-  }, [db, now, ios]);
+  }, [db, now, native]);
   useFocusEffect(reload);
   useEffect(() => reload(), [reload, lastFinalized]);
   useEffect(() => onParkedChanged(() => void reload()), [reload]);
 
-  if (!ios || hidden || spot === null) return null;
+  if (!native || hidden || spot === null) return null;
   return (
     <ParkedCardView
       spot={spot}

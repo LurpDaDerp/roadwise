@@ -7,7 +7,18 @@ export {
   readPromptHistory,
   recordPrompt,
 } from './policy';
-export { askBluetoothForCar, BLUETOOTH_ANSWERED_KEY, CAR_RADIO_SETTLE_MS, carRadioState, type CarBluetoothDeps } from './carBluetooth';
+export {
+  ANDROID_BT_CONNECT,
+  ANDROID_NEARBY_API,
+  askBluetoothForCar,
+  askNearbyForCar,
+  BLUETOOTH_ANSWERED_KEY,
+  CAR_RADIO_SETTLE_MS,
+  carNearbyGranted,
+  carRadioState,
+  type CarBluetoothDeps,
+  type CarNearbyDeps,
+} from './carBluetooth';
 export { createDriveSenseResolver, resolveDriveDetect, resolveDriveSense } from './driveSensePort';
 export type { DriveDetectPort, DriveSenseLoaders, DriveSensePort } from './driveSensePort';
 export {

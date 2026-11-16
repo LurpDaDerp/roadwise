@@ -1,7 +1,8 @@
-// Settings › Your car (iPhone): pair the car whose Bluetooth or CarPlay is connected now (up to 3,
-// family cars), see the paired ones and forget any. The output connected now is offered first; with
-// several connected, each can be chosen. A name that reads like headphones or a hearing aid can't be
-// paired (CarPlay always can). Nothing pairs without the tap.
+// Settings › Your car: pair the car whose Bluetooth or CarPlay (Android Auto on Android) is
+// connected now (up to 3, family cars), see the paired ones and forget any. The output connected now
+// is offered first; with several connected, each can be chosen. A name that reads like headphones
+// or a hearing aid can't be paired (CarPlay and Android Auto always can). Nothing pairs without the
+// tap; on Android 12+ the tap asks for Nearby devices first (`useCarLink`).
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';

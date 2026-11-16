@@ -255,12 +255,12 @@ export interface AutoDetectStatus {
   permissions: DetectState['permissions'];
 }
 
-// ——— The car link (iPhone; round 11) ———
-// All native (`DriveDetect`): the audio route's Bluetooth and CarPlay outputs, read only; the paired
-// cars (at most 3), the last 3 drives' outputs and "Not my car", kept natively so the detector reads
-// them with no JS. The device wipes take it all with the rest of native's drive state. Each call
-// answers the state, or null on Android, before the runtime, in a native build without it, or when
-// it fails (reported); none rejects.
+// ——— The car link (round 11; iPhone and Android) ———
+// All native (`DriveDetect`): the Bluetooth and CarPlay outputs (Android: the connected Bluetooth
+// audio outputs and Android Auto), read only; the paired cars (at most 3), the last 3 drives'
+// outputs and "Not my car", kept natively so the detector reads them with no JS. The device wipes
+// take it all with the rest of native's drive state. Each call answers the state, or null before
+// the runtime, in a native build without it, or when it fails (reported); none rejects.
 
 async function carCall(ctx: string, run: (detect: DriveDetectApi) => Promise<CarLinkState>): Promise<CarLinkState | null> {
   const detect = detector();

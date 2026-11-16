@@ -1,5 +1,7 @@
-// The car link's screen rules (iPhone): which output the pairing screen offers first, the headphones
-// warning, the Settings row's line and Home's "Is <name> your car?". Pure.
+// The car link's screen rules (both phones): which output the pairing screen offers first, the
+// headphones warning, the Settings row's line and Home's "Is <name> your car?". Pure. `carAudio` is
+// CarPlay on iPhone and Android Auto on Android; the headphones and hearing-aid names are one list
+// for both.
 import type { CarLinkState, CarOutput } from '@drive-sense';
 
 import { carCopy } from './copy';

@@ -1,12 +1,13 @@
 /**
  * The car link's screens (iPhone): the rules (what is offered first, headphones, the suggestion),
- * Settings › Your car, the pairing screen and Home's card, over the fake detector's car link.
+ * Settings › Your car, the pairing screen and Home's card, over the fake detector's car link
+ * (Android's words and its Nearby devices ask: carLinkAndroid.test.tsx).
  */
 import { act, screen, waitFor } from '@testing-library/react-native';
-import { Platform } from 'react-native';
 
 import { createFakeDriveDetect, type CarLinkState, type CarOutput } from '@drive-sense';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { asPlatform } from '@/lib/__fixtures__/platform';
 
 import { carCopy } from '../copy';
 import { CarScreen } from '../CarScreen';
@@ -269,7 +270,7 @@ describe("Home's car card", () => {
     await waitFor(() => expect(screen.queryByTestId('home-car-ask')).toBeNull());
   });
 
-  it('never shows during a drive, with automatic drives off, once a car is paired, once closed, or on Android', async () => {
+  it('never shows during a drive, with automatic drives off, once a car is paired or once closed; on Android as on iPhone', async () => {
     mockDetect.seeCarDrive([civic]);
     mockDetect.seeCarDrive([civic]);
     const w = await appWorld({ settings: { [CAR_CARD_DISMISSED_KEY]: true } });
@@ -294,15 +295,14 @@ describe("Home's car card", () => {
     await act(async () => {});
     expect(screen.queryByTestId('home-car-ask')).toBeNull();
     paired.unmount();
-    const os = Platform.OS;
-    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    const restore = asPlatform('android');
     try {
       await mockDetect.forgetCar(civic.uid);
-      await w2.render(<HomeCarCard hidden={false} />);
-      await act(async () => {});
-      expect(screen.queryByTestId('home-car-ask')).toBeNull();
+      const android = await w2.render(<HomeCarCard hidden={false} />);
+      await waitFor(() => expect(screen.getByTestId('home-car-ask')).toHaveTextContent(/Is Civic your car\?/));
+      android.unmount();
     } finally {
-      Object.defineProperty(Platform, 'OS', { value: os, configurable: true });
+      restore();
     }
   });
 });

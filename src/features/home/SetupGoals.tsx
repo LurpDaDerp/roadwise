@@ -1,6 +1,6 @@
 /**
  * Home's "Get set up" row: a few one-time things, each a tile in a row that scrolls sideways
- * (emergency contacts, your places, your car on an iPhone with the car link, DashPal, a first
+ * (emergency contacts, your places, your car on a build with the car link, DashPal, a first
  * friend). A tap opens its screen. Each tile has a ✕ in its top right corner, a check once its goal
  * is done (the tile then moves to the end); either removes the tile for good (until a sign-out). The
  * row goes once every goal is done or every tile is removed, and never shows during a drive.

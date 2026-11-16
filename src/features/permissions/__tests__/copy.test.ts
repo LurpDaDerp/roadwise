@@ -91,7 +91,11 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('bluetooth', m('denied'), IOS_CAR)).toBe("Without it, RoadWise can't tell when you're riding as a passenger.");
   expect(rowDetail('bluetooth', { kind: 'granted' }, IOS_BOTH)).toBe("Your DashPal can connect, and RoadWise can tell when you're a passenger.");
   expect(rowDetail('bluetooth', m('denied'), IOS_BOTH)).toBe("Your DashPal can't connect, and RoadWise can't tell when you're a passenger.");
-  expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired DashPal.');
+  expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID)).toBe('Used only with a paired car or DashPal.');
+  expect(rowDetail('bluetooth', { kind: 'idle' }, { ...ANDROID_11, car: true })).toBe('Your car needs no permission on this phone.');
+  expect(homeLine('bluetooth', m('denied'), { ...ANDROID, car: true })).toBe("Nearby devices is off, so passenger rides aren't spotted.");
+  expect(rowDetail('bluetooth', { kind: 'granted' }, { ...ANDROID, car: true })).toBe("RoadWise can tell when you're riding as a passenger.");
+  expect(rowDetail('bluetooth', m('denied'), { ...ANDROID, car: true })).toBe("Without it, RoadWise can't tell when you're riding as a passenger.");
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
   expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so it plays its alerts itself.");
   expect(rowDetail('camera', { kind: 'idle' }, IOS)).toBe('RoadWise asks when you scan a QR code.');

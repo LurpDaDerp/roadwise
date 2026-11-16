@@ -125,12 +125,12 @@ describe('the drive row', () => {
     expect(screen.getByTestId('row-car')).toBeOnTheScreen();
   });
 
-  test('Android: no car anywhere', async () => {
+  test('Android: each row names its car as on iPhone', async () => {
     await pairAll(civic, volvo);
     restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
     await draw(<HistoryView {...props()} />);
     await settle();
-    expect(screen.queryByTestId('drive-a-car')).toBeNull();
+    expect(within(screen.getByTestId('drive-a-car')).getByText('Civic')).toBeOnTheScreen();
   });
 });
 

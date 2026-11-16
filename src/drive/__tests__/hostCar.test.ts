@@ -1,5 +1,5 @@
 /**
- * The drive host's car link (iPhone, round 14) over the fake detector: the drive's car stored on the
+ * The drive host's car link (round 14; iPhone, and Android at the end) over the fake detector: the drive's car stored on the
  * trip, "Are you driving?" (posted once when every rule holds, taken down when the car connects or
  * the drive ends; a tap's cancel accepted), and "Where you parked" (stored only after the paired car
  * left with the car stopped and the driver walked away).
@@ -106,13 +106,13 @@ type FakeSense = ReturnType<typeof createFakeDriveSense>;
 type FakeDetect = ReturnType<typeof createFakeDriveDetect>;
 
 /** `reuse`: the last process's native side (a relaunch: a fresh host over the same detector). */
-function buildIos(opts: { appState?: string; note?: PassengerNotePort | null; reuse?: { source: FakeSense; detect: FakeDetect } } = {}) {
+function buildIos(opts: { appState?: string; note?: PassengerNotePort | null; reuse?: { source: FakeSense; detect: FakeDetect }; platform?: 'ios' | 'android'; pump?: () => void } = {}) {
   let source: FakeSense;
   let detect: FakeDetect;
   if (opts.reuse !== undefined) {
     ({ source, detect } = opts.reuse);
   } else {
-    const fresh = createFakeDriveSense({ platform: 'ios', now: () => clock });
+    const fresh = createFakeDriveSense({ platform: opts.platform ?? 'ios', now: () => clock });
     fresh.setState({ location: 'whenInUse', motion: 'granted', lockSignal: 'reliable' });
     const d = createFakeDriveDetect({ now: () => clock, sense: { emit: (e, p) => fresh.emit(e, p as never) } });
     const stop = fresh.stopCapture.bind(fresh);
@@ -143,6 +143,8 @@ function buildIos(opts: { appState?: string; note?: PassengerNotePort | null; re
     spots: { readWatchSpots: async () => [] },
     detect: detect as DriveDetectApi,
     passengerNote: note,
+    ...(opts.platform === undefined ? {} : { platform: opts.platform }),
+    ...(opts.pump === undefined ? {} : { pump: opts.pump }),
     onError: (e, ctx) => errors.push(`${ctx}: ${e instanceof Error ? e.message : String(e)}`),
   });
   return { host, source, detect, scheduler, appState, errors, note };
@@ -594,6 +596,63 @@ describe('"Where you parked"', () => {
     await feedIos(h, rows(30, { t0: T0 + 40_000, speedMps: 15 }));
     await h.host.end();
     expect(await createSettingsRepo(db).get(PARKED_KEY)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('on Android (the same car link: the drive’s car, "Are you driving?", "Where you parked")', () => {
+  test('"Are you driving?" is posted once as on iPhone, and taken down when the car connects', async () => {
+    const h = buildIos({ appState: 'background', platform: 'android' });
+    await pair(h, civic);
+    h.detect.setCarRoute([]);
+    await provenIn(civic);
+    await start(h);
+    await feedIos(h, rows(200, { t0: T0 + 40_000, speedMps: 15 }));
+    const note = h.note as ReturnType<typeof fakeNote>;
+    expect(note.log).toEqual([`post ${NATIVE}`]);
+    h.detect.setCarRoute([civic]);
+    expect(note.log).toEqual([`post ${NATIVE}`, `remove ${NATIVE}`]);
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('"Where you parked" stored as on iPhone; each motion report pumps the paused timers (Android only)', async () => {
+    const pump = jest.fn();
+    const h = buildIos({ platform: 'android', pump });
+    await pair(h, civic);
+    await start(h);
+    await feedIos(h, rows(60, { t0: T0 + 40_000, speedMps: 15 }));
+    await feedIos(h, rows(10, { t0: T0 + 100_000, speedMps: 0 }));
+    h.detect.setCarRoute([]);
+    await feedIos(h, rows(3, { t0: T0 + 110_000, speedMps: 0 }));
+    await h.host.end();
+    pump.mockClear();
+    clock += 5_000;
+    activity(h, 'walking');
+    await h.host.settled();
+    expect(pump).toHaveBeenCalledTimes(1);
+    clock += 60_000;
+    activity(h, 'walking');
+    await h.host.settled();
+    expect(pump).toHaveBeenCalledTimes(2);
+    h.scheduler.fire();
+    await h.host.settled();
+    h.scheduler.fire();
+    await h.host.settled();
+    await flush();
+    expect(await readParkedSpot(db)).toMatchObject({ driveId: NATIVE });
+    expect(h.errors).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('iPhone never pumps on a motion report (its JS timers run in the background)', async () => {
+    const pump = jest.fn();
+    const h = buildIos({ pump });
+    await h.host.boot();
+    pump.mockClear();
+    activity(h, 'walking');
+    await h.host.settled();
+    expect(pump).not.toHaveBeenCalled();
     await h.host.stop({ endOpenTrip: false });
   });
 });

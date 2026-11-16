@@ -1,10 +1,12 @@
-// "Are you driving?" (iPhone with the car link, round 14): an automatic drive whose route never held
-// the driver's car may be a ride in someone else's. The host asks once, by a notification, when
-// every rule below holds; a tap stops the drive as "Not driving?" does. Pure, but for the one read
-// of which paired cars have proven their link.
+// "Are you driving?" (a build with the car link, both phones; round 14): an automatic drive whose
+// route never held the driver's car may be a ride in someone else's. The host asks once, by a
+// notification, when every rule below holds; a tap stops the drive as "Not driving?" does. Pure, but
+// for the one read of which paired cars have proven their link. On Android "the route" is every
+// connected Bluetooth audio output and Android Auto (CarPlay's place), and Bluetooth is known to be
+// on only with Nearby devices allowed (Android 12+).
 //
 // Asked only when ALL hold:
-// 1. an automatic drive recording on an iPhone build with the car link, no longer waiting, whose
+// 1. an automatic drive recording on a build with the car link, no longer waiting, whose
 //    "Not driving?" can still be used (the tap's cancel is then accepted);
 // 2. at least one paired car, whose link is proven: a kept drive of the last 30 days was in one of
 //    the paired cars (so the car does connect when it is driven);
@@ -30,7 +32,7 @@ export const PASSENGER_PROVEN_MS = 30 * 24 * 60 * 60_000;
 export const PASSENGER_READ_EVERY_MS = 30_000;
 
 export interface PassengerFacts {
-  /** An iPhone build with the car link, recording for real (no dry run). */
+  /** A build with the car link, recording for real (no dry run). */
   carLink: boolean;
   origin: 'auto' | 'manual' | null;
   recording: boolean;

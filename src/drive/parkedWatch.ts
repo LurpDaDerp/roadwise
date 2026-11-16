@@ -1,4 +1,4 @@
-// "Where you parked" (iPhone with the car link, round 14): after a kept drive, the spot is stored
+// "Where you parked" (a build with the car link, both phones; round 14): after a kept drive, the spot is stored
 // only when the paired car went off the route with the car standing still and the driver then
 // walked away from it. Pure: the host feeds the drive's rows, the car link and the live motion
 // reports, and stores the spot on `confirmed` (`src/features/parked/model.ts`).

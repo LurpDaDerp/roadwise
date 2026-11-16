@@ -239,8 +239,19 @@ describe('the store', () => {
     expect(mockRead).toHaveBeenCalledTimes(2);
   });
 
-  test('Android: never reads, never listens, no cars', async () => {
+  test('Android: reads and listens as on iPhone (the rows and the filter name the car)', async () => {
     restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    await pairAll(civic, volvo);
+    await render(<Probe />);
+    await flush();
+    expect(mockRead).toHaveBeenCalledTimes(1);
+    expect(appListeners).toHaveLength(1);
+    expect(screen.getByTestId('cars')).toHaveTextContent('2');
+    expect(screen.getByTestId('labels')).toHaveTextContent(`${civic.uid}=Civic|${volvo.uid}=Volvo XC60`);
+  });
+
+  test('web: never reads, never listens, no cars', async () => {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'web').restore;
     await pairAll(civic, volvo);
     await render(<Probe />);
     await flush();

@@ -1,4 +1,4 @@
-// "Where you parked": Home's card words (iPhone with the car link).
+// "Where you parked": Home's card words (a build with the car link, both phones).
 export const parkedCopy = {
   title: 'Where you parked',
   /** The drive's end label and when the car parked (as the drive rows say it), or the time alone. */

@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 /** Every word Home says (ui.md §3.1). Plain, warm and short; no em dashes, no exclamation marks. */
 export const homeCopy = {
   greeting: (name: string) => `Hey, ${name}`,
@@ -59,7 +61,14 @@ export const homeCopy = {
     goals: {
       emergency: { title: 'Emergency contacts', line: 'People to call from a drive', hint: 'Opens Emergency contacts in Settings' },
       places: { title: 'Your places', line: 'Home, work and school', hint: 'Opens Places in Settings' },
-      car: { title: 'Your car', line: 'Pair its Bluetooth or CarPlay', hint: 'Opens Your car in Settings' },
+      car: {
+        title: 'Your car',
+        /** Android says Android Auto where iPhone says CarPlay (read as shown). */
+        get line(): string {
+          return `Pair its Bluetooth or ${Platform.OS === 'android' ? 'Android Auto' : 'CarPlay'}`;
+        },
+        hint: 'Opens Your car in Settings',
+      },
       dashpal: { title: 'DashPal', line: 'Set up your dashcam', hint: 'Opens DashPal in Settings' },
       friend: { title: 'First friend', line: 'Add someone you know', hint: 'Opens Add friends' },
     },

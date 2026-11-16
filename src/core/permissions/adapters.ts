@@ -258,6 +258,15 @@ const rnAndroidPermissions: AndroidPermissionsPort = {
   requestMultiple: async (permissions) => (await PermissionsAndroid.requestMultiple(permissions as never)) as Record<string, string>,
 };
 
+/** React Native's `PermissionsAndroid`, narrowed (the car link's Nearby devices ask and read). */
+export const androidPermissions: AndroidPermissionsPort = rnAndroidPermissions;
+
+/** Android's API level; 0 on any other platform. */
+export function androidApiLevel(): number {
+  if (Platform.OS !== 'android') return 0;
+  return typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version) || 0;
+}
+
 function defaultDeps(): PermissionsAdapterDeps {
   return {
     platform: Platform.OS === 'ios' ? 'ios' : 'android',

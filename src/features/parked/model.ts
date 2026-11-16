@@ -1,4 +1,4 @@
-// "Where you parked" (iPhone with the car link): the spot the drive host stores when the paired car
+// "Where you parked" (a build with the car link): the spot the drive host stores when the paired car
 // left the route with the car stopped and the driver then walked away (`src/drive/parkedWatch.ts`),
 // and Home's rules for its card. Pure, but for the settings read and a tiny process-local signal the
 // host raises when it stores or clears a spot, so a Home already on screen shows it at once.

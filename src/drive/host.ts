@@ -363,7 +363,7 @@ export interface DriveHostDeps {
   /** The fetch the drive's weather series is asked with (default the global one); unused with `weather` or `weatherReading`. */
   weatherFetch?: FetchLike;
   /**
-   * iPhone with the car link: what "Are you driving?" needs of the phone (Bluetooth, the notification
+   * A build with the car link: what "Are you driving?" needs of the phone (Bluetooth, the notification
    * permission, the note). Default: the phone's own on such a build; null turns the check off.
    */
   passengerNote?: PassengerNotePort | null;
@@ -552,7 +552,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
    */
   const pushStarts = platform === 'ios' && hasDetector;
   const scheduler = deps.scheduler ?? realScheduler;
-  /** An iPhone build with the car link (round 11): the car tally, "Are you driving?" and "Where you parked". */
+  /** A build with the car link (round 11; iPhone and Android): the car tally, "Are you driving?" and "Where you parked". */
   const carLink = detect !== null && detect.carLinkAvailable === true;
   const passengerNote: PassengerNotePort | null = carLink && persist ? (deps.passengerNote === undefined ? createPassengerNotePort(db) : deps.passengerNote) : null;
 
@@ -601,10 +601,10 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   let parkingSpots: readonly { lat: number; lng: number }[] = [];
   /** The open drive's saved places, with who they are (`parkingSpots.ts` `readPlaceSpots`), read as it opens. */
   let places: readonly PlaceSpot[] = [];
-  /** iOS: native's car-link "gone since" for the live drive (`carLink`), or null. */
+  /** Native's car-link "gone since" for the live drive (`carLink`), or null. */
   let carGoneSince: number | null = null;
   /**
-   * iPhone with the car link: what the route held over the open drive (`carTally.ts`), from the read
+   * A build with the car link: what the route held over the open drive (`carTally.ts`), from the read
    * as it opened; kept after it closes (the parked watch reads it) until the next drive opens. Null
    * for a drive replayed at a launch (nobody saw its route), or when the link could not be read.
    */
@@ -763,7 +763,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     }
   }
 
-  // --- the car link: the drive's car, "Are you driving?", "Where you parked" (iPhone) -------------
+  // --- the car link: the drive's car, "Are you driving?", "Where you parked" ----------------------
 
   /**
    * The drive's car (`carTally.ts`): the link read once more as it closes, then the paired car
@@ -2416,11 +2416,14 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         // Every valid report goes to the engine, which reads it for the walking end alone
         // (`core/engine/motion.ts`); a malformed payload is dropped. With motion not granted none come.
         source.addListener('activity', (raw) => {
+          // Android pauses JS timers in the background: after an automatic end the reports (every
+          // 5 s through the watch that follows it) are what fire the parked watch's timer.
+          if (platform === 'android') (deps.pump ?? processTimers.pump)();
           const activity = parseActivity(raw);
           if (activity === null) return;
           void run(async () => {
             await engine.dispatch({ type: 'motion', activity, ts: now() });
-            // After a drive's end: the walk away from the parked car (iPhone with the car link).
+            // After a drive's end: the walk away from the parked car (a build with the car link).
             onParkedActivity(activity);
           }, 'activity');
         })
