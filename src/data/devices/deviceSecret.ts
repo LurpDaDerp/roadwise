@@ -95,6 +95,22 @@ export async function clearDeviceSecret(store: SecretStore = defaultStore()): Pr
   }
 }
 
+/** The SecureStore item older iPhone builds kept for App Attest: the account's user id and its key's id. */
+export const OLD_APP_ATTEST_KEY = 'roadwise.appAttest';
+
+/**
+ * Clears what older builds left behind: their App Attest record names the account it was made for,
+ * and nothing reads it any more. Run at launch and by the wipe. Never throws.
+ */
+export async function clearOldAppAttestRecord(store?: SecretStore): Promise<void> {
+  try {
+    // A keychain delete matches on the key alone, whatever class the item was saved with.
+    await (store ?? defaultStore()).deleteItemAsync(OLD_APP_ATTEST_KEY);
+  } catch {
+    // Nothing stored, or no store (Jest): nothing to clear.
+  }
+}
+
 /** The per-drive trim seed: HMAC-SHA256(secret, clientTripId), hex. Never uploaded or logged. */
 export async function deviceTrimSeed(clientTripId: string, store?: SecretStore): Promise<string> {
   return hmacSha256Hex(await getDeviceSecret(store), clientTripId);
