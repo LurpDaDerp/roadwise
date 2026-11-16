@@ -15,6 +15,7 @@ import android.content.SharedPreferences
 object DriveSensePrefs {
   private const val FILE = "expo.modules.drivesense"
   private const val CAPTURE_OPEN = "captureOpen"
+  private const val DETECTOR_OWNED = "detectorOwned"
   private const val MODE = "mode"
   private const val RATE = "rate"
   private const val STARTED_AT = "captureStartedAt"
@@ -62,6 +63,18 @@ object DriveSensePrefs {
     // commit, not apply: a process killed right after startCapture must still find the flag.
     set(v) {
       p.edit().putBoolean(CAPTURE_OPEN, v).commit()
+    }
+
+  /**
+   * The open capture is the drive detector's (its drive is in the detector's record and journal):
+   * the `START_STICKY` restart hands it to the detector, which resumes it or ends it as an orphan,
+   * and never to the plain capture's restart and watchdog.
+   */
+  var detectorOwned: Boolean
+    get() = p.getBoolean(DETECTOR_OWNED, false)
+    // commit: the sticky restart reads it in a new process.
+    set(v) {
+      p.edit().putBoolean(DETECTOR_OWNED, v).commit()
     }
 
   var mode: String

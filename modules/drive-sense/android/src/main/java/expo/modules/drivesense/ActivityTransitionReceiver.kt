@@ -15,6 +15,7 @@ import com.google.android.gms.location.ActivityTransitionEvent
 import com.google.android.gms.location.ActivityTransitionRequest
 import com.google.android.gms.location.ActivityTransitionResult
 import com.google.android.gms.location.DetectedActivity
+import expo.modules.drivesense.detect.DriveDetector
 
 /**
  * The Activity Recognition Transitions feed, delivered by Google Play services at no app cost.
@@ -74,6 +75,8 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         } else if (type == "walking" || type == "running") {
           EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
         }
+        // A detector drive's safety stop reads the walks and the car motion too (from their arrival).
+        if (CaptureService.detectorCapture) DriveDetector.peek()?.onTransition(type, enter, arrival.toDouble())
       }
       // After JS has its events: the reminder keeps the vehicle state (state only, never a post),
       // so its session is right when the drive ends. Best effort: it can never disturb the capture.

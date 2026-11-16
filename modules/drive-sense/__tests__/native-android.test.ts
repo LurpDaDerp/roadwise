@@ -12,6 +12,7 @@ import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
+import { DRIVE_DETECT_ERROR_CODES } from '../src/detect/types';
 import { DANGER_ORDER } from '../../../src/features/weather/danger';
 import { ANDROID_GEOCODE_METHODS } from '../src/geocode';
 import { ANDROID_SHARE_METHODS } from '../src/share';
@@ -127,8 +128,9 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(src).toMatch(/OnStopObserving\(/);
   });
 
-  it('rejects only with the contract error codes', () => {
-    const used = new Set([...code(allKotlin()).matchAll(/"(E_[A-Z_]+)"/g)].map((x) => x[1]!));
+  it('rejects only with the contract error codes (DriveDetect with its own: E_BUSY)', () => {
+    for (const m of code(kt('DriveDetectModule')).matchAll(/"(E_[A-Z_]+)"/g)) expect(DRIVE_DETECT_ERROR_CODES as readonly string[]).toContain(m[1]);
+    const used = new Set([...code(allKotlin().replace(kt('DriveDetectModule'), '')).matchAll(/"(E_[A-Z_]+)"/g)].map((x) => x[1]!));
     expect(used.size).toBeGreaterThan(0);
     for (const c of used) expect(DRIVE_SENSE_ERROR_CODES as readonly string[]).toContain(c);
     // The codes Android can raise (README §2 "Errors"); the excludeFromBackup codes are iOS-only.
@@ -309,7 +311,10 @@ describe('native-android: a capture starts only from JS (plan §1 decision 4)', 
   it('the transition receiver never starts the capture service or emits a wake', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
     expect(rx).not.toMatch(/startForegroundService|startService|startNative|startFromJs|CaptureService\.start|ACTION_START|HeadlessJs|getService\(|getForegroundService\(|"wake"/);
-    expect(code(allKotlin())).not.toMatch(/ACTION_START_NATIVE|fun startNative|"wake"|\barmed\b/);
+    // DriveDetect's bridge stores JS's arming (setArmed), and the journal's reader names the Start
+    // card's start source ("wake"); no wake exists anywhere yet (automatic detection comes later).
+    expect(code(allKotlin().replace(kt('DriveDetectModule'), '').replace(kt('RowJournalRead'), ''))).not.toMatch(/ACTION_START_NATIVE|fun startNative|"wake"|\barmed\b/);
+    expect(code(allKotlin())).not.toMatch(/"wake:|GeofencingClient|ACTION_START_NATIVE/);
   });
 
   // The forgot-to-start reminder only notifies.
@@ -585,7 +590,8 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     // JS's stop passes the drive's end; the watchdog's stop passes none (now)
     expect(svc).toMatch(/fun stopFromJs\(context: Context, end: CaptureEnd\?, done: \(\) -> Unit\)[\s\S]*?inst\.endCapture\(clearOpen = true, end = end\)/);
     expect(svc).toMatch(/endCapture\(clearOpen = true, headlessNow = true\)/);
-    expect(MODULE()).toMatch(/AsyncFunction\("stopCapture"\) \{ kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->\s*CaptureService\.stopFromJs\(context, CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\) \{ promise\.resolve\(null\) \}/);
+    // A detector drive's end goes to the detector first (its `js` end); only a plain capture's reaches stopFromJs.
+    expect(MODULE()).toMatch(/AsyncFunction\("stopCapture"\) \{ kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->\s*val ctx = context\s*val end = CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\s*DriveDetector\.get\(ctx\)\.stopCapture\(end\) \{ handled ->\s*if \(handled\) promise\.resolve\(null\) else CaptureService\.stopFromJs\(ctx, end\) \{ promise\.resolve\(null\) \}/);
     const ce = code(kt('CaptureEnd'));
     expect(ce).toMatch(/"dropped" -> CaptureEnd\(null, drivingAtEnd\)/);
     // "auto" (a JS automatic end, sent once DriveDetect has `carLinkState`) is "at" with its cut, marked automatic, as iOS reads it.
@@ -594,7 +600,10 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(ce).toMatch(/else -> null/);
     const rem = code(kt('TripReminder'));
     expect(rem).toMatch(/fun onCaptureEnded\(context: Context, end: CaptureEnd\? = null\) \{\s*val now = now\(\)\s*val drivingEndedAt: Long\? = if \(end == null\) now else end\.drivingEndedAt\s*val drivingAtEnd = end\?\.drivingAtEnd == true\s*save\(context, TripReminderPolicy\.captureEnded\(TripReminderPolicy\.settle\(load\(context\), now, true\), now, drivingEndedAt, drivingAtEnd, true\)\)/);
-    expect(svc.match(/TripReminder\./g)).toHaveLength(2);
+    // A detector drive's end tells it too (nothing known of the end: now).
+    const detectorEnd = /private fun endDetector\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(detectorEnd).toMatch(/TripReminder\.onCaptureEnded\(this, null\)/);
+    expect(svc.match(/TripReminder\./g)).toHaveLength(3);
   });
 
   it('the module: switch and status go to TripReminder; Android needs no reminder location; RoadWise in front takes the note down', () => {
@@ -791,8 +800,10 @@ describe("native-android: the drive notification, Android's Live Activity (plan 
     expect(svc).toMatch(/private fun goForeground\(restart: Boolean = false\): String\?/);
     expect(svc).toMatch(/val notification = DriveNotificationController\.foreground\(this, display, restart\)/);
     // only the START_STICKY restart (no intent) restores the kept state
-    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
-    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(1);
+    // (a detector drive's, then a plain capture's), and a detector drive resumed in a new process
+    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?if \(prefs\.detectorOwned\) \{\s*if \(goForeground\(restart = true\) != null\)[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
+    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(2);
+    expect(svc).toMatch(/ACTION_DETECT -> \{\s*val restart = intent\.getBooleanExtra\(EXTRA_RESTART, false\)\s*val refused = goForeground\(restart = restart\)/);
     expect(svc).toMatch(/display\?\.let \{ DriveNotificationController\.update\(this, it\) \}/);
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(begin).toMatch(/display = null/);
@@ -943,7 +954,7 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(fn).toMatch(/else -> null/);
     expect(fn).toMatch(/catch \(_: Exception\) \{\s*null\s*\}/);
     const svc = code(kt('CaptureService'));
-    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*pedometer\?\.steps\?\.let \{ body\["steps"\] = it \}\s*EventBus\.emit\("row", body\)/);
+    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*pedometer\?\.steps\?\.let \{ body\["steps"\] = it \}\s*val detector = if \(detectorCapture\) DriveDetector\.peek\(\) else null\s*if \(detector != null\) detector\.onRow\(row, body\) else EventBus\.emit\("row", body\)/);
     expect(code(kt('Types'))).not.toMatch(/"call"/);
     // One Kotlin reading of the call state: the audio-mode rules live in PhoneStateReceiver alone.
     for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt') && x !== 'PhoneStateReceiver.kt')) {
@@ -1061,7 +1072,7 @@ describe('native-android: RoadWise in front (AppVisibility)', () => {
     const src = code(pkg);
     expect(src).toMatch(/class DriveSensePackage : Package \{/);
     expect(src).toMatch(/override fun createApplicationLifecycleListeners\(context: Context\): List<ApplicationLifecycleListener> =/);
-    expect(src).toMatch(/override fun onCreate\(application: Application\) \{\s*AppVisibility\.register\(application\)\s*\}/);
+    expect(src).toMatch(/override fun onCreate\(application: Application\) \{\s*AppVisibility\.register\(application\)\s*try \{\s*DriveDetector\.get\(application\)\.resumeAtLaunch\(\)/);
     // the late fallback in the module, seeded from the activity on screen
     expect(MODULE()).toMatch(/\(context as\? Application\)\?\.let \{ AppVisibility\.registerLate\(it, appContext\.currentActivity\) \}/);
   });

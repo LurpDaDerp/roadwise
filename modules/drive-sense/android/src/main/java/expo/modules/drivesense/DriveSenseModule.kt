@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.ActivityCompat
+import expo.modules.drivesense.detect.DriveDetector
 import expo.modules.interfaces.permissions.PermissionsResponseListener
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
@@ -119,6 +120,12 @@ class DriveSenseModule : Module() {
         promise.reject(coded("E_PERMISSION", "startCapture needs location permission"))
         return@AsyncFunction
       }
+      // A detector drive records (or waits to resume): it is the capture; nothing more starts (iOS's
+      // capture answers the same). A running one takes the mode.
+      if (DriveDetector.get(ctx).recordingNow) {
+        if (CaptureService.isCapturing) CaptureService.startFromJs(ctx, if (mode in MODES) mode else "mounted") { promise.resolve(null) } else promise.resolve(null)
+        return@AsyncFunction
+      }
       CaptureService.startFromJs(ctx, if (mode in MODES) mode else "mounted") { code ->
         if (code == null) {
           promise.resolve(null)
@@ -130,8 +137,13 @@ class DriveSenseModule : Module() {
 
     // The drive's end for the reminder (README §2): kind "now" (nothing known), "dropped" (the drive
     // was not kept) or "at" (its driving ended at endedAt), and whether the car was at driving speed.
+    // A detector drive's end from JS (its cut, journaled as the `js` end); else a plain capture's.
     AsyncFunction("stopCapture") { kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->
-      CaptureService.stopFromJs(context, CaptureEnd.of(kind, endedAt, drivingAtEnd)) { promise.resolve(null) }
+      val ctx = context
+      val end = CaptureEnd.of(kind, endedAt, drivingAtEnd)
+      DriveDetector.get(ctx).stopCapture(end) { handled ->
+        if (handled) promise.resolve(null) else CaptureService.stopFromJs(ctx, end) { promise.resolve(null) }
+      }
     }
 
     AsyncFunction("setCaptureRate") { rate: String, promise: Promise ->
