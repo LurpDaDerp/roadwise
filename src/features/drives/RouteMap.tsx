@@ -130,10 +130,10 @@ export function endPlace(id: string | null | undefined): FixedKind | null {
 }
 
 /**
- * The start disc would sit under the destination pin on screen at this zoom (a drive back to where
- * it began): anywhere a 30 pt disc would touch the 32 × 44 pin standing on `end`. The start then
- * shows the plain circle round the pin's tip, and the pin's head alone carries the place; zooming
- * in far enough to part them brings the icon back. False before the map has a scale.
+ * The start disc would sit under the destination pin on screen at this zoom: anywhere a 30 pt disc
+ * would touch the 32 × 44 pin standing on `end`. On a drive back to the same saved place the start
+ * then shows the plain circle round the pin's tip, and the pin's head alone carries the place;
+ * zooming in far enough to part them brings the icon back. False before the map has a scale.
  */
 export function startUnderPin(start: LatLng, end: LatLng, metersPerPx: number): boolean {
   const o = screenOffset(end, start, metersPerPx);
@@ -278,7 +278,8 @@ export function highlightCaption(e: LocalDriveEvent): string {
  * route, framed with it. The drive's ends are marked: a round start marker where it began (the
  * lead-in's start, else the route's first point) and an ink teardrop pin with its tip on the
  * route's last point, each with the icon of a saved Home, Work or School (`ends`, `endPlace`);
- * a start under the pin on screen stays the plain circle (`startUnderPin`).
+ * on a drive back to the same saved place, a start under the pin on screen stays the plain circle
+ * (`startUnderPin`). Event pins draw over both ends, so a pin at either end keeps its tap.
  */
 export function RouteMap({
   runs: visible,
@@ -326,8 +327,9 @@ export function RouteMap({
   const shown = view && region && view.base === region ? view.at : region;
   const mPerPx = shown ? metersPerPixel(shown, side) : 0;
   const shapes = marks.map((m) => (m.stretch.length >= 2 && markShape(m.lengthM, mPerPx) === 'line' ? 'line' : 'dot'));
-  // A drive back to where it began: the pin's head carries the place, the start under it is plain.
-  const startIcon = fromPlace && startAt && endAt && startUnderPin(startAt, endAt, mPerPx) ? null : fromPlace;
+  // A drive back to the same saved place: the pin's head carries it, the start under it is plain.
+  // Any other start keeps its icon, partly under the pin if need be, so the place is never lost.
+  const startIcon = fromPlace && fromPlace === toPlace && startAt && endAt && startUnderPin(startAt, endAt, mPerPx) ? null : fromPlace;
   const settling = useSettling(`${side > 0}|${marks.map((m, i) => `${m.id}:${shapes[i]}`).join(',')}|${ring ? highlighted?.id : ''}|${startIcon}|${toPlace}`);
   const selected = selectedId && marks.some((m) => m.id === selectedId) ? (events.find((e) => e.id === selectedId) ?? null) : null;
   const onLayout = (e: LayoutChangeEvent) => setSide(Math.round(e.nativeEvent.layout.width));

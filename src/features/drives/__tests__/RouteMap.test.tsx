@@ -402,6 +402,40 @@ describe('a drive back to where it began', () => {
     expect(screen.getByTestId('map-summary')).toHaveProp('accessibilityLabel', 'Route map, from Home to Home, no events marked');
   });
 
+  test.each<[string, RouteEnds, string | null]>([
+    ['an end that matched no saved place', { fromLabel: 'Home', toLabel: 'Near Home', fromPlace: 'home', toPlace: null }, null],
+    ['another saved place', { fromLabel: 'Home', toLabel: 'Work', fromPlace: 'home', toPlace: 'work' }, 'briefcase-outline'],
+    ['a place of your own', { fromLabel: 'Home', toLabel: 'Gym', fromPlace: 'home', toPlace: 'p-gym' }, null],
+  ])('a start under the pin of %s keeps its icon, so the place still shows', async (_, ends, pinIcon) => {
+    await draw(<RouteMap runs={[ROUTE]} lead={[parked, ROUTE[0]!]} ends={ends} events={[]} highlighted={null} />);
+    await fireEvent(screen.getByTestId('map-canvas', H), 'layout', { nativeEvent: { layout: { width: 340, height: 340 } } });
+    const start = screen.getByTestId('map-start', H);
+    expect(within(start).getByText(glyph('home-outline'), H)).toBeOnTheScreen();
+    expect(within(start).getByTestId('map-start-view', H)).toHaveStyle({ width: START.place + 4 });
+    // Drawn under the pin, which shows its own place or the plain dot.
+    expect(start.props.zIndex).toBeLessThan(screen.getByTestId('map-end', H).props.zIndex as number);
+    const pin = screen.getByTestId('map-end', H);
+    if (pinIcon) expect(within(pin).getByText(glyph(pinIcon as keyof typeof Ionicons.glyphMap), H)).toBeOnTheScreen();
+    else expect(within(pin).queryByText(glyph('home-outline'), H)).toBeNull();
+  });
+
+  test('an event pin on either end draws over it and keeps its tap; the ends keep their icons', async () => {
+    const ends: RouteEnds = { fromLabel: 'Home', toLabel: 'Work', fromPlace: 'home', toPlace: 'work' };
+    const atStart = event({ id: 'go', type: 'hard_accel', tier: 'severe', lat: ROUTE[0]!.lat, lng: ROUTE[0]!.lng });
+    const atEnd = event({ id: 'stop', tier: 'moderate', lat: end.lat, lng: end.lng });
+    await draw(<RouteMap runs={[ROUTE]} ends={ends} events={[atStart, atEnd]} highlighted={null} />);
+    await fireEvent(screen.getByTestId('map-canvas', H), 'layout', { nativeEvent: { layout: { width: 340, height: 340 } } });
+    const z = (id: string) => screen.getByTestId(id, H).props.zIndex as number;
+    expect(z('pin-go')).toBeGreaterThan(z('map-start'));
+    expect(z('pin-stop')).toBeGreaterThan(z('map-end'));
+    expect(within(screen.getByTestId('map-start', H)).getByText(glyph('home-outline'), H)).toBeOnTheScreen();
+    expect(within(screen.getByTestId('map-end', H)).getByText(glyph('briefcase-outline'), H)).toBeOnTheScreen();
+    await fireEvent.press(screen.getByTestId('pin-go'));
+    expect(screen.getByTestId('map-event-title')).toHaveTextContent('Hard start');
+    await fireEvent.press(screen.getByTestId('pin-stop'));
+    expect(screen.getByTestId('map-event-title')).toHaveTextContent('Hard brake');
+  });
+
   test('startUnderPin: anywhere a 30 pt disc would touch the 32 × 44 pin standing on the end', () => {
     const mPerPx = 1; // one metre a point
     const away = (east: number, north: number) => ({ lat: end.lat + north / 111_320, lng: end.lng + east / (111_320 * Math.cos((end.lat * Math.PI) / 180)) });
