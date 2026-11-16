@@ -1,5 +1,7 @@
 // The OS port of the recap notification: the handover wipe finds recaps already delivered (posted
 // with no trigger, they never sit in the pending queue), and only drive summaries.
+import { Platform } from 'react-native';
+
 import { cancelDriveSummaries, createExpoSummaryPort, SUMMARY_CHANNEL_ID } from '@/features/drive/summaryNotifier';
 
 const mockOs = {
@@ -48,6 +50,28 @@ test('a recap posts at once on the drive-recap channel, named in the trigger', a
   expect(req.trigger).toEqual({ channelId: SUMMARY_CHANNEL_ID });
   expect(SUMMARY_CHANNEL_ID).toBe('recaps');
   expect(req.content).not.toHaveProperty('channelId');
+});
+
+// Android 7 has no channels: expo plays the default sound unless the content says `sound: false`.
+// On 8+ (and iOS) it stays unset: the silent channel decides, and a silent build never peeks.
+test.each([
+  ['android', 25, false],
+  ['android', 24, false],
+  ['android', 26, undefined],
+  ['android', 34, undefined],
+  ['ios', '17.4', undefined],
+] as const)('%s %p: the recap content carries sound %p', async (os, version, sound) => {
+  const restoreOS = jest.replaceProperty(Platform, 'OS', os).restore;
+  const versionSpy = jest.spyOn(Platform, 'Version', 'get').mockReturnValue(version);
+  try {
+    await createExpoSummaryPort().schedule({ identifier: 'drive-summary:a', clientTripId: 'a', title: 't', body: 'b', url: '/drives/a?fresh=1' });
+  } finally {
+    versionSpy.mockRestore();
+    restoreOS();
+  }
+  const req = mockOs.posted[0] as { content: Record<string, unknown> };
+  expect(req.content.sound).toBe(sound);
+  if (sound === undefined) expect(req.content).not.toHaveProperty('sound');
 });
 
 test('scheduled() lists the recaps in Notification Center as well as the pending ones, each once, and only drive summaries', async () => {

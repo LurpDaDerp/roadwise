@@ -25,14 +25,14 @@
  * when a drive finalizes.
  */
 import * as Notifications from 'expo-notifications';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { createSettingsRepo, type Db } from '@/data/db';
 import type { DriveHost, LastFinalized } from '@/drive/host';
 import { formatDuration } from '@/features/drives/format';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
-import { RECAP_CHANNEL_ID } from '@/features/notifications/channels';
+import { androidHasChannels, RECAP_CHANNEL_ID } from '@/features/notifications/channels';
 import { formatDistance, type Units } from '@/lib/units';
 
 /** `content.data.kind` of every drive-summary request, so cancels find only ours. */
@@ -117,6 +117,10 @@ export function createExpoSummaryPort(): SummaryNotificationPort {
           body: req.body,
           data: { kind: DRIVE_SUMMARY_KIND, url: req.url, clientTripId: req.clientTripId },
           ...(req.categoryIdentifier ? { categoryIdentifier: req.categoryIdentifier } : {}),
+          // Android 7 has no silent `recaps` channel: the notification's own sound would play (expo
+          // plays the default one unless told not to). On 8+ it stays unset: the channel is silent,
+          // and a notification built silent never shows as a heads-up.
+          ...(Platform.OS === 'android' && !androidHasChannels() ? { sound: false } : {}),
         },
         // Android reads the channel only from the trigger (in `content` it is ignored and the recap
         // lands on expo's fallback channel); a channel-only trigger still posts at once, and on iOS

@@ -39,6 +39,18 @@ export const WEATHER_CHANNEL_ID = 'weather';
 /** "Are you driving?"'s channel (`src/drive/passengerNote.ts`). */
 export const DRIVE_ALERTS_CHANNEL_ID = 'drive_alerts';
 
+/** Android 8 (API 26) added notification channels; below it a notification's own settings decide its sound. */
+export const ANDROID_CHANNELS_API = 26;
+
+/**
+ * Whether an Android phone of this API level has notification channels (Android 8 and later). An
+ * unreadable level reads as current.
+ */
+export function androidHasChannels(api: unknown = Platform.Version): boolean {
+  const v = typeof api === 'number' ? api : Number(api);
+  return !Number.isFinite(v) || v >= ANDROID_CHANNELS_API;
+}
+
 /** Channels an earlier build created whose presentation can no longer be changed in place: deleted. */
 export const RETIRED_CHANNEL_IDS: readonly string[] = ['trips', 'updates'];
 

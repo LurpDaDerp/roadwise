@@ -4,10 +4,10 @@ import { foregroundBehavior, installForegroundHandler, type HandlerApi } from '.
 
 type Handler = Parameters<HandlerApi['setNotificationHandler']>[0];
 
-function install(isRecording: () => boolean, os?: string): NonNullable<Handler> {
+function install(isRecording: () => boolean, os?: string, level?: number): NonNullable<Handler> {
   let installed: Handler = null;
   const api: HandlerApi = { setNotificationHandler: (h) => void (installed = h) };
-  installForegroundHandler({ isRecording, ...(os !== undefined ? { os } : {}) }, api);
+  installForegroundHandler({ isRecording, ...(os !== undefined ? { os } : {}), ...(level !== undefined ? { api: level } : {}) }, api);
   if (installed === null) throw new Error('no handler installed');
   return installed;
 }
@@ -58,6 +58,13 @@ describe('foreground notification handler', () => {
       shouldPlaySound: false,
       shouldSetBadge: false,
     });
+  });
+
+  it('on Android 7 (no channels: the notification itself would sound) keeps the recap quiet in front', async () => {
+    for (const level of [24, 25]) {
+      expect((await install(() => false, 'android', level).handleNotification(note({ kind: 'driveSummary' }))).shouldPlaySound).toBe(false);
+    }
+    expect((await install(() => false, 'android', 26).handleNotification(note({ kind: 'driveSummary' }))).shouldPlaySound).toBe(true);
   });
 
   it('tolerates a notification with no data', async () => {
