@@ -160,8 +160,14 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
   });
 
   it('a new process resumes a drive whose last row is 5 min old or less (a gap past resumeSeq), else ends it as an orphan', () => {
+    const settle = fn(drive(), 'private fun DriveDetector.settleResume(');
+    expect(settle).toMatch(/if \(DetectPolicy\.resumeDecision\(summary\.lastRowTs, startedAt, now\) != ResumeDecision\.RESUME\) \{\s*commitEnd\("orphan", now\)\s*return true/);
+    // Wakes that came while the journal was read wait for it (held with their done), then are
+    // replayed; a sticky restart's service is kept through them, so a drive that ended can watch.
     const resume = fn(drive(), 'internal fun DriveDetector.resumeDrive(');
-    expect(resume).toMatch(/if \(DetectPolicy\.resumeDecision\(summary\.lastRowTs, startedAt, now\) != ResumeDecision\.RESUME\) \{\s*commitEnd\("orphan", now\)/);
+    expect(resume).toMatch(/if \(sticky\) CaptureService\.holdRelease\(\)\s*val ended = settleResume\(driveId, summary\)\s*for \(\(reason, done\) in heldWakes\.drain\(ended, sticky, noop = \{\}\)\) onWake\(reason, done\)\s*if \(sticky\) CaptureService\.endReleaseHold\(\)/);
+    expect(fn(det('DriveDetectorWatch'), 'internal fun DriveDetector.onWake(')).toMatch(/if \(resuming\) \{\s*heldWakes\.hold\(reason, done\)\s*return\s*\}/);
+    expect(kt('CaptureService')).toMatch(/main\.post \{ if \(!releaseHeld && !isCapturing/);
     const sensed = fn(drive(), 'private fun DriveDetector.onResumeSensing(');
     expect(sensed).toMatch(/if \(code != null\) \{[\s\S]*?resumePending = true\s*return\s*\}/);
     expect(sensed).toMatch(/val skipTo = DetectPolicy\.resumeSeq\(s\.topSeq\)\s*nextSeq = skipTo \+ 1/);
