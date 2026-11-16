@@ -1,9 +1,10 @@
 /**
  * The Android headless task (drive-sense README §6).
  *
- * The native `CaptureService` starts a headless JS service under `DriveSenseTask` when it restarts
- * a capture with no app in front: a plain capture's sticky restart after the process died
- * mid-drive, or a drive detector drive resumed from its journal in a new process. The task body
+ * The native `CaptureService` starts a headless JS service under `DriveSenseTask` when a drive
+ * records with no app in front: a plain capture's sticky restart after the process died mid-drive,
+ * a drive detector drive resumed from its journal in a new process, or an automatic drive the
+ * detector's watch confirmed in the background. The task body
  * boots the runtime as a background launch (whose recovery continues the drive the user started,
  * takes the detector's drive in from its journal, or finalizes it as an orphan), lets the host run
  * it to its end, uploads once from the service, and settles. It never starts a drive: with nothing
