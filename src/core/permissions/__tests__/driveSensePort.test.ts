@@ -28,6 +28,20 @@ describe('createDriveSenseResolver', () => {
     expect(without?.isIgnoringBatteryOptimizations).toBeUndefined();
   });
 
+  it("exposes Android's getUnusedAppRestrictions only when the native module has it, refusing an answer outside the contract", async () => {
+    const ds = createFakeDriveSense({ platform: 'android' });
+    let answer: unknown = 'enabled';
+    const native = { getState() {}, getUnusedAppRestrictions: jest.fn(async () => answer) };
+    const port = await createDriveSenseResolver({ loadNative: async () => native, loadWrapper: async () => ds })();
+    expect(await port?.getUnusedAppRestrictions?.()).toBe('enabled');
+    answer = 'disabled';
+    expect(await port?.getUnusedAppRestrictions?.()).toBe('disabled');
+    answer = 42;
+    await expect(port?.getUnusedAppRestrictions?.()).rejects.toThrow('unexpected answer');
+    const without = await createDriveSenseResolver({ loadNative: async () => ({ getState() {} }), loadWrapper: async () => ds })();
+    expect(without?.getUnusedAppRestrictions).toBeUndefined();
+  });
+
   it('forwards getState and requestMotionPermission to the wrapper', async () => {
     const ds = createFakeDriveSense({ platform: 'ios' });
     const port = await createDriveSenseResolver({

@@ -1,11 +1,10 @@
 /**
  * The permission words: Home's one row, the "Don't remind me again" confirmation, and
- * Settings › Permissions. On an iPhone the words speak of drives starting on their own; on Android,
- * of drives started from Home. Each line says only what the reading supports and what it means for a
+ * Settings › Permissions. They speak of drives starting on their own on both phones, each in its own
+ * names: Location Always / "Allow all the time", Motion & Fitness / Physical activity, Background App
+ * Refresh / App battery usage. Each line says only what the reading supports and what it means for a
  * drive; nothing nags. Limits, pinned by tests: Home lines ≤ 60 characters, Settings details ≤ 100.
  */
-import { IDLE_END_S } from '@scoring';
-
 import type { PermissionPlatform } from '@/core/permissions';
 
 import { ANDROID_NEARBY_DEVICES_API, type MissingState, type PermissionId, type PermState } from './registry';
@@ -22,8 +21,6 @@ export interface CopyCtx {
 /** Bluetooth serves only a paired car here (no DashPal). */
 const carOnly = (c: CopyCtx) => c.car === true && c.dashpal !== true;
 const carToo = (c: CopyCtx) => c.car === true && c.dashpal === true;
-
-const IDLE_MIN = Math.round(IDLE_END_S / 60);
 
 export const HOME_LINE_MAX = 60;
 export const DETAIL_MAX = 100;
@@ -42,14 +39,14 @@ export const permissionsCopy = {
   /** The note under the list. */
   about: {
     ios: "With Location set to Always, RoadWise notices drives and records them even when it's closed. Your location is never sold.",
-    android: 'A drive uses location only while it records. Start each drive from Home.',
+    android: "With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.",
   },
   /** The second note: how phone pickups are noticed, which needs no permission. */
   phone: 'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.',
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
-  /** A Settings row's detail for Location Always or Background App Refresh while the Automatic drives switch is off. */
+  /** A Settings row's detail for an automatic drives' row (Location Always, Background App Refresh and their Android rows) while the Automatic drives switch is off. */
   autoOff: 'Only needed for automatic drives, and those are turned off.',
   showOnHome: 'Show on Home',
   home: {
@@ -85,6 +82,9 @@ export function statusWord(state: PermState): StatusWord {
 
 const nearbyDevices = (c: CopyCtx) => c.platform === 'android' && (c.androidApi ?? ANDROID_NEARBY_DEVICES_API) >= ANDROID_NEARBY_DEVICES_API;
 const motionName = (c: CopyCtx) => (c.platform === 'ios' ? 'Motion & Fitness' : 'Physical activity');
+/** Android 12 renamed the unused-app switch (Android 11 only takes the permissions back). */
+const ANDROID_PAUSE_API = 31;
+const pauseName = (c: CopyCtx) => ((c.androidApi ?? ANDROID_PAUSE_API) >= ANDROID_PAUSE_API ? 'Pause app activity if unused' : "Remove permissions if app isn't used");
 
 /** A Settings row's title. */
 export function rowTitle(id: PermissionId, c: CopyCtx): string {
@@ -96,9 +96,11 @@ export function rowTitle(id: PermissionId, c: CopyCtx): string {
     case 'motion':
       return motionName(c);
     case 'locationAlways':
-      return 'Location Always';
+      return c.platform === 'ios' ? 'Location Always' : 'Location all the time';
     case 'backgroundRefresh':
-      return 'Background App Refresh';
+      return c.platform === 'ios' ? 'Background App Refresh' : 'App battery usage';
+    case 'unusedApps':
+      return pauseName(c);
     case 'notifications':
       return 'Notifications';
     case 'bluetooth':
@@ -130,12 +132,13 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
     case 'precise':
       return "Precise Location is off. Drives can't record.";
     case 'locationAlways':
-      return 'Set Location to Always so drives start on their own.';
+      return ios ? 'Set Location to Always so drives start on their own.' : 'Allow Location all the time so drives start on their own.';
     case 'motion':
-      if (ios) return state.reason === 'notYet' ? 'Allow Motion & Fitness so RoadWise can spot drives.' : "Motion & Fitness is off. Drives won't start on their own.";
-      return state.reason === 'notYet' ? `Allow ${motionName(c)} so walking away ends a drive.` : `${motionName(c)} is off. Walking away won't end a drive.`;
+      return state.reason === 'notYet' ? `Allow ${motionName(c)} so RoadWise can spot drives.` : `${motionName(c)} is off. Drives won't start on their own.`;
     case 'backgroundRefresh':
-      return 'Turn on Background App Refresh to catch every drive.';
+      return ios ? 'Turn on Background App Refresh to catch every drive.' : 'Battery use is set to Restricted. Drives may be missed.';
+    case 'unusedApps':
+      return 'Turn off Pause app activity so drives keep starting.';
     case 'notifications':
       return state.reason === 'notYet' ? 'Allow Notifications to get your drive recaps.' : "Notifications are off. You'll miss your drive recaps.";
     case 'bluetooth':
@@ -165,16 +168,16 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
       if (state.kind === 'idle') return 'Allow Location first.';
       return on ? 'RoadWise can notice your drives and record them with the app closed.' : "Drives won't start on their own. You can still start them from Home.";
     case 'motion': {
-      if (ios) {
-        if (on) return 'RoadWise can tell driving from walking, so drives start and end on time.';
-        return state.kind === 'missing' && state.reason === 'denied'
-          ? "Drives won't start on their own. Also check Privacy & Security › Motion & Fitness."
-          : "Without it, drives won't start on their own.";
-      }
-      return on ? 'If you forget to end a drive, it ends when you walk away.' : `Without it, a drive you forget to end stops after ${IDLE_MIN} min.`;
+      if (on) return 'RoadWise can tell driving from walking, so drives start and end on time.';
+      return ios && state.kind === 'missing' && state.reason === 'denied'
+        ? "Drives won't start on their own. Also check Privacy & Security › Motion & Fitness."
+        : "Without it, drives won't start on their own.";
     }
     case 'backgroundRefresh':
-      return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
+      if (ios) return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
+      return on ? 'Android can wake RoadWise when a drive starts.' : "Battery use is set to Restricted, so drives won't start on their own.";
+    case 'unusedApps':
+      return on ? "RoadWise keeps working even if you don't open it for months." : "If RoadWise goes unopened for a few months, Android may pause it and drives won't start.";
     case 'notifications':
       return on ? 'Drive recaps, your weekly and monthly recaps and friend requests can reach you.' : "You won't get drive recaps, your weekly and monthly recaps or friend requests.";
     case 'bluetooth':
@@ -193,14 +196,14 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
 }
 
 /** The Settings button that asks the phone (only where a row can ask). */
-export function requestLabel(id: PermissionId, state: MissingState): string {
+export function requestLabel(id: PermissionId, state: MissingState, c?: CopyCtx): string {
   switch (id) {
     case 'location':
       return state.reason === 'servicesOff' ? 'Turn on location' : 'Allow location';
     case 'precise':
       return 'Allow precise location';
     case 'locationAlways':
-      return 'Allow Always';
+      return c?.platform === 'android' ? 'Allow all the time' : 'Allow Always';
     case 'motion':
       return 'Allow motion';
     case 'notifications':
@@ -209,3 +212,19 @@ export function requestLabel(id: PermissionId, state: MissingState): string {
       return permissionsCopy.openSettings;
   }
 }
+
+/**
+ * Google Play's prominent disclosure for background location (Android), shown right before every
+ * "Allow all the time" request: onboarding's Location step, Home's row and Settings › Permissions
+ * (which Settings › Driving's "Fix it in Permissions" opens). It names the data (location), that it
+ * is collected when the app is closed or not in use, and what for. Play reviews these words: change
+ * them only with the owner's approval.
+ */
+export const backgroundDisclosureCopy = {
+  title: 'Allow location in the background',
+  body: 'RoadWise collects location data to detect and record your drives automatically, even when the app is closed or not in use.',
+  uses: 'During a drive, your location measures your speed and distance, finds the speed limits and checks the local weather. Your drives stay in your RoadWise account, and your location is never sold.',
+  next: 'Next, choose "Allow all the time".',
+  continue: 'Continue',
+  notNow: 'Not now',
+} as const;

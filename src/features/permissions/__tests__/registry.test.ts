@@ -22,7 +22,7 @@ function board(over: Partial<PermissionSnapshot> = {}, rest: Partial<Omit<Permis
 const state = (id: PermissionId, read: PermissionBoardRead): PermState => permissionDef(id).state(read);
 const missing = (reason: string, canAsk: boolean, target = 'app') => ({ kind: 'missing', reason, canAsk, target });
 
-test('every permission has a unique order; only the camera has no Home row; location and precise are required', () => {
+test('every permission has a unique order; only the camera and the Android unused-app tip have no Home row; location and precise are required', () => {
   const orders = PERMISSIONS.map((d) => d.order);
   expect(new Set(orders).size).toBe(orders.length);
   expect(PERMISSIONS.map((d) => [d.id, d.order])).toEqual([
@@ -31,17 +31,51 @@ test('every permission has a unique order; only the camera has no Home row; loca
     ['locationAlways', 25],
     ['motion', 30],
     ['backgroundRefresh', 35],
+    ['unusedApps', 37],
     ['notifications', 40],
     ['bluetooth', 60],
     ['camera', 70],
   ]);
-  expect(PERMISSIONS.filter((d) => !d.homeRow).map((d) => d.id)).toEqual(['camera']);
+  expect(PERMISSIONS.filter((d) => !d.homeRow).map((d) => d.id)).toEqual(['unusedApps', 'camera']);
   expect(PERMISSIONS.filter((d) => d.need === 'required').map((d) => d.id)).toEqual(['location', 'precise']);
-  // The automatic-drive rows are the iPhone's alone: Android gains no row.
-  expect(PERMISSIONS.filter((d) => !d.platforms.includes('android')).map((d) => d.id)).toEqual(['locationAlways', 'backgroundRefresh']);
-  for (const d of PERMISSIONS) expect(d.platforms).toContain('ios');
+  // Both phones list every row but the Android unused-app tip (an iPhone has no such switch).
+  expect(PERMISSIONS.filter((d) => !d.platforms.includes('android')).map((d) => d.id)).toEqual([]);
+  expect(PERMISSIONS.filter((d) => !d.platforms.includes('ios')).map((d) => d.id)).toEqual(['unusedApps']);
   expect(permissionDef('locationAlways').need).toBe('recommended');
   expect(permissionDef('backgroundRefresh').need).toBe('recommended');
+  expect(permissionDef('unusedApps').need).toBe('optional');
+});
+
+describe("automatic drives' rows on Android", () => {
+  const listed = (id: PermissionId, read: PermissionBoardRead) => permissionDef(id).listed?.(read) ?? true;
+
+  it('listed once the drive detector answered (every iPhone lists them)', () => {
+    for (const id of ['locationAlways', 'backgroundRefresh', 'unusedApps'] as const) {
+      expect(listed(id, board({ platform: 'android', canAskAlways: true }))).toBe(true);
+      expect(listed(id, board({ platform: 'android', canAskAlways: null }))).toBe(false);
+    }
+    expect(listed('locationAlways', board({ platform: 'ios', canAskAlways: null }))).toBe(true);
+    expect(listed('backgroundRefresh', board({ platform: 'ios', canAskAlways: null }))).toBe(true);
+  });
+
+  it('Allow all the time: idle without location, granted, else always askable (the detector shows the dialog or its page)', () => {
+    expect(state('locationAlways', board({ platform: 'android', location: 'denied', precise: null, canAskAlways: true }))).toEqual({ kind: 'idle' });
+    expect(state('locationAlways', board({ platform: 'android', location: 'always', canAskAlways: false }))).toEqual({ kind: 'granted' });
+    expect(state('locationAlways', board({ platform: 'android', location: 'foreground', canAskAlways: true }))).toEqual(missing('notYet', true));
+    expect(state('locationAlways', board({ platform: 'android', location: 'foreground', canAskAlways: false }))).toEqual(missing('denied', true));
+  });
+
+  it('battery: only Restricted is missing (Settings only)', () => {
+    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'available', canAskAlways: false }))).toEqual({ kind: 'granted' });
+    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'denied', canAskAlways: false }))).toEqual(missing('denied', false));
+  });
+
+  it('Pause app activity if unused: off is granted, on is missing (Settings only), unread is unknown', () => {
+    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'off' }))).toEqual({ kind: 'granted' });
+    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'on' }))).toEqual(missing('denied', false));
+    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: null }))).toEqual({ kind: 'unknown' });
+    expect(state('unusedApps', board({ platform: 'android' }))).toEqual({ kind: 'unknown' });
+  });
 });
 
 describe('location', () => {
@@ -174,14 +208,16 @@ describe('camera (never on Home, never requested here)', () => {
   });
 });
 
-test('Bluetooth, the camera and Background App Refresh never ask the phone from here', () => {
+test('Bluetooth, the camera, Background App Refresh (and Android battery) and the unused-app tip never ask the phone from here', () => {
   const reads = [
     board({ platform: 'android' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true } }),
     board({ platform: 'ios', backgroundRefresh: 'denied' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true } }),
+    board({ platform: 'android', backgroundRefresh: 'denied', canAskAlways: true, unusedAppPause: 'on' }, { paired: true, bluetooth: 'denied', camera: { access: 'denied', canAskAgain: true } }),
   ];
   for (const read of reads) {
-    const ids = read.snapshot.platform === 'ios' ? (['bluetooth', 'camera', 'backgroundRefresh'] as const) : (['bluetooth', 'camera'] as const);
+    const ids = read.snapshot.platform === 'ios' || read.snapshot.backgroundRefresh !== null ? (['bluetooth', 'camera', 'backgroundRefresh', 'unusedApps'] as const) : (['bluetooth', 'camera'] as const);
     for (const id of ids) {
+      if (id === 'unusedApps' && read.snapshot.platform === 'ios') continue;
       const s = state(id, read);
       expect(s.kind).toBe('missing');
       if (s.kind === 'missing') expect(s.canAsk).toBe(false);

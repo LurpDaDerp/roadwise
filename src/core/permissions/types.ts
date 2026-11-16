@@ -42,14 +42,25 @@ export interface PermissionSnapshot {
   /** iOS Low Power Mode / Android Battery Saver; null when it could not be read. */
   lowPowerMode: boolean | null;
   /**
-   * iOS Background App Refresh for RoadWise (automatic drives need it), from the drive detector;
-   * null on Android or when it could not be read.
+   * What lets the phone wake RoadWise when a drive starts (automatic drives want it), from the drive
+   * detector: iOS Background App Refresh; Android's battery usage for RoadWise, `denied` only while
+   * it is set to Restricted (Optimized, the default, and Unrestricted are both `available`). null
+   * where the phone has no drive detector or it could not be read.
    */
   backgroundRefresh: 'available' | 'denied' | 'restricted' | null;
-  /** iOS: the one Location Always request is still available (While Using held, not yet asked); null on Android or unreadable. */
+  /**
+   * The Location Always request (Android: "Allow all the time") can still be shown: While Using
+   * held, not yet asked (iOS asks once). From the drive detector; null where it has none or unreadable.
+   */
   canAskAlways: boolean | null;
-  /** iOS: Live Activities are allowed for RoadWise; null on Android or unreadable. */
+  /** The drive's lock-screen surface is allowed: iOS Live Activities, Android the drive notification. null without a detector or unreadable. */
   liveActivities: boolean | null;
+  /**
+   * Android 11 and later: whether the phone may pause RoadWise and take its permissions back after a
+   * few months unopened ("Pause app activity if unused"): `on` (it may), `off`. null (or absent) on
+   * iOS, below Android 11, or where it could not be read.
+   */
+  unusedAppPause?: 'on' | 'off' | null;
   /** epoch ms, integer */
   checkedAt: number;
 }

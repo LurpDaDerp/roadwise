@@ -110,8 +110,12 @@ export interface PermissionBoard {
   read: PermissionBoardRead | null;
   prefs: HomePrefs;
   refresh(mode?: RefreshMode): Promise<void>;
-  /** The tap on a missing row (no-op for one that is not missing). Rejects when the phone call failed. */
-  fix(id: PermissionId, opts?: { markReturn?: boolean }): Promise<FixOutcome | null>;
+  /**
+   * The tap on a missing row (no-op for one that is not missing). Rejects when the phone call failed.
+   * `disclose`: the screen's background-location disclosure (`useBackgroundDisclosure().ask`), which
+   * Android needs for Location Always: without it that fix rejects and asks nothing.
+   */
+  fix(id: PermissionId, opts?: { markReturn?: boolean; disclose?: () => Promise<boolean> }): Promise<FixOutcome | null>;
   /** "Don't remind me again". Rejects when it could not be stored. */
   hide(id: PermissionId): Promise<void>;
   /** Show on Home. Rejects when it could not be stored. */
@@ -215,19 +219,23 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   }, [read, prefsQuery.data, settings, commitPrefs]);
 
   const fix = useCallback(
-    async (id: PermissionId, opts: { markReturn?: boolean } = {}): Promise<FixOutcome | null> => {
+    async (id: PermissionId, opts: { markReturn?: boolean; disclose?: () => Promise<boolean> } = {}): Promise<FixOutcome | null> => {
       // The read and prefs the tap was made on.
       const r = read;
       if (r === null || !prefsSettled) return null;
       const state = permissionDef(id).state(r);
       const which = fixFor(id, state, prefs);
       if (which === null || state.kind !== 'missing') return null;
+      const android = r.snapshot.platform === 'android';
+      // Google Play: no background-location path on Android without the prominent disclosure.
+      if (android && id === 'locationAlways' && !opts.disclose) throw new Error('Location Always on Android needs the background-location disclosure');
       const outcome = await runFix(id, state, which, {
         adapter,
         settings,
         now,
         markReturn: opts.markReturn,
-        ensureChannels: r.snapshot.platform === 'android' ? (deps.ensureChannels ?? defaultEnsureChannels) : undefined,
+        discloseBackground: android ? opts.disclose : undefined,
+        ensureChannels: android ? (deps.ensureChannels ?? defaultEnsureChannels) : undefined,
         requestDeviceSync: deps.requestDeviceSync ?? requestDeviceSync,
         reread: async () => {
           await refresh('fresh');

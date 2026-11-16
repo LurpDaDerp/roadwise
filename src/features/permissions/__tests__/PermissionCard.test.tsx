@@ -261,7 +261,7 @@ test('a fix that fails shows "That didn\'t work. Try again." in the row until th
   });
   expect(screen.getByTestId('home-permission-line')).toHaveTextContent("That didn't work. Try again.");
   d.rerender({ ...board, read: read({ platform: 'android', motion: 'undetermined' }) });
-  await waitFor(() => expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Allow Physical activity so walking away ends a drive.'));
+  await waitFor(() => expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Allow Physical activity so RoadWise can spot drives.'));
 });
 
 test('hiding the shown row shows the next one; a hidden row stays hidden', async () => {
@@ -290,4 +290,34 @@ test('an iPhone kept at While Using shows the Location Always line on Home', asy
   await draw(fakeBoard(read({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' })));
   expect(screen.getByTestId('home-permission-locationAlways')).toBeOnTheScreen();
   expect(screen.getByText('Set Location to Always so drives start on their own.')).toBeOnTheScreen();
+});
+
+test('Android with the drive detector: the Allow all the time row, whose tap carries the background-location disclosure', async () => {
+  const board = fakeBoard(read({ platform: 'android', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' }));
+  await draw(board);
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Allow Location all the time so drives start on their own.');
+  expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Allow');
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('home-permission-locationAlways'));
+  });
+  expect(board.fix).toHaveBeenCalledWith('locationAlways', { disclose: expect.any(Function) });
+  // The disclosure is the card's own: ask() shows it, and Not now answers false.
+  const { disclose } = board.fix.mock.calls[0]![1] as { disclose: () => Promise<boolean> };
+  let choice: Promise<boolean> = Promise.resolve(true);
+  await act(async () => {
+    choice = disclose();
+  });
+  expect(screen.getByTestId('background-disclosure-body')).toHaveTextContent(/even when the app is closed or not in use/);
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('background-disclosure-not-now'));
+  });
+  await expect(choice).resolves.toBe(false);
+});
+
+test('Android: battery set to Restricted is a Home row; Android without the detector shows no automatic-drive row', async () => {
+  await draw(fakeBoard(read({ platform: 'android', location: 'always', canAskAlways: false, backgroundRefresh: 'denied' })));
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Battery use is set to Restricted. Drives may be missed.');
+  expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
+  await draw(fakeBoard(read({ platform: 'android', location: 'foreground', canAskAlways: null, backgroundRefresh: null })));
+  expect(screen.queryByTestId('home-permissions')).toBeNull();
 });

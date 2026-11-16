@@ -3,7 +3,9 @@
  * Fix it alike. A request is the driver's own tap, so it is never throttled, and it stamps the 14-day
  * history so the app's own later offers wait (policy.ts). Bluetooth, the camera and Background App
  * Refresh never request: they only open the phone's settings. Location Always asks once (iOS shows
- * that prompt once), then opens Settings.
+ * that prompt once), then opens Settings. On Android every Location Always tap, a request or
+ * Settings alike, first shows Google Play's prominent disclosure (`discloseBackground`): Not now
+ * asks nothing and opens nothing.
  *
  * The no-effect rule: after a request the board is read again; if the permission is still missing
  * in the same state (a dialog the phone did not show, one dismissed, Android notifications switched
@@ -29,11 +31,18 @@ export interface FixDeps {
   requestDeviceSync?: () => void;
   /** Stamp the "back from Settings" acknowledgement before opening Settings (Settings › Permissions). */
   markReturn?: boolean;
+  /**
+   * Android: Google Play's prominent disclosure, shown before any Location Always fix; resolves true
+   * on Continue. Only with it does the adapter ask for "Allow all the time".
+   */
+  discloseBackground?: () => Promise<boolean>;
 }
 
 export type FixOutcome =
   | { kind: 'requested'; read: PermissionBoardRead | null; noEffect: boolean }
-  | { kind: 'opened' };
+  | { kind: 'opened' }
+  /** The driver chose Not now on the background-location disclosure: nothing was asked or opened. */
+  | { kind: 'declined' };
 
 const allowed = (n: NotificationAccess) => n === 'granted' || n === 'provisional';
 
@@ -46,7 +55,7 @@ export function requestable(id: PermissionId, state: MissingState): boolean {
   return id === 'location' || id === 'precise' || id === 'locationAlways' || id === 'motion' || id === 'notifications';
 }
 
-async function request(id: PermissionId, state: MissingState, deps: FixDeps): Promise<void> {
+async function request(id: PermissionId, state: MissingState, deps: FixDeps, disclosed: boolean): Promise<void> {
   const { adapter } = deps;
   switch (id) {
     case 'location':
@@ -63,7 +72,7 @@ async function request(id: PermissionId, state: MissingState, deps: FixDeps): Pr
       await stamp(deps, 'location');
       return;
     case 'locationAlways':
-      await adapter.requestLocationAlways();
+      await adapter.requestLocationAlways({ disclosed });
       await stamp(deps, 'location');
       return;
     case 'motion':
@@ -97,11 +106,16 @@ async function openTarget(state: MissingState, deps: FixDeps): Promise<void> {
  * nothing; the caller shows "That didn't work. Try again."
  */
 export async function runFix(id: PermissionId, state: MissingState, fix: Fix, deps: FixDeps): Promise<FixOutcome> {
+  let disclosed = false;
+  if (id === 'locationAlways' && deps.discloseBackground) {
+    if (!(await deps.discloseBackground())) return { kind: 'declined' };
+    disclosed = true;
+  }
   if (fix === 'settings' || !requestable(id, state)) {
     await openTarget(state, deps);
     return { kind: 'opened' };
   }
-  await request(id, state, deps);
+  await request(id, state, deps, disclosed);
   const read = await deps.reread();
   if (read === null) return { kind: 'requested', read, noEffect: false };
   const after = permissionDef(id).state(read);

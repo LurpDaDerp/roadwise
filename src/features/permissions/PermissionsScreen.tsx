@@ -6,6 +6,7 @@ import { useAutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
+import { useBackgroundDisclosure } from './BackgroundDisclosure';
 import { fixFor, overall, settingsRows } from './board';
 import { permissionsCopy as copy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from './copy';
 import { HealthRow } from './HealthRow';
@@ -18,7 +19,9 @@ import { usePermissionBoard, type PermissionBoardDeps } from './usePermissionBoa
  * Settings page; Bluetooth and the camera only Settings). A permission hidden from Home offers Show
  * on Home. A fix is the driver's own tap, so it goes to the phone directly; back from Settings, the
  * phone is read again. With the Automatic drives switch off, a missing Location Always or Background
- * App Refresh reads Not in use, says it is only needed for automatic drives, and leaves the summary.
+ * App Refresh (and Android's "Pause app activity if unused") reads Not in use, says it is only needed
+ * for automatic drives, and leaves the summary. On Android, Location Always's fix first shows Google
+ * Play's background-location disclosure.
  */
 export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps }) {
   const th = useTheme();
@@ -26,13 +29,14 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
   const autoDisabled = useAutoDrives().state === 'disabled';
   const [busy, setBusy] = useState<PermissionId | null>(null);
   const [failed, setFailed] = useState(false);
+  const disclosure = useBackgroundDisclosure();
 
   const onFix = async (id: PermissionId) => {
     if (busy) return;
     setBusy(id);
     setFailed(false);
     try {
-      await board.fix(id, { markReturn: true });
+      await board.fix(id, { markReturn: true, disclose: disclosure.ask });
     } catch {
       setFailed(true);
     } finally {
@@ -78,7 +82,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
         <Section testID="permissions-rows">
           {rows.map((r) => {
             const fix = fixFor(r.id, r.state, board.prefs);
-            const label = fix === null || r.state.kind !== 'missing' ? null : fix === 'request' ? requestLabel(r.id, r.state) : copy.openSettings;
+            const label = fix === null || r.state.kind !== 'missing' ? null : fix === 'request' ? requestLabel(r.id, r.state, ctx) : copy.openSettings;
             return (
               <HealthRow
                 key={r.id}
@@ -117,6 +121,7 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
           {copy.phone}
         </Text>
       </View>
+      {disclosure.sheet}
     </Screen>
   );
 }

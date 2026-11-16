@@ -223,3 +223,27 @@ describe('readPermissionBoard', () => {
     expect((await readPermissionBoard(d)).androidApi).toBeNull();
   });
 });
+
+describe('Android with the drive detector', () => {
+  const detector = (over: Partial<PermissionSnapshot> = {}) =>
+    board({ platform: 'android', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', unusedAppPause: 'on', ...over });
+
+  it("lists automatic drives' rows (and the unused-app tip) only once the detector answered", () => {
+    expect(boardRows(detector()).map((r) => r.id)).toEqual(['location', 'precise', 'locationAlways', 'motion', 'backgroundRefresh', 'unusedApps', 'notifications', 'bluetooth', 'camera']);
+    expect(boardRows(board({ platform: 'android' })).map((r) => r.id)).toEqual(['location', 'precise', 'motion', 'notifications', 'bluetooth', 'camera']);
+  });
+
+  it('Home asks for Allow all the time first, then the battery; never the unused-app tip; none of them with Automatic drives off', () => {
+    expect(homeCard(detector(), prefs(), false)).toMatchObject({ row: { id: 'locationAlways' }, more: 1 });
+    expect(homeCard(detector({ location: 'always' }), prefs(), false)).toMatchObject({ row: { id: 'backgroundRefresh' }, more: 0 });
+    expect(homeCard(detector({ location: 'always', backgroundRefresh: 'available' }), prefs(), false)).toEqual({ row: null, more: 0 });
+    expect(homeCard(detector(), prefs(), false, true)).toEqual({ row: null, more: 0 });
+  });
+
+  it('Settings marks all three Not in use while Automatic drives is off, and the summary leaves them out', () => {
+    const rows = settingsRows(detector(), prefs(), true);
+    expect(rows.filter((r) => r.autoOff).map((r) => r.id)).toEqual(['locationAlways', 'backgroundRefresh', 'unusedApps']);
+    expect(overall(rows)).toBe('ok');
+    expect(overall(settingsRows(detector(), prefs(), false))).toBe('attention');
+  });
+});

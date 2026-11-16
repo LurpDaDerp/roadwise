@@ -380,27 +380,54 @@ describe('camera (read only)', () => {
   });
 });
 
-describe('automatic drives (iOS): Location Always, Background App Refresh, Live Activities', () => {
-  it('the snapshot reads them from the drive detector on iOS; null on Android and when unreadable', async () => {
+describe('automatic drives: Location Always, Background App Refresh, Live Activities (and their Android counterparts)', () => {
+  it('the snapshot reads them from the drive detector on both phones; null without one and when unreadable', async () => {
     const detect = createFakeDriveDetect({ permissions: { backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false } });
     const ios = await createPermissionsAdapter(makeDeps('ios', { driveDetect: detect }).deps).snapshot();
     expect(ios).toMatchObject({ backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false });
-    const android = await createPermissionsAdapter(makeDeps('android', { driveDetect: detect }).deps).snapshot();
-    expect(android).toMatchObject({ backgroundRefresh: null, canAskAlways: null, liveActivities: null });
+    const androidDetect = createFakeDriveDetect({ platform: 'android', permissions: { backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false } });
+    const android = await createPermissionsAdapter(makeDeps('android', { driveDetect: androidDetect }).deps).snapshot();
+    expect(android).toMatchObject({ backgroundRefresh: 'denied', canAskAlways: true, liveActivities: false });
+    expect(await createPermissionsAdapter(makeDeps('android', { driveDetect: null }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null, liveActivities: null });
     const failing: DriveDetectPort = { getState: () => Promise.reject(new Error('x')), requestAlways: () => Promise.reject(new Error('x')) };
     expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: failing }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null });
   });
 
-  it('iOS: the one Always request through the detector; Android asks nothing and answers as it stands', async () => {
+  it('iOS: the one Always request through the detector', async () => {
     const detect = createFakeDriveDetect({ permissions: { location: 'whenInUse', canAskAlways: true } });
     detect.setAlwaysAnswer('always');
     const ios = makeDeps('ios', { driveDetect: detect });
     expect(await createPermissionsAdapter(ios.deps).requestLocationAlways()).toBe('always');
     expect(detect.calls).toEqual(['requestAlways']);
-    const android = makeDeps('android', { driveDetect: detect });
-    expect(await createPermissionsAdapter(android.deps).requestLocationAlways()).toBe('whenInUse');
+  });
+
+  it('Android asks for Allow all the time only right after the disclosure; without it, nothing is asked', async () => {
+    const detect = createFakeDriveDetect({ platform: 'android', permissions: { location: 'whenInUse', canAskAlways: true } });
+    detect.setAlwaysAnswer('always');
+    const undisclosed = makeDeps('android', { driveDetect: detect });
+    expect(await createPermissionsAdapter(undisclosed.deps).requestLocationAlways()).toBe('whenInUse');
+    expect(await createPermissionsAdapter(undisclosed.deps).requestLocationAlways({ disclosed: false })).toBe('whenInUse');
+    expect(detect.calls).toEqual([]);
+    expect(undisclosed.calls).toEqual(['location.getForeground', 'location.getBackground', 'location.getForeground', 'location.getBackground']);
+    const disclosed = makeDeps('android', { driveDetect: detect });
+    expect(await createPermissionsAdapter(disclosed.deps).requestLocationAlways({ disclosed: true })).toBe('always');
     expect(detect.calls).toEqual(['requestAlways']);
-    expect(android.calls).toEqual(['location.getForeground', 'location.getBackground']);
+    // A phone without the detector: the answer as it stands.
+    expect(await createPermissionsAdapter(makeDeps('android', { driveDetect: null }).deps).requestLocationAlways({ disclosed: true })).toBe('whenInUse');
+  });
+
+  it("Android 11+: Pause app activity if unused, read from drive-sense where the build has it", async () => {
+    const ds = createFakeDriveSense({ platform: 'android' });
+    const port = (answer: () => Promise<'enabled' | 'disabled' | 'unavailable'>): DriveSensePort => ({ ...withBattery(ds), getUnusedAppRestrictions: answer });
+    const read = async (p: DriveSensePort, platform: PermissionPlatform = 'android', api = 34) =>
+      (await createPermissionsAdapter({ ...makeDeps(platform, { driveSense: p }).deps, androidApiLevel: () => api }).snapshot()).unusedAppPause;
+    expect(await read(port(async () => 'enabled'))).toBe('on');
+    expect(await read(port(async () => 'disabled'))).toBe('off');
+    expect(await read(port(async () => 'unavailable'))).toBeUndefined();
+    expect(await read(port(() => Promise.reject(new Error('x'))))).toBeUndefined();
+    expect(await read(withBattery(ds))).toBeUndefined();
+    expect(await read(port(async () => 'enabled'), 'android', 29)).toBeUndefined();
+    expect(await read(port(async () => 'enabled'), 'ios')).toBeUndefined();
   });
 
   it('with no detector, or a failed request, the answer as it stands', async () => {

@@ -101,6 +101,8 @@ export type BluetoothAccess = 'granted' | 'off' | 'denied' | 'undetermined' | 'u
 
 export const ANDROID_BT_PERMISSIONS = ['android.permission.BLUETOOTH_SCAN', 'android.permission.BLUETOOTH_CONNECT'] as const;
 export const ANDROID_FINE_LOCATION = 'android.permission.ACCESS_FINE_LOCATION';
+/** Android 11: the first with unused-app permission revocation ("Pause app activity if unused" from 12). */
+export const ANDROID_UNUSED_APP_API = 30;
 
 export interface PermissionsAdapterDeps {
   platform: PermissionPlatform;
@@ -109,7 +111,7 @@ export interface PermissionsAdapterDeps {
   battery: BatteryPort;
   linking: LinkingPort;
   driveSense: () => Promise<DriveSensePort | null>;
-  /** iOS: the drive detector (automatic drives' permissions, the Always request). Default: the native one; null on Android. */
+  /** The drive detector (automatic drives' permissions, the Always request). Default: the native one; null where there is none. */
   driveDetect?: () => Promise<DriveDetectPort | null>;
   now: () => number;
   /** Default: the DashPal transport's radio, loaded on first use. */
@@ -169,12 +171,14 @@ export interface PermissionsAdapter {
    */
   requestBluetooth(): Promise<BluetoothAccess>;
   /**
-   * iOS, on the driver's tap (onboarding, the Permissions screen): the one Location Always request
-   * automatic drives need, through the drive detector (While Using must already be held; asked once
-   * per install, then the answer as it stands). Android asks nothing (drives start from the Start
-   * card): the answer as it stands. `denied` when location could not be read at all.
+   * On the driver's tap (onboarding, Home's row, the Permissions screen): the Location Always request
+   * automatic drives need, through the drive detector (While Using must already be held). iOS asks
+   * once per install, then answers as it stands. Android asks for "Allow all the time" (the system
+   * dialog, or its settings page on Android 11 and later) only with `disclosed`: the caller showed
+   * Google Play's prominent disclosure right before and the driver chose Continue; without it,
+   * Android asks nothing and answers as it stands. `denied` when location could not be read at all.
    */
-  requestLocationAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
+  requestLocationAlways(opts?: { disclosed?: boolean }): Promise<'always' | 'whenInUse' | 'denied'>;
 }
 
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
@@ -370,10 +374,9 @@ export function createPermissionsAdapter(
     }
   }
 
-  /** iOS: what the drive detector reads of automatic drives' permissions; all null on Android or when unreadable. */
+  /** What the drive detector reads of automatic drives' permissions (iOS and Android); all null without a detector or when unreadable. */
   async function readDetect(): Promise<Pick<PermissionSnapshot, 'backgroundRefresh' | 'canAskAlways' | 'liveActivities'>> {
     const none = { backgroundRefresh: null, canAskAlways: null, liveActivities: null };
-    if (deps.platform !== 'ios') return none;
     try {
       const port = await (deps.driveDetect ?? resolveDriveDetect)();
       if (port === null) return none;
@@ -381,6 +384,21 @@ export function createPermissionsAdapter(
       return { backgroundRefresh: p.backgroundRefresh, canAskAlways: p.canAskAlways, liveActivities: p.liveActivities };
     } catch {
       return none;
+    }
+  }
+
+  /**
+   * Android 11 and later: "Pause app activity if unused" (null on iOS, older Android, a native build
+   * without the read, a phone without the feature, or a failed read).
+   */
+  async function readUnusedAppPause(port: DriveSensePort | null): Promise<'on' | 'off' | null> {
+    if (deps.platform !== 'android' || !port?.getUnusedAppRestrictions) return null;
+    if ((deps.androidApiLevel ?? (() => ANDROID_UNUSED_APP_API))() < ANDROID_UNUSED_APP_API) return null;
+    try {
+      const v = await port.getUnusedAppRestrictions();
+      return v === 'enabled' ? 'on' : v === 'disabled' ? 'off' : null;
+    } catch {
+      return null;
     }
   }
 
@@ -395,7 +413,7 @@ export function createPermissionsAdapter(
   return {
     async snapshot() {
       const port = await deps.driveSense();
-      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode, locationServices, detect] = await Promise.all([
+      const [{ fg, bg }, notif, motion, batteryOptimization, lowPowerMode, locationServices, detect, unusedAppPause] = await Promise.all([
         readLocation(),
         deps.notifications.getPermissionsAsync(),
         readMotion(port),
@@ -403,6 +421,7 @@ export function createPermissionsAdapter(
         readLowPower(),
         readServices(),
         readDetect(),
+        readUnusedAppPause(port),
       ]);
       const location = toLocationAccess(fg, bg);
       return {
@@ -417,6 +436,8 @@ export function createPermissionsAdapter(
         batteryOptimization,
         lowPowerMode,
         ...detect,
+        // Only where it was read, so a snapshot without it is shaped as before.
+        ...(unusedAppPause !== null ? { unusedAppPause } : {}),
         checkedAt: deps.now(),
       };
     },
@@ -526,7 +547,7 @@ export function createPermissionsAdapter(
       return fromRadio(await radio.startRadio());
     },
 
-    async requestLocationAlways() {
+    async requestLocationAlways(opts) {
       const asIs = async (): Promise<'always' | 'whenInUse' | 'denied'> => {
         try {
           const access = await locationAccess();
@@ -535,7 +556,8 @@ export function createPermissionsAdapter(
           return 'denied';
         }
       };
-      if (deps.platform !== 'ios') return asIs();
+      // Google Play: Android never asks for background location without the disclosure just shown.
+      if (deps.platform !== 'ios' && opts?.disclosed !== true) return asIs();
       try {
         const port = await (deps.driveDetect ?? resolveDriveDetect)();
         return port === null ? await asIs() : await port.requestAlways();
