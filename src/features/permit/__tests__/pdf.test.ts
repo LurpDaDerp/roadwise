@@ -108,6 +108,16 @@ describe('the share sheet', () => {
     expect(removed).toEqual(['file:///a.pdf']);
   });
 
+  test('Android: a shared PDF stays for the app picked (the stale sweep takes it); a failed share still deletes it', async () => {
+    const removed: string[] = [];
+    const remove = (uri: string) => removed.push(uri);
+    const print = async () => ({ uri: 'file:///cache/Print/a.pdf' });
+    expect(await sharePracticeLog('x', { platform: 'android', isAvailable: async () => true, print, share: async () => undefined, remove })).toBe(true);
+    expect(removed).toEqual([]);
+    expect(await sharePracticeLog('x', { platform: 'android', isAvailable: async () => true, print, share: () => Promise.reject(new Error('no')), remove })).toBe(false);
+    expect(removed).toEqual(['file:///cache/Print/a.pdf']);
+  });
+
   test('the defaults: expo-print and expo-sharing', async () => {
     jest.doMock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
     expect(await sharePracticeLog('<p>x</p>', { remove: () => {} })).toBe(true);

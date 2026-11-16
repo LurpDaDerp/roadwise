@@ -12,12 +12,13 @@ export interface ExportDeps {
   account?: AccountDeps;
   exportData?: () => Promise<ExportResult>;
   share?: (json: string) => Promise<ExportShareOutcome>;
+  /** The platform whose share sheet takes the file (default: this phone's). */
   platform?: string;
 }
 
-export type ExportState = 'idle' | 'working' | 'saved' | 'offline' | 'too_many' | 'failed';
+export type ExportState = 'idle' | 'working' | 'offline' | 'too_many' | 'failed';
 
-/** `account-export`, then the file goes to the share sheet (iOS) or a folder picker (Android). */
+/** `account-export`, then the file goes to the system share sheet. */
 export function useExport(deps: ExportDeps = {}) {
   const [state, setState] = useState<ExportState>('idle');
   const run = async () => {
@@ -28,14 +29,13 @@ export function useExport(deps: ExportDeps = {}) {
       setState(r.reason);
       return;
     }
-    const outcome = await (deps.share ?? ((json: string) => shareExport(json)))(r.json);
-    setState(outcome === 'failed' ? 'failed' : outcome === 'saved' ? 'saved' : 'idle');
+    const outcome = await (deps.share ?? ((json: string) => shareExport(json, { platform: deps.platform })))(r.json);
+    setState(outcome === 'failed' ? 'failed' : 'idle');
   };
   return { state, run };
 }
 
 export function ExportMessage({ state }: { state: ExportState }) {
-  if (state === 'saved') return <Banner testID="export-saved" tone="success" message={copy.saved} />;
   if (state === 'offline') return <Banner testID="export-offline" tone="info" message={copy.offline} />;
   if (state === 'too_many') return <Banner testID="export-too-many" tone="warning" message={copy.tooMany} />;
   if (state === 'failed') return <Banner testID="export-failed" tone="warning" message={copy.failed} />;

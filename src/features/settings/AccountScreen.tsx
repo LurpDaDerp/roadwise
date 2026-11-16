@@ -1,5 +1,4 @@
 import { useRouter } from 'expo-router';
-import { Platform } from 'react-native';
 
 import { useMySummary } from '@/data/server/summary';
 import { Avatar, Button, Card, ListRow, Screen, Text, useTheme } from '@/ui';
@@ -22,7 +21,6 @@ export function AccountScreen({ deps = {} }: { deps?: ExportDeps }) {
   const username = useMySummary().data?.profile.username ?? null;
   const exporter = useExport(deps);
   const { signOut, signingOut } = useSignOutFlow();
-  const android = (deps.platform ?? Platform.OS) === 'android';
 
   return (
     <Screen scroll testID="account-screen">
@@ -36,7 +34,7 @@ export function AccountScreen({ deps = {} }: { deps?: ExportDeps }) {
         </Card>
       ) : null}
 
-      <Section title={copy.export.title} footer={android ? copy.export.androidNote : undefined}>
+      <Section title={copy.export.title}>
         <ListRow
           title={exporter.state === 'working' ? copy.export.working : copy.export.action}
           subtitle={copy.export.body}

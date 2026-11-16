@@ -2,9 +2,8 @@ import { exportFileName, shareExport, type ExportFsLike } from '../exportShare';
 
 const NOW = new Date(2026, 8, 26, 10, 30).getTime();
 
-function fakeFs(opts: { pick?: 'ok' | 'cancel'; writeFails?: boolean } = {}) {
+function fakeFs(opts: { writeFails?: boolean } = {}) {
   const files: { parts: unknown[]; content: string | null; deleted: boolean; created: boolean }[] = [];
-  const picked: { name: string; mime: string | null; content: string | null }[] = [];
   class File {
     parts: unknown[];
     rec: (typeof files)[number];
@@ -30,32 +29,8 @@ function fakeFs(opts: { pick?: 'ok' | 'cancel'; writeFails?: boolean } = {}) {
       this.rec.deleted = true;
     }
   }
-  const fs = {
-    Paths: { cache: 'CACHE' },
-    File,
-    Directory: {
-      pickDirectoryAsync: jest.fn(async () => {
-        if (opts.pick === 'cancel') throw new Error('cancelled');
-        return {
-          createFile: (name: string, mime: string | null) => {
-            const rec = { name, mime, content: null as string | null };
-            picked.push(rec);
-            return {
-              uri: `content://picked/${name}`,
-              exists: true,
-              create() {},
-              write(content: string) {
-                if (opts.writeFails) throw new Error('disk full');
-                rec.content = content;
-              },
-              delete() {},
-            };
-          },
-        };
-      }),
-    },
-  };
-  return { fs: fs as unknown as ExportFsLike, files, picked };
+  const fs = { Paths: { cache: 'CACHE' }, File };
+  return { fs: fs as unknown as ExportFsLike, files };
 }
 
 test('the file is named for the day', () => {
@@ -102,19 +77,27 @@ describe('iOS: a file through the share sheet, deleted afterwards', () => {
   });
 });
 
-describe('Android: saved into the folder the driver picks', () => {
-  test('saved as JSON', async () => {
+describe('Android: a file through the share sheet, left for the app picked (the stale sweep deletes it)', () => {
+  test('shared as JSON through the sheet; the file stays', async () => {
     const f = fakeFs();
     const share = jest.fn();
-    expect(await shareExport('{"a":1}', { platform: 'android', share, loadFs: async () => f.fs, now: () => NOW })).toBe('saved');
-    expect(f.picked).toEqual([{ name: 'roadwise-data-2026-09-26.json', mime: 'application/json', content: '{"a":1}' }]);
+    const shareFile = jest.fn(async () => undefined);
+    expect(await shareExport('{"a":1}', { platform: 'android', share, shareFile, loadFs: async () => f.fs, now: () => NOW })).toBe('shared');
+    expect(shareFile).toHaveBeenCalledWith('file:///cache/export/roadwise-data-2026-09-26.json', { mimeType: 'application/json', dialogTitle: 'Export my data' });
     expect(share).not.toHaveBeenCalled();
+    expect(f.files[0]?.content).toBe('{"a":1}');
+    expect(f.files[0]?.deleted).toBe(false);
   });
 
-  test('no folder chosen: dismissed; a write that fails: failed', async () => {
-    const f = fakeFs({ pick: 'cancel' });
-    expect(await shareExport('{}', { platform: 'android', loadFs: async () => f.fs, now: () => NOW })).toBe('dismissed');
+  test('a sheet that fails or a write that fails is a failure, and the file goes', async () => {
+    const f = fakeFs();
+    const shareFile = jest.fn(async () => {
+      throw new Error('no sheet');
+    });
+    expect(await shareExport('{}', { platform: 'android', shareFile, loadFs: async () => f.fs, now: () => NOW })).toBe('failed');
+    expect(f.files[0]?.deleted).toBe(true);
     const g = fakeFs({ writeFails: true });
-    expect(await shareExport('{}', { platform: 'android', loadFs: async () => g.fs, now: () => NOW })).toBe('failed');
+    expect(await shareExport('{}', { platform: 'android', shareFile, loadFs: async () => g.fs, now: () => NOW })).toBe('failed');
+    expect(shareFile).toHaveBeenCalledTimes(1);
   });
 });
