@@ -25,12 +25,14 @@ function alertsOf(rows: FeatureRow[], c: DetectorContext = ctx()): { i: number; 
 }
 
 describe('a use row', () => {
-  test('handled (score 0.6 or more) with the IMU read; on iPhone never during a call; Android always', () => {
+  test('handled (score 0.6 or more) with the IMU read; never during a call, on iPhone and Android alike', () => {
     expect(isUseRow(row({ handlingScore: 0.6, gravityStability: 0.7 }), 'ios')).toBe(true);
     expect(isUseRow(row({ handlingScore: 0.59, gravityStability: 0.7 }), 'ios')).toBe(false);
     expect(isUseRow(row({ ...handled, call: 'live' }), 'ios')).toBe(false);
     expect(isUseRow(row({ ...handled, call: 'ring' }), 'ios')).toBe(false);
-    expect(isUseRow(row({ ...handled, call: 'live' }), 'android')).toBe(true);
+    expect(isUseRow(row({ ...handled, call: 'live' }), 'android')).toBe(false);
+    expect(isUseRow(row({ ...handled, call: 'ring' }), 'android')).toBe(false);
+    expect(isUseRow(row(handled), 'android')).toBe(true);
     expect(isUseRow(row(NO_IMU), 'ios')).toBe(false);
     expect(isUseRow(row({ ...handled, handlingScore: Number.NaN }), 'android')).toBe(false);
   });
@@ -146,10 +148,10 @@ describe('phone pickups (phone plan P1)', () => {
     expect(only(run(seq([10, at(35)], [16, use(35)], [20, at(35)]), c).all)).toMatchObject({ startedAt: T0 + 10_000, durationS: 16 });
   });
 
-  test('iPhone: handling during a call is never a pickup (hands-free cannot be told from handheld); Android counts it', () => {
+  test('handling during a call is never a pickup (hands-free cannot be told from handheld), on iPhone and Android alike', () => {
     const rows = seq([10, at(35)], [10, use(35, { call: 'live' })], [20, at(35)]);
     expect(run(rows, ctx({ platform: 'ios' })).all).toEqual([]);
-    expect(only(run(rows, ctx({ platform: 'android' })).all)).toMatchObject({ durationS: 10 });
+    expect(run(rows, ctx({ platform: 'android' })).all).toEqual([]);
     // A call that starts mid-pickup on iPhone ends the use rows there: put down 10 s later.
     const mid = seq([10, at(35)], [5, use(35)], [20, use(35, { call: 'ring' })], [20, at(35)]);
     expect(only(run(mid, ctx({ platform: 'ios' })).all)).toMatchObject({ durationS: 5 });

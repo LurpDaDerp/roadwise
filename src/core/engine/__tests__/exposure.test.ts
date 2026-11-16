@@ -180,10 +180,10 @@ describe('phone time (phone plan P2): the seconds a pickup could have been seen'
     expect(run(list).phoneS).toBe(2);
   });
 
-  test('on an iPhone a call row is no phone time (it can never be phone use); on Android it is', () => {
+  test('a call row is no phone time (it can never be phone use), on iPhone and Android alike', () => {
     const list = speeds(hold(30, 6)).map((r, i) => (i >= 2 && i < 5 ? { ...r, call: i === 2 ? ('ring' as const) : ('live' as const) } : r));
     expect(run(list, () => false, 'ios').phoneS).toBe(3);
-    expect(run(list, () => false, 'android').phoneS).toBe(6);
+    expect(run(list, () => false, 'android').phoneS).toBe(3);
   });
 
   test('closeExposure keeps phoneS within movingS', () => {

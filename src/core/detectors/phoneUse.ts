@@ -2,9 +2,10 @@
 // whatever app is in front and with RoadWise in front or behind alike.
 //
 // - **A use row:** a second of the phone being handled (`handlingScore` ≥ `PHONE_HANDLING_MIN_SCORE`)
-//   whose motion sensors reported (an IMU-absent row is evidence of nothing). On iPhone a row with a
-//   call (`call` set, ringing or connected) is never a use row, live and rebuilt alike: iOS cannot
-//   tell hands-free from handheld. Android motion is never suppressed by a call.
+//   whose motion sensors reported (an IMU-absent row is evidence of nothing). A row with a call
+//   (`call` set, ringing or connected) is never a use row, live and rebuilt alike, on either phone:
+//   iOS cannot tell hands-free from handheld, and Android reads a call the same way so both phones
+//   score a drive alike.
 // - **An episode** opens on any use row, from the drive's first row (no warm-up: a pickup needs
 //   driving speed anyway).
 // - **A pickup** (the episode confirmed): `PHONE_PICKUP_MIN_ROWS` use rows, and one of them at driving
@@ -45,9 +46,13 @@ export const CLOSE_AFTER_QUIET_ROWS = 2;
 const QUIET_MS = PHONE_PUTDOWN_QUIET_S * 1000;
 const MOVING_MPS = MOVING_MIN_MPH * MPS_PER_MPH;
 
-/** A use row (see the header): handled, on a second a pickup could be seen in (the IMU read, and on iPhone no call). */
-export function isUseRow(row: FeatureRow, platform: DetectorContext['platform']): boolean {
-  return row.handlingScore >= PHONE_HANDLING_MIN_SCORE && phoneWatchable(row, platform);
+/**
+ * A use row (see the header): handled, on a second a pickup could be seen in (the IMU read, and no
+ * call). `_platform`: the phone that recorded the drive, which no longer changes the answer (both
+ * read a call row alike); kept so the callers' shape stays as it was.
+ */
+export function isUseRow(row: FeatureRow, _platform?: DetectorContext['platform']): boolean {
+  return row.handlingScore >= PHONE_HANDLING_MIN_SCORE && phoneWatchable(row);
 }
 
 interface Episode {
@@ -114,7 +119,7 @@ export function createPhoneUseDetector(newId: () => string): PhoneUseDetector {
       //    between. An episode not yet a pickup: two seconds without a use row (a gap in the rows) drop it.
       let out: DetectedEvent[] = [];
       if (ep !== null && row.ts - (ep.lastUseTs + ROW_MS) >= (ep.confirmed ? QUIET_MS : CLOSE_AFTER_QUIET_ROWS * ROW_MS)) out = close();
-      const use = isUseRow(row, ctx.platform);
+      const use = isUseRow(row);
       if (ep === null) {
         if (!use) return out;
         ep = {

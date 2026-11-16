@@ -33,7 +33,7 @@ export interface ExposureState {
   /**
    * Phone use's opportunities, the seconds a pickup could have been seen: rows at driving speed
    * (`atDrivingSpeed`: a known, trusted GPS speed of 10 mph or more) on which a use row was possible
-   * (`phoneWatchable`: the motion sensors reported, and on iPhone no call), one second each. The
+   * (`phoneWatchable`: the motion sensors reported, and no call), one second each. The
    * warm-up's rows count: at 10 mph they are rare (a drive that starts moving has none), and the
    * counter stays a reducer of the row alone.
    */
@@ -119,17 +119,19 @@ function turn(s: Turn, ts: number, course: number): Turn {
 
 /**
  * One row. `limitUsable`: the speeding detector could use the row (an actionable posted limit,
- * trusted speed, a good fix, past the warm-up). `platform`: the phone that recorded the drive (on
- * iPhone a call row is no phone time). Returns a new frozen state; the input is untouched.
+ * trusted speed, a good fix, past the warm-up). A call row is no phone time on either phone
+ * (`phoneWatchable`); `_platform`, the phone that recorded the drive, no longer changes the answer
+ * and is kept so the callers' shape stays as it was. Returns a new frozen state; the input is
+ * untouched.
  */
-export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, limitUsable: boolean, platform: 'ios' | 'android'): Readonly<ExposureState> {
+export function noteExposure(state: Readonly<ExposureState>, row: FeatureRow, limitUsable: boolean, _platform?: 'ios' | 'android'): Readonly<ExposureState> {
   const v = speedTrusted(row) ? knownSpeedMph(row) : null;
   if (v === null) return state;
   const swung = swing(state, v);
   const qualifies = row.gnssValid && row.course >= 0 && row.course <= 360 && v >= TURN_MIN_MPH;
   const turned = qualifies ? turn(state, row.ts, row.course) : state;
   const limitS = state.limitS + (limitUsable && v >= LIMIT_MIN_MPH ? 1 : 0);
-  const phoneS = state.phoneS + (atDrivingSpeed(row) && phoneWatchable(row, platform) ? 1 : 0);
+  const phoneS = state.phoneS + (atDrivingSpeed(row) && phoneWatchable(row) ? 1 : 0);
   return Object.freeze({
     slowdowns: swung.slowdowns,
     speedups: swung.speedups,

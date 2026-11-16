@@ -792,10 +792,10 @@ describe('a phone pickup (phone plan P4)', () => {
     expect((await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup')).toHaveLength(2);
   });
 
-  test('on an iPhone a handled phone during a call is never a pickup; on Android it is', async () => {
+  test('a handled phone during a call is never a pickup, on iPhone and Android alike', async () => {
     for (const [platform, count] of [
       ['ios', 0],
-      ['android', 1],
+      ['android', 0],
     ] as const) {
       // Each drive taps Start at T0, as its rows begin.
       clock = T0;

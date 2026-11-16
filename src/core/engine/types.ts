@@ -10,7 +10,7 @@ import type { RoadCondition, RoadGrip, RoadStamp } from '@/core/road';
  *
  * The field list is the native row contract (frozen on Android), so every field stays; nothing in
  * JS reads `locked`, `screenOn`, `appForeground` or `exempt` (phone use is motion only); the phone
- * detector reads `call` on iPhone.
+ * detector reads `call` on both phones.
  */
 export interface FeatureRow {
   /**
@@ -58,8 +58,8 @@ export interface FeatureRow {
   mock?: boolean;
   /**
    * A call during the row (bridge-only, like `mock`): `ring` or `live`; absent with none. Stored with
-   * the row. On iPhone a row with a call is never phone use (`detectors/phoneUse.ts`): iOS cannot
-   * tell hands-free from handheld. Android motion is never suppressed by a call.
+   * the row. A row with a call is never phone use on either phone (`detectors/phoneUse.ts`): iOS
+   * cannot tell hands-free from handheld, and Android reads a call the same way.
    */
   call?: 'ring' | 'live';
   /**
@@ -100,7 +100,7 @@ export interface DetectorContext {
    * and phone pickups do not wait for it.
    */
   warmupEndsAt: number;
-  /** The phone that recorded the drive: on iPhone a row with a call is never phone use. */
+  /** The phone that recorded the drive. A row with a call is never phone use on either. */
   platform: 'ios' | 'android';
 }
 

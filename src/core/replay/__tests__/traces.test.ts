@@ -57,8 +57,8 @@ test.each(names)('%s is a 1 Hz drive that asserts something', (name) => {
  * the limit seconds. The synthetic drives run straight east, so only
  * `turn-right-90` turns; a 35 → 25 mph brake is a 10 mph drop, under the 12 mph slowdown line. Phone
  * seconds are every row at 10 mph or more on a trusted speed on which a pickup could be seen (the
- * motion sensors read; on iPhone no call: `phone-hands-free-call` loses its 20 call rows, Android's
- * `phone-call-android` keeps them), the warm-up's included.
+ * motion sensors read, and no call: `phone-hands-free-call` and Android's `phone-call-android` each
+ * lose their 20 call rows), the warm-up's included.
  */
 const EXPOSURE: Record<string, readonly [number, number, number, number, number, number]> = {
   'clean-commute': [0, 0, 0, 300, 300, 300],
@@ -71,7 +71,7 @@ const EXPOSURE: Record<string, readonly [number, number, number, number, number,
   'hard-corner-plausible': [0, 0, 0, 200, 200, 200],
   'hard-corner-straight': [0, 0, 0, 200, 200, 200],
   'hard-corner-wrong-side': [0, 0, 0, 200, 200, 200],
-  'phone-call-android': [0, 0, 0, 200, 200, 200],
+  'phone-call-android': [0, 0, 0, 200, 200, 180],
   'phone-handling-long': [0, 0, 0, 240, 240, 240],
   'phone-hands-free-call': [0, 0, 0, 200, 200, 180],
   'phone-parked-start': [0, 1, 0, 120, 120, 120],
