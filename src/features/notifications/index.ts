@@ -3,7 +3,18 @@
  * response listener (`NotificationsHost`), which also opens the driving screen from the drive's
  * recording note.
  */
-export { DEVICE_CHANNELS, ensureAndroidChannels, type ChannelsApi, type DeviceChannel } from './channels';
+export {
+  DEVICE_CHANNELS,
+  DRIVE_ALERTS_CHANNEL_ID,
+  ensureAndroidChannels,
+  PUSH_CHANNEL_ID,
+  RECAP_CHANNEL_ID,
+  RETIRED_CHANNEL_IDS,
+  WEATHER_CHANNEL_ID,
+  type ChannelsApi,
+  type DeviceChannel,
+  type DeviceChannelId,
+} from './channels';
 export { ensureNotificationSetup, type SetupApi } from './categories';
 export { notificationCopy } from './copy';
 export { foregroundBehavior, installForegroundHandler, type HandlerApi } from './handler';

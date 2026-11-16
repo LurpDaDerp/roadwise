@@ -616,19 +616,20 @@ describe('a drive', () => {
   });
 });
 
-// iOS: the native detector as a fake beside the fake capture.
-function buildIos(over: Over = {}, opts: { appState?: string } = {}) {
-  const source = createFakeDriveSense({ platform: 'ios', now: () => clock });
+// iOS: the native detector as a fake beside the fake capture. `platform: 'android'`: the same pair
+// on an Android detector build (the host told it runs on Android).
+function buildIos(over: Over = {}, opts: { appState?: string; platform?: 'ios' | 'android' } = {}) {
+  const source = createFakeDriveSense({ platform: opts.platform ?? 'ios', now: () => clock });
   // Native journals every row and emits it live; `lossy` drops the live copy (a row JS missed).
   const link = { lossy: false };
-  const detect = createFakeDriveDetect({ now: () => clock, sense: { emit: (e, p) => (link.lossy ? undefined : source.emit(e, p as never)) } });
+  const detect = createFakeDriveDetect({ now: () => clock, platform: opts.platform ?? 'ios', sense: { emit: (e, p) => (link.lossy ? undefined : source.emit(e, p as never)) } });
   // A JS end reaches native through stopCapture (two fakes, one phone).
   const stop = source.stopCapture.bind(source);
   source.stopCapture = async (end) => {
     await stop(end);
     detect.jsStop(end?.drivingEndedAt ?? clock);
   };
-  const h = build({ source, detect: detect as DriveDetectApi, ...over });
+  const h = build({ source, detect: detect as DriveDetectApi, ...(opts.platform ? { platform: opts.platform } : {}), ...over });
   if (opts.appState) h.appState.set(opts.appState);
   return { ...h, source, detect, link };
 }
@@ -2347,6 +2348,94 @@ describe('iOS: the push-to-start once the confirming rows are in (plan decision 
     h.scheduler.fire();
     await flush(h);
     expect(p.pushed).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+});
+
+describe('Android with a drive detector: its paths by capability, the push-to-start by platform (WP01)', () => {
+  const flush = async (h: Pick<I, 'host'>) => {
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.settled();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+
+  async function autoBehind(platform: 'ios' | 'android', pushed: PushToStartRequest[]) {
+    const h = buildIos({ pushToStart: async (req) => (pushed.push(req), true) }, { appState: 'background', platform });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(30, { speedMps: 15 }));
+    await flush(h);
+    return h;
+  }
+
+  test('a drive that opens behind starts the drive notification itself and never asks the server for a push-to-start', async () => {
+    const pushed: PushToStartRequest[] = [];
+    const h = await autoBehind('android', pushed);
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: NATIVE });
+    expect(h.display.log[0]).toMatch(/^start /);
+    expect(pushed).toEqual([]);
+    expect(h.scheduler.delays()).not.toContain(PUSH_START_WAIT_MS);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the same drive on iOS: no local start behind, the server is asked once (unchanged)', async () => {
+    const pushed: PushToStartRequest[] = [];
+    const h = await autoBehind('ios', pushed);
+    expect(h.display.log.filter((l) => l.startsWith('start'))).toEqual([]);
+    expect(pushed).toHaveLength(1);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('iOS without a detector (Expo Go, an older build): a Start-card drive behind still starts its display, never a push', async () => {
+    const pushed: PushToStartRequest[] = [];
+    const h = build({ platform: 'ios', pushToStart: async (req) => (pushed.push(req), true) });
+    await h.host.boot();
+    h.appState.set('background');
+    await drive(h, rows(20, { speedMps: 15 }));
+    await flush(h);
+    expect(h.host.snapshot().status).toBe('recording');
+    expect(h.display.log[0]).toMatch(/^start /);
+    expect(pushed).toEqual([]);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('"Not driving?" goes to native (no stopCapture), as on iOS', async () => {
+    const h = buildIos({}, { platform: 'android' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(60, { speedMps: 15 }));
+    expect(await h.host.cancelDrive()).toBe(true);
+    await h.host.settled();
+    expect(h.detect.calls).toContain('notDriving');
+    expect(h.source.calls).not.toContain('stopCapture');
+    expect(await createTripsRepo(db).get(NATIVE)).toBeNull();
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('the Start card opens the drive through the detector (startWaiting), not a plain capture', async () => {
+    const h = buildIos({}, { platform: 'android' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+    expect(h.detect.calls).toContain('startWaiting');
+    expect(h.source.calls).not.toContain('startCapture:mounted');
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  test("an automatic end (the car link's) tells native it was automatic, so its stopCapture sends 'auto'", async () => {
+    const h = buildIos({}, { platform: 'android' });
+    await h.host.boot();
+    await h.detect.setArmed(true, 'user-1');
+    h.detect.wake();
+    await confirm(h, rows(40, { speedMps: 15 }));
+    const parked = rows(30, { t0: T0 + 40_000, speedMps: 0 });
+    await feedIos(h, parked.slice(0, 5));
+    h.detect.setCarGoneSince(T0 + 45_000);
+    await feedIos(h, parked.slice(5, 20));
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { clientTripId: NATIVE, endCause: 'stopped' } });
+    expect(h.source.captureEnds.at(-1)).toMatchObject({ automatic: true });
     await h.host.stop({ endOpenTrip: false });
   });
 });

@@ -15,6 +15,7 @@ import { ensurePassengerCategory } from '../categories';
 import { NotificationsHost } from '../NotificationsHost';
 import { PASSENGER_ACTION_ID, PASSENGER_CATEGORY_ID, PASSENGER_WINDOW_MS, passengerOffered, passengerTapOf, recapCategory } from '../passenger';
 import { routeForResponse } from '../responses';
+import { runAs } from '@/lib/__fixtures__/platform';
 
 const mockNotifications = { listener: null as null | ((r: unknown) => void), last: null as unknown };
 
@@ -209,5 +210,62 @@ describe('the host', () => {
     expect(h.confirm).not.toHaveBeenCalled();
     expect(h.navigate).not.toHaveBeenCalled();
     expect(await createSettingsRepo(db).get('notifications.pendingHref')).toMatchObject({ href: `/drives/${ID}?fresh=1` });
+  });
+});
+
+describe('on Android: the same action, button and host', () => {
+  runAs('android');
+
+  async function mountAndroid(o: { ready?: boolean } = {}) {
+    const navigate = jest.fn();
+    const confirm = jest.fn(async () => true);
+    let ready = o.ready ?? true;
+    const ui = () => (
+      <DataProvider db={db} now={() => T}>
+        <NotificationsHost isRecording={() => false} isDriveRecording={() => false} isBusy={() => false} subscribeBusy={() => () => {}} navigate={navigate} ready={ready} confirmPassenger={confirm} />
+      </DataProvider>
+    );
+    const view = await render(ui());
+    const settle = async () => {
+      for (let i = 0; i < 10; i += 1) await act(async () => Promise.resolve());
+    };
+    await settle();
+    return {
+      navigate,
+      confirm,
+      press: async (r: unknown) => {
+        await act(async () => mockNotifications.listener?.(r));
+        await settle();
+      },
+      setReady: async (r: boolean) => {
+        ready = r;
+        await view.rerender(ui());
+        await settle();
+      },
+    };
+  }
+
+  test('the category is registered with the one button, its curly apostrophe kept', async () => {
+    const set = jest.fn(async () => null);
+    await ensurePassengerCategory({ setNotificationCategoryAsync: set } as never, 'android');
+    expect(set).toHaveBeenCalledWith(PASSENGER_CATEGORY_ID, [{ identifier: PASSENGER_ACTION_ID, buttonTitle: 'I wasn’t driving', options: { opensAppToForeground: true } }]);
+  });
+
+  test('the button confirms and marks the drive', async () => {
+    await drive();
+    const h = await mountAndroid();
+    await h.press(tap(PASSENGER_ACTION_ID));
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+    expect(await createTripsRepo(db).get(ID)).toMatchObject({ status: 'not_driving' });
+  });
+
+  test('a cold start from the button (getLastNotificationResponse) asks once the navigator is up', async () => {
+    await drive();
+    mockNotifications.last = tap(PASSENGER_ACTION_ID, ID, 9);
+    const h = await mountAndroid({ ready: false });
+    expect(h.confirm).not.toHaveBeenCalled();
+    await h.setReady(true);
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+    expect(h.navigate).not.toHaveBeenCalled();
   });
 });

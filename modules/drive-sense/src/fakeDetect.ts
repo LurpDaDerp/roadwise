@@ -39,8 +39,20 @@ import type {
 } from './detect/types';
 
 export interface FakeDetectOptions {
-  /** Whether the module exists (default true; false = Android, Jest without a fake, web). */
+  /** Whether the module exists (default true; false = a build without it, Jest without a fake, web). */
   available?: boolean;
+  /**
+   * Whether the build has the car link (`carLinkState`; default: `available`). False is a detector
+   * build without it (an older iPhone build, or an Android build before its car link): the car-link
+   * methods then reject "not in this native build", as the real module's do, and `carLink` is never heard.
+   */
+  carLinkAvailable?: boolean;
+  /**
+   * The phone the detector runs on (default 'ios'). Only labels the fake (`platform`); the detector
+   * contract is the same on both, and the host decides from its own `platform` what is iOS-only (the
+   * Live Activity's push-to-start).
+   */
+  platform?: 'ios' | 'android';
   /** The clock (default `Date.now`). */
   now?: () => number;
   /** Deliver events on a microtask, as native does. Default false. */
@@ -103,6 +115,8 @@ export interface FakeDetectControls {
   /** The car link's "disconnected since" for the live drive (native's debounced signal), or null. */
   setCarGoneSince(at: number | null): void;
   readonly carLink: CarLinkState;
+  /** The phone the fake stands for (`FakeDetectOptions.platform`). */
+  readonly platform: 'ios' | 'android';
 }
 
 const PERMISSIONS: DetectPermissions = {
@@ -120,6 +134,8 @@ const newId = (): string => `00000000-0000-4000-8000-${(++idSeq).toString(16).pa
 export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetectApi & FakeDetectControls {
   const now = opts.now ?? Date.now;
   const available = opts.available ?? true;
+  const carLinkOn = available && (opts.carLinkAvailable ?? true);
+  const platform = opts.platform ?? 'ios';
   let permissions: DetectPermissions = { ...PERMISSIONS, ...opts.permissions };
   let alwaysAnswer: 'always' | 'whenInUse' | 'denied' | null = null;
   let carMotion = false;
@@ -267,6 +283,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
 
   const resolve = <T>(v: T): Promise<T> => Promise.resolve(v);
   const absent = (method: string) => Promise.reject(new Error(`DriveDetect.${method}: not available (Android, Jest, Expo Go or web)`));
+  const notInBuild = (method: string) => Promise.reject(new Error(`DriveDetect.${method}: not in this native build`));
   const busy = () => Object.assign(new Error('DriveDetect.discardDrive: the drive is still recording'), { code: 'E_BUSY' as const });
 
   const api: DriveDetectApi & FakeDetectControls = {
@@ -274,7 +291,10 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       return available;
     },
     get carLinkAvailable() {
-      return available;
+      return carLinkOn;
+    },
+    get platform() {
+      return platform;
     },
     setArmed(armed, ownerId) {
       calls.push(`setArmed:${String(armed)}`);
@@ -397,11 +417,13 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     carLinkState() {
       calls.push('carLinkState');
       if (!available) return absent('carLinkState');
+      if (!carLinkOn) return notInBuild('carLinkState');
       return resolve(carLink());
     },
     pairCar(uid) {
       calls.push(`pairCar:${uid}`);
       if (!available) return absent('pairCar');
+      if (!carLinkOn) return notInBuild('pairCar');
       let known = carRoute.find((o) => o.uid === uid);
       for (const d of [...carDrives].reverse()) known ??= d.outputs.find((o) => o.uid === uid);
       if (known && !cars.some((c) => c.uid === uid) && cars.length < DETECT.CARS_MAX) {
@@ -414,6 +436,7 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     forgetCar(uid) {
       calls.push(`forgetCar:${uid}`);
       if (!available) return absent('forgetCar');
+      if (!carLinkOn) return notInBuild('forgetCar');
       cars = cars.filter((c) => c.uid !== uid);
       carChanged();
       return resolve(carLink());
@@ -421,12 +444,15 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
     notMyCar(uid) {
       calls.push(`notMyCar:${uid}`);
       if (!available) return absent('notMyCar');
+      if (!carLinkOn) return notInBuild('notMyCar');
       if (!notMine.includes(uid)) notMine = [...notMine, uid].slice(-DETECT.CAR_NOT_MINE_MAX);
       carChanged();
       return resolve(carLink());
     },
     addListener<E extends DriveDetectEvent>(event: E, fn: (p: DriveDetectEvents[E]) => void): DetectSubscription {
       if (!available) return { remove() {} };
+      // A build without the car link has no such event.
+      if (event === 'carLink' && !carLinkOn) return { remove() {} };
       const listener = fn as (p: unknown) => void;
       let set = listeners.get(event);
       if (!set) {

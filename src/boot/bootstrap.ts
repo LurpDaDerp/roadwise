@@ -542,13 +542,17 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       permissions: deps.permissions ?? defaultPermissions(db),
       lastPosition: deps.lastPosition ?? defaultLastPosition,
       detect,
+      // iOS only: the server push-starts a Live Activity for a drive that opens behind. Android posts
+      // its drive notification itself, so it never calls `live-activity-start`.
       pushToStart:
-        deps.pushToStart ??
-        createPushToStart({
-          deviceId: () => getInstallId(createSettingsRepo(db)),
-          invoke: (name, options) => identity.supabase.functions.invoke(name, options),
-          onError,
-        }),
+        Platform.OS === 'ios'
+          ? (deps.pushToStart ??
+            createPushToStart({
+              deviceId: () => getInstallId(createSettingsRepo(db)),
+              invoke: (name, options) => identity.supabase.functions.invoke(name, options),
+              onError,
+            }))
+          : undefined,
       voiceEnabled: deps.voiceEnabled ?? defaultVoiceEnabled,
       appState,
       alertsAvailable,

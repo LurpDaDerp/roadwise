@@ -4,10 +4,10 @@ import { foregroundBehavior, installForegroundHandler, type HandlerApi } from '.
 
 type Handler = Parameters<HandlerApi['setNotificationHandler']>[0];
 
-function install(isRecording: () => boolean): NonNullable<Handler> {
+function install(isRecording: () => boolean, os?: string): NonNullable<Handler> {
   let installed: Handler = null;
   const api: HandlerApi = { setNotificationHandler: (h) => void (installed = h) };
-  installForegroundHandler({ isRecording }, api);
+  installForegroundHandler({ isRecording, ...(os !== undefined ? { os } : {}) }, api);
   if (installed === null) throw new Error('no handler installed');
   return installed;
 }
@@ -26,5 +26,42 @@ describe('foreground notification handler', () => {
       throw new Error('boom');
     });
     expect(await h.handleNotification(note({}))).toEqual(foregroundBehavior(true));
+  });
+
+  it('on iOS never asks for a sound, the recap included', async () => {
+    for (const kind of ['driveSummary', 'weeklyRecap', undefined]) {
+      expect(await install(() => false, 'ios').handleNotification(note({ kind }))).toEqual({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      });
+    }
+  });
+
+  it('on Android lets the recap "play" its silent channel so expo does not build it silent (no heads-up otherwise)', async () => {
+    expect(await install(() => false, 'android').handleNotification(note({ kind: 'driveSummary' }))).toEqual({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    });
+  });
+
+  it('on Android keeps every other notification quiet in front, and hides the recap while recording', async () => {
+    for (const kind of ['weeklyRecap', 'weatherCommute', undefined]) {
+      expect((await install(() => false, 'android').handleNotification(note({ kind }))).shouldPlaySound).toBe(false);
+    }
+    expect(await install(() => true, 'android').handleNotification(note({ kind: 'driveSummary' }))).toEqual({
+      shouldShowBanner: false,
+      shouldShowList: false,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    });
+  });
+
+  it('tolerates a notification with no data', async () => {
+    const bare = { date: 0, request: { identifier: 'x', content: {}, trigger: null } } as unknown as Notifications.Notification;
+    expect((await install(() => false, 'android').handleNotification(bare)).shouldPlaySound).toBe(false);
   });
 });

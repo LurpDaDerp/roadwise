@@ -32,12 +32,13 @@ import type { DriveHost, LastFinalized } from '@/drive/host';
 import { formatDuration } from '@/features/drives/format';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
+import { RECAP_CHANNEL_ID } from '@/features/notifications/channels';
 import { formatDistance, type Units } from '@/lib/units';
 
 /** `content.data.kind` of every drive-summary request, so cancels find only ours. */
 export const DRIVE_SUMMARY_KIND = 'driveSummary';
-/** The Android channel (created by `ensureAndroidChannels`). */
-export const SUMMARY_CHANNEL_ID = 'trips';
+/** The Android channel (created by `ensureAndroidChannels`): HIGH and silent, so the recap peeks as a heads-up like an iOS banner. */
+export const SUMMARY_CHANNEL_ID = RECAP_CHANNEL_ID;
 const IDENTIFIER_PREFIX = 'drive-summary:';
 
 export const summaryCopy = {

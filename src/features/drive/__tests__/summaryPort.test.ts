@@ -46,7 +46,7 @@ test('a recap posts at once on the drive-recap channel, named in the trigger', a
   expect(mockOs.posted).toHaveLength(1);
   const req = mockOs.posted[0] as { trigger: unknown; content: Record<string, unknown> };
   expect(req.trigger).toEqual({ channelId: SUMMARY_CHANNEL_ID });
-  expect(SUMMARY_CHANNEL_ID).toBe('trips');
+  expect(SUMMARY_CHANNEL_ID).toBe('recaps');
   expect(req.content).not.toHaveProperty('channelId');
 });
 
