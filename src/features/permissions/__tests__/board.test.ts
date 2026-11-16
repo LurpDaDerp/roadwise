@@ -245,5 +245,7 @@ describe('Android with the drive detector', () => {
     expect(rows.filter((r) => r.autoOff).map((r) => r.id)).toEqual(['locationAlways', 'backgroundRefresh', 'unusedApps']);
     expect(overall(rows)).toBe('ok');
     expect(overall(settingsRows(detector(), prefs(), false))).toBe('attention');
+    // The unused-app switch is a tip: alone it leaves the summary at ok.
+    expect(overall(settingsRows(detector({ location: 'always', backgroundRefresh: 'available' }), prefs(), false))).toBe('ok');
   });
 });

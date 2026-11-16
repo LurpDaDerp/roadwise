@@ -131,10 +131,16 @@ export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs, autoDi
 
 export type Overall = 'ok' | 'attention' | 'broken';
 
-/** The summary: broken while a drive cannot record; ok when nothing in use is missing (an `autoOff` row is not in use). */
+/** Rows that are only a tip (Android's "Pause app activity if unused"): never part of the summary. */
+const TIPS: ReadonlySet<PermissionId> = new Set<PermissionId>(['unusedApps']);
+
+/**
+ * The summary: broken while a drive cannot record; ok when nothing in use is missing (an `autoOff`
+ * row is not in use, and a tip never counts).
+ */
 export function overall(rows: readonly (BoardRow & { autoOff?: boolean })[]): Overall {
   if (rows.some((r) => r.def.need === 'required' && r.state.kind === 'missing')) return 'broken';
-  return rows.every((r) => r.state.kind !== 'missing' || r.autoOff === true) ? 'ok' : 'attention';
+  return rows.every((r) => r.state.kind !== 'missing' || r.autoOff === true || TIPS.has(r.id)) ? 'ok' : 'attention';
 }
 
 /** Whether a stored "no effect" signature still applies to this read. */
