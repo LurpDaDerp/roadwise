@@ -461,9 +461,10 @@ project_id = "cjcpotetcslpscsbkdnj"
 
 [remotes.production.auth]
 site_url = "https://roadwise.app"
-# Sign-in is Apple and Google only, both native (an id token handed to Auth), so no link ever has to
-# land anywhere.
-additional_redirect_urls = []
+# Sign-in is Apple and Google only. Both are native (an id token handed to Auth) except Sign in with
+# Apple on Android, Apple's web sign-in, which comes back to the app on roadwise://auth-callback
+# (the only link Auth may send anywhere).
+additional_redirect_urls = ["roadwise://auth-callback"]
 
 # No email accounts: the email provider is off, so Auth refuses an email sign-up or a password
 # sign-in and sends no mail. Apple and Google sign-in are not affected. (The password and email-code
@@ -480,14 +481,23 @@ enable_confirmations = false
 default_pool_size = 15
 max_client_conn = 200
 
-# Native Sign in with Apple only (expo-apple-authentication + signInWithIdToken): the client id is
-# the App ID and no Services ID or secret is needed.
+# Sign in with Apple: native on iPhone (expo-apple-authentication + signInWithIdToken), whose client
+# id is the App ID and needs no secret. Android (shown only in a build with
+# EXPO_PUBLIC_APPLE_WEB_SIGNIN=1) uses Apple's web sign-in, which needs a Services ID grouped with
+# the App ID (return URL https://cjcpotetcslpscsbkdnj.supabase.co/auth/v1/callback) and a client
+# secret, a JWT signed with a Sign in with Apple key that Apple lets live at most 6 months. When that
+# is set up, list the Services ID after the App ID here (comma-separated, the App ID first) and add
+#   secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+# before `supabase config push`; until then this stays the App ID alone, so a push never turns the
+# iPhone's sign-in off.
 [remotes.production.auth.external.apple]
 enabled = true
 client_id = "com.lurp.safedrive"
 
-# Native Google sign-in (expo-auth-session id token + signInWithIdToken). client_id is every OAuth
-# client id, comma-separated, the web one first. The app sends a hashed nonce with every request and
+# Native Google sign-in: an id token handed to signInWithIdToken, from expo-auth-session on iPhone
+# (the iOS client) and from Credential Manager on Android (issued to the web client; Google checks
+# the app against the project's Android clients itself). client_id is every OAuth client id,
+# comma-separated, the web one first. The app sends a hashed nonce with every request and
 # the raw one to Supabase, so the nonce check stays on.
 # The ids come from the root .env (never committed) when `supabase config push` runs. No client
 # secret: it is needed only for the web OAuth redirect flow, which the app never uses.
