@@ -486,10 +486,12 @@ max_client_conn = 200
 # EXPO_PUBLIC_APPLE_WEB_SIGNIN=1) uses Apple's web sign-in, which needs a Services ID grouped with
 # the App ID (return URL https://cjcpotetcslpscsbkdnj.supabase.co/auth/v1/callback) and a client
 # secret, a JWT signed with a Sign in with Apple key that Apple lets live at most 6 months. When that
-# is set up, list the Services ID after the App ID here (comma-separated, the App ID first) and add
+# is set up, set client_id = "<services id>,com.lurp.safedrive" (the Services ID first: the web
+# sign-in uses only the first id, and Apple's web page takes only a Services ID; the iPhone's id
+# token is accepted against any id listed) and add
 #   secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
-# before `supabase config push`; until then this stays the App ID alone, so a push never turns the
-# iPhone's sign-in off.
+# before `supabase config push`; until then this stays the App ID alone. With the App ID still in
+# the list, a push never turns the iPhone's sign-in off.
 [remotes.production.auth.external.apple]
 enabled = true
 client_id = "com.lurp.safedrive"
