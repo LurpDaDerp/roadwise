@@ -30,7 +30,8 @@ import org.json.JSONObject
  * - **A restart.** The newest state and when it came are kept on disk (its own small preferences
  *   file) with the capture's start, so a capture Android restarts after killing the process
  *   (`START_STICKY`) shows it at once: as it was when under 2 min old, else its stale form. Never a
- *   previous drive's: it must be the open capture's.
+ *   previous drive's: it must be the open capture's, and only that restart restores it (a new
+ *   capture starts empty and forgets it).
  * - **The end.** JS's final `ended` state forgets the drive's state and posts nothing more: the
  *   capture's stop takes the notification down.
  *
@@ -72,31 +73,42 @@ object DriveNotificationController {
   }
 
   /**
-   * The notification a foreground start posts (`goForeground`, main thread): [display] when the
-   * capture already has one (a start while recording), else the open capture's kept state (a
-   * restart), else the empty one. A new foreground post shows whatever was swiped away again.
+   * The notification a foreground start posts (`goForeground`, main thread), from
+   * [DriveNotificationRules.source]: [display] when the capture already has one (a start while
+   * recording); on a `START_STICKY` [restart] the open capture's kept state; on a start while
+   * recording before any update what already shows; else (a new capture) the empty one, forgetting
+   * any kept state. A new capture never restores: its capture-open flag and start are written only
+   * after this post, so the kept state of a drive killed mid-drive would still match them. A new
+   * foreground post shows whatever was swiped away again.
    */
   @Synchronized
-  fun foreground(context: Context, display: DriveDisplay?): Notification {
+  fun foreground(context: Context, display: DriveDisplay?, restart: Boolean): Notification {
     val ctx = context.applicationContext
     app = ctx
     ensureReceiver(ctx)
     dismissed = false
     ended = false
     val now = SystemClock.elapsedRealtime()
-    if (display != null) {
-      if (display !== latest) {
+    when (DriveNotificationRules.source(display != null, restart, CaptureService.isCapturing)) {
+      DriveNotificationRules.Source.DISPLAY -> if (display !== latest) {
         latest = display
         latestAt = now
       }
-    } else {
-      val kept = restore(ctx)
-      latest = kept?.first
-      latestAt = now - (kept?.second ?: 0L)
+      DriveNotificationRules.Source.KEPT -> {
+        val kept = restore(ctx)
+        latest = kept?.first
+        latestAt = now - (kept?.second ?: 0L)
+      }
+      DriveNotificationRules.Source.CURRENT -> Unit
+      DriveNotificationRules.Source.EMPTY -> {
+        latest = null
+        latestAt = now
+        forget(ctx)
+      }
     }
-    val age = now - latestAt
-    stale = latest != null && age >= DriveNotificationText.STALE_AFTER_MS
-    armStale(if (latest == null || stale) DriveNotificationText.STALE_AFTER_MS else DriveNotificationText.STALE_AFTER_MS - age)
+    val left = DriveNotificationRules.staleIn(now, latestAt)
+    stale = latest != null && left <= 0
+    armStale(if (latest == null || stale) DriveNotificationText.STALE_AFTER_MS else left)
     val promoted = LiveUpdates.allowed(ctx)
     val shown = shown()
     postedKey = DriveNotificationText.key(shown, promoted)
@@ -140,9 +152,19 @@ object DriveNotificationController {
     postedKey = null
   }
 
+  /**
+   * The stale timer. An update may have come while it waited for the lock (removeCallbacks cannot
+   * stop a run already under way), so it goes by the newest state's age, not by having fired: not
+   * due yet, it waits out what is left.
+   */
   @Synchronized
   private fun onStale() {
     if (latest == null || stale) return
+    val left = DriveNotificationRules.staleIn(SystemClock.elapsedRealtime(), latestAt)
+    if (left > 0) {
+      armStale(left)
+      return
+    }
     stale = true
     app?.let { post(it) }
   }

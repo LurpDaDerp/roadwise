@@ -541,7 +541,7 @@ describe("native-android: the drive notification, Android's Live Activity (plan 
   const TEXT = () => code(kt('DriveNotificationText'));
 
   it('its files exist', () => {
-    for (const name of ['NotificationFactory', 'DriveNotificationController', 'DriveNotificationText', 'LimitSignBitmap', 'LimitSignGeometry', 'WeatherSymbol']) {
+    for (const name of ['NotificationFactory', 'DriveNotificationController', 'DriveNotificationText', 'DriveNotificationRules', 'LimitSignBitmap', 'LimitSignGeometry', 'WeatherSymbol']) {
       expect({ name, exists: existsSync(join(KT_DIR, `${name}.kt`)) }).toEqual({ name, exists: true });
     }
   });
@@ -553,7 +553,7 @@ describe("native-android: the drive notification, Android's Live Activity (plan 
     expect(text).toMatch(/const val NOT_DRIVING = "Not driving\?"/);
     expect(text).toMatch(/if \(v == null \|\| !v\.isFinite\(\)\) return "-"/);
     expect(text).toMatch(/"\$\{WeatherSymbol\.of\(kind\)\} \$text"/);
-    // VoiceOver's words for TalkBack
+    // VoiceOver's words, the ticker
     expect(text).toContain('"Speed unknown"');
     expect(text).toContain('"kilometers per hour" else "miles per hour"');
     expect(text).toContain('", over the limit"');
@@ -651,13 +651,26 @@ describe("native-android: the drive notification, Android's Live Activity (plan 
     // the kept state is the open capture's only, and the end forgets it
     expect(c).toMatch(/if \(!drive\.captureOpen \|\| p\.getLong\(KEY_DRIVE, -1L\) != drive\.captureStartedAt\)/);
     expect(c).toMatch(/if \(display\.ended\) \{[\s\S]*?forget\(ctx\)\s*return\s*\}/);
+    // restored on the sticky restart only; a new capture starts empty and forgets the kept state
+    const rules = code(kt('DriveNotificationRules'));
+    expect(rules).toMatch(/hasDisplay -> Source\.DISPLAY\s*restart -> Source\.KEPT\s*capturing -> Source\.CURRENT\s*else -> Source\.EMPTY/);
+    expect(c).toMatch(/DriveNotificationRules\.Source\.KEPT -> \{\s*val kept = restore\(ctx\)/);
+    expect(c).toMatch(/DriveNotificationRules\.Source\.EMPTY -> \{\s*latest = null\s*latestAt = now\s*forget\(ctx\)\s*\}/);
+    expect(c.match(/restore\(ctx\)/g)).toHaveLength(1);
+    // the stale timer goes by the newest state's age: an update that lands as it fires is not marked stale
+    expect(rules).toMatch(/fun staleIn\(now: Long, latestAt: Long\): Long = DriveNotificationText\.STALE_AFTER_MS - \(now - latestAt\)/);
+    expect(c).toMatch(/private fun onStale\(\) \{\s*if \(latest == null \|\| stale\) return\s*val left = DriveNotificationRules\.staleIn\(SystemClock\.elapsedRealtime\(\), latestAt\)\s*if \(left > 0\) \{\s*armStale\(left\)\s*return\s*\}\s*stale = true/);
   });
 
   it('setDriveDisplay reaches the running capture only, and the display resets with each capture', () => {
     expect(MODULE()).toMatch(/AsyncFunction\("setDriveDisplay"\) \{ state: Map<String, Any\?> ->\s*CaptureService\.setDriveDisplay\(DriveDisplay\.from\(state\)\)/);
     const svc = code(kt('CaptureService'));
     expect(svc).toMatch(/fun setDriveDisplay\(display: DriveDisplay\) \{\s*val inst = instance \?: return/);
-    expect(svc).toMatch(/val notification = DriveNotificationController\.foreground\(this, display\)/);
+    expect(svc).toMatch(/private fun goForeground\(restart: Boolean = false\): String\?/);
+    expect(svc).toMatch(/val notification = DriveNotificationController\.foreground\(this, display, restart\)/);
+    // only the START_STICKY restart (no intent) restores the kept state
+    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
+    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(1);
     expect(svc).toMatch(/display\?\.let \{ DriveNotificationController\.update\(this, it\) \}/);
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(begin).toMatch(/display = null/);

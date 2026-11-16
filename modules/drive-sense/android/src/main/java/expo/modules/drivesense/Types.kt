@@ -47,7 +47,7 @@ data class DriveDisplay(
   val ended: Boolean = false,
   /** The driving screen's numeral colour at its speeding tint ("#RRGGBB"); null: the plain text colour. */
   val speedTint: String? = null,
-  /** Over the limit now (TalkBack only). */
+  /** Over the limit now (the ticker's words only). */
   val speeding: Boolean = false,
   /** The "Not driving?" hint shows. */
   val notDrivingAvailable: Boolean = false,

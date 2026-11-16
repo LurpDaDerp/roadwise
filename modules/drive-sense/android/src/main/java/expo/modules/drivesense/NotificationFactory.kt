@@ -24,7 +24,11 @@ import androidx.core.app.NotificationManagerCompat
  * speeding tint; the posted limit as the driving screen's sign (the large icon, [LimitSignBitmap])
  * and as "Limit 35"; the weather line while the driving screen shows its weather card; "Not
  * driving?" while that option lasts. A tap opens the driving screen (`roadwise://drive`, as the Live
- * Activity's tap does); nothing on it is a button. TalkBack reads VoiceOver's words.
+ * Activity's tap does); nothing on it is a button. Its ticker is VoiceOver's words
+ * ([DriveNotificationText.accessibility]), which Android announces to TalkBack once, when the
+ * notification first appears (a capture's start or restart, so mostly "Speed unknown. Speed limit
+ * unknown."); no update alerts, so after that TalkBack reads its title and text as shown ("34 mph",
+ * "Limit 35 · Not driving?"), without "over the limit": the tint is the only sign of speeding.
  *
  * Its look: on Android 16 QPR1 and later, with Live Updates allowed for RoadWise
  * ([LiveUpdates.allowed]), it asks to be promoted to a Live Update (on the lock screen and the

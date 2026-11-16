@@ -12,8 +12,10 @@ package expo.modules.drivesense
  *   expanded ([bigText]);
  * - the status-bar chip of a Live Update ([chip]): "34 mph", or the number alone when that would
  *   run past [CHIP_MAX] characters ("120" for 120 km/h);
- * - TalkBack ([accessibility], the ticker): VoiceOver's words, "Speed 34 miles per hour, over the
- *   limit. Speed limit 35. Heavy rain. Not driving?".
+ * - the ticker ([accessibility]): VoiceOver's words, "Speed 34 miles per hour, over the limit.
+ *   Speed limit 35. Heavy rain. Not driving?". Android announces a ticker to TalkBack only as a
+ *   notification first appears (updates never alert), so TalkBack hears it once per capture; in the
+ *   shade it reads the title and text.
  * Nothing about scores or problem spots appears on it.
  */
 object DriveNotificationText {
@@ -73,7 +75,7 @@ object DriveNotificationText {
   /** VoiceOver's limit label (`Format.limitLabel`). */
   fun limitLabel(d: DriveDisplay): String = if (d.limit == null) "Speed limit unknown" else "Speed limit ${number(d.limit)}"
 
-  /** What TalkBack reads: the labels, the weather line as its words and the hint. */
+  /** The ticker, VoiceOver's words: the labels, the weather line as its words and the hint (announced once, as the notification first appears). */
   fun accessibility(d: DriveDisplay): String = listOfNotNull(
     speedLabel(d),
     limitLabel(d),
