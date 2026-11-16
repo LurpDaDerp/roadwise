@@ -244,7 +244,9 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
         {auto.visible && auto.needsFix ? (
           <LinkRow icon="shield-checkmark-outline" title={copy.autoDrives.fix} onPress={() => router.push(SETTINGS_HREFS.permissions)} testID="settings-auto-drives-fix" />
         ) : null}
-        {auto.visible ? <CarSettingRow /> : null}
+        {/* On Android the car link works without automatic drives (a phone without Google Play
+            services still pairs a car for its Start drives), so the row stands on its own there. */}
+        {auto.visible || Platform.OS === 'android' ? <CarSettingRow /> : null}
         <LinkRow icon="videocam-outline" title={copy.dashcam.title} subtitle={dashcam.label} onPress={() => router.push(SETTINGS_HREFS.dashcam)} testID="settings-dashcam" />
         <LinkRow icon="volume-high-outline" title={copy.alerts.title} subtitle={copy.alerts.subtitle} onPress={() => router.push(SETTINGS_HREFS.alerts)} testID="settings-alerts" />
         <NavAppSettingRow db={db} />

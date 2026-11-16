@@ -48,6 +48,12 @@ jest.mock('@/drive/useDrive', () => ({
 }));
 jest.mock('@/drive/policy', () => ({ isBusyStatus: (s: string) => s === 'recording' || s === 'finalizing' }));
 jest.mock('../deviceWipe', () => ({ wipeThisPhone: jest.fn(async () => {}) }));
+/** Your car's row as a marker: whether Settings places it is what these tests check (its own reads are carLink's). */
+jest.mock('@/features/carLink/CarSettingRow', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- React Native inside a mock factory
+  const { View } = require('react-native') as typeof import('react-native');
+  return { CarSettingRow: () => <View testID="settings-car" /> };
+});
 /** The native automatic-drive status (null: Android). */
 const mockAutoStatus = jest.fn<unknown, []>(() => null);
 /** The switch's store-and-sync; by default it makes the status follow the choice, as the boot package does. */
@@ -217,6 +223,15 @@ describe('Settings', () => {
     });
   });
 
+  it('on an iPhone without a drive detector: neither the switch nor Your car', async () => {
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    await screen.findByTestId('settings-alerts');
+    await act(async () => {});
+    expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
+    expect(screen.queryByTestId('settings-car')).toBeNull();
+  });
+
   describe('Automatic drives (Android, with the drive detector)', () => {
     runAs('android');
     // The switch itself (React Native's Android Switch has no accessibility role under Jest).
@@ -261,12 +276,13 @@ describe('Settings', () => {
       expect(autoDrivesLine({ state: 'off', missing: ['motion'] }, 'ios')).toBe('On, but it needs Motion & Fitness.');
     });
 
-    it('without a drive detector (no status): no switch', async () => {
+    it('without a drive detector (no status, as with no Google Play services): no switch, but Your car stays', async () => {
       const w = await appWorld();
       await w.render(<SettingsScreen />);
       await screen.findByTestId('settings-alerts');
       await act(async () => {});
       expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
+      expect(screen.getByTestId('settings-car')).toBeOnTheScreen();
     });
   });
 
