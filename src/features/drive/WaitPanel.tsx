@@ -6,13 +6,13 @@
 // light haptic. It sits where the navigation list does (the two never show together) in the app's
 // own sheet colours, and shows only while the drive has not yet reached driving speed.
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { WAIT_TOTAL_MS, type WaitingPublic } from '@/drive/waiting';
 import { panelStyles as ps, panelTones, pressedLook, PANEL_ICON_PT, type PanelColors } from '@/ui/drive/panelLook';
 import { fontFamilies } from '@/ui/fonts';
+import { haptics } from '@/ui/haptics';
 
 import { hudCopy } from './hudCopy';
 import { useAppActive } from './useHaloBurst';
@@ -66,7 +66,7 @@ export function WaitPanel({
   // One light haptic as each panel opens (only with RoadWise in front), and its words read out.
   useEffect(() => {
     if (!active) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    haptics.tick();
     const t = Date.now();
     const words = countdown ? hudCopy.countdown.spoken(waitSecondsLeft(since, t)) : `${hudCopy.ask.title} ${hudCopy.ask.body(waitMinutesLeft(since, t))}`;
     AccessibilityInfo.announceForAccessibility?.(words);

@@ -1,9 +1,9 @@
-import * as Haptics from 'expo-haptics';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import Animated, { FadeOut } from 'react-native-reanimated';
 
 import { Text, useTheme } from '@/ui';
+import { haptics } from '@/ui/haptics';
 
 import { dashpalCopy } from '../../copy';
 import { Checkmark } from './Checkmark';
@@ -51,7 +51,7 @@ export function StepConnecting({ view, step }: { view: ConnectingView; step: str
   const said = view.kind === 'connecting' && !view.reconnecting ? title.replace(/…$/, '') : view.kind === 'finishing' && view.reconnecting && body ? body : title;
   useEffect(() => {
     announce(said);
-    if (done) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    if (done) haptics.success();
     // Once per text: the same words set again are not said again.
   }, [said, done]);
 

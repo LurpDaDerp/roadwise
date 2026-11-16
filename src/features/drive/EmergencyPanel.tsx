@@ -9,7 +9,6 @@
 // title, "Call 911", a whole contact row and Close at the text size in use) the title is only read
 // out and everything scrolls, "Call 911" first, Close last. Numbers read as in Settings (`formatPhone`).
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
@@ -18,6 +17,7 @@ import { ensureGround } from '@/ui';
 import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
 import { panelStyles as ps, panelTones, pressedLook, PANEL_CAPSULE_PT, PANEL_ICON_PT } from '@/ui/drive/panelLook';
 import { fontFamilies } from '@/ui/fonts';
+import { haptics } from '@/ui/haptics';
 
 import { hudCopy } from './hudCopy';
 import type { WaitPanelColors } from './WaitPanel';
@@ -71,7 +71,7 @@ export function EmergencyPanel({
   const red = useMemo(() => sosCallFace(palette), [palette]);
   const [failed, setFailed] = useState(false);
   const call = (phone: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    haptics.press();
     setFailed(false);
     void onCall(phone).then((ok) => {
       if (!ok) setFailed(true);
