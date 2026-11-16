@@ -5,11 +5,7 @@
 
 export interface RecordedInvoke {
   name: string;
-  /** What was sent, as an object: a JSON string body (a drive upload, sent as its exact bytes) is parsed back. */
   body: unknown;
-  /** The string body exactly as sent, when it was one. */
-  raw?: string;
-  headers?: Record<string, string>;
 }
 
 export interface RecordedRpc {
@@ -40,7 +36,7 @@ export interface FakeSupabase {
     getSession(): Promise<{ data: { session: { user: { id: string } } | null }; error: null }>;
     refreshSession(): Promise<{ data: { session: { user: { id: string } } | null }; error: unknown }>;
   };
-  functions: { invoke(name: string, options: { body: unknown; headers?: Record<string, string> }): Promise<SupabaseReply> };
+  functions: { invoke(name: string, options: { body: unknown }): Promise<SupabaseReply> };
   rpc(fn: string, args?: Record<string, unknown>): Promise<SupabaseReply>;
 }
 
@@ -72,9 +68,8 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
       },
     },
     functions: {
-      async invoke(name, { body, headers }) {
-        const record: RecordedInvoke =
-          typeof body === 'string' ? { name, body: JSON.parse(body) as unknown, raw: body, headers } : { name, body, ...(headers ? { headers } : {}) };
+      async invoke(name, { body }) {
+        const record = { name, body };
         const index = fake.invokes.length;
         fake.invokes.push(record);
         return options.invoke ? options.invoke(record, index) : ok({});

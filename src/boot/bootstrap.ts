@@ -19,7 +19,6 @@ import { createSpeedLimitClient, type SpeedLimitClient } from '@/core/speedLimit
 import { createSupabaseSpeedLimitApi, type SpeedLimitApi, type SpeedLimitsSupabase } from '@/core/speedLimits/api';
 import { refreshAppConfig, type AppConfigSupabase } from '@/data/config/appConfig';
 import { createExpoDb, createQueueRepo, createSettingsRepo, migrate, type Db, type TripRow } from '@/data/db';
-import { createDefaultAppAttest } from '@/data/devices/appAttest';
 import { preloadDeviceSecret } from '@/data/devices/deviceSecret';
 import { getInstallId } from '@/data/devices/installId';
 import { createPushToStart } from '@/data/devices/liveActivity';
@@ -684,8 +683,6 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         mayDrain: deps.mayDrain ?? drainPolicy({ appState }),
         isRecording: isBusy,
         appState,
-        // iPhone drive uploads carry App Attest over their exact bytes (src/data/devices/appAttest.ts)
-        attest: createDefaultAppAttest((name, options) => identity.supabase.functions.invoke(name, options), onError),
         now,
         onError,
       });
