@@ -11,8 +11,9 @@
 // count as the watchdog's liveness signal (§6.2), so opening this screen could lose rows or keep
 // an orphaned capture alive. Samples exist only for a drive still recording.
 //
-// iPhone: the drive detector's state (what phase it is in and since when: a `candidate` is the last
-// wake), its permissions and its journal, read with `getState`/`listDrives` only. Every platform:
+// The drive detector (iPhone, and Android where it has one): its state (what phase it is in and
+// since when: a `candidate` is the last wake), its permissions (in the phone's own names) and its
+// journal, read with `getState`/`listDrives` only. Every platform:
 // the last drives' opportunity counters and per-category loads, for tuning the scoring baselines.
 import DriveSense, { DriveDetect, unknownRowKeys, type DetectState, type DriveDetectApi, type DriveSenseApi, type DriveSenseState, type ExitInfo, type FeatureRow, type JournaledDrive } from '@drive-sense';
 import { clampExposure, driveLoads, estimateExposure, RATE_AXES, type DriveEvent, type Exposure } from '@scoring';
@@ -88,6 +89,7 @@ export const diagCopy = {
   noDrive: 'No drive recorded with diagnostics on yet.',
   detector: 'Drive detector',
   noDetector: 'No drive detector on this phone (drives start from the Start card).',
+  noDetectorAndroid: 'No drive detector on this phone.',
   phase: 'Phase',
   since: 'Since',
   armed: 'Armed',
@@ -102,6 +104,12 @@ export const diagCopy = {
   backgroundRefresh: 'Background App Refresh',
   liveActivities: 'Live Activities',
   canAskAlways: 'Always can be asked',
+  /** The same permission lines in Android's names. */
+  android: {
+    backgroundRefresh: 'Battery (available unless Restricted)',
+    liveActivities: 'Drive notification',
+    canAskAlways: 'All the time can be asked',
+  },
   journal: 'Journal',
   noJournal: 'No journaled drives.',
   journaled: (j: JournaledDrive) =>
@@ -126,7 +134,7 @@ export interface DriveDiagnosticsProps {
   /** The drive HUD for the simulation (the route passes U2's, drawn as the lockout overlay). */
   Hud: ComponentType;
   source?: DiagSource;
-  /** iOS: the drive detector, read only; null (Android) shows none. Default: the native one. */
+  /** The drive detector, read only; null (a phone without one) shows none. Default: the native one. */
   detect?: Pick<DriveDetectApi, 'available' | 'getState' | 'listDrives'> | null;
   createPlayer?: (getHost: () => DriveHost | undefined) => Promise<AlertPlayer>;
 }
@@ -290,7 +298,7 @@ export function DriveDiagnosticsScreen({ Hud, source = DriveSense, detect = Driv
         ) : null}
       </Section>
 
-      <Section title={diagCopy.detector}>{snap ? <DetectorLines detector={snap.detector} /> : null}</Section>
+      <Section title={diagCopy.detector}>{snap ? <DetectorLines detector={snap.detector} platform={platform} /> : null}</Section>
 
       <Section title={diagCopy.opportunities}>{snap ? <LoadLines loads={snap.loads} /> : null}</Section>
 
@@ -419,18 +427,20 @@ function SensingLines({ s }: { s: DriveSenseState }) {
   );
 }
 
-function DetectorLines({ detector }: { detector: Read<{ state: DetectState; journal: JournaledDrive[] } | null> }) {
+function DetectorLines({ detector, platform }: { detector: Read<{ state: DetectState; journal: JournaledDrive[] } | null>; platform: string | null }) {
   const th = useTheme();
+  const android = platform === 'android';
   if (!detector.ok) return <Line label={diagCopy.detector} value={detector.error} tone="danger" first />;
   if (detector.value === null) {
     return (
       <Text variant="subhead" tone="muted">
-        {diagCopy.noDetector}
+        {android ? diagCopy.noDetectorAndroid : diagCopy.noDetector}
       </Text>
     );
   }
   const { state: s, journal } = detector.value;
   const p = s.permissions;
+  const names = android ? diagCopy.android : diagCopy;
   return (
     <>
       <Line label={diagCopy.phase} value={s.origin ? `${s.state} (${s.origin})` : s.state} first testID="diag-detect-phase" />
@@ -446,9 +456,9 @@ function DetectorLines({ detector }: { detector: Read<{ state: DetectState; jour
       <Line label={diagCopy.location} value={p.location} />
       <Line label={diagCopy.precise} value={p.precise ? diagCopy.yes : diagCopy.no} />
       <Line label={diagCopy.motion} value={p.motion} />
-      <Line label={diagCopy.backgroundRefresh} value={p.backgroundRefresh} />
-      <Line label={diagCopy.liveActivities} value={p.liveActivities ? diagCopy.yes : diagCopy.no} />
-      <Line label={diagCopy.canAskAlways} value={p.canAskAlways ? diagCopy.yes : diagCopy.no} />
+      <Line label={names.backgroundRefresh} value={p.backgroundRefresh} />
+      <Line label={names.liveActivities} value={p.liveActivities ? diagCopy.yes : diagCopy.no} />
+      <Line label={names.canAskAlways} value={p.canAskAlways ? diagCopy.yes : diagCopy.no} />
       <View style={{ paddingTop: th.space.md, gap: th.space.xs }}>
         <Text variant="headline">{diagCopy.journal}</Text>
         {journal.length === 0 ? (

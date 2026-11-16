@@ -7,6 +7,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-
 
 import { resetAutoDrivesForTests } from '@/features/autoDrives/useAutoDrives';
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { runAs } from '@/lib/__fixtures__/platform';
 import { APPEARANCE_KEY, createAppearanceStore } from '@/ui/appearance';
 
 import { alertStyleCopy } from '../alerts/copy';
@@ -204,7 +205,7 @@ describe('Settings', () => {
       expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
     });
 
-    it('is not shown on Android, and there is no reminder or state row', async () => {
+    it('is not shown without a drive detector (no status), and there is no reminder or state row', async () => {
       const w = await appWorld();
       await w.render(<SettingsScreen />);
       await screen.findByTestId('settings-alerts');
@@ -213,6 +214,59 @@ describe('Settings', () => {
       expect(screen.queryByTestId('settings-reminder')).toBeNull();
       expect(screen.queryByTestId('settings-state')).toBeNull();
       expect(screen.queryByTestId('settings-license')).toBeNull();
+    });
+  });
+
+  describe('Automatic drives (Android, with the drive detector)', () => {
+    runAs('android');
+    // The switch itself (React Native's Android Switch has no accessibility role under Jest).
+    const autoSwitch = () => screen.getByTestId('settings-auto-drives');
+    /** Android's native switch takes `on` where iOS's takes `value`. */
+    const isOn = () => (autoSwitch().props as { on?: boolean; value?: boolean }).on ?? autoSwitch().props.value;
+
+    it("is the same switch as on an iPhone, its needs in Android's names, and Fix it opens Settings › Permissions", async () => {
+      mockAutoStatus.mockReturnValue({
+        enabled: true,
+        armed: true,
+        status: 'needs',
+        missing: ['locationAlways'],
+        permissions: { ...ALL_ON, location: 'whenInUse' },
+      });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-auto-drives');
+      expect(isOn()).toBe(true);
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, On, but it needs Location set to Allow all the time.');
+      await tap('settings-auto-drives-fix');
+      expect(mockRouter.push).toHaveBeenLastCalledWith(SETTINGS_HREFS.permissions);
+    });
+
+    it('on, and switched off, read as on an iPhone', async () => {
+      mockAutoStatus.mockReturnValue({ enabled: true, armed: true, status: 'on', missing: [], permissions: ALL_ON });
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-auto-drives');
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, On. RoadWise notices your drives.');
+      await act(async () => fireEvent(autoSwitch(), 'valueChange', false));
+      await waitFor(() => expect(isOn()).toBe(false));
+      expect(autoSwitch()).toHaveProp('accessibilityLabel', 'Automatic drives, Off. Swipe Start drive on Home before you pull out.');
+    });
+
+    it("the line names Android's settings, in the same order", () => {
+      expect(autoDrivesLine({ state: 'off', missing: ['locationAlways', 'motion'] })).toBe('On, but it needs Location set to Allow all the time.');
+      expect(autoDrivesLine({ state: 'off', missing: ['precise'] })).toBe('On, but it needs Precise location.');
+      expect(autoDrivesLine({ state: 'off', missing: ['motion'] })).toBe('On, but it needs Physical activity.');
+      expect(autoDrivesLine({ state: 'off', missing: ['backgroundRefresh'] })).toBe('On, but it needs App battery usage set to Optimized or Unrestricted.');
+      // An explicit platform wins over the phone's own.
+      expect(autoDrivesLine({ state: 'off', missing: ['motion'] }, 'ios')).toBe('On, but it needs Motion & Fitness.');
+    });
+
+    it('without a drive detector (no status): no switch', async () => {
+      const w = await appWorld();
+      await w.render(<SettingsScreen />);
+      await screen.findByTestId('settings-alerts');
+      await act(async () => {});
+      expect(screen.queryByTestId('settings-auto-drives')).toBeNull();
     });
   });
 

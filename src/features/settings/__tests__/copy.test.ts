@@ -45,6 +45,12 @@ describe('the rest of the settings words', () => {
     expect(a.needs(a.what.locationAlways)).toBe('On, but it needs Location set to Always.');
     expect(a.fix).toBe('Fix it in Permissions');
     expect(Object.values(a.what)).toEqual(['Location set to Always', 'Precise Location', 'Motion & Fitness', 'Background App Refresh']);
+    expect(Object.values(a.whatAndroid)).toEqual([
+      'Location set to Allow all the time',
+      'Precise location',
+      'Physical activity',
+      'App battery usage set to Optimized or Unrestricted',
+    ]);
   });
 
   it('deleting the account names the Safety Rating, and no settings words mention points, streaks, freezes, levels or the global board', () => {

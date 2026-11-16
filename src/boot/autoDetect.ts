@@ -17,7 +17,8 @@
 //   owed, an account switch, the account's deletion) also wipe native's drive state
 //   (`DriveDetect.wipe()`: every journal, the last end, the parked spot and a rest), so nothing of
 //   one driver's reaches the next.
-// Android has no detector: every call is a no-op and `readAutoDetectStatus()` answers null.
+// A phone without the detector (a native build without it, Jest, web): every call is a no-op and
+// `readAutoDetectStatus()` answers null. Android's detector follows the same contract as iPhone's.
 import type { CarLinkState, DetectMissing, DetectState, DriveDetectApi } from '@drive-sense';
 
 import { createSettingsRepo, type Db } from '@/data/db';
@@ -32,7 +33,7 @@ const NO_OWNER = 'none';
 
 export interface AutoDetectRuntime {
   db: Db;
-  /** The detector (null on Android); default the native module. */
+  /** The detector (null where there is none); default the native module. */
   detect?: DriveDetectApi | null;
   /**
    * The signed-in driver's id, or null when signed out. Rejects when the session cannot be read
@@ -287,7 +288,7 @@ export function onCarLink(fn: (s: CarLinkState) => void): () => void {
   return () => sub.remove();
 }
 
-/** What Settings and Home say about automatic drives; null on Android or when it cannot be read. */
+/** What Settings and Home say about automatic drives; null without a detector or when it cannot be read. */
 export async function readAutoDetectStatus(): Promise<AutoDetectStatus | null> {
   const detect = detector();
   if (detect === null) return null;

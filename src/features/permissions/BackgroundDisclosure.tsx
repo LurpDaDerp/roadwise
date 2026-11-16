@@ -7,7 +7,7 @@
  *
  * `useBackgroundDisclosure()` gives a screen `ask()`, which shows the sheet and resolves with the
  * driver's choice, and the `sheet` element to render. The permission adapter refuses the Android
- * request without it (`requestLocationAlways({ disclosed })`), so a path that skips it asks nothing.
+ * request without it (`requestLocationAlways` with `disclosed`), so a path that skips it asks nothing.
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { View } from 'react-native';

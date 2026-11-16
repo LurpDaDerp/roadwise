@@ -30,7 +30,7 @@ export const settingsCopy = {
 
   root: {
     driving: 'Driving',
-    /** iPhone only: the switch for drives that start on their own, and what they need first while it is on. */
+    /** The switch for drives that start on their own (where the phone runs them), and what they need first while it is on. */
     autoDrives: {
       title: 'Automatic drives',
       on: 'On. RoadWise notices your drives.',
@@ -45,6 +45,13 @@ export const settingsCopy = {
         precise: 'Precise Location',
         motion: 'Motion & Fitness',
         backgroundRefresh: 'Background App Refresh',
+      } satisfies Record<AutoDrivesMissing, string>,
+      /** The same needs in Android's names (battery: anything but Restricted lets Android wake RoadWise). */
+      whatAndroid: {
+        locationAlways: 'Location set to Allow all the time',
+        precise: 'Precise location',
+        motion: 'Physical activity',
+        backgroundRefresh: 'App battery usage set to Optimized or Unrestricted',
       } satisfies Record<AutoDrivesMissing, string>,
     },
     dashcam: { title: 'DashPal' },

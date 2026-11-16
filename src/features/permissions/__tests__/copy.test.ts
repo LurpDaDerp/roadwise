@@ -87,7 +87,7 @@ test('Android words the automatic-drive rows in its own names', () => {
   for (const id of PERMISSION_IDS) {
     for (const st of ALL_STATES) {
       const lines = [rowTitle(id, ANDROID), rowDetail(id, st, ANDROID), ...(st.kind === 'missing' ? [homeLine(id, st, ANDROID)] : [])];
-      for (const line of lines) expect(line).not.toMatch(/Always|Background App Refresh|Motion & Fitness|iOS|iPhone|Privacy & Security/);
+      for (const line of lines) expect(line).not.toMatch(/Always\b|Background App Refresh|Motion & Fitness|iOS|iPhone|Privacy & Security/);
     }
   }
 });
