@@ -6,11 +6,12 @@
  *   0.1° (about 10 km, the same as the weather service gets) so nearby addresses come first.
  *   Asked at most once per pause in typing (`SEARCH_DEBOUNCE_MS`), from 3 characters, and the last
  *   answers are remembered, to stay within Photon's fair use.
- * - **Exact address:** the phone's own geocoder (Apple's on iPhone), for an address OpenStreetMap
- *   has no house number for. Asked only on a tap.
+ * - **Exact address:** the phone's own geocoder (Apple's on iPhone, Google's on Android:
+ *   `@/lib/phoneGeocoder`), for an address OpenStreetMap has no house number for. Asked only on a tap.
  * - **Address of a point:** the phone's reverse geocoder, the channel drive labels already use.
  */
 import type { LatLng } from '@/lib/geo';
+import { forwardGeocode, reverseGeocode } from '@/lib/phoneGeocoder';
 
 export const PHOTON_URL = 'https://photon.komoot.io/api/';
 export const MIN_QUERY = 3;
@@ -189,9 +190,7 @@ export function linesFromGeo(a: GeoAddress | undefined | null): AddressLines | n
 /** The address at a point from the phone's reverse geocoder; null on any failure. Never throws. */
 export async function addressAt(point: LatLng): Promise<AddressLines | null> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-    const Location = require('expo-location') as typeof import('expo-location');
-    const results = await Location.reverseGeocodeAsync({ latitude: point.lat, longitude: point.lng });
+    const results = await reverseGeocode(point);
     return linesFromGeo(results[0]);
   } catch {
     return null;
@@ -199,16 +198,14 @@ export async function addressAt(point: LatLng): Promise<AddressLines | null> {
 }
 
 /**
- * The typed address through the phone's own geocoder (Apple's on iPhone): its point, and the
+ * The typed address through the phone's own geocoder (Apple's on iPhone, Google's on Android): its point, and the
  * address read back at that point. Null when it finds nothing. Never throws.
  */
 export async function lookUpExact(query: string): Promise<AddressHit | null> {
   const q = query.trim();
   if (q.length < MIN_QUERY) return null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-    const Location = require('expo-location') as typeof import('expo-location');
-    const found = await Location.geocodeAsync(q);
+    const found = await forwardGeocode(q);
     const first = found[0];
     if (!first || !Number.isFinite(first.latitude) || !Number.isFinite(first.longitude)) return null;
     const point = { lat: first.latitude, lng: first.longitude };

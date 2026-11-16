@@ -75,7 +75,7 @@ import type { TripSession } from './engine.types';
 import { closeExposure } from './exposure';
 import { fullRoute, placeOnTrack } from './fullRoute';
 import { boundLimitBuckets, limitBucketsJson } from './limitBuckets';
-import { endLabel, expoGeocoder, startPoint, type Geocoder, type LabelPlace } from './labels';
+import { endLabel, phoneLabelGeocoder, startPoint, type Geocoder, type LabelPlace } from './labels';
 import { parseZones, PRIVACY_ZONES_KEY, roundCoord5, trimRoute, type PrivacyZone } from './privacy';
 import { durationSOf } from './session';
 import { speedTraceJson } from './speedTrace';
@@ -89,7 +89,7 @@ export interface FinalizeDeps {
   appVersion: string;
   /** The privacy zones; default: the settings repo's `privacy.zones`. */
   zones?: () => Promise<PrivacyZone[]>;
-  /** Reverse geocoder for the labels; default expo-location. `null`: no geocode (zone and place names only). */
+  /** Reverse geocoder for the labels; default the phone's (`phoneLabelGeocoder`). `null`: no geocode (zone and place names only). */
   geocode?: Geocoder | null;
   /**
    * The saved places with where the driver usually parks at each (`core/places/store.ts`), for the
@@ -504,7 +504,7 @@ export async function finalizeTrip(session: Readonly<TripSession>, deps: Finaliz
   const polyline = route.runs.join(RUN_SEPARATOR);
   // The whole route, for the driver's own views only.
   const routeFull = fullRoute(session.track);
-  const geocode = deps.geocode === undefined ? expoGeocoder : deps.geocode;
+  const geocode = deps.geocode === undefined ? phoneLabelGeocoder : deps.geocode;
   const places = await (deps.places ?? (() => readAnchoredPlaces(db, now())))().catch((): LabelPlace[] => []);
   const from = startPoint(session);
   const [fromEnd, toEnd] = await Promise.all([endLabel(from, zones, places, geocode), endLabel(session.lastFix, zones, places, geocode)]);

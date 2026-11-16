@@ -4,6 +4,7 @@
  * is no position or no permission, outside the US, or on any failure. Never throws.
  */
 import type { LatLng } from '@/lib/geo';
+import { reverseGeocode } from '@/lib/phoneGeocoder';
 import { lastKnownPlace } from '@/ui/sky/ports';
 
 import { stateFromRegion, type PermitState } from './states';
@@ -16,11 +17,8 @@ export interface GeoRegion {
 
 export type ReverseGeocode = (point: LatLng) => Promise<readonly GeoRegion[]>;
 
-const phoneGeocode: ReverseGeocode = async (point) => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-  const Location = require('expo-location') as typeof import('expo-location');
-  return Location.reverseGeocodeAsync({ latitude: point.lat, longitude: point.lng });
-};
+/** The phone's reverse geocode (`@/lib/phoneGeocoder`: Apple's on iPhone, Android's own on Android). */
+const phoneGeocode: ReverseGeocode = (point) => reverseGeocode(point);
 
 /** The state at a point: the geocoder's region (a postal code on an iPhone, a full name on Android), in the US only. */
 export async function stateAt(point: LatLng, geocode: ReverseGeocode = phoneGeocode): Promise<PermitState | null> {
