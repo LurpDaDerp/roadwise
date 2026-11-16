@@ -12,6 +12,8 @@ import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
+import { ANDROID_GEOCODE_METHODS } from '../src/geocode';
+import { ANDROID_SHARE_METHODS } from '../src/share';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -96,9 +98,9 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(MODULE()).toContain(`AsyncFunction("${name}")`);
   });
 
-  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS, and none twice', () => {
+  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share and geocoder ones, and none twice', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
-    expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS].sort());
+    expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS].sort());
   });
 
   it.each([...DRIVE_SENSE_SYNC_METHODS])('Function("%s") is declared (sync, never an AsyncFunction)', (name) => {
@@ -178,13 +180,115 @@ describe('native-android: manifest (plan §1 decision 4: While Using only, no au
     expect(m![0]).toContain('android:exported="false"');
   });
 
-  it("the receivers: the transitions feed and the reminder's boot one, none exported; the boot one disabled until the reminder is on", () => {
+  it("the receivers: the transitions feed, the reminder's boot one and the share sheet's Save image, none exported; the boot one disabled until the reminder is on", () => {
     const receivers = [...MANIFEST().matchAll(/<receiver[^>]*android:name="([^"]+)"[^>]*>/g)];
-    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.ReminderBootReceiver']);
+    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.ReminderBootReceiver', '.SaveImageReceiver']);
     for (const r of receivers) expect(r[0]).toContain('android:exported="false"');
     expect(receivers[1]![0]).toContain('android:enabled="false"');
     expect(receivers[0]![0]).not.toContain('android:enabled');
     expect(MANIFEST()).not.toMatch(/ReminderActionReceiver|NOT_DRIVING/);
+  });
+});
+
+describe('native-android: share images (WP09, ruling 10)', () => {
+  const share = () => code(kt('ShareIntent'));
+  const saver = () => code(kt('ImageSaver'));
+
+  it('shareImage is an Android-only function on the main queue that never rejects', () => {
+    const fn = /AsyncFunction\("shareImage"\)[\s\S]*?\.runOnQueue\(Queues\.MAIN\)/.exec(MODULE())?.[0] ?? '';
+    expect(fn).toMatch(/ShareIntent\.shareImage\(activity, uri, text, title\)/);
+    expect(fn).toMatch(/catch \(_: Exception\)/);
+    expect(fn).not.toMatch(/reject/);
+    expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain('shareImage');
+  });
+
+  it('the image goes as a FileProvider content URI with a read grant, in EXTRA_STREAM and the ClipData, with EXTRA_TEXT beside it', () => {
+    const src = share();
+    expect(src).toMatch(/FileProvider\.getUriForFile\(/);
+    expect(src).toMatch(/Intent\.EXTRA_STREAM/);
+    expect(src).toMatch(/Intent\.EXTRA_TEXT/);
+    expect(src).toMatch(/ClipData\.newUri\(/);
+    expect(src).toMatch(/FLAG_GRANT_READ_URI_PERMISSION/);
+    expect(src).toMatch(/Intent\.createChooser\(/);
+    expect(src).not.toMatch(/FLAG_GRANT_WRITE_URI_PERMISSION/);
+  });
+
+  it('the provider is not exported and serves the cache only', () => {
+    const m = /<provider[^>]*android:name="\.ShareFileProvider"[^>]*>/.exec(MANIFEST());
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain('android:exported="false"');
+    expect(m![0]).toContain('android:grantUriPermissions="true"');
+    expect(m![0]).toContain('android:authorities="${applicationId}.drivesense.share"');
+    const paths = read(join(MAIN, 'res', 'xml', 'drivesense_share_paths.xml')).replace(/<!--[\s\S]*?-->/g, '');
+    expect([...paths.matchAll(/<([a-z-]+-path)\b/g)].map((x) => x[1])).toEqual(['cache-path']);
+  });
+
+  it('only an image inside the cache is ever shared or saved', () => {
+    expect(share()).toMatch(/fun shareableImage\(cacheDir: File, uriOrPath: String\): File\?/);
+    expect(share()).toMatch(/canonicalFile/);
+    expect(saver()).toMatch(/ShareIntent\.shareableImage\(ctx\.cacheDir, path\)/);
+  });
+
+  it('Save image: a chooser action on 14+ (explicit, immutable broadcast), an initial intent on 10 to 13, nothing below 10', () => {
+    const src = share();
+    expect(src).toMatch(/SDK_INT >= Build\.VERSION_CODES\.UPSIDE_DOWN_CAKE\)\s*\{\s*chooser\.putExtra\(Intent\.EXTRA_CHOOSER_CUSTOM_ACTIONS/);
+    expect(src).toMatch(/else if \(saveOffered\)\s*\{\s*chooser\.putExtra\(Intent\.EXTRA_INITIAL_INTENTS/);
+    expect(src).toMatch(/saveOffered: Boolean\s*get\(\) = Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.Q/);
+    expect(src).toMatch(/Intent\(ctx, SaveImageReceiver::class\.java\)\s*\.setPackage\(ctx\.packageName\)/);
+    expect(src).toMatch(/PendingIntent\.getBroadcast\([^)]*PendingIntent\.FLAG_IMMUTABLE/);
+    expect(src).not.toMatch(/FLAG_MUTABLE/);
+  });
+
+  it('the save is MediaStore into Pictures/RoadWise, pending until written, with no storage permission', () => {
+    const src = saver();
+    expect(src).toMatch(/MediaStore\.Images\.Media\.RELATIVE_PATH/);
+    expect(src).toMatch(/IS_PENDING, 1/);
+    expect(src).toMatch(/IS_PENDING, 0/);
+    expect(src).toMatch(/SDK_INT < Build\.VERSION_CODES\.Q/);
+    expect(src).toMatch(/goAsync\(\)/);
+    expect(MANIFEST()).not.toMatch(/WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES|READ_EXTERNAL_STORAGE/);
+  });
+
+  it('the save activity is unexported and translucent', () => {
+    const m = /<activity[^>]*android:name="\.SaveImageActivity"[^>]*>/.exec(MANIFEST());
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain('android:exported="false"');
+    expect(m![0]).toContain('Theme.Translucent');
+    expect(existsSync(join(MAIN, 'res', 'drawable', 'drivesense_save_image.xml'))).toBe(true);
+  });
+});
+
+describe('native-android: the background-safe geocoder (WP10)', () => {
+  const geo = () => code(kt('Geocode'));
+
+  it.each([...ANDROID_GEOCODE_METHODS])('%s is an Android-only function that never rejects', (name) => {
+    const start = MODULE().indexOf(`AsyncFunction("${name}")`);
+    expect(start).toBeGreaterThan(-1);
+    const fn = MODULE().slice(start, MODULE().indexOf('\n    }', start));
+    expect(fn).toMatch(/promise\.resolve\(/);
+    expect(fn).not.toMatch(/reject/);
+    expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain(name);
+  });
+
+  it('uses android.location.Geocoder: the listener form on 33+, a background thread below, no activity', () => {
+    const src = geo();
+    expect(src).toMatch(/import android\.location\.Geocoder/);
+    expect(src).toMatch(/SDK_INT >= Build\.VERSION_CODES\.TIRAMISU/);
+    expect(src).toMatch(/Geocoder\.GeocodeListener/);
+    expect(src).toMatch(/Executors\.newSingleThreadExecutor/);
+    expect(src).not.toMatch(/currentActivity|\bActivity\b/);
+  });
+
+  it('no geocoder on the phone answers null (ruling 17: no label), and every lookup answers once within its timeout', () => {
+    const src = geo();
+    expect(src).toMatch(/Geocoder\.isPresent\(\)/);
+    expect(src).toMatch(/const val TIMEOUT_MS = 5_000L/);
+    expect(src).toMatch(/compareAndSet\(false, true\)/);
+  });
+
+  it("answers in expo-location's address shape", () => {
+    const keys = [...geo().matchAll(/"(\w+)" to (?:clean\(|district\(\))/g)].map((x) => x[1]);
+    expect(keys).toEqual(['city', 'district', 'streetNumber', 'street', 'region', 'subregion', 'country', 'postalCode', 'name', 'isoCountryCode']);
   });
 });
 

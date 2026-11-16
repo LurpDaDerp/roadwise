@@ -12,6 +12,7 @@ import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -322,6 +323,49 @@ class DriveSenseModule : Module() {
       } catch (e: SelfTest.InvalidInput) {
         throw coded("E_INVALID_INPUT", e.message ?: "the vectors JSON cannot be parsed")
       }
+    }
+
+    // ---- Share images (WP09). Android only: ANDROID_SHARE_METHODS in src/share.ts, outside
+    // DRIVE_SENSE_METHODS (iPhone's sheet takes the image and the text itself). ----
+
+    // The share sheet with a share image from RoadWise's cache, `text` beside it and Save image on
+    // Android 10+ (ShareIntent). True once the sheet is up; false with no activity on screen or a
+    // file that is not a share image. Never rejects. Main thread: it starts the chooser.
+    AsyncFunction("shareImage") { uri: String, text: String?, title: String? ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        false
+      } else {
+        try {
+          ShareIntent.shareImage(activity, uri, text, title)
+        } catch (_: Exception) {
+          false
+        }
+      }
+    }.runOnQueue(Queues.MAIN)
+
+    // ---- The background-safe geocoder (WP10). Android only: ANDROID_GEOCODE_METHODS in
+    // src/geocode.ts, outside DRIVE_SENSE_METHODS (iPhone keeps expo-location's). ----
+
+    // The addresses at a point (expo-location's shape), in front, behind or headless (Geocode).
+    // Null without a geocoder, on a failure or after its timeout. Never rejects.
+    AsyncFunction("reverseGeocode") { lat: Double, lng: Double, promise: Promise ->
+      val ctx = try {
+        context
+      } catch (_: Exception) {
+        null
+      }
+      if (ctx == null) promise.resolve(null) else Geocode.reverse(ctx, lat, lng) { promise.resolve(it) }
+    }
+
+    // The points a typed address names (`{ latitude, longitude }`); null as above. Never rejects.
+    AsyncFunction("forwardGeocode") { query: String, promise: Promise ->
+      val ctx = try {
+        context
+      } catch (_: Exception) {
+        null
+      }
+      if (ctx == null) promise.resolve(null) else Geocode.forward(ctx, query) { promise.resolve(it) }
     }
   }
 }

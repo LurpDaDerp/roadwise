@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShareFileProvider (ShareIntent.kt): a share image goes out from RoadWise's cache directory only,
+     where react-native-view-shot captures the share cards. Nothing in files/ or external storage. -->
+<paths>
+  <cache-path name="share" path="." />
+</paths>

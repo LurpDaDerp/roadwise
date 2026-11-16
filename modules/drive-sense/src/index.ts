@@ -45,6 +45,11 @@ export { gravityFilter, initialGravityState, androidAccelToReference } from './e
 export { runSelfTest, runVector } from './extract/vectors';
 export { REMINDER } from './reminder/policy';
 export { isNavAppPackage, NAV_APP_PACKAGES } from './navPackages';
+// Android only (WP09, WP10): the share sheet with an image, and the geocoder that works behind.
+export { ANDROID_SHARE_METHODS, nativeShareImage, setShareModuleForTests } from './share';
+export type { ShareImage, ShareImageOptions } from './share';
+export { ANDROID_GEOCODE_METHODS, GEOCODE_QUERY_MAX, nativeAddressSchema, nativeGeocoder, setGeocodeModuleForTests } from './geocode';
+export type { NativeAddress, NativeGeocoder, NativePoint } from './geocode';
 // The iOS drive detector (plan §3.1.1): its bridge, fake, rules, decision table, self-test and journal format.
 export {
   carLinkStateSchema,
