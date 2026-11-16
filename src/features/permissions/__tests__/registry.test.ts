@@ -89,7 +89,8 @@ describe("automatic drives' rows on Android", () => {
     expect(disclosesBackground('locationAlways', always, board({ platform: 'android', canAskAlways: true }))).toBe(true);
     expect(disclosesBackground('location', loc, old())).toBe(true);
     expect(disclosesBackground('location', services, old())).toBe(false);
-    expect(disclosesBackground('location', loc, old({ canAskAlways: null }))).toBe(false);
+    // Fails closed: the detector unread, or reading no Play services (it arms once they come back).
+    expect(disclosesBackground('location', loc, old({ canAskAlways: null }))).toBe(true);
     expect(disclosesBackground('location', loc, board({ platform: 'android', location: 'undetermined', canAskAlways: false }, { androidApi: 29 }))).toBe(false);
     expect(disclosesBackground('motion', loc, old())).toBe(false);
     for (const id of ['location', 'locationAlways'] as const) {

@@ -229,13 +229,12 @@ export const ANDROID_BACKGROUND_LOCATION_API = 29;
 /**
  * Android 9 and lower: allowing location allows it in the background too, so on a phone with the
  * drive detector (which would then use it with the app closed) the location request is itself a
- * background-location request, and Google Play's disclosure comes before it. A null API reads as
- * current.
+ * background-location request, and Google Play's disclosure comes before it. Every Android build
+ * carries the detector, so this fails closed: it holds whatever the detector reads of Google Play
+ * services (it arms once they come back) or when its read failed. A null API reads as current.
  */
 export const locationIsBackground = (read: Pick<PermissionBoardRead, 'snapshot' | 'androidApi'>): boolean =>
-  read.snapshot.platform === 'android' &&
-  read.snapshot.canAskAlways !== null &&
-  (read.androidApi ?? ANDROID_BACKGROUND_LOCATION_API) < ANDROID_BACKGROUND_LOCATION_API;
+  read.snapshot.platform === 'android' && (read.androidApi ?? ANDROID_BACKGROUND_LOCATION_API) < ANDROID_BACKGROUND_LOCATION_API;
 
 /**
  * Whether this fix carries Google Play's background-location disclosure first (Android only): every

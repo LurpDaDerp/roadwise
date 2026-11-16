@@ -193,9 +193,11 @@ test('Android Location Always: a fix without the disclosure rejects and asks not
   expect(s.adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationAlways:disclosed']);
 });
 
-test("Android 9 and lower with the drive detector: the location fix needs the disclosure, naming the dialog's Allow", async () => {
+// Fails closed: a detector reading no Play services (updating, too old) or unread (null) arms once
+// they come back, so its location request is a background one too.
+test.each([false, null] as const)("Android 9 and lower with the drive detector (answer %p): the location fix needs the disclosure, naming the dialog's Allow", async (canAskAlways) => {
   const w = await appWorld();
-  const s = setup({ androidApi: 28 }, snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false, backgroundRefresh: 'available' }), { foreground: 'always' });
+  const s = setup({ androidApi: 28 }, snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways, backgroundRefresh: 'available' }), { foreground: 'always' });
   const { result } = await mount(w, s.deps);
   await waitFor(() => expect(result.current.status).toBe('ready'));
   await act(async () => {
@@ -212,7 +214,7 @@ test("Android 9 and lower with the drive detector: the location fix needs the di
 
 test.each([
   [29, false],
-  [28, null],
+  [29, null],
 ] as const)('Android %i with detector answer %p: the location fix asks with no disclosure', async (api, canAskAlways) => {
   const w = await appWorld();
   const s = setup({ androidApi: api }, snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways, backgroundRefresh: 'available' }));

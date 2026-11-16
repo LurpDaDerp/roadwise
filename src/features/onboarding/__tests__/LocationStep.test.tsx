@@ -304,13 +304,15 @@ describe('Android 9 and lower: allowing location allows it in the background too
     expect(screen.getByTestId('location-allow')).toBeOnTheScreen();
   });
 
-  it('without the drive detector nothing runs in the background, so no disclosure', async () => {
+  it('a detector reading no Play services (or unread) still gets the disclosure first: it arms once they come back', async () => {
     const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: null }), { foreground: 'always' });
     const { onNext } = await renderStep('android', adapter, 28);
     await press(await screen.findByTestId('location-allow'));
+    expect(await screen.findByTestId('background-disclosure-body')).toBeOnTheScreen();
+    expect(requests(adapter)).toEqual([]);
+    await press(screen.getByTestId('background-disclosure-continue'));
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
     expect(requests(adapter)).toEqual(['requestLocationForeground']);
-    expect(adapter.requestLocationForeground).toHaveBeenCalledWith({ disclosed: false });
+    expect(adapter.requestLocationForeground).toHaveBeenCalledWith({ disclosed: true });
   });
 });

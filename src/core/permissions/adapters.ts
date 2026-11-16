@@ -430,12 +430,17 @@ export function createPermissionsAdapter(
   /**
    * Android 9 and lower on a phone with the drive detector: allowing location allows it in the
    * background too, so a location request is a background-location request (registry's
-   * `locationIsBackground`, the same rule).
+   * `locationIsBackground`, the same rule). Fails closed: the detector's module present is enough,
+   * whatever it reads of Google Play services (it arms whenever they come back) or when unreadable.
    */
   async function locationRequestIsBackground(): Promise<boolean> {
     if (deps.platform !== 'android') return false;
     if ((deps.androidApiLevel ?? (() => ANDROID_BACKGROUND_LOCATION_API))() >= ANDROID_BACKGROUND_LOCATION_API) return false;
-    return (await readDetect()).canAskAlways !== null;
+    try {
+      return (await (deps.driveDetect ?? resolveDriveDetect)()) !== null;
+    } catch {
+      return true;
+    }
   }
 
   /** `PermissionsAdapter.locationAskIsBackground`: a background request while location is not allowed yet. */

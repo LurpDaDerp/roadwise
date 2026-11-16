@@ -241,9 +241,16 @@ describe('requestLocationForeground', () => {
     expect(await ask('android', 29, detect())).toEqual({ answer: 'foreground', asked: true });
     expect(await ask('android', 28, null)).toEqual({ answer: 'foreground', asked: true });
     expect(await ask('ios', 0, createFakeDriveDetect({ permissions: { location: 'none', canAskAlways: false } }))).toEqual({ answer: 'foreground', asked: true });
-    // No Google Play services: no automatic drives, so not a background request.
+    // Fails closed: Google Play services unavailable (updating, too old: the detector arms once they
+    // come back) or the detector unreadable still need the disclosure first.
     const noPlay = createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', motion: 'unavailable', canAskAlways: false } });
-    expect(await ask('android', 28, noPlay)).toEqual({ answer: 'foreground', asked: true });
+    expect(await ask('android', 28, noPlay)).toEqual({ answer: 'undetermined', asked: false });
+    const unreadable = createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', canAskAlways: false } });
+    unreadable.getState = async () => {
+      throw new Error('read failed');
+    };
+    expect(await ask('android', 28, unreadable)).toEqual({ answer: 'undetermined', asked: false });
+    expect(await ask('android', 28, noPlay, true)).toEqual({ answer: 'foreground', asked: true });
   });
 });
 
@@ -608,15 +615,15 @@ describe('Bluetooth (DashPal)', () => {
     const disclosed = bt('android', { level: 28, driveDetect: detect(), fg: notAsked });
     expect(await disclosed.adapter.requestBluetooth({ disclosed: true })).toBe('granted');
     expect(disclosed.calls).toContain('request:android.permission.ACCESS_FINE_LOCATION');
-    // Location already allowed (nothing new is allowed), Android 10 and later, a phone without the
-    // detector or without Play services, and an iPhone: no disclosure.
+    // Location already allowed (nothing new is allowed), Android 10 and later, a build without the
+    // detector and an iPhone: no disclosure. A phone reading no Play services still has one (fails closed).
     const allowed = bt('android', { level: 28, driveDetect: detect() });
     expect(await allowed.adapter.locationAskIsBackground()).toBe(false);
     expect(await allowed.adapter.requestBluetooth()).toBe('granted');
     expect(await bt('android', { level: 29, driveDetect: detect(), fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
     expect(await bt('android', { level: 28, driveDetect: null, fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
     const noPlay = createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', motion: 'unavailable', canAskAlways: false } });
-    expect(await bt('android', { level: 28, driveDetect: noPlay, fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
+    expect(await bt('android', { level: 28, driveDetect: noPlay, fg: notAsked }).adapter.locationAskIsBackground()).toBe(true);
     expect(await bt('ios', { driveDetect: createFakeDriveDetect({ permissions: { location: 'none', canAskAlways: false } }), fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
   });
 
