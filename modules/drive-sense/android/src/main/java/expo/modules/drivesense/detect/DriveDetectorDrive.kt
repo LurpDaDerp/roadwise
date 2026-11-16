@@ -292,8 +292,9 @@ internal fun DriveDetector.automaticEndDue(): Boolean {
 /**
  * "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests
  * with no GPS until a 20 s walk, 5 min without vehicle motion, or 3 h (ruling 4: the activity
- * transitions are its eyes; car motion standing as it begins holds its still clock, a passenger
- * still riding). The last end stays as it was.
+ * transitions are its eyes; car motion in the live feed's last 2 min, or an IN_VEHICLE transition
+ * still standing in the motion history, holds its still clock: a passenger still riding, whatever
+ * the one live report at the tap said). The last end stays as it was.
  */
 fun DriveDetector.notDriving(done: () -> Unit) {
   handler.post {
@@ -318,7 +319,7 @@ fun DriveDetector.notDriving(done: () -> Unit) {
         startSource = null,
         suppressedSince = now,
         suppressedUntil = now + DetectPolicy.SUPPRESS_MAX_MS,
-        rest = RestStanding(carStanding = carStanding)
+        rest = DetectPolicy.restSeed(carFresh(), history)
       )
     )
     finishSensing(holdMs = DetectPolicy.END_TASK_MAX_MS.toLong())

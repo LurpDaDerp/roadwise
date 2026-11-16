@@ -11,10 +11,12 @@ import androidx.core.app.NotificationCompat
 /**
  * The watch's notification (ruling 3): Android shows a notification for every foreground service,
  * and a watch for a drive is one (its GPS runs in the location service). iOS watches invisibly, so
- * this one says as little as it can: "Checking for a drive", on its own minimum-importance channel
- * ("Checking for a drive"): no sound, no vibration, no badge, no heads-up, no status-bar icon and
- * nothing on the lock screen (minimum importance shows only in the shade, collapsed). It goes the
- * moment the watch ends. A tap opens RoadWise. When the watch confirms a drive, the drive
+ * this one says as little as it can: "Checking for a drive", on its own channel ("Checking for a
+ * drive"), created at minimum importance, which Android raises to low for a foreground service's
+ * notification (it allows none quieter): no sound, no vibration, no badge, no heads-up and nothing
+ * on the lock screen, listed with the silent notifications in the shade, and its small icon may show
+ * in the status bar (unless the phone hides silent notifications' icons). It goes the moment the
+ * watch ends. A tap opens RoadWise. When the watch confirms a drive, the drive
  * notification ([NotificationFactory]) takes its place under the same id.
  *
  * Also retires the forgot-to-start reminder's channel ("trip_reminder"), which RoadWise no longer has.

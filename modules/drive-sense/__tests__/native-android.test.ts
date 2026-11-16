@@ -449,7 +449,7 @@ describe('native-android: the activity feeds (the transitions while armed, the l
     expect(src).not.toMatch(/^import /m);
   });
 
-  it('the transitions follow the detector (its wakes run), with motion and Play services; synced best effort; a re-request only for a registration from another boot or when forced', () => {
+  it('the transitions follow the detector (its wakes run), with motion and Play services; synced best effort; a re-request only for a registration from another boot, one whose PendingIntent a force stop cancelled, or when forced', () => {
     const rx = code(kt('ActivityTransitionReceiver'));
     const sync = /fun sync\(context: Context, want: Boolean[\s\S]*?\n {2}\}/.exec(rx)?.[0] ?? '';
     expect(sync).toMatch(/try \{/);
@@ -458,11 +458,16 @@ describe('native-android: the activity feeds (the transitions while armed, the l
     expect(sync).toMatch(/val ok = want && DriveSensePermissions\.motionGranted\(context\) && DriveSensePermissions\.playServicesAvailable\(context\)\s*prefs\.transitionsWanted = ok/);
     expect(rx).toMatch(/Settings\.Global\.getInt\(context\.contentResolver, Settings\.Global\.BOOT_COUNT, -1\)/);
     expect(sync).toContain('val thisBoot = prefs.transitionsAtNanos in 1L..nowNanos && (boot < 0 || prefs.transitionsBoot == boot)');
-    const skip = sync.indexOf('prefs.transitionsTier == SET && thisBoot');
+    const skip = sync.indexOf('prefs.transitionsTier == SET && thisBoot && registered(context)');
     expect(skip).toBeGreaterThan(-1);
     expect(skip).toBeLessThan(sync.indexOf('prefs.transitionsAtNanos = nowNanos'));
     expect(sync.indexOf('prefs.transitionsAtNanos = nowNanos')).toBeLessThan(sync.indexOf('subscribe(context) { e ->'));
     expect(sync).toMatch(/if \(force\) prefs\.transitionsTier = null/);
+    // The request on file counts only while the system still holds its PendingIntent (never made by the check).
+    // Same intent, request code and mutability as the subscription's (one builder).
+    expect(rx).toMatch(/fun registered\(context: Context\): Boolean = try \{\s*broadcast\(context, PendingIntent\.FLAG_NO_CREATE\) != null/);
+    expect(rx).toMatch(/fun pendingIntent\(context: Context\): PendingIntent = broadcast\(context, PendingIntent\.FLAG_UPDATE_CURRENT\)!!/);
+    expect(rx).toMatch(/private fun broadcast\(context: Context, base: Int\): PendingIntent\? \{\s*val intent = Intent\(context, ActivityTransitionReceiver::class\.java\)\.setAction\(ACTION\)\s*var flags = base/);
     // Only the detector's wakes call it.
     expect(code(allKotlin())).not.toMatch(/ActivityTransitions\.sync\(/);
     expect(code(read(join(KT_DIR_DETECT, 'WakeSources.kt')))).toMatch(/ActivityTransitions\.sync\(app, run, force, onDone\)/);
@@ -502,7 +507,7 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(det('DriveDetectorSensing')).not.toMatch(/CaptureService\.|LocationSource|startWatch/);
   });
 
-  it('the parked geofence: "roadwise.parked", 100 m, exit only, never expiring, no initial trigger, replaced (never accumulated)', () => {
+  it('the parked geofence: "roadwise.parked", 100 m, exit only, never expiring, no initial trigger, replaced (never accumulated); dropped, refused or cancelled, it is set again at the next launch or foreground', () => {
     const w = det('WakeSources');
     expect(w).toMatch(/const val GEOFENCE_ID = "roadwise\.parked"/);
     expect(w).toMatch(/\.setCircularRegion\(p\.lat, p\.lng, DetectPolicy\.PARKED_REGION_RADIUS_M\.toFloat\(\)\)/);
@@ -514,6 +519,21 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(g).toMatch(/if \(event\.errorCode == GeofenceStatusCodes\.GEOFENCE_NOT_AVAILABLE\) DriveDetector\.get\(context\)\.onGeofenceLost\(\)/);
     expect(g).toMatch(/if \(event\.geofenceTransition != Geofence\.GEOFENCE_TRANSITION_EXIT\) return/);
     expect(g).toMatch(/it\.requestId == WakeSources\.GEOFENCE_ID/);
+    // Refused, dropped (location off) or its PendingIntent cancelled (a force stop): owed, kept on disk.
+    expect(w).toMatch(/\.addOnSuccessListener \{ onParked\(true\) \}/);
+    expect(w).toMatch(/\.addOnFailureListener \{ e ->[\s\S]{0,120}onParked\(false\)/);
+    expect(w).toMatch(/fun geofenceIntentAlive\(context: Context\): Boolean = try \{\s*broadcast\(context, PendingIntent\.FLAG_NO_CREATE\) != null/);
+    expect(w).toMatch(/fun geofenceIntent\(context: Context\): PendingIntent = broadcast\(context, PendingIntent\.FLAG_UPDATE_CURRENT\)!!/);
+    const d = det('DriveDetector');
+    expect(d).toMatch(/WakeSources\(app\) \{ onFile -> handler\.post \{ fenceOwed\(!onFile\) \} \}/);
+    expect(d).toMatch(/fun onGeofenceLost\(\) \{\s*handler\.post \{ fenceOwed\(true\) \}/);
+    expect(d).toMatch(/store\.edit\(\)\.putBoolean\(FENCE_OWED_KEY, owed\)\.commit\(\)/);
+    expect(d).not.toMatch(/geofenceLost/);
+    expect(d).toMatch(/WakeFile\.parkedOwed\(r\.state == "off", r\.parked != null, store\.getBoolean\(FENCE_OWED_KEY, false\)\) \{ wakes\.parkedOnFile\(\) \}/);
+    const fg = /fun appForeground\(\) \{[\s\S]*?\n {2}\}/.exec(d)?.[0] ?? '';
+    expect(fg).toMatch(/refreshParked\(\)\s*onWake\(WakeReason\.APP\)/);
+    const launch = /fun resumeAtLaunch\(\) \{[\s\S]*?\n {2}\}/.exec(d)?.[0] ?? '';
+    expect(launch.match(/refreshParked\(\)/g)?.length).toBe(2);
   });
 
   it('the boot receiver only re-arms (under goAsync), switched on and off by the wakes alone, always with DONT_KILL_APP', () => {
@@ -597,7 +617,7 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(code(kt('DriveNotificationController'))).toMatch(/if \(!CaptureService\.recording\(\) \|\| ended \|\| dismissed\) return/);
   });
 
-  it('the watch notification: "Checking for a drive" on its own silent minimum-importance channel, hidden on the lock screen; the retired reminder channel is deleted', () => {
+  it('the watch notification: "Checking for a drive" on its own silent channel (created at minimum importance; Android shows a service notification at low), hidden on the lock screen; the retired reminder channel is deleted', () => {
     const n = code(kt('WatchNotification'));
     expect(n).toMatch(/const val CHANNEL_ID = "drive_check"/);
     expect(n).toMatch(/const val TITLE = "Checking for a drive"/);
@@ -612,10 +632,12 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
 
   it('the rest after "Not driving?" needs no GPS: its evidence is the transitions, kept in the record, checked at every wake, foreground and state read', () => {
     const s = det('DriveDetectorSensing');
-    expect(s).toMatch(/DetectPolicy\.restAfter\(r\.rest, batch\)/);
+    expect(s).toMatch(/val step = DetectPolicy\.restOnBatch\(since, until, r\.rest, batch, arrival\)\s*if \(step\.due != null\) \{\s*endSuppression\(\)/);
+    expect(s).toMatch(/save\(r\.copy\(rest = step\.standing\)\)\s*checkRest\(\)/);
     expect(s).toMatch(/DetectPolicy\.restDue\(since, until, r\.rest, DriveDetector\.now\(\)\)/);
     expect(s).toMatch(/wakes\.lastKnown \{ spot -> if \(spot != null\) handler\.post \{ park\(spot\) \} \}/);
-    expect(det('DriveDetectorDrive')).toMatch(/rest = RestStanding\(carStanding = carStanding\)/);
+    // Seeded from car motion in the live feed's last 2 min or an IN_VEHICLE transition still standing, not the one report at the tap.
+    expect(det('DriveDetectorDrive')).toMatch(/rest = DetectPolicy\.restSeed\(carFresh\(\), history\)/);
     expect(det('DriveDetectorWatch')).toMatch(/if \(r\.state == "suppressed"\) restOnTransitions\(batch, arrival\)/);
   });
 

@@ -38,19 +38,26 @@ fun DriveDetector.onActivity(a: MotionReport) {
 
 // ——— the rest after "Not driving?" ———
 
-/** A batch of transitions during the rest: its evidence moves on (and is kept), then its end is checked. */
+/**
+ * A batch of transitions during the rest: what stood before each transition is checked at its time
+ * (a walk that stood 20 s before the car came, or before a later transition of the same batch ended
+ * it), then the evidence moves on (and is kept) and what stands now is checked.
+ */
 internal fun DriveDetector.restOnTransitions(batch: List<TimedTransition>, arrival: Double) {
   val r = rec ?: return
   if (r.state != "suppressed") return
   val since = r.suppressedSince
   val until = r.suppressedUntil
-  // What stood until this batch may already have ended the rest (a walk that stood 20 s before the car came).
-  val first = batch.minOfOrNull { it.at } ?: arrival
-  if (since != null && until != null && DetectPolicy.restDue(since, until, r.rest, minOf(first, arrival)) != null) {
+  if (since == null || until == null) {
     endSuppression()
     return
   }
-  save(r.copy(rest = DetectPolicy.restAfter(r.rest, batch)))
+  val step = DetectPolicy.restOnBatch(since, until, r.rest, batch, arrival)
+  if (step.due != null) {
+    endSuppression()
+    return
+  }
+  save(r.copy(rest = step.standing))
   checkRest()
 }
 

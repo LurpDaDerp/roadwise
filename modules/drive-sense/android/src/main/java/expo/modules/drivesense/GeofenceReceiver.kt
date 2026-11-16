@@ -16,8 +16,8 @@ import expo.modules.drivesense.detect.WakeSources
  * parked, the drive detector's `region` wake. Reached only through the explicit, mutable
  * PendingIntent handed to Play services (not exported); the broadcast lets RoadWise start its
  * location service from the background (Android 12+). goAsync until the detector has acted.
- * GEOFENCE_NOT_AVAILABLE (location switched off) removes every geofence: the detector sets it again
- * at its next sync (RoadWise in front, a reboot, the next end).
+ * GEOFENCE_NOT_AVAILABLE (location switched off) removes every geofence: the detector keeps that
+ * on disk and sets it again at RoadWise's next launch or foreground (or a reboot, or the next end).
  */
 class GeofenceReceiver : BroadcastReceiver() {
   companion object {

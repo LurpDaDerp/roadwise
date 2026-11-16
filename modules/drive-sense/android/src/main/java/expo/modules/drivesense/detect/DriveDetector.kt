@@ -48,6 +48,8 @@ class DriveDetector private constructor(context: Context) {
     private const val PREFS = "expo.modules.drivesense.detect"
     private const val KEY = "record"
     private const val HISTORY_KEY = "history"
+    /** The parked geofence is owed to Play services (dropped with location off, or refused): set again at the next launch or foreground. */
+    private const val FENCE_OWED_KEY = "fenceOwed"
     private val DRIVE_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     @Volatile
@@ -77,7 +79,7 @@ class DriveDetector private constructor(context: Context) {
     )
   }
   internal val access = DriveDetectAccess(app)
-  internal val wakes = WakeSources(app)
+  internal val wakes = WakeSources(app) { onFile -> handler.post { fenceOwed(!onFile) } }
   private val store: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   // ——— detector thread only ———
@@ -129,9 +131,6 @@ class DriveDetector private constructor(context: Context) {
 
   private val tickTask = Runnable { tick() }
   internal val restTask = Runnable { checkRest() }
-
-  /** Play services dropped the parked geofence (location off): set again at the next foreground. */
-  private var geofenceLost = false
 
   /** The record says a drive records (recording or ending): read by the capture and the module. */
   @Volatile
@@ -307,9 +306,32 @@ class DriveDetector private constructor(context: Context) {
     }
   }
 
-  /** Play services dropped the geofence (location switched off): it is set again when RoadWise next comes to the front. */
+  /**
+   * Play services dropped the geofence (location switched off): kept on disk, as the broadcast
+   * usually comes to a process started for it alone and gone long before RoadWise next runs, so the
+   * next launch or foreground sets it again ([refreshParked]).
+   */
   fun onGeofenceLost() {
-    handler.post { geofenceLost = true }
+    handler.post { fenceOwed(true) }
+  }
+
+  /** Whether the parked geofence is owed to Play services (commit: the process may go right after). */
+  private fun fenceOwed(owed: Boolean) {
+    if (store.getBoolean(FENCE_OWED_KEY, false) != owed) store.edit().putBoolean(FENCE_OWED_KEY, owed).commit()
+  }
+
+  /**
+   * The parked geofence set again where Play services no longer holds it: dropped with location off
+   * or refused when it was set (kept on disk), or its PendingIntent gone (a force stop, an OEM
+   * cleaner or Task Manager's Stop cancels every PendingIntent RoadWise holds, and Play services then
+   * drops the geofence). Never re-set while held: a same-id geofence added while the phone is
+   * already outside would swallow an exit Play services has yet to deliver.
+   */
+  internal fun refreshParked() {
+    val r = rec ?: return
+    if (WakeFile.parkedOwed(r.state == "off", r.parked != null, store.getBoolean(FENCE_OWED_KEY, false)) { wakes.parkedOnFile() }) {
+      wakes.setParked(r.parked)
+    }
   }
 
   /**
@@ -472,7 +494,8 @@ class DriveDetector private constructor(context: Context) {
   /**
    * RoadWise came to the front (an activity started, or JS's `appForeground`): a drive whose resume
    * Android refused behind is resumed now (or ended, past its 5 min), a rest past its end ends, a
-   * permission change is taken in, a geofence location-off dropped is set again, and then the `app`
+   * permission change is taken in, a parked geofence Play services no longer holds is set again
+   * ([refreshParked]), and then the `app`
    * wake: a watch opens when the motion history shows the car moving in the last 2 min and the
    * driver not on foot (the rest after an empty watch is skipped, never the hourly cap).
    */
@@ -482,10 +505,7 @@ class DriveDetector private constructor(context: Context) {
       if (resumePending && !resuming && !sensing && r.recording) r.driveId?.let { resumeDrive(it) }
       checkRest()
       sync("permissionLost")
-      if (geofenceLost && rec?.state != "off") {
-        geofenceLost = false
-        wakes.setParked(rec?.parked)
-      }
+      refreshParked()
       onWake(WakeReason.APP)
     }
   }
@@ -520,7 +540,8 @@ class DriveDetector private constructor(context: Context) {
    * never survives a process; a drive open in the last process resumes from its journal or ends as
    * an orphan; a rest goes on until its end (Android senses it through the transitions Play
    * services kept delivering, so nothing restarts its clocks). The wakes are synced (registrations
-   * from an earlier boot are made again). Already sensing in this process: nothing to do.
+   * from an earlier boot, or ones a force stop cancelled, are made again; the parked geofence too,
+   * [refreshParked]). Already sensing in this process: nothing to do.
    */
   fun resumeAtLaunch() {
     handler.post {
@@ -539,6 +560,7 @@ class DriveDetector private constructor(context: Context) {
           if (id != null) {
             resumeDrive(id)
             syncWakes()
+            refreshParked()
             return@post
           }
           save(settle(r, now))
@@ -550,6 +572,7 @@ class DriveDetector private constructor(context: Context) {
       clearStaleCapture()
       CaptureService.releaseIfIdle()
       syncWakes()
+      refreshParked()
     }
   }
 

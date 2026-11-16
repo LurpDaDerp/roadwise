@@ -178,6 +178,81 @@ class AutoDetectTest {
     assertNull(DetectPolicy.restDue(since, until, again, since + 50 * min))
   }
 
+  @Test
+  fun `a rest begun mid-ride holds while the history is in the vehicle, whatever the one live report at the tap said`() {
+    val since = t0
+    val until = since + DetectPolicy.SUPPRESS_MAX_MS
+    // Play services' transition state is in the vehicle (no EXIT or other ENTER since): the live
+    // report at the tap was a tilt or still at a light (not car motion, nothing fresh).
+    val riding = listOf(e(since - 30 * min, ActivityHistory.Kind.STILL), e(since - 20 * min, ActivityHistory.Kind.VEHICLE))
+    val seeded = DetectPolicy.restSeed(carFresh = false, history = riding)
+    assertTrue(seeded.carStanding)
+    assertNull(DetectPolicy.restDue(since, until, seeded, since + 5 * min))
+    assertNull(DetectPolicy.restDue(since, until, seeded, since + 60 * min))
+    assertEquals(until, DetectPolicy.restNextCheck(since, until, seeded), 0.0)
+    // Car motion in the live feed's last 2 min holds it too, with no history.
+    assertTrue(DetectPolicy.restSeed(carFresh = true, history = emptyList()).carStanding)
+    // Out of the vehicle (an EXIT, or another ENTER since), nothing fresh: 5 min from the tap.
+    for (after in listOf(ActivityHistory.Kind.VEHICLE_EXIT, ActivityHistory.Kind.STILL, ActivityHistory.Kind.WALKING)) {
+      val out = DetectPolicy.restSeed(carFresh = false, history = riding + e(since - 1 * min, after))
+      assertFalse(out.carStanding)
+      assertEquals(SuppressionCause.STILL, DetectPolicy.restDue(since, until, out, since + 5 * min))
+    }
+    assertFalse(DetectPolicy.restSeed(carFresh = false, history = emptyList()).carStanding)
+  }
+
+  @Test
+  fun `a walk of 20 s inside one late batch ends the rest, though a later transition of the batch ended it`() {
+    val since = t0
+    val until = since + DetectPolicy.SUPPRESS_MAX_MS
+    val riding = RestStanding(carStanding = true)
+    val t = since + 20 * min
+    // Out of the car, a minute's walk to the door, then still: delivered together, later.
+    val batch = listOf(tt("automotive", false, t), tt("walking", true, t + 5_000), tt("stationary", true, t + 65_000))
+    assertEquals(SuppressionCause.WALKING, DetectPolicy.restOnBatch(since, until, riding, batch, t + 90_000).due)
+    // A walk under 20 s before the still does not; the still clock then runs from leaving the car.
+    val short = listOf(tt("automotive", false, t), tt("walking", true, t + 5_000), tt("stationary", true, t + 15_000))
+    val step = DetectPolicy.restOnBatch(since, until, riding, short, t + 30_000)
+    assertNull(step.due)
+    assertEquals(RestStanding(walkSince = null, carStanding = false, carLeftAt = t), step.standing)
+    // What stood before the batch is checked first (a walk that stood 20 s before the car came).
+    val walking = RestStanding(walkSince = t, carStanding = false, carLeftAt = t)
+    assertEquals(SuppressionCause.WALKING, DetectPolicy.restOnBatch(since, until, walking, listOf(tt("automotive", true, t + 30_000)), t + 40_000).due)
+    // The still clock reached inside the batch ends it as well.
+    val parked = RestStanding(carStanding = false, carLeftAt = t)
+    assertEquals(SuppressionCause.STILL, DetectPolicy.restOnBatch(since, until, parked, listOf(tt("automotive", true, t + 6 * min)), t + 7 * min).due)
+  }
+
+  @Test
+  fun `a transition dated before the rest counts from the rest's start`() {
+    val since = t0
+    val until = since + DetectPolicy.SUPPRESS_MAX_MS
+    // A walk from before the tap, delivered late: dated at the tap, not ending the rest at once.
+    val step = DetectPolicy.restOnBatch(since, until, RestStanding(carStanding = true), listOf(tt("walking", true, since - 2 * min)), since + 5_000)
+    assertNull(step.due)
+    assertEquals(RestStanding(walkSince = since, carStanding = false, carLeftAt = since), step.standing)
+    assertNull(DetectPolicy.restDue(since, until, step.standing, since + 10_000))
+    // Still walking 20 s after the tap: over, as iOS's rest would be.
+    assertEquals(SuppressionCause.WALKING, DetectPolicy.restDue(since, until, step.standing, since + 20_000))
+    // restAfter clamps the same way.
+    assertEquals(since, DetectPolicy.restAfter(RestStanding(), listOf(tt("walking", true, since - 60_000)), since).walkSince)
+  }
+
+  @Test
+  fun `the parked geofence is set again only when owed or its PendingIntent is gone, never while off or with no spot`() {
+    var asked = 0
+    val alive = { asked++; true }
+    val gone = { asked++; false }
+    assertFalse(WakeFile.parkedOwed(off = false, parked = true, owed = false, intentAlive = alive))
+    assertTrue(WakeFile.parkedOwed(off = false, parked = true, owed = false, intentAlive = gone))
+    assertTrue(WakeFile.parkedOwed(off = false, parked = true, owed = true, intentAlive = alive))
+    assertEquals(2, asked)
+    assertFalse(WakeFile.parkedOwed(off = true, parked = true, owed = true, intentAlive = gone))
+    assertFalse(WakeFile.parkedOwed(off = false, parked = false, owed = true, intentAlive = gone))
+    // The system is asked only when nothing else decides.
+    assertEquals(2, asked)
+  }
+
   // ——— the record and the status ———
 
   @Test

@@ -5,11 +5,12 @@ package expo.modules.drivesense.detect
  * until a 20 s walk, 5 min with nothing over 3 mph, or 3 h; Android reads the same three ends from
  * the activity transitions Play services keeps delivering while RoadWise is not running:
  * - a walk (WALKING or RUNNING ENTER) that has stood 20 s, dated when it began (the transition's own
- *   time: Play services often delivers it 30 s or more late, so a walk is usually over 20 s old when
- *   it arrives and ends the rest at once);
+ *   time, never before the rest: Play services often delivers it 30 s or more late, so a walk is
+ *   usually over 20 s old when it arrives and ends the rest at once; one a later transition of the
+ *   same batch ended counts too, [restOnBatch]);
  * - 5 min without vehicle motion: the clock runs from the rest's start or from when the phone last
  *   left the vehicle (IN_VEHICLE EXIT, or any other ENTER after an IN_VEHICLE one), and holds while
- *   an IN_VEHICLE ENTER stands (a passenger still riding);
+ *   an IN_VEHICLE ENTER stands (a passenger still riding; [restSeed] reads the one standing at the tap);
  * - 3 h after the tap.
  * The standing evidence is kept in the detector's record, so a rest survives RoadWise's process
  * coming and going between transitions (each delivery may start a new one). Pure.
@@ -26,31 +27,57 @@ data class RestStanding(
 /** One activity transition with the time it happened (epoch ms). `type` as the `activity` event names it. */
 data class TimedTransition(val type: String, val enter: Boolean, val at: Double)
 
-/** The rest's standing evidence after one delivered batch, in order. */
-fun DetectPolicy.restAfter(s: RestStanding, batch: List<TimedTransition>): RestStanding {
-  var walk = s.walkSince
-  var car = s.carStanding
-  var left = s.carLeftAt
-  for (t in batch) {
-    if (t.type == "automotive") {
-      if (t.enter) {
-        car = true
-        walk = null
-      } else if (car) {
-        car = false
-        left = t.at
-      }
-      continue
-    }
-    if (!t.enter) continue
-    if (car) {
-      car = false
-      left = t.at
-    }
-    val onFoot = t.type == "walking" || t.type == "running"
-    walk = if (onFoot) walk ?: t.at else null
+/**
+ * The rest's evidence as "Not driving?" begins it: the car stands when the live feed saw confident
+ * car motion in the last 2 min ([carFresh]: a passenger who picks the phone up to tap makes the
+ * newest live report a tilt, or still at a light), or when the motion history's newest transition
+ * is an IN_VEHICLE ENTER (Play services' transition state is still in the vehicle: it sends nothing
+ * more while the ride goes on, and its EXIT or another ENTER is what tells the rest the ride is
+ * over), as iOS's rest holds on ten-metre GPS while the car moves.
+ */
+fun DetectPolicy.restSeed(carFresh: Boolean, history: List<ActivityHistory.Entry>): RestStanding =
+  RestStanding(carStanding = carFresh || history.maxByOrNull { it.at }?.kind == ActivityHistory.Kind.VEHICLE)
+
+/**
+ * One transition into the rest's evidence. [since]: the rest's start; a transition dated before it
+ * (Play services delivering late) counts from the start, as iOS dates its rest's walk only from
+ * reports after the rest began.
+ */
+private fun restStep(s: RestStanding, t: TimedTransition, since: Double): RestStanding {
+  val at = maxOf(t.at, since)
+  if (t.type == "automotive") {
+    if (t.enter) return RestStanding(walkSince = null, carStanding = true, carLeftAt = s.carLeftAt)
+    return if (s.carStanding) s.copy(carStanding = false, carLeftAt = at) else s
   }
-  return RestStanding(walk, car, left)
+  if (!t.enter) return s
+  val left = if (s.carStanding) at else s.carLeftAt
+  val onFoot = t.type == "walking" || t.type == "running"
+  return RestStanding(walkSince = if (onFoot) s.walkSince ?: at else null, carStanding = false, carLeftAt = left)
+}
+
+/** The rest's standing evidence after one delivered batch, in order (transitions before [since] count from it). */
+fun DetectPolicy.restAfter(s: RestStanding, batch: List<TimedTransition>, since: Double = Double.NEGATIVE_INFINITY): RestStanding =
+  batch.fold(s) { acc, t -> restStep(acc, t, since) }
+
+/** One batch during the rest: the evidence after it, and the end it reached on the way (null: none). */
+data class RestBatch(val standing: RestStanding, val due: SuppressionCause?)
+
+/**
+ * One delivered batch during the rest (Play services often batches and delivers late): before each
+ * transition, what stood until then is checked at that transition's time, so a walk of 20 s or more
+ * that a later transition in the same batch ended (out of the car, a minute's walk to the door, then
+ * still) still ends the rest, as iOS's rest ends on any 20 s walk. Times are clamped to the rest's
+ * start and the batch's [arrival]. What stands after the batch is checked at the detector's next look.
+ */
+fun DetectPolicy.restOnBatch(since: Double, until: Double, s: RestStanding, batch: List<TimedTransition>, arrival: Double): RestBatch {
+  var cur = s
+  for (t in batch) {
+    val at = minOf(maxOf(t.at, since), arrival)
+    val due = restDue(since, until, cur, at)
+    if (due != null) return RestBatch(cur, due)
+    cur = restStep(cur, t, since)
+  }
+  return RestBatch(cur, null)
 }
 
 /**

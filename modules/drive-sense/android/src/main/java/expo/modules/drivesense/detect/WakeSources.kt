@@ -30,11 +30,15 @@ import expo.modules.drivesense.GeofenceReceiver
  *   of minutes late, so the start is traced back with the motion history;
  * - RoadWise coming to the front (the detector's `appForeground`);
  * - a reboot or an app update, which drop every registration: [DetectBootReceiver] (enabled only
- *   while the wakes run) sets them again.
+ *   while the wakes run) sets them again; a force stop, which cancels RoadWise's PendingIntents (and
+ *   so Play services' registrations): the next launch or foreground finds them gone and sets them
+ *   again ([WakeFile]).
  * Every call runs on the detector's thread; Play services answers on the main thread, and nothing
- * here waits for it.
+ * here waits for it. [onParked] hears (on the main thread) whether the parked geofence is on file as
+ * asked: false when Play services refused it (location off, no background location), so the
+ * detector sets it again later.
  */
-class WakeSources(context: Context) {
+class WakeSources(context: Context, private val onParked: (onFile: Boolean) -> Unit = {}) {
   companion object {
     const val GEOFENCE_ID = "roadwise.parked"
     private const val REQUEST_CODE = 7307
@@ -45,9 +49,18 @@ class WakeSources(context: Context) {
     const val LAST_KNOWN_MAX_ACC_M = 100f
 
     /** Play services fills the geofence event into this intent, so it must be mutable on API 31+ (and explicit). */
-    fun geofenceIntent(context: Context): PendingIntent {
+    fun geofenceIntent(context: Context): PendingIntent = broadcast(context, PendingIntent.FLAG_UPDATE_CURRENT)!!
+
+    /** The geofence's PendingIntent, if the system still holds it (never made here: FLAG_NO_CREATE, the same intent and mutability). */
+    fun geofenceIntentAlive(context: Context): Boolean = try {
+      broadcast(context, PendingIntent.FLAG_NO_CREATE) != null
+    } catch (_: Exception) {
+      true
+    }
+
+    private fun broadcast(context: Context, base: Int): PendingIntent? {
       val intent = Intent(context, GeofenceReceiver::class.java).setAction(GeofenceReceiver.ACTION)
-      var flags = PendingIntent.FLAG_UPDATE_CURRENT
+      var flags = base
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
       return PendingIntent.getBroadcast(context.applicationContext, REQUEST_CODE, intent, flags)
     }
@@ -65,12 +78,16 @@ class WakeSources(context: Context) {
     ActivityTransitions.sync(app, run, force, onDone)
   }
 
+  /** Whether Play services can still hold the parked geofence (its PendingIntent survives; [WakeFile]). */
+  fun parkedOnFile(): Boolean = geofenceIntentAlive(app)
+
   /** The parked geofence at [place] (null: none), replacing any other (a geofence with the same id is replaced). */
   @SuppressLint("MissingPermission")
   fun setParked(place: GeoPoint?) {
     val p = place
     if (p == null) {
       removeGeofence()
+      onParked(true)
       return
     }
     try {
@@ -84,11 +101,16 @@ class WakeSources(context: Context) {
       val request = GeofencingRequest.Builder().setInitialTrigger(0).addGeofence(fence).build()
       LocationServices.getGeofencingClient(app)
         .addGeofences(request, geofenceIntent(app))
-        .addOnFailureListener { e -> Log.w(TAG, "parked geofence not set: ${e.javaClass.simpleName}") }
+        .addOnSuccessListener { onParked(true) }
+        .addOnFailureListener { e ->
+          Log.w(TAG, "parked geofence not set: ${e.javaClass.simpleName}")
+          onParked(false)
+        }
     } catch (e: Exception) {
       // No background location, location off (GEOFENCE_NOT_AVAILABLE) or no Play services: the
-      // transitions remain the wake; the next sync tries again.
+      // transitions remain the wake; the next launch or foreground tries again.
       Log.w(TAG, "parked geofence not set: ${e.javaClass.simpleName}")
+      onParked(false)
     }
   }
 

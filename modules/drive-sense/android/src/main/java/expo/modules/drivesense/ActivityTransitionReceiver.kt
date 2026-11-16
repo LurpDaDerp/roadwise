@@ -99,8 +99,10 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
  * whole). Free while idle: Play services classifies activity whatever the app does.
  *
  * One PendingIntent: each request replaces the last. The request on file ([DriveSensePrefs]) skips
- * an identical re-request from this boot (each request replays the current activity); `force`
- * re-requests anyway (a reboot or an update, which drop registrations).
+ * an identical re-request from this boot (each request replays the current activity) while the
+ * system still holds its PendingIntent ([registered]: a force stop, an OEM cleaner or Task Manager's
+ * Stop cancels it, and Play services then drops the registration, so the next sync asks again);
+ * `force` re-requests anyway (a reboot or an update, which drop registrations).
  */
 object ActivityTransitions {
   const val ACTION = "expo.modules.drivesense.ACTIVITY_TRANSITION"
@@ -129,9 +131,18 @@ object ActivityTransitions {
     )
 
   /** Play services fills the transition result into this intent, so it must be mutable on API 31+ (and explicit). */
-  fun pendingIntent(context: Context): PendingIntent {
+  fun pendingIntent(context: Context): PendingIntent = broadcast(context, PendingIntent.FLAG_UPDATE_CURRENT)!!
+
+  /** The feed's PendingIntent, if the system still holds it (never made here: FLAG_NO_CREATE, the same intent and mutability). */
+  fun registered(context: Context): Boolean = try {
+    broadcast(context, PendingIntent.FLAG_NO_CREATE) != null
+  } catch (_: Exception) {
+    true
+  }
+
+  private fun broadcast(context: Context, base: Int): PendingIntent? {
     val intent = Intent(context, ActivityTransitionReceiver::class.java).setAction(ACTION)
-    var flags = PendingIntent.FLAG_UPDATE_CURRENT
+    var flags = base
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
     return PendingIntent.getBroadcast(context.applicationContext, REQUEST_CODE, intent, flags)
   }
@@ -170,11 +181,12 @@ object ActivityTransitions {
       if (force) prefs.transitionsTier = null
       val nowNanos = SystemClock.elapsedRealtimeNanos()
       val boot = bootCount(context)
-      // The same request is on file and from this boot (a reboot drops every registration): nothing
-      // to do. The boot count says which boot; where the phone does not give it, a stamp ahead of
-      // the boot clock (which restarts at a reboot) is the only sign.
+      // The same request is on file, from this boot (a reboot drops every registration) and its
+      // PendingIntent still held (a force stop cancels it): nothing to do. The boot count says which
+      // boot; where the phone does not give it, a stamp ahead of the boot clock (which restarts at a
+      // reboot) is the only sign.
       val thisBoot = prefs.transitionsAtNanos in 1L..nowNanos && (boot < 0 || prefs.transitionsBoot == boot)
-      if (prefs.transitionsTier == SET && thisBoot) {
+      if (prefs.transitionsTier == SET && thisBoot && registered(context)) {
         done()
         return
       }
