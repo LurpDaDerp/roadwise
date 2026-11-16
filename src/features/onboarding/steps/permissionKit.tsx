@@ -8,7 +8,7 @@
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, useWindowDimensions, View } from 'react-native';
+import { AppState, Platform, useWindowDimensions, View } from 'react-native';
 
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -16,6 +16,13 @@ import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Text, useTheme } from '@/ui';
+
+/** `Platform.Version` on Android; null on iOS (or unreadable). */
+export const deviceAndroidApi = (): number | null => {
+  if (Platform.OS !== 'android') return null;
+  const v = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  return Number.isFinite(v) ? v : null;
+};
 
 /** What a test can hand a step in place of the phone. */
 export interface PermissionStepDeps {

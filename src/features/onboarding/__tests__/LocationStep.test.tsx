@@ -37,12 +37,12 @@ afterEach(() => {
   clearQueryClients();
 });
 
-async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter) {
+async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter, api: number | null = platform === 'android' ? 34 : null) {
   const w = await appWorld();
   const onNext = jest.fn();
   const appState = fakeAppState();
   await w.render(
-    <LocationStep ctx={ctx(platform)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} />,
+    <LocationStep ctx={ctx(platform)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} api={api} />,
     fakeHost().host
   );
   return { ...w, onNext, appState };
@@ -247,4 +247,67 @@ test('a read failure says so with a retry, and the step is still passable', asyn
   await press(screen.getByTestId('location-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(requests(adapter)).toEqual([]);
+});
+
+describe('Android without the drive detector (no automatic drives): While Using is all the step asks', () => {
+  it('one tap asks While Using only, shows no disclosure, and moves on', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: null }), { foreground: 'foreground' });
+    const { onNext } = await renderStep('android', adapter);
+    expect(await screen.findByTestId('location-allow')).toBeOnTheScreen();
+    // "Your phone asks twice" is not true here.
+    expect(screen.queryByTestId('location-twice')).toBeNull();
+    await press(screen.getByTestId('location-allow'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  });
+
+  it('already While Using: says location is allowed, with no Allow all the time button', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'foreground', precise: true, canAskAlways: null }));
+    const { onNext } = await renderStep('android', adapter);
+    expect(await screen.findByText(android.allowed)).toBeOnTheScreen();
+    expect(screen.queryByTestId('location-allow-always')).toBeNull();
+    expect(screen.queryByText(android.whileUsing)).toBeNull();
+    await press(screen.getByTestId('location-continue'));
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(requests(adapter)).toEqual([]);
+  });
+});
+
+describe('Android 9 and lower: allowing location allows it in the background too', () => {
+  it("with the drive detector, Google Play's disclosure comes before the one request, naming the dialog's Allow", async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'always' });
+    const { onNext, settings } = await renderStep('android', adapter, 28);
+    await screen.findByTestId('location-allow');
+    expect(screen.queryByTestId('location-twice')).toBeNull();
+    await press(screen.getByTestId('location-allow'));
+    expect(await screen.findByTestId('background-disclosure-body')).toBeOnTheScreen();
+    expect(screen.getByTestId('background-disclosure-next')).toHaveTextContent('Next, choose "Allow".');
+    // Nothing is asked before Continue.
+    expect(requests(adapter)).toEqual([]);
+    await press(screen.getByTestId('background-disclosure-continue'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+    expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
+  });
+
+  it('Not now on the disclosure asks nothing and stays on the step', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'always' });
+    const { onNext, settings } = await renderStep('android', adapter, 28);
+    await press(await screen.findByTestId('location-allow'));
+    await press(await screen.findByTestId('background-disclosure-not-now'));
+    expect(requests(adapter)).toEqual([]);
+    expect(onNext).not.toHaveBeenCalled();
+    expect(await settings.get(PROMPTS_KEY)).toBeNull();
+    expect(screen.getByTestId('location-allow')).toBeOnTheScreen();
+  });
+
+  it('without the drive detector nothing runs in the background, so no disclosure', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: null }), { foreground: 'always' });
+    const { onNext } = await renderStep('android', adapter, 28);
+    await press(await screen.findByTestId('location-allow'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  });
 });

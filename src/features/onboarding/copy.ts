@@ -100,6 +100,8 @@ export const onboardingCopy = {
       /** Kept at While Using: the way to "Allow all the time" (the disclosure first, then the phone). */
       allowAlways: 'Allow all the time',
       always: "You're all set. RoadWise will notice your drives.",
+      /** A phone without the drive detector (no automatic drives): While Using is all it needs. */
+      allowed: 'Location is allowed.',
       whileUsing: "Location is on only while RoadWise is in use, so drives won't start on their own. Start them from Home, or allow it all the time.",
       denied: "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
       approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
