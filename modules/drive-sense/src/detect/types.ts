@@ -192,8 +192,8 @@ export const CAR_PORT_TYPES: readonly CarPortType[] = ['bluetoothA2DP', 'bluetoo
 
 /**
  * One Bluetooth or CarPlay (Android Auto) output: matched on `uid` (a renamed car keeps it: iOS's
- * port uid, Android's Bluetooth address, `android-auto` for Android Auto); `name` is the phone's
- * name for it now.
+ * port uid, Android's Bluetooth address; Android Auto is the car's own Bluetooth output as
+ * `carAudio`, or `android-auto` when that car cannot be told); `name` is the phone's name for it now.
  */
 export interface CarOutput {
   uid: string;
