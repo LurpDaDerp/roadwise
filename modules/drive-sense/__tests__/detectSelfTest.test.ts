@@ -1,7 +1,7 @@
 /** @jest-environment node */
 // The drive detector's self-test (plan §3.3): the wire rows carry no answers, the diff passes the
-// reference and catches a planted drift of every rule, a skip is accepted only from Android (which
-// has no detector), and the fake drive-sense answers a detect self-test with the reference.
+// reference and catches a planted drift of every rule, a skip fails from either platform (both run
+// the policy), and the fake drive-sense answers a detect self-test with the reference.
 import { createFakeDriveSense } from '../src/fake';
 import {
   detectWireVectors,
@@ -31,8 +31,8 @@ describe('the detect self-test', () => {
     }
   });
 
-  test('the iOS answers of the reference pass', () => {
-    const diff = diffDetectSelfTest(DETECT_VECTORS, nativeOutput('ios'));
+  test.each(['ios', 'android'])('the %s answers of the reference pass', (platform) => {
+    const diff = diffDetectSelfTest(DETECT_VECTORS, nativeOutput(platform));
     expect(diff.error).toBeUndefined();
     expect(diff.results.filter((r) => !r.ok)).toEqual([]);
     expect(diff.ok).toBe(true);
@@ -75,14 +75,14 @@ describe('the detect self-test', () => {
     expect(matchDetectRow(none, {})).toEqual([]);
   });
 
-  test('a skip is accepted from Android only', () => {
+  test('a skip fails from either platform: both run the policy', () => {
     const name = DETECT_VECTORS[0]!.name;
     const skip = (n: string, r: Record<string, unknown>) => (n === name ? { name: n, kind: 'detect', skipped: 'no detector' } : r);
-    expect(diffDetectSelfTest(DETECT_VECTORS, nativeOutput('android', skip)).results[0]).toMatchObject({ ok: true, skipped: 'no detector' });
-    expect(diffDetectSelfTest(DETECT_VECTORS, nativeOutput('ios', skip)).results[0]).toMatchObject({
-      ok: false,
-      error: 'skipped (no detector), but ios has the drive detector',
-    });
+    for (const platform of ['ios', 'android']) {
+      const diff = diffDetectSelfTest(DETECT_VECTORS, nativeOutput(platform, skip));
+      expect(diff.ok).toBe(false);
+      expect(diff.results[0]).toMatchObject({ ok: false, error: `skipped (no detector), but ${platform} has the drive detector` });
+    }
   });
 
   test('a drifted answer, a missing row, an error, a wrong kind and unusable output all fail', () => {

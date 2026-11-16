@@ -4,7 +4,7 @@
 // them), so the diff is native against TS. iOS answers the gravity-filter and android-raw vectors
 // with `skipped`, which `diffSelfTest` accepts and this panel says. Then it runs the native drive
 // detector's rules over their decision table (`src/detect/vectors.ts`: the confirmation, the
-// trace-back, the end and the wake gates); Android has no detector and skips every row
+// trace-back, the end and the wake gates) on both platforms; a skipped row fails
 // (`diffDetectSelfTest`).
 //
 // The vector files are loaded here and nowhere else in the app (README §8), and only when the
