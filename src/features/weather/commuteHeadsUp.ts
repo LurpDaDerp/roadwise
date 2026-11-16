@@ -79,6 +79,12 @@ export interface HeadsUpEntry {
   delivered: boolean;
   title?: string;
   body?: string;
+  /**
+   * The Android channel a pending one is scheduled on, as the OS's list reports it (absent on iOS,
+   * which has no channels). A pending one on another channel than `HEADS_UP_CHANNEL_ID` was
+   * scheduled by an earlier build on a channel since deleted (`RETIRED_CHANNEL_IDS`).
+   */
+  channelId?: string;
 }
 
 /** Everything this module asks of the OS. */
@@ -99,14 +105,23 @@ const numberIn = (data: unknown, key: 'departAt' | 'fireAt'): number | null => {
   const v = (data as Record<string, unknown> | null | undefined)?.[key];
   return finite(v) ? v : null;
 };
-const entryOf = (identifier: string, content: { title?: string | null; body?: string | null; data?: unknown }, delivered: boolean): HeadsUpEntry => ({
-  identifier,
-  departAt: numberIn(content.data, 'departAt'),
-  fireAt: numberIn(content.data, 'fireAt'),
-  delivered,
-  ...(typeof content.title === 'string' ? { title: content.title } : {}),
-  ...(typeof content.body === 'string' ? { body: content.body } : {}),
-});
+const entryOf = (
+  identifier: string,
+  content: { title?: string | null; body?: string | null; data?: unknown },
+  delivered: boolean,
+  trigger?: unknown
+): HeadsUpEntry => {
+  const channelId = (trigger as { channelId?: unknown } | null | undefined)?.channelId;
+  return {
+    identifier,
+    departAt: numberIn(content.data, 'departAt'),
+    fireAt: numberIn(content.data, 'fireAt'),
+    delivered,
+    ...(typeof content.title === 'string' ? { title: content.title } : {}),
+    ...(typeof content.body === 'string' ? { body: content.body } : {}),
+    ...(typeof channelId === 'string' && channelId !== '' ? { channelId } : {}),
+  };
+};
 
 export function createExpoHeadsUpPort(): HeadsUpPort {
   return {
@@ -133,7 +148,7 @@ export function createExpoHeadsUpPort(): HeadsUpPort {
         Notifications.getPresentedNotificationsAsync().catch(() => [] as Notifications.Notification[]),
       ]);
       return [
-        ...pending.filter((n) => n.content.data?.kind === WEATHER_COMMUTE_KIND).map((n) => entryOf(n.identifier, n.content, false)),
+        ...pending.filter((n) => n.content.data?.kind === WEATHER_COMMUTE_KIND).map((n) => entryOf(n.identifier, n.content, false, n.trigger)),
         ...presented.filter((n) => n.request.content.data?.kind === WEATHER_COMMUTE_KIND).map((n) => entryOf(n.request.identifier, n.request.content, true)),
       ];
     },
@@ -259,8 +274,16 @@ export async function replanHeadsUps(deps: ReplanDeps): Promise<ReplanOutcome> {
     }
     // Unknown: the one already scheduled for this same departure stands, or goes back if a drive took it down.
     failed = true;
-    if (existing.some(same(p))) {
-      choices.push({ ...p, kind: null, keep: true });
+    const held = existing.find(same(p));
+    if (held !== undefined) {
+      // Android: one an earlier build scheduled on a channel since deleted would show on expo's
+      // fallback channel (a sound, a vibration and a badge); it is posted again, words unchanged, on
+      // the heads-up's own channel. iOS reports no channel, so it always stands as it is.
+      const moved =
+        held.channelId !== undefined && held.channelId !== HEADS_UP_CHANNEL_ID && held.title !== undefined && held.body !== undefined
+          ? { title: held.title, body: held.body }
+          : null;
+      choices.push(moved !== null ? { ...p, kind: null, keep: false, restore: moved } : { ...p, kind: null, keep: true });
       continue;
     }
     const was = takenDown.find(same(p));

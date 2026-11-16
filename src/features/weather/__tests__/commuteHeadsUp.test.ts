@@ -78,22 +78,30 @@ const icyMorning = forecast((t) => t >= MON_740 - HOUR && t <= MON_740 + HOUR);
 // ——— the OS ———
 
 function fakePort(granted = true) {
-  const pending = new Map<string, { departAt: number | null; req?: HeadsUpRequest }>();
+  const pending = new Map<string, { departAt: number | null; req?: HeadsUpRequest; channelId?: string }>();
   const delivered = new Map<string, number | null>();
   /** When a shown one was due, when known. */
   const shownAt = new Map<string, number>();
   const log: string[] = [];
-  const state = { granted };
+  /** `channelId`: the Android channel the port reports for what it schedules (unset: none, as on iOS). */
+  const state: { granted: boolean; channelId?: string } = { granted };
   const port: HeadsUpPort = {
     permissionGranted: async () => state.granted,
     async schedule(req) {
       log.push(`schedule:${req.identifier}`);
-      pending.set(req.identifier, { departAt: req.departAt, req });
+      pending.set(req.identifier, { departAt: req.departAt, req, ...(state.channelId !== undefined ? { channelId: state.channelId } : {}) });
     },
     async list() {
       const out: HeadsUpEntry[] = [];
       for (const [identifier, p] of pending) {
-        out.push({ identifier, departAt: p.departAt, fireAt: p.req?.fireAt ?? null, delivered: false, ...(p.req ? { title: p.req.title, body: p.req.body } : {}) });
+        out.push({
+          identifier,
+          departAt: p.departAt,
+          fireAt: p.req?.fireAt ?? null,
+          delivered: false,
+          ...(p.req ? { title: p.req.title, body: p.req.body } : {}),
+          ...(p.channelId !== undefined ? { channelId: p.channelId } : {}),
+        });
       }
       for (const [identifier, departAt] of delivered) out.push({ identifier, departAt, fireAt: shownAt.get(identifier) ?? null, delivered: true });
       return out;
@@ -165,6 +173,26 @@ describe('one plan', () => {
     p.pending.set('weather-commute:home-work', { departAt: MON_740 - DAY });
     expect(await replan({ port: p.port, forecast: async () => null })).toBe('partial');
     expect(p.pending.size).toBe(0);
+  });
+
+  it('a forecast that fails posts again, words unchanged, a kept one an earlier build left on a deleted Android channel', async () => {
+    await seedLeg(HOME, WORK, 7 * 60 + 40);
+    await endedAtHome();
+    const p = fakePort();
+    // The earlier build scheduled it on the retired `updates` channel.
+    p.state.channelId = 'updates';
+    await replan({ port: p.port });
+    const before = p.pending.get('weather-commute:home-work')?.req;
+    p.state.channelId = 'weather';
+    p.log.length = 0;
+    expect(await replan({ port: p.port, forecast: async () => null })).toBe('partial');
+    expect(p.log).toEqual(['schedule:weather-commute:home-work']);
+    expect(p.pending.get('weather-commute:home-work')?.req).toEqual(before);
+    expect(p.pending.get('weather-commute:home-work')?.channelId).toBe('weather');
+    // On its own channel now: it stands as it is.
+    p.log.length = 0;
+    expect(await replan({ port: p.port, forecast: async () => null })).toBe('partial');
+    expect(p.log).toEqual([]);
   });
 
   it('nothing without a learned leg, and a leftover one is taken back', async () => {
