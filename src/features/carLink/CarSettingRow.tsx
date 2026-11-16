@@ -1,6 +1,6 @@
-// Settings › Driving › Your car (iPhone only, beside the Automatic drives switch): the paired cars'
-// names or "Not paired"; one tap to the pairing screen. Nothing on Android or a native build
-// without the car link.
+// Settings › Driving › Your car (beside the Automatic drives switch): the paired cars' names or
+// "Not paired"; one tap to the pairing screen. Nothing on web or a native build without the car
+// link.
 import { useRouter } from 'expo-router';
 
 import { LinkRow } from '@/features/settings/parts';

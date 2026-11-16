@@ -113,6 +113,40 @@ fun DetectPolicy.endOnSteps(c: EndClock, ts: Double, steps: Double): EndClock {
   return c.copy(steps = log, stepWalkTs = c.stepWalkTs ?: (if (walked && calm) t else null))
 }
 
+/** One activity transition of the capture's feed: `type` as the `activity` event names it. */
+data class FeedTransition(val type: String, val enter: Boolean)
+
+/** What the feed says stands: the confident walk's arrival (null: none), and car motion. */
+data class FeedStanding(val walkSince: Double?, val carStanding: Boolean)
+
+/**
+ * One delivered batch of transitions, all arriving at `at`. As iOS counts a walk as walking or
+ * running (`MotionReport.walking`) and keeps its start across both, a walk is either on-foot type
+ * and stands from the first on-foot ENTER: a RUNNING ENTER after a WALKING one keeps the clock, a
+ * RUNNING ENTER starts one. Any other ENTER (automotive, stationary, cycling) ends the walk. An
+ * on-foot EXIT ends it too, unless an on-foot ENTER follows in the same batch (Android reports a
+ * walk turning into a run as EXIT WALKING then ENTER RUNNING, together). Car motion stands from
+ * IN_VEHICLE's ENTER until its EXIT or another ENTER. Pure.
+ */
+fun DetectPolicy.feedAfter(s: FeedStanding, batch: List<FeedTransition>, at: Double): FeedStanding {
+  var walk = s.walkSince
+  var car = s.carStanding
+  var footExit = false
+  for (t in batch) {
+    val onFoot = t.type == "walking" || t.type == "running"
+    if (!t.enter) {
+      if (onFoot) footExit = true
+      if (t.type == "automotive") car = false
+      continue
+    }
+    car = t.type == "automotive"
+    walk = if (onFoot) walk ?: at else null
+    footExit = false
+  }
+  if (footExit) walk = null
+  return FeedStanding(walk, car)
+}
+
 /**
  * The standing walk's arrival, or null once the car has driven at or after it (`lastDroveTs` at or
  * after `walkSince`): as JS voids a walk the car drove after (`checkFoot`), only a walk that arrived

@@ -2,9 +2,10 @@
 // loaded until a snapshot or request asks. `null` where no native DriveSense module exists
 // (Jest, Expo Go, web) — callers report motion as unavailable and battery as unknown, never as
 // granted. `isIgnoringBatteryOptimizations` is feature-detected on the native module, so a dev
-// build that predates it reads as "can't check" rather than a rejected call. The iOS drive
-// detector (`DriveDetect`) is a second port: what automatic drives need (Location Always, Background
-// App Refresh, Live Activities) and the one Always request; null on Android.
+// build that predates it reads as "can't check" rather than a rejected call. The drive detector
+// (`DriveDetect`) is a second port: what automatic drives need (Location Always, Background App
+// Refresh, Live Activities) and the one Always request; the adapters read it on iPhone only, and it
+// is null where the module does not exist.
 import type { DetectState, DriveSenseApi } from '@drive-sense';
 
 export interface DriveSensePort {
@@ -68,7 +69,7 @@ export function createDriveSenseResolver(
 export const resolveDriveSense: () => Promise<DriveSensePort | null> =
   createDriveSenseResolver(defaultLoaders);
 
-/** The iOS drive detector, or null where it does not exist (Android, Jest, Expo Go, web). */
+/** The native drive detector (iOS, Android), or null where it does not exist (Jest, Expo Go, web). */
 export async function resolveDriveDetect(): Promise<DriveDetectPort | null> {
   try {
     const { DriveDetect } = await import('@drive-sense');

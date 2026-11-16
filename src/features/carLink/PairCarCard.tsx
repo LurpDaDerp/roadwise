@@ -1,12 +1,12 @@
-// Home's car card (iPhone): once the same Bluetooth or CarPlay was connected for most of 2 of the
-// last 3 drives (CarPlay after one), "Is <name> your car?" with Use it and Not my car, its ✕ in the
-// top right corner closing it for good. Shown only while automatic drives are on and no car is
-// paired; never while a drive records; never on Android. Pairing a car with nothing detected yet is
-// a tile in Home's "Get set up" row.
+// Home's car card: once the same Bluetooth or CarPlay (Android Auto on Android) was connected for
+// most of 2 of the last 3 drives (CarPlay or Android Auto after one), "Is <name> your car?" with Use
+// it and Not my car, its ✕ in the top right corner closing it for good. Shown only while automatic
+// drives are on and no car is paired, on a build with the car link; never while a drive records.
+// Pairing a car with nothing detected yet is a tile in Home's "Get set up" row.
 import { Ionicons } from '@expo/vector-icons';
 import type { Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { CarOutput } from '@drive-sense';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -15,7 +15,7 @@ import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives
 import { Button, Card, IconButton, Text, useTheme } from '@/ui';
 
 import { carCopy } from './copy';
-import { CAR_CARD_DISMISSED_KEY, carSuggestion, outputName } from './model';
+import { CAR_CARD_DISMISSED_KEY, carSuggestion, suggestionTitle } from './model';
 import { useCarLink } from './useCarLink';
 
 const copy = carCopy.card;
@@ -44,14 +44,13 @@ export function PairCarCardView({
   onDismiss: () => void;
 }) {
   const t = useTheme();
-  const name = outputName(suggestion);
   return (
     <Card testID="home-car-ask">
       <View style={{ gap: t.space.md }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
           <CarDisc />
           <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="headline">{copy.askTitle(name)}</Text>
+            <Text variant="headline">{suggestionTitle(suggestion)}</Text>
             <Text variant="subhead" tone="muted">
               {copy.askBody}
             </Text>
@@ -86,7 +85,7 @@ export function HomeCarCard({ hidden }: { hidden: boolean }) {
     };
   }, [settings]);
 
-  if (Platform.OS !== 'ios' || hidden || dismissed !== false || !autoDrivesOn(auto) || link.view.status !== 'ready') return null;
+  if (hidden || dismissed !== false || !autoDrivesOn(auto) || link.view.status !== 'ready') return null;
   const state = link.view.state;
   if (state.cars.length > 0) return null;
   const suggestion = carSuggestion(state);

@@ -1,7 +1,8 @@
-// Settings › Your car (iPhone): pair the car whose Bluetooth or CarPlay is connected now (up to 3,
-// family cars), see the paired ones and forget any. The output connected now is offered first; with
-// several connected, each can be chosen. A name that reads like headphones or a hearing aid can't be
-// paired (CarPlay always can). Nothing pairs without the tap.
+// Settings › Your car: pair the car whose Bluetooth or CarPlay (Android Auto on Android) is
+// connected now (up to 3, family cars), see the paired ones and forget any. The output connected now
+// is offered first; with several connected, each can be chosen. A name that reads like headphones
+// or a hearing aid can't be paired (CarPlay and Android Auto always can). Nothing pairs without the
+// tap; on Android 12+ the tap asks for Nearby devices first (`useCarLink`).
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
@@ -11,7 +12,7 @@ import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Button, ListRow, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { carCopy } from './copy';
-import { canPair, CARS_MAX, isPaired, outputName, preselect } from './model';
+import { canPair, CARS_MAX, isPaired, outputKind, outputName, preselect } from './model';
 import { useCarLink } from './useCarLink';
 
 const copy = carCopy.screen;
@@ -20,7 +21,7 @@ const copy = carCopy.screen;
 function OutputChoice({ output, paired, chosen, onPress, testID }: { output: CarOutput; paired: boolean; chosen: boolean; onPress: () => void; testID: string }) {
   const th = useTheme();
   const name = outputName(output);
-  const detail = paired ? `${carCopy.kind(output.type)} · ${copy.paired}` : carCopy.kind(output.type);
+  const detail = paired ? `${outputKind(output)} · ${copy.paired}` : outputKind(output);
   return (
     <Pressable
       accessibilityRole="radio"
@@ -93,7 +94,7 @@ function CarLinkBody({ state, failed, onPair, onForget }: { state: CarLinkState;
               <ListRow
                 key={c.uid}
                 title={name}
-                subtitle={now ? copy.connected : carCopy.kind(c.type)}
+                subtitle={now ? copy.connected : outputKind(c)}
                 trailing={<Button label={copy.forget} size="sm" variant="secondary" onPress={() => run(onForget(c.uid))} accessibilityHint={copy.forgetLabel(name)} testID={`car-forget-${i}`} />}
                 accessibilityLabel={name}
                 testID={`car-paired-${i}`}

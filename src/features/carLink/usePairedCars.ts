@@ -1,18 +1,19 @@
 /**
- * The paired cars as the drive lists read them (iPhone): with 2 or more cars paired, each drive row
+ * The paired cars as the drive lists read them (iPhone and Android): with 2 or more cars paired, each drive row
  * names the car it was made in and Drive history filters by car. With fewer, nothing shows.
  *
  * One store for every row: the first list on screen reads the car link and listens to the native
  * `carLink` event (a pairing, a forget, a rename all arrive through it) and reads it again when
  * RoadWise returns to the front; the last one gone stops listening. The rows re-render only when
  * the paired cars themselves change (their uids, names or kinds), never on a route change. A read
- * that fails, Android and a native build without the car link leave it as it was: no cars.
+ * that fails, web and a native build without the car link leave it as it was: no cars.
  */
 import type { CarLinkState, PairedCar } from '@drive-sense';
 import { useSyncExternalStore } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import type { LocalDrive } from '@/data/queries/rows';
+import { sameCarUid } from '@/lib/carUid';
 
 import { outputName } from './model';
 import { onCarLink, readCarLink } from './port';
@@ -47,13 +48,14 @@ export function pairedCarLabels(cars: readonly Pick<PairedCar, 'uid' | 'name' | 
 
 /**
  * The car a drive row names: none with fewer than 2 cars paired (`labels` empty) or on a drive with
- * no car; the car's name now while it is paired, else the name it had on that drive.
+ * no car; the car's name now while it is paired (Android's hidden form of its address included),
+ * else the name it had on that drive.
  */
 export function driveCarLabel(drive: Pick<LocalDrive, 'carUid' | 'carName'>, labels: readonly CarLabel[]): string | null {
   if (labels.length < CAR_LIST_MIN) return null;
   const uid = typeof drive.carUid === 'string' ? drive.carUid : '';
   if (uid === '') return null;
-  const now = labels.find((l) => l.uid === uid);
+  const now = labels.find((l) => sameCarUid(l.uid, uid));
   if (now) return now.label;
   const then = typeof drive.carName === 'string' ? drive.carName.trim() : '';
   return then === '' ? null : then;
@@ -105,7 +107,7 @@ function start(): void {
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  if (listeners.size === 1 && stop === null && Platform.OS === 'ios') start();
+  if (listeners.size === 1 && stop === null && (Platform.OS === 'ios' || Platform.OS === 'android')) start();
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && stop !== null) {
@@ -120,7 +122,7 @@ function subscribe(listener: () => void): () => void {
 const carsNow = (): readonly PairedCar[] => cars;
 const labelsNow = (): readonly CarLabel[] => labels;
 
-/** The paired cars now (iPhone); empty until read, on Android and without the car link. */
+/** The paired cars now; empty until read, on web and without the car link. */
 export function usePairedCars(): readonly PairedCar[] {
   return useSyncExternalStore(subscribe, carsNow, carsNow);
 }

@@ -1,11 +1,12 @@
-// The typed JS face of the iOS drive detector (`DriveDetect`, plan §3.1.1). Arguments are checked
+// The typed JS face of the native drive detector (`DriveDetect`, plan §3.1.1). Arguments are checked
 // before they cross the bridge and results validated after, so a native bug surfaces as a rejected
 // promise naming the method. Event payloads are validated too; one that fails is dropped and
 // counted, never passed on.
 //
-// The lookup is `requireOptionalNativeModule`: on Android (the module is registered for Apple only),
-// Jest, Expo Go and web `available` is false, every method but `wipe` and `appForeground` rejects
-// (those two resolve: there is nothing to wipe or wake) and every listener is inert.
+// The lookup is `requireOptionalNativeModule`: iOS and Android register the module, both with the
+// car link (`carLinkState`, so `carLinkAvailable`; an older native build without it reads false). In Jest, Expo
+// Go and web `available` is false, every method but `wipe` and `appForeground` rejects (those two
+// resolve: there is nothing to wipe or wake) and every listener is inert.
 // Tests inject `createFakeDriveDetect()`.
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { z } from 'zod';
@@ -127,7 +128,8 @@ export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
 ]);
 
 /**
- * A car output's uid (what a pairing matches, AVAudioSession's port uid) and name. Native caps them
+ * A car output's uid (what a pairing matches: AVAudioSession's port uid, Android's Bluetooth
+ * address) and name. Native caps them
  * at these UTF-16 lengths; a longer one is cut here rather than refused, so one odd name never
  * takes the whole state down.
  */
@@ -191,7 +193,7 @@ const fail = (method: string, what: string): Error => new Error(`DriveDetect.${m
  */
 async function call<T>(method: DriveDetectMethod, args: readonly unknown[], argsOk: boolean, result: z.ZodType<T>, quiet = false): Promise<T> {
   if (!argsOk) throw fail(method, quiet ? 'invalid arguments' : `invalid arguments ${safeJson(args)}`);
-  if (!native) throw fail(method, 'not available (Android, Jest, Expo Go or web)');
+  if (!native) throw fail(method, 'not available (Jest, Expo Go or web)');
   const fn = native[method] as ((...a: readonly unknown[]) => Promise<unknown>) | undefined;
   // A native build from before the method (the car link's, say) has nothing to call.
   if (typeof fn !== 'function') throw fail(method, 'not in this native build');
@@ -224,7 +226,7 @@ export const DriveDetect: DriveDetectApi = {
   readRows: (id, afterSeq, limit) =>
     call('readRows', [id, afterSeq, limit], isDriveId(id) && isCount(afterSeq, 0, Number.MAX_SAFE_INTEGER) && isCount(limit, 1, DETECT.READ_ROWS_MAX), readRowsResultSchema),
   discardDrive: (id) => call('discardDrive', [id], isDriveId(id), voidResult),
-  // A wipe must never fail where there is no detector (Android, Jest, Expo Go, web): nothing to wipe.
+  // A wipe must never fail where there is no detector (Jest, Expo Go, web): nothing to wipe.
   wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
   // Nor a wake: nothing to wake there, nor in a native build from before the method.
   appForeground: () => (native && typeof native.appForeground === 'function' ? call('appForeground', [], true, voidResult) : Promise.resolve()),

@@ -188,6 +188,29 @@ test('the headless task keeps a continued drive alive and stops a capture with n
   await rt.stop();
 });
 
+test("the headless task never stops a drive the detector records (native's own, as on iPhone), read only after the boot", async () => {
+  const d = deps();
+  const rt = await bootstrapApp(d.deps);
+  const stopped: string[] = [];
+  const order: string[] = [];
+  const task = createDriveHeadlessTask({
+    ensureRuntime: async () => {
+      order.push('boot');
+      return rt;
+    },
+    stopCapture: async () => void stopped.push('stop'),
+    report: () => {},
+    detectorRecording: async () => {
+      order.push('read');
+      return true;
+    },
+  });
+  await task({});
+  expect(stopped).toEqual([]);
+  expect(order).toEqual(['boot', 'read']);
+  await rt.stop();
+});
+
 test("the headless task posts no recap of its own: it waits on the launch's one notifier", async () => {
   const attached: string[] = [];
   let settledCalls = 0;

@@ -1,17 +1,18 @@
 /**
  * The car link's screens (iPhone): the rules (what is offered first, headphones, the suggestion),
- * Settings › Your car, the pairing screen and Home's card, over the fake detector's car link.
+ * Settings › Your car, the pairing screen and Home's card, over the fake detector's car link
+ * (Android's words and its Nearby devices ask: carLinkAndroid.test.tsx).
  */
 import { act, screen, waitFor } from '@testing-library/react-native';
-import { Platform } from 'react-native';
 
 import { createFakeDriveDetect, type CarLinkState, type CarOutput } from '@drive-sense';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { asPlatform } from '@/lib/__fixtures__/platform';
 
 import { carCopy } from '../copy';
 import { CarScreen } from '../CarScreen';
 import { CarSettingRow } from '../CarSettingRow';
-import { CAR_CARD_DISMISSED_KEY, carRowLine, carSuggestion, looksLikeHeadphones, preselect } from '../model';
+import { CAR_CARD_DISMISSED_KEY, carRowLine, carSuggestion, looksLikeHeadphones, outputKind, preselect, suggestionTitle } from '../model';
 import { HomeCarCard } from '../PairCarCard';
 
 let mockDetect = createFakeDriveDetect();
@@ -79,6 +80,9 @@ describe('the rules', () => {
       'Signia Pure',
       'Starkey Genesis',
       'My hearing aids',
+      // Android: a watch can hold the phone's hands-free link.
+      'Galaxy Watch6 (A1B2)',
+      'Pixel Watch 2',
     ])
       expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: true });
     for (const n of ['Civic', 'Toyota RAV4', 'CarPlay', 'MY VW', 'Uconnect']) expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: false });
@@ -105,6 +109,13 @@ describe('the rules', () => {
     expect(carSuggestion({ ...base, cars: three, drives: [drive([civic], 1), drive([civic], 2)] })).toBeNull();
     expect(carRowLine({ ...base, cars: three.slice(0, 2) })).toBe('Car 1, Car 2');
     expect(carRowLine(base)).toBe(carCopy.row.none);
+  });
+
+  it('names the kind and asks about a car as before on iPhone (CarPlay with no name of its own included)', () => {
+    expect(outputKind(carplay)).toBe('CarPlay');
+    expect(outputKind(civic)).toBe('Bluetooth');
+    expect(suggestionTitle(civic)).toBe('Is Civic your car?');
+    expect(suggestionTitle({ ...carplay, name: '' })).toBe('Is CarPlay your car?');
   });
 });
 
@@ -269,7 +280,7 @@ describe("Home's car card", () => {
     await waitFor(() => expect(screen.queryByTestId('home-car-ask')).toBeNull());
   });
 
-  it('never shows during a drive, with automatic drives off, once a car is paired, once closed, or on Android', async () => {
+  it('never shows during a drive, with automatic drives off, once a car is paired or once closed; on Android as on iPhone', async () => {
     mockDetect.seeCarDrive([civic]);
     mockDetect.seeCarDrive([civic]);
     const w = await appWorld({ settings: { [CAR_CARD_DISMISSED_KEY]: true } });
@@ -294,15 +305,14 @@ describe("Home's car card", () => {
     await act(async () => {});
     expect(screen.queryByTestId('home-car-ask')).toBeNull();
     paired.unmount();
-    const os = Platform.OS;
-    Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
+    const restore = asPlatform('android');
     try {
       await mockDetect.forgetCar(civic.uid);
-      await w2.render(<HomeCarCard hidden={false} />);
-      await act(async () => {});
-      expect(screen.queryByTestId('home-car-ask')).toBeNull();
+      const android = await w2.render(<HomeCarCard hidden={false} />);
+      await waitFor(() => expect(screen.getByTestId('home-car-ask')).toHaveTextContent(/Is Civic your car\?/));
+      android.unmount();
     } finally {
-      Object.defineProperty(Platform, 'OS', { value: os, configurable: true });
+      restore();
     }
   });
 });

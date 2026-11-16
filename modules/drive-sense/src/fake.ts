@@ -6,13 +6,11 @@
 //   asynchronously when the first listener attaches;
 // - with `asyncDelivery: true` every event is delivered on a microtask, as the native bridge
 //   always does; the default is synchronous delivery, for step-by-step tests (review M4);
-// - iOS answers the shared reminder methods with its fixed stubs and reads no lock state; the
-//   forgot-to-start reminder runs on Android only;
+// - both platforms answer the retired reminder's shared methods with fixed stubs; iOS reads no
+//   lock state;
 // - with `rowSeq: true` (iOS) every row carries the journal's `seq`, 1 and up per capture.
 import { isDetectWireVector, referenceDetectOutput } from './detect/selfTest';
 import { runSelfTest } from './extract/vectors';
-import { claim, INITIAL, newSession, posted, setEnabled, settle, statusOf, tapDelivered, type ReminderState } from './reminder/policy';
-import { isReminderWireVector, referenceReminderOutput } from './reminder/selfTest';
 import { parseVectors } from './selfTest';
 import type {
   AudioOutputState,
@@ -31,11 +29,8 @@ import type {
   ExitInfo,
   FakeControls,
   InstalledApp,
-  ReminderLocationAnswer,
-  ReminderTap,
   Subscription,
   ThermalLevel,
-  TripReminderMissing,
 } from './types';
 
 /** Events buffered while no listener for them is attached, across all events (README §Buffering). */
@@ -67,8 +62,8 @@ export function driveSenseError(code: DriveSenseErrorCode, message: string): Err
   return Object.assign(new Error(message), { code });
 }
 
-/** iOS's fixed reminder answer (it has no reminder). */
-const IOS_REMINDER_OFF = { enabled: false, state: 'off', missing: [] } as const;
+/** The retired reminder's fixed answer, on both platforms. */
+const REMINDER_OFF = { enabled: false, state: 'off', missing: [] } as const;
 
 export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & FakeControls {
   const platform = opts.platform ?? 'ios';
@@ -96,16 +91,9 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
   /** The capture's own activity subscription (best effort), and a forced failure of it. */
   let captureFeed = false;
   let captureSubscribeFails = false;
-  /** The forgot-to-start reminder: its state (the policy's own), and the phone as it sees it. */
-  let reminder: ReminderState = INITIAL;
-  let reminderAvailable = true;
-  let reminderMissing: TripReminderMissing[] = [];
-  let reminderLocation: ReminderLocationAnswer = 'notNeeded';
   /** Android: the apps installed on the phone, and what a launch of one answers. */
   let installedApps: InstalledApp[] = [];
   let launchOk = true;
-  /** Android: the tap handed over and not yet taken (the module's hold). */
-  let heldTap: ReminderTap | null = null;
   /** What `audioOutputState` answers. */
   let audioOutput: AudioOutputState = { callActive: false, volume: null, headphones: null };
   /** Android: the DashPal link service's state while it runs (null: not running), and whether a start is allowed. */
@@ -232,11 +220,7 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     selfTest(vectorsJson: string) {
       command('selfTest');
       try {
-        // The forgot-to-start reminder's rows run through the TS reference, as a native mirror would.
         const all: unknown = JSON.parse(vectorsJson);
-        if (Array.isArray(all) && all.length > 0 && all.every(isReminderWireVector)) {
-          return resolve(JSON.stringify(referenceReminderOutput(all)));
-        }
         // The drive detector's rows run through its TS reference, as the Swift policy would.
         if (Array.isArray(all) && all.length > 0 && all.every(isDetectWireVector)) {
           return resolve(JSON.stringify(referenceDetectOutput(all)));
@@ -246,37 +230,27 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
         return Promise.reject(driveSenseError('E_INVALID_INPUT', e instanceof Error ? e.message : String(e)));
       }
     },
+    // The retired forgot-to-start reminder: fixed answers on both platforms.
     setTripReminder(enabled: boolean) {
       command('setTripReminder', String(enabled));
-      // iOS has no reminder: a fixed answer.
-      if (platform === 'ios') return resolve({ ...IOS_REMINDER_OFF, missing: [] });
-      reminder = setEnabled(reminder, enabled);
-      return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
+      return resolve({ ...REMINDER_OFF, missing: [] });
     },
     getTripReminderStatus() {
       query('getTripReminderStatus');
-      if (platform === 'ios') return resolve({ ...IOS_REMINDER_OFF, missing: [] });
-      reminder = settle(reminder, now(), state.capturing);
-      return resolve(statusOf(reminder, reminderAvailable, reminderMissing));
+      return resolve({ ...REMINDER_OFF, missing: [] });
     },
     requestReminderLocation() {
       command('requestReminderLocation');
-      // iOS: the current location answer, without prompting.
-      if (platform === 'ios') return resolve(state.location === 'none' ? 'denied' : state.location);
-      return resolve(reminderLocation);
+      // The current location answer, without prompting.
+      return resolve(state.location === 'none' ? 'denied' : state.location);
     },
-    claimReminderTap(token: string) {
+    claimReminderTap() {
       command('claimReminderTap');
-      if (platform === 'ios') return resolve(false);
-      const r = claim(reminder, token, now(), state.capturing, true);
-      reminder = r.state;
-      return resolve(r.ok);
+      return resolve(false);
     },
     takeReminderTap() {
       query('takeReminderTap');
-      const tap = heldTap;
-      heldTap = null;
-      return resolve(tap);
+      return resolve(null);
     },
     listInstalledApps(packages: readonly string[]) {
       query('listInstalledApps');
@@ -414,11 +388,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     get activitySubscribed() {
       return captureFeed;
     },
-    setTripReminderEnv(env) {
-      if (env.available !== undefined) reminderAvailable = env.available;
-      if (env.missing !== undefined) reminderMissing = [...env.missing];
-      if (env.location !== undefined) reminderLocation = env.location;
-    },
     setInstalledApps(apps) {
       installedApps = apps.map((a) => ({ ...a }));
     },
@@ -449,22 +418,6 @@ export function createFakeDriveSense(opts: FakeOptions = {}): DriveSenseApi & Fa
     },
     get holdAwakeCalls() {
       return [...holdAwakeCalls];
-    },
-    get tripReminderOn() {
-      return reminder.enabled;
-    },
-    postReminderForTest(token, at = now()) {
-      const session = { ...newSession(at - 10 * 60_000, at, false), drove: true };
-      reminder = posted({ ...reminder, session }, at, token);
-    },
-    tapReminderForTest(token) {
-      if (platform !== 'android') return false;
-      const r = tapDelivered(reminder, token, now());
-      if (!r.delivered) return false;
-      reminder = r.state;
-      heldTap = { token, at: r.state.token === token && r.state.tapAt > 0 ? r.state.tapAt : now() };
-      emitRaw('reminderTap', {});
-      return true;
     },
   };
   return api;

@@ -84,7 +84,9 @@ enum class WakeReason(val wire: String) {
   SLC("slc"),
   REGION("region"),
   VISIT("visit"),
-  APP("app");
+  APP("app"),
+  /** Android only (ruling 2): a paired car's Bluetooth connecting. */
+  CAR("car");
 
   companion object {
     fun of(wire: String): WakeReason? = entries.firstOrNull { it.wire == wire }

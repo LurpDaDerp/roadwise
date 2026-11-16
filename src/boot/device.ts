@@ -105,7 +105,7 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   DROP_NOTICE_KEY,
   NOT_DRIVING_KEY,
   BREAK_KEY,
-  // The drive that asked "Are you driving?", and where the car was parked (iPhone with the car link).
+  // The drive that asked "Are you driving?", and where the car was parked (a build with the car link).
   PASSENGER_ASKED_KEY,
   PARKED_KEY,
   // The last drive's weather answer (its 0.1° cell and time), kept for a relaunch mid-drive.

@@ -10,6 +10,7 @@ import { SERVER_SLOW_STALE_MS } from '@/data/server/useServerQuery';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
 import { PLACES_KEY } from '@/features/places/model';
+import { runAs } from '@/lib/__fixtures__/platform';
 
 import { homeCopy } from '../copy';
 import { HomeSetupGoals, orderGoals, parseHiddenGoals, SETUP_GOALS_HIDDEN_KEY } from '../SetupGoals';
@@ -227,5 +228,19 @@ describe('when the row is gone', () => {
   it('copy has no dashes, exclamation marks or game words', () => {
     const words = JSON.stringify(homeCopy.setup, (_k, v: unknown) => (typeof v === 'function' ? (v as (...a: unknown[]) => string)(2, 5) : v));
     expect(words).not.toMatch(/[–—!]|\bpoints?\b|\bpts\b|streak|freeze|\blevel\b|leaderboard/i);
+  });
+});
+
+describe('on Android with the car link', () => {
+  runAs('android');
+
+  it('offers Your car as on iPhone, in Android words (Android Auto for CarPlay)', async () => {
+    mockCarView = READY([]);
+    const w = await appWorld();
+    await w.render(<HomeSetupGoals hidden={false} />);
+    await screen.findByTestId('home-setup');
+    expect(tileIds()).toContain('home-setup-car');
+    expect(within(screen.getByTestId('home-setup-car')).getByText('Pair its Bluetooth or Android Auto')).toBeOnTheScreen();
+    expect(homeCopy.setup.goals.car.line).toBe('Pair its Bluetooth or Android Auto');
   });
 });

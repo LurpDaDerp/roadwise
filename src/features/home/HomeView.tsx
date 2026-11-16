@@ -61,7 +61,7 @@ export type HomeViewProps = {
   recording?: boolean;
   /** The dangerous-weather card: the first action item under the drive card (it renders nothing when all is well). */
   weather?: ReactNode;
-  /** "Where you parked" (iPhone with the car link), right after the weather card (it renders nothing without a spot, or during a drive). */
+  /** "Where you parked" (a build with the car link), right after the weather card (it renders nothing without a spot, or during a drive). */
   parked?: ReactNode;
   /** The weather now (°F, icon, words), shown on the drive card above Start drive. */
   conditions?: Conditions | null;

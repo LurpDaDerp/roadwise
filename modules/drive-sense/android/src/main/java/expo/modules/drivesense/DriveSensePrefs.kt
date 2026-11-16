@@ -6,15 +6,16 @@ import android.content.SharedPreferences
 /**
  * The state drive-sense persists across processes: the capture-open flag and the capture's
  * parameters (for the `START_STICKY` restart and `captureWasOpen`), the motion "requested once"
- * flag, the last native exit record ([ExitInfoReader]), the forgot-to-start reminder's state
- * ([TripReminder]), the activity-transition request on file ([ActivityTransitions]) and the step
- * counter's baseline for the open capture ([PedometerSource]). Every entry
+ * flag, the last native exit record ([ExitInfoReader]), the activity-transition request on file
+ * and whether the drive detector wants it ([ActivityTransitions]) and the step counter's baseline
+ * for the open capture ([PedometerSource]). Every entry
  * point — the module, the receivers, both services — calls [init] first, so
  * [captureWasOpenAtProcessStart] is read before anything in this process writes the flag.
  */
 object DriveSensePrefs {
   private const val FILE = "expo.modules.drivesense"
   private const val CAPTURE_OPEN = "captureOpen"
+  private const val DETECTOR_OWNED = "detectorOwned"
   private const val MODE = "mode"
   private const val RATE = "rate"
   private const val STARTED_AT = "captureStartedAt"
@@ -24,7 +25,9 @@ object DriveSensePrefs {
   private const val EXIT_WHILE_CAPTURING = "exitWhileCapturing"
   private const val FALLBACK_COUNT = "timebaseFallbacks"
   private const val UNPAIRED_COUNT = "imuUnpaired"
+  /** The retired forgot-to-start reminder's state, removed by [forgetRetired]. */
   private const val TRIP_REMINDER = "tripReminder"
+  private const val TRANSITIONS_WANTED = "transitionsWanted"
   private const val TRANSITIONS_TIER = "transitionsTier"
   private const val TRANSITIONS_AT_NANOS = "transitionsAtNanos"
   private const val TRANSITIONS_BOOT = "transitionsBoot"
@@ -64,6 +67,18 @@ object DriveSensePrefs {
       p.edit().putBoolean(CAPTURE_OPEN, v).commit()
     }
 
+  /**
+   * The open capture is the drive detector's (its drive is in the detector's record and journal):
+   * the `START_STICKY` restart hands it to the detector, which resumes it or ends it as an orphan,
+   * and never to the plain capture's restart and watchdog.
+   */
+  var detectorOwned: Boolean
+    get() = p.getBoolean(DETECTOR_OWNED, false)
+    // commit: the sticky restart reads it in a new process.
+    set(v) {
+      p.edit().putBoolean(DETECTOR_OWNED, v).commit()
+    }
+
   var mode: String
     get() = p.getString(MODE, "mounted") ?: "mounted"
     set(v) = p.edit().putString(MODE, v).apply()
@@ -80,15 +95,20 @@ object DriveSensePrefs {
     get() = p.getBoolean(MOTION_REQUESTED, false)
     set(v) = p.edit().putBoolean(MOTION_REQUESTED, v).apply()
 
-  /** The forgot-to-start reminder's state as JSON ([TripReminderState]); null until it is first written. */
-  var tripReminderJson: String?
-    get() = p.getString(TRIP_REMINDER, null)
-    // commit: the next broadcast may run in a new process.
+  /** What the retired forgot-to-start reminder left on file goes (detector thread, once per process). */
+  fun forgetRetired() {
+    if (p.contains(TRIP_REMINDER)) p.edit().remove(TRIP_REMINDER).apply()
+  }
+
+  /** The drive detector wants the activity transitions now (its wakes run); the receiver drops a batch otherwise. */
+  var transitionsWanted: Boolean
+    get() = p.getBoolean(TRANSITIONS_WANTED, false)
+    // commit: the next batch may arrive in a new process.
     set(v) {
-      p.edit().putString(TRIP_REMINDER, v).commit()
+      p.edit().putBoolean(TRANSITIONS_WANTED, v).commit()
     }
 
-  /** The activity-transition tier last requested from Play services, or null for none on file. */
+  /** The activity-transition set last requested from Play services, or null for none on file. */
   var transitionsTier: String?
     get() = p.getString(TRANSITIONS_TIER, null)
     set(v) {

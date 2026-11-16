@@ -1,5 +1,5 @@
 /**
- * "Are you driving?" (iPhone with the car link): the note the drive host posts on an automatic drive
+ * "Are you driving?" (a build with the car link): the note the drive host posts on an automatic drive
  * whose route never held the driver's car (`src/drive/passengerCheck.ts`). Its tap goes to
  * `NotificationsHost`, which hands the drive to the app's handler (the root layout: the same as the
  * driving screen's "Not driving?") before anything is held for a drive, then opens Home. Pure: the

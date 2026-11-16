@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import expo.modules.drivesense.detect.DriveDetector
 import java.lang.ref.WeakReference
 
 /**
@@ -105,6 +106,13 @@ object AppVisibility : Application.ActivityLifecycleCallbacks {
         DriveNotificationController.onAppFront()
       } catch (_: Exception) {
         // the notification comes back with the next capture instead
+      }
+      // The drive detector's foreground: a drive whose resume Android refused behind resumes now
+      // (RoadWise in front may start its location service). Its own thread does the work.
+      try {
+        DriveDetector.peek()?.appForeground()
+      } catch (_: Exception) {
+        // the next process start resumes it instead
       }
     }
   }

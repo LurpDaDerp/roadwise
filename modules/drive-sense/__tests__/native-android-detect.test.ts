@@ -126,7 +126,8 @@ describe('native-android: the drive detector policy (text)', () => {
     const reasons = ['OFF', 'NO_OWNER', 'PERMISSION', 'BUSY', 'RESTING', 'CAPPED', 'OK'].map((r) => gate.indexOf(`WakeGate.${r}`));
     expect(reasons.every((i) => i > 0)).toBe(true);
     expect([...reasons].sort((a, b) => a - b)).toEqual(reasons);
-    expect(gate).toMatch(/if \(c\.reason != WakeReason\.REGION && c\.reason != WakeReason\.APP && c\.now < c\.candidateRestUntil\) return WakeGate\.RESTING/);
+    // Android's paired car connecting (ruling 2; not in policy.ts) skips the rest as the region and the app do.
+    expect(gate).toMatch(/if \(c\.reason != WakeReason\.REGION && c\.reason != WakeReason\.APP && c\.reason != WakeReason\.CAR && c\.now < c\.candidateRestUntil\) return WakeGate\.RESTING/);
     const end = detect('DetectEndPolicy');
     expect(end).toMatch(/if \(walked >= WALK_END_MS \+ walkSlack \|\| stepped >= walkSlack\) return SafetyCause\.WALKING/);
     expect(end).toMatch(/if \(gone >= CAR_GONE_MS \+ slack\) return SafetyCause\.STILL/);

@@ -15,8 +15,6 @@ import org.json.JSONObject
  * Android runs every golden kind; it never answers `skipped` for one (that form is iOS-only). A
  * `detect` vector (one row of the drive detector's decision table, `src/detect/vectors.ts`) goes
  * to [DetectSelfTest], which runs every row through the production [expo.modules.drivesense.detect.DetectPolicy].
- * A `reminder` vector (one row of the forgot-to-start reminder's decision table) goes to
- * [TripReminderSelfTest], which skips the iOS-only rows.
  */
 object SelfTest {
   class InvalidInput(message: String) : Exception(message)
@@ -45,7 +43,6 @@ object SelfTest {
             "androidRaw" -> JSONObject()
               .put("name", name).put("kind", "androidRaw").put("rows", rowsJson(runAndroidRaw(inputs)))
             "detect" -> DetectSelfTest.result(name, inputs)
-            "reminder" -> TripReminderSelfTest.result(name, inputs)
             else -> throw IllegalArgumentException("unknown vector kind '$kind'")
           }
         } catch (e: Exception) {

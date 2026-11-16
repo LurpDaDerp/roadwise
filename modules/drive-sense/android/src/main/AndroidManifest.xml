@@ -1,11 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-  <!-- Location: 1 Hz GNSS while capturing. While Using only (plan §1 decision 4): a drive starts in
-       the foreground, and the location foreground service keeps it running from there. No
-       background-location permission anywhere. -->
+  <!-- Location: 1 Hz GNSS while a watch or a drive runs, in the location foreground service. The
+       Start card needs While Using; automatic drives need "Allow all the time" (Android 10+): the
+       drive detector's wakes (an activity transition, the parked geofence's exit) start its
+       location service from the background, and the parked geofence needs it. Asked for only
+       through DriveDetect.requestAlways, after RoadWise's own explanation. -->
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-  <!-- Activity transitions (walking auto-end during a drive): the runtime permission on API 29+, the Play services one below it. -->
+  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+  <!-- Activity recognition (the detector's transitions and live reports, the walking end): the runtime permission on API 29+, the Play services one below it. -->
   <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
   <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -21,9 +24,16 @@
   <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
   <!-- HeadlessJsTaskService and the 1 Hz row timer hold a partial wake lock while a drive records (rev1: I15). -->
   <uses-permission android:name="android.permission.WAKE_LOCK" />
-  <!-- The forgot-to-start reminder re-registers its activity feed after a reboot (ReminderBootReceiver,
-       enabled only while the reminder is on). It starts nothing. -->
+  <!-- The drive detector sets its wakes again after a reboot (DetectBootReceiver, enabled only while
+       automatic drives are armed). -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- The car link (CarLink.kt): a paired car's Bluetooth connecting wakes the drive detector
+       (CarConnectReceiver: Android sends ACL_CONNECTED only to an app holding Bluetooth), and on
+       Android 14+ a car's full Bluetooth address is readable only with Nearby devices
+       (BLUETOOTH_CONNECT, Android 12+), asked for before "Use this car". The same declarations as
+       react-native-ble-manager's (DashPal); never a scan. -->
+  <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
   <!-- The navigation button (README §2): the navigation apps RoadWise may find and open, by package
        (API 30+ package visibility). Exactly the Android packages of src/features/navigation/catalog.ts;
@@ -41,6 +51,9 @@
     <package android:name="app.organicmaps" />
     <package android:name="com.mapquest.android.ace" />
     <package android:name="ru.yandex.yandexnavi" />
+    <!-- The car link: Android Auto's connection provider (androidx.car.app's CarConnection
+         contract), asked whether it projects to a car. -->
+    <provider android:authorities="androidx.car.app.connection" />
   </queries>
 
   <application>
@@ -59,20 +72,40 @@
         android:exported="false"
         android:foregroundServiceType="connectedDevice" />
 
-    <!-- Reached only through the explicit PendingIntent handed to Play services. Never starts a capture. -->
+    <!-- Play services' activity transitions and live reports, reached only through the explicit
+         mutable PendingIntents handed to it. A confident in-a-vehicle transition is a drive
+         detector wake (its broadcast may start the location service from the background). -->
     <receiver
         android:name=".ActivityTransitionReceiver"
         android:exported="false" />
 
-    <!-- Disabled until the forgot-to-start reminder is turned on (TripReminder enables it with
-         DONT_KILL_APP). System broadcasts reach an unexported receiver. It only re-subscribes. -->
+    <!-- The parked car's geofence exit, reached only through the explicit mutable PendingIntent
+         handed to Play services: a drive detector wake. -->
     <receiver
-        android:name=".ReminderBootReceiver"
+        android:name=".GeofenceReceiver"
+        android:exported="false" />
+
+    <!-- Disabled until automatic drives are armed (the detector enables it with DONT_KILL_APP).
+         System broadcasts reach an unexported receiver. It only sets the wakes again. -->
+    <receiver
+        android:name=".DetectBootReceiver"
         android:exported="false"
         android:enabled="false">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+
+    <!-- A paired car's Bluetooth connecting: a drive detector wake (ruling 2). Disabled until
+         automatic drives run with a car paired (the detector enables it with DONT_KILL_APP).
+         Exported: the Bluetooth stack sends ACL_CONNECTED, a protected broadcast no app can fake. -->
+    <receiver
+        android:name=".CarConnectReceiver"
+        android:exported="true"
+        android:enabled="false">
+      <intent-filter>
+        <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
       </intent-filter>
     </receiver>
 

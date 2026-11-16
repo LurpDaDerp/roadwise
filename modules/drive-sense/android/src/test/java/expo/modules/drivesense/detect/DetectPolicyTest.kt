@@ -94,4 +94,30 @@ class DetectPolicyTest {
     val ok = DetectSelfTest.result("r4", JSONObject().put("kind", "resume").put("startedAt", 0).put("now", 300_000).put("lastRowTs", JSONObject.NULL))
     assertEquals("resume", ok.getJSONObject("actual").getString("decision"))
   }
+
+  private fun feed(s: FeedStanding, at: Double, vararg ts: Pair<String, Boolean>) =
+    DetectPolicy.feedAfter(s, ts.map { (type, enter) -> FeedTransition(type, enter) }, at)
+
+  @Test
+  fun `a walk is walking or running, as iOS counts it, and keeps its clock across both`() {
+    val none = FeedStanding(null, false)
+    // A RUNNING ENTER starts the walk clock.
+    assertEquals(FeedStanding(t0, false), feed(none, t0, "running" to true))
+    // A walk turning into a run (EXIT WALKING, ENTER RUNNING in one batch) keeps its start, and back again.
+    val walking = feed(none, t0, "walking" to true)
+    val running = feed(walking, t0 + 8_000, "walking" to false, "running" to true)
+    assertEquals(FeedStanding(t0, false), running)
+    assertEquals(FeedStanding(t0, false), feed(running, t0 + 15_000, "running" to false, "walking" to true))
+    // An on-foot EXIT with no on-foot ENTER after it ends the walk; so does any other ENTER.
+    assertEquals(FeedStanding(null, false), feed(walking, t0 + 5_000, "walking" to false))
+    assertEquals(FeedStanding(null, false), feed(running, t0 + 5_000, "running" to true, "running" to false))
+    assertEquals(FeedStanding(null, false), feed(walking, t0 + 5_000, "stationary" to true))
+    assertEquals(FeedStanding(null, true), feed(walking, t0 + 5_000, "walking" to false, "automotive" to true))
+    // Car motion stands from IN_VEHICLE's ENTER until its EXIT or another ENTER.
+    val car = feed(none, t0, "automotive" to true)
+    assertEquals(FeedStanding(null, true), car)
+    assertEquals(FeedStanding(null, false), feed(car, t0 + 1_000, "automotive" to false))
+    assertEquals(FeedStanding(t0 + 1_000, false), feed(car, t0 + 1_000, "automotive" to false, "running" to true))
+    assertEquals(car, DetectPolicy.feedAfter(car, emptyList(), t0 + 1_000))
+  }
 }

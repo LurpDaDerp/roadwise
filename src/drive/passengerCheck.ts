@@ -1,10 +1,12 @@
-// "Are you driving?" (iPhone with the car link, round 14): an automatic drive whose route never held
-// the driver's car may be a ride in someone else's. The host asks once, by a notification, when
-// every rule below holds; a tap stops the drive as "Not driving?" does. Pure, but for the one read
-// of which paired cars have proven their link.
+// "Are you driving?" (a build with the car link, both phones; round 14): an automatic drive whose
+// route never held the driver's car may be a ride in someone else's. The host asks once, by a
+// notification, when every rule below holds; a tap stops the drive as "Not driving?" does. Pure, but
+// for the one read of which paired cars have proven their link. On Android "the route" is every
+// connected Bluetooth audio output and Android Auto (CarPlay's place), and Bluetooth is known to be
+// on only with Nearby devices allowed (Android 12+).
 //
 // Asked only when ALL hold:
-// 1. an automatic drive recording on an iPhone build with the car link, no longer waiting, whose
+// 1. an automatic drive recording on a build with the car link, no longer waiting, whose
 //    "Not driving?" can still be used (the tap's cancel is then accepted);
 // 2. at least one paired car, whose link is proven: a kept drive of the last 30 days was in one of
 //    the paired cars (so the car does connect when it is driven);
@@ -18,6 +20,7 @@
 // The host reads Bluetooth and the notification permission last, only once everything else holds.
 import type { RadioState } from '@/core/permissions/adapters';
 import type { Db } from '@/data/db';
+import { sameCarUid } from '@/lib/carUid';
 import { mphToMps } from '@/lib/units';
 
 /** Asked once the car has been at driving speed this long. */
@@ -30,7 +33,7 @@ export const PASSENGER_PROVEN_MS = 30 * 24 * 60 * 60_000;
 export const PASSENGER_READ_EVERY_MS = 30_000;
 
 export interface PassengerFacts {
-  /** An iPhone build with the car link, recording for real (no dry run). */
+  /** A build with the car link, recording for real (no dry run). */
   carLink: boolean;
   origin: 'auto' | 'manual' | null;
   recording: boolean;
@@ -75,7 +78,8 @@ export const passengerReady = (f: PassengerFacts, bluetooth: RadioState | null, 
 
 /**
  * The paired cars (`uids`) that were the car of a kept drive (any stored drive no longer
- * recording) ending in the 30 days before `now`. A failed read proves nothing.
+ * recording) ending in the 30 days before `now` (a drive stored under Android's hidden form of the
+ * car's address counts for it). A failed read proves nothing.
  */
 export async function readProvenCars(db: Db, uids: readonly string[], now: number): Promise<Set<string>> {
   if (uids.length === 0) return new Set();
@@ -85,7 +89,7 @@ export async function readProvenCars(db: Db, uids: readonly string[], now: numbe
       [now - PASSENGER_PROVEN_MS]
     );
     const seen = new Set(rows.map((r) => r.car_uid).filter((u): u is string => typeof u === 'string'));
-    return new Set(uids.filter((u) => seen.has(u)));
+    return new Set(uids.filter((u) => seen.has(u) || [...seen].some((s) => sameCarUid(u, s))));
   } catch {
     return new Set();
   }

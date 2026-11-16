@@ -11,8 +11,8 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import type { BluetoothPermission, PermissionsAdapter } from '@/core/permissions';
-import { lazyBluetooth } from '@/core/permissions/adapters';
-import { carRadioState } from '@/core/permissions/carBluetooth';
+import { androidApiLevel, androidPermissions, lazyBluetooth } from '@/core/permissions/adapters';
+import { carNearbyGranted, carRadioState } from '@/core/permissions/carBluetooth';
 import { asPaired, PAIRED_KEY } from '@/dashcam/keys';
 import { activeDashcam, subscribeActiveDashcam } from '@/dashcam/registry';
 import { requestDeviceSync } from '@/data/devices/events';
@@ -70,19 +70,22 @@ const defaultAndroidApi = (): number | null => {
   return Number.isFinite(v) ? v : null;
 };
 
-/** iPhone: a car is paired on the car link (Bluetooth then serves "Are you driving?"). */
+/** A car is paired on the car link (Bluetooth then serves "Are you driving?"); false on web and builds without it. */
 async function defaultCarPaired(): Promise<boolean> {
-  if (Platform.OS !== 'ios') return false;
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return false;
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the drive detector
   const { readCarLink } = require('@/features/carLink/port') as typeof import('@/features/carLink/port');
   return ((await readCarLink())?.cars.length ?? 0) > 0;
 }
 
 /**
- * The Bluetooth permission for a paired car: read from the shared manager, created (with no prompt)
- * only once the phone has answered; not answered yet reads undetermined.
+ * The Bluetooth permission for a paired car. iPhone: read from the shared manager, created (with no
+ * prompt) only once the phone has answered; not answered yet reads undetermined. Android: Nearby
+ * devices (BLUETOOTH_CONNECT) itself, read with no prompt (always allowed below Android 12); not
+ * allowed reads undetermined, which a paired car makes a revoke.
  */
 async function readCarBluetooth(settings: Pick<SettingsRepo, 'get' | 'set'>): Promise<BluetoothPermission> {
+  if (Platform.OS === 'android') return (await carNearbyGranted({ permissions: androidPermissions, apiLevel: androidApiLevel() })) ? 'granted' : 'undetermined';
   const radio = await carRadioState({ platform: 'ios', settings, radio: lazyBluetooth });
   if (radio === null) return 'undetermined';
   if (radio === 'unauthorized') return 'denied';

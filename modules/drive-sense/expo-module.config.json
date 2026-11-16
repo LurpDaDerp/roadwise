@@ -5,6 +5,6 @@
     "appDelegateSubscribers": ["DriveDetectAppDelegate"]
   },
   "android": {
-    "modules": ["expo.modules.drivesense.DriveSenseModule", "expo.modules.drivesense.SystemBarsModule", "expo.modules.drivesense.PhoneHeadingModule"]
+    "modules": ["expo.modules.drivesense.DriveSenseModule", "expo.modules.drivesense.DriveDetectModule", "expo.modules.drivesense.SystemBarsModule", "expo.modules.drivesense.PhoneHeadingModule"]
   }
 }

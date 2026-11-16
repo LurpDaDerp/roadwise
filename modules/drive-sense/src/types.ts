@@ -8,25 +8,34 @@
 // Start-card drive opens at the tap and waits for two trusted readings at 10 mph or more in a
 // row), traces its start back,
 // journals every row to disk and emits it here as a `row` with a bridge-only `seq`. JS adopts the drive wherever it runs and decides its end; native stops on its
-// own only as a safety stop. On iOS the shared reminder methods are fixed stubs and nothing reads the
-// phone's lock state any more.
+// own only as a safety stop. Nothing reads the phone's lock state any more.
 //
-// Android (frozen): drives start only from a tap in the app through `startCapture`; native captures
-// between a JS `startCapture` and `stopCapture` (plus its sticky restart under the watchdog). Its
-// forgot-to-start reminder code is unchanged and unreachable once JS stops turning it on.
+// Android: the same drive detector in Kotlin (`DriveDetectModule.kt`, without the car link yet),
+// woken by Play services' activity transitions (a confident in-a-vehicle report), the parked car's
+// geofence and RoadWise coming to the front, with the same rules and numbers. A plain capture
+// between a JS `startCapture` and `stopCapture` (plus its sticky restart under the watchdog) is for
+// tests and dev tools. The retired forgot-to-start reminder's shared methods are fixed stubs on both
+// platforms.
 import type { FeatureRow } from '../../../src/core/engine/types';
 import type { ExtractedRow } from './extract/types';
-import type { TripReminderMissing, TripReminderStatus } from './reminder/policy';
 
-export type { FeatureRow, TripReminderMissing, TripReminderStatus };
+export type { FeatureRow };
 
-/**
- * `requestReminderLocation()`: iOS location after the one "Always" request (`whenInUse` = the
- * driver kept While Using); Android `notNeeded` (its reminder uses no location).
- */
+/** What the retired reminder's status could name as missing (kept for the contract's shape). */
+export type TripReminderMissing = 'motion' | 'notifications' | 'locationAlways' | 'locationPrecise';
+
+/** The retired reminder's status: always `{ enabled: false, state: 'off', missing: [] }` now. */
+export interface TripReminderStatus {
+  enabled: boolean;
+  state: 'off' | 'on' | 'needs' | 'unavailable';
+  /** What is missing; only for `needs`. */
+  missing: TripReminderMissing[];
+}
+
+/** `requestReminderLocation()`: the current location answer, without prompting (`notNeeded` is never sent now). */
 export type ReminderLocationAnswer = 'always' | 'whenInUse' | 'denied' | 'notNeeded';
 
-/** A tap on the reminder's note as Android hands it to JS: its token, and when it was handed over (epoch ms). */
+/** A reminder tap as an older Android build handed it to JS (never sent now). */
 export interface ReminderTap {
   token: string;
   at: number;
@@ -63,7 +72,7 @@ export type DashpalLinkResult = 'running' | 'stopped' | 'refused' | 'unsupported
 
 export type CaptureMode = 'mounted' | 'pocket' | 'auto';
 
-/** What JS knows of a drive's end at `stopCapture`, for the forgot-to-start reminder's session. */
+/** What JS knows of a drive's end at `stopCapture` (the detector's linger reads `automatic`). */
 export interface CaptureEnd {
   /** When its driving ended, epoch ms (where the car last moved, or the End tap); null when the drive was not kept. */
   drivingEndedAt: number | null;
@@ -231,7 +240,7 @@ export type DriveSenseEvents = {
    * and `active: false` at the stop for a call still up.
    */
   call: { active: boolean; ts: number };
-  /** Android only: a tap on the reminder's note was handed over; read it with `takeReminderTap`. */
+  /** The retired reminder's tap: kept in the contract, never sent. */
   reminderTap: Record<string, never>;
   /**
    * Android only: the DashPal link service's 30-s tick while it waits for the DashPal (JS pumps its
@@ -383,31 +392,17 @@ export interface DriveSenseApi {
   /** Runs the native extractor over golden vectors; returns a `SelfTestOutput` as JSON (README §Self-test). */
   selfTest(vectorsJson: string): Promise<string>;
   /**
-   * Android: the forgot-to-start reminder's switch (README "Forgot-to-start reminder"). On: saved on
-   * even when a permission is missing (the status says what), the session kept, the channel created.
-   * Off: all of its state forgotten, its feed and wakes stopped, any notification taken down. Never
-   * rejects; never starts a capture. iOS (no reminder): resolves `{ enabled: false, state: 'off',
-   * missing: [] }`.
+   * The retired forgot-to-start reminder's switch (the bootstrap turns an older install's off once):
+   * resolves `{ enabled: false, state: 'off', missing: [] }` on both platforms and changes nothing.
    */
   setTripReminder(enabled: boolean): Promise<TripReminderStatus>;
-  /** Android: the reminder's status, brought up to now first. iOS: `{ enabled: false, state: 'off', missing: [] }`. */
+  /** The retired reminder's status: `{ enabled: false, state: 'off', missing: [] }` on both platforms. */
   getTripReminderStatus(): Promise<TripReminderStatus>;
-  /**
-   * iOS: the current location answer, without prompting (the Always request is
-   * `DriveDetect.requestAlways`). Android: `notNeeded`.
-   */
+  /** The current location answer, without prompting (the Always request is `DriveDetect.requestAlways`). */
   requestReminderLocation(): Promise<ReminderLocationAnswer>;
-  /**
-   * Android: a tap on the reminder's note: true once, for the note's own token, while the reminder is
-   * on, its session lasts, no drive is open and within 2 min of the tap's hand-over. True spends the
-   * token and takes the note down. It never starts a capture. iOS: always false.
-   */
+  /** The retired reminder's tap claim: always false. */
   claimReminderTap(token: string): Promise<boolean>;
-  /**
-   * Android: the tap on the reminder's note the phone handed RoadWise, once (null when none is
-   * waiting; each token is handed over at most once). iOS: always null (its taps arrive through
-   * expo-notifications).
-   */
+  /** The retired reminder's tap: always null. */
   takeReminderTap(): Promise<ReminderTap | null>;
   /**
    * Resolves with no effect on both platforms (phone use is not tracked). Never rejects for a valid
@@ -490,12 +485,6 @@ export interface FakeControls {
   readonly captureEnds: readonly (CaptureEnd | null)[];
   /** The last `setDriveDisplay` argument delivered while capturing, or null (cleared by stopCapture, as the notification goes). */
   readonly driveDisplay: DriveDisplayState | null;
-  /**
-   * Android: the phone as the reminder sees it: `available` false = no Play services
-   * (`unavailable`); `missing` = what `needs` reports; `location` = what `requestReminderLocation`
-   * answers (default `notNeeded`). iOS has no reminder and ignores it.
-   */
-  setTripReminderEnv(env: { available?: boolean; missing?: TripReminderMissing[]; location?: ReminderLocationAnswer }): void;
   /** Android: the apps `listInstalledApps` finds (by package; others are not installed). Default none. */
   setInstalledApps(apps: readonly InstalledApp[]): void;
   /** What `launchApp` answers for an installed app (default true); an app not installed is always false. */
@@ -515,16 +504,6 @@ export interface FakeControls {
   tickDashpalLink(): boolean;
   /** Every `holdAwake(ms)` the fake took, in order (iOS ones included). */
   readonly holdAwakeCalls: number[];
-  /** Whether the reminder is switched on now. */
-  readonly tripReminderOn: boolean;
-  /** A note is up with `token` in a driven, live session, as a stop would have posted it (`now` defaults to the fake's clock). */
-  postReminderForTest(token: string, now?: number): void;
-  /**
-   * Android: a tap on the note with `token` reaches RoadWise, as the module reads it from the
-   * intent: handed over once (queued for `takeReminderTap` and announced with `reminderTap`); a
-   * token handed over before is dropped. Returns whether it was handed over. iOS: nothing (false).
-   */
-  tapReminderForTest(token: string): boolean;
   // ——— the native activity feed (README §3) ———
   /**
    * An OS motion-activity delivery as native makes it: an `activity` event only while the feed is

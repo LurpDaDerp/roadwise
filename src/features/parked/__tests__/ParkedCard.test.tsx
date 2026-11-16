@@ -1,7 +1,7 @@
 /**
  * "Where you parked" on Home: the stored spot's card (label and time, Walk back, the ✕ top right),
- * gone on ✕, once a later drive is kept, after 3 days, during a drive and on Android; the spot's
- * parse and the host's signal.
+ * gone on ✕, once a later drive is kept, after 3 days and during a drive, the same on Android (web
+ * has none); the spot's parse and the host's signal.
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Platform } from 'react-native';
@@ -113,7 +113,7 @@ describe("Home's card", () => {
     expect(await createSettingsRepo(db).get(PARKED_KEY)).toBeNull();
   });
 
-  test('never during a drive, nor on Android', async () => {
+  test('never during a drive; on Android as on iPhone, Walk back included; never on web', async () => {
     await writeParkedSpot(db, spot);
     const during = await render(ui(true));
     await settle();
@@ -122,6 +122,12 @@ describe("Home's card", () => {
     const os = Platform.OS;
     Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
     try {
+      const android = await render(ui());
+      await waitFor(() => expect(screen.getByTestId('home-parked-line')).toHaveTextContent(`Capitol Hill · ${formatWhen(spot.parkedAt)}`));
+      fireEvent.press(screen.getByTestId('home-parked-walk'));
+      await waitFor(() => expect(mockWalk).toHaveBeenCalledWith('google_maps', { lat: spot.lat, lng: spot.lng }));
+      android.unmount();
+      Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });
       await render(ui());
       await settle();
       expect(screen.queryByTestId('home-parked')).toBeNull();

@@ -1,7 +1,10 @@
-// What the drive host asks of the phone for "Are you driving?" (iPhone with the car link): the
-// Bluetooth radio (read without ever prompting, `carRadioState`), the notification permission (read,
-// never asked), and the note itself, posted at once with no sound and taken down by its identifier.
-// Every native module is loaded only when first used.
+// What the drive host asks of the phone for "Are you driving?" (a build with the car link, both
+// phones): the Bluetooth radio (read without ever prompting, `carRadioState`; on Android only with
+// Nearby devices allowed), the notification permission (read, never asked), and the note itself,
+// posted at once with no sound (Android: on its silent "Are you driving?" channel) and taken down by its
+// identifier. Every native module is loaded only when first used.
+import { Platform } from 'react-native';
+
 import type { RadioState } from '@/core/permissions/adapters';
 import { carRadioState } from '@/core/permissions/carBluetooth';
 import { createSettingsRepo, type Db } from '@/data/db';
@@ -30,8 +33,13 @@ export function createPassengerNotePort(db: Db): PassengerNotePort {
   return {
     async bluetooth() {
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the BLE native module
-      const { lazyBluetooth } = require('@/core/permissions/adapters') as typeof import('@/core/permissions/adapters');
-      return carRadioState({ platform: 'ios', settings: createSettingsRepo(db), radio: lazyBluetooth });
+      const { androidApiLevel, androidPermissions, lazyBluetooth } = require('@/core/permissions/adapters') as typeof import('@/core/permissions/adapters');
+      return carRadioState({
+        platform: Platform.OS === 'android' ? 'android' : 'ios',
+        settings: createSettingsRepo(db),
+        radio: lazyBluetooth,
+        android: { permissions: androidPermissions, apiLevel: androidApiLevel() },
+      });
     },
     async notificationsAllowed() {
       const n = notifications();

@@ -149,7 +149,7 @@ object NotificationFactory {
   }
 
   /** The RoadWise mark the app's other notifications use; the module's own glyph if the app names none. */
-  private fun smallIcon(context: Context): Int {
+  fun smallIcon(context: Context): Int {
     if (smallIcon != 0) return smallIcon
     val fromApp = try {
       val pm = context.packageManager

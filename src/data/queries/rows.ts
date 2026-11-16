@@ -13,6 +13,7 @@ import { toTripRow } from '@/data/db/trips';
 import type { DriveOrigin, DriveWeather, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { carFilterUid, type DriveHistoryFilter } from '@/data/queries/keys';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
+import { sameCarUid } from '@/lib/carUid';
 import type { LatLng } from '@/lib/geo';
 
 export type DriveStatus = TripStatus;
@@ -355,8 +356,8 @@ export const isScoredDrive = (d: Pick<LocalDrive, 'status' | 'reason'>): boolean
 
 /**
  * Whether a listed drive belongs under a history filter: every drive, the clean ones, the "Wasn't
- * driving" ones, or the ones made in one paired car (`car:{uid}`: the drive's own car tag; a drive
- * with none is in no car).
+ * driving" ones, or the ones made in one paired car (`car:{uid}`: the drive's own car tag, Android's
+ * hidden form of the car's address included; a drive with none is in no car).
  */
 export function matchesHistoryFilter(d: Pick<LocalDrive, 'status' | 'archived' | 'clean' | 'carUid'>, filter: DriveHistoryFilter): boolean {
   if (!isListed(d)) return false;
@@ -369,7 +370,7 @@ export function matchesHistoryFilter(d: Pick<LocalDrive, 'status' | 'archived' |
       return d.status === 'not_driving';
     default: {
       const uid = carFilterUid(filter);
-      return uid !== null && typeof d.carUid === 'string' && d.carUid === uid;
+      return uid !== null && typeof d.carUid === 'string' && sameCarUid(d.carUid, uid);
     }
   }
 }

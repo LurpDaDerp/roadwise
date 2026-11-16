@@ -18,11 +18,23 @@ object DriveSensePermissions {
       granted(context, Manifest.permission.ACCESS_COARSE_LOCATION)
 
   /**
-   * `whenInUse` / `none`. The app never declares the background-location permission (plan §1 decision 4), so
-   * `always` is never reported on Android: a drive started from the foreground keeps its location
+   * "Allow all the time": ACCESS_BACKGROUND_LOCATION on Android 10+ (with a foreground grant); below
+   * 10 every location grant is all the time.
+   */
+  fun hasBackgroundLocation(context: Context): Boolean =
+    hasForegroundLocation(context) &&
+      (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || granted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+
+  /**
+   * `always` / `whenInUse` / `none`. Automatic drives need `always` (the drive detector's wakes
+   * start its location service from the background); the Start card's drive keeps its location
    * foreground service with While Using.
    */
-  fun location(context: Context): String = if (hasForegroundLocation(context)) "whenInUse" else "none"
+  fun location(context: Context): String = when {
+    hasBackgroundLocation(context) -> "always"
+    hasForegroundLocation(context) -> "whenInUse"
+    else -> "none"
+  }
 
   fun playServicesAvailable(context: Context): Boolean =
     try {

@@ -1,6 +1,6 @@
 // What the drive host needs from drive-sense: start and stop the capture, one state read, the
 // event subscription, and the one-time reminder retirement. `createFakeDriveSense()` satisfies it in
-// tests. On iOS the host also drives the drive detector (`DriveDetect`, `nativeDriveDetect`).
+// tests. The host also drives the drive detector (`DriveDetect`, `nativeDriveDetect`) on both platforms.
 import DriveSense, { DriveDetect, type DriveDetectApi, type DriveSenseApi } from '@drive-sense';
 
 export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | 'getState' | 'addListener'> &
@@ -10,7 +10,7 @@ export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | '
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;
 
-/** The iOS drive detector, or null where it does not exist (Android, Jest, Expo Go, web). */
+/** The native drive detector (iOS, Android), or null where it does not exist (Jest, Expo Go, web). */
 export const nativeDriveDetect = (): DriveDetectApi | null => (DriveDetect.available ? DriveDetect : null);
 
 /**

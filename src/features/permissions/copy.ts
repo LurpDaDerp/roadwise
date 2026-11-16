@@ -14,7 +14,7 @@ import { ANDROID_NEARBY_DEVICES_API, type MissingState, type PermissionId, type 
 export interface CopyCtx {
   platform: PermissionPlatform;
   androidApi: number | null;
-  /** What Bluetooth is for on this phone: a paired DashPal, a paired car (iPhone), both or neither. */
+  /** What Bluetooth is for on this phone: a paired DashPal, a paired car, both or neither. */
   dashpal?: boolean;
   car?: boolean;
 }
@@ -139,7 +139,7 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
     case 'notifications':
       return state.reason === 'notYet' ? 'Allow Notifications to get your drive recaps.' : "Notifications are off. You'll miss your drive recaps.";
     case 'bluetooth':
-      if (carOnly(c)) return "Bluetooth isn't allowed, so passenger rides aren't spotted.";
+      if (carOnly(c)) return nearbyDevices(c) ? "Nearby devices is off, so passenger rides aren't spotted." : "Bluetooth isn't allowed, so passenger rides aren't spotted.";
       return nearbyDevices(c) ? "Nearby devices isn't allowed. DashPal can't connect." : "Bluetooth isn't allowed. DashPal can't connect.";
     case 'camera':
       return "Camera access is off, so you can't scan QR codes.";
@@ -179,9 +179,10 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
       return on ? 'Drive recaps, your weekly and monthly recaps and friend requests can reach you.' : "You won't get drive recaps, your weekly and monthly recaps or friend requests.";
     case 'bluetooth':
       if (state.kind === 'idle') {
+        // Android 11 and lower: DashPal's scans use Location; the car link needs nothing.
+        if (!ios && !nearbyDevices(c)) return carOnly(c) ? 'Your car needs no permission on this phone.' : 'Uses Location on this phone.';
         if (c.car === true) return 'RoadWise asks for it in Settings › Your car.';
-        if (ios) return 'Used only with a paired car or DashPal.';
-        return nearbyDevices(c) ? 'Used only with a paired DashPal.' : 'Uses Location on this phone.';
+        return 'Used only with a paired car or DashPal.';
       }
       if (carOnly(c)) return on ? "RoadWise can tell when you're riding as a passenger." : "Without it, RoadWise can't tell when you're riding as a passenger.";
       if (carToo(c)) return on ? "Your DashPal can connect, and RoadWise can tell when you're a passenger." : "Your DashPal can't connect, and RoadWise can't tell when you're a passenger.";
