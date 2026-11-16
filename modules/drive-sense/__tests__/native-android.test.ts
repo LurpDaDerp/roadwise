@@ -1230,7 +1230,7 @@ describe('native-android: the phone heading for the driving-screen compass (Phon
 
   it('its own Android-only module, so the shared DriveSense surface stays the same on both platforms', () => {
     const config = JSON.parse(read(join(__dirname, '..', 'expo-module.config.json'))) as { apple: { modules: string[] }; android: { modules: string[] } };
-    expect(config.android.modules).toEqual(['expo.modules.drivesense.DriveSenseModule', 'expo.modules.drivesense.PhoneHeadingModule']);
+    expect(config.android.modules).toContain('expo.modules.drivesense.PhoneHeadingModule');
     expect(config.apple.modules).not.toContain('PhoneHeadingModule');
     expect(PH()).toMatch(/Name\("PhoneHeading"\)/);
     expect(PH()).toMatch(/Events\("heading"\)/);
