@@ -89,7 +89,7 @@ export const expectationSchema: z.ZodType<Expectation> = z.strictObject({
 
 export const traceSchema = z.strictObject({
   name: z.string().min(1),
-  /** The phone that recorded it (default `ios`): on iPhone a row with a call is never phone use. */
+  /** The phone that recorded it (default `ios`). A row with a call is never phone use on either. */
   platform: z.enum(['ios', 'android']).optional(),
   rows: z.array(featureRowSchema).min(1),
   limits: z.array(limitEntrySchema),

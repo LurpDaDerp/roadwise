@@ -71,6 +71,9 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'DashpalLinkService',
     'AlertWakeLock',
     'AudioOutput',
+    'PedometerSource',
+    'HeadingSource',
+    'PhoneHeadingModule',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -236,12 +239,14 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/requestActivityTransitionUpdates\(/);
   });
 
-  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT); the reminder IN_VEHICLE ENTER when idle, and in a session IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
+  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT) with the ENTERs of STILL and ON_BICYCLE; the reminder IN_VEHICLE ENTER when idle, and in a session IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/CAPTURE_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
+    // The stop (the known-parking-spot end's evidence) and a bicycle, as iOS reports both; ENTER only.
+    expect(src).toMatch(/CAPTURE_ENTERS\s*=\s*listOf\(DetectedActivity\.STILL,\s*DetectedActivity\.ON_BICYCLE\)/);
     const tiers = /fun transitions\(tier: TripReminderPolicy\.Tier\)[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
     expect(tiers).toMatch(/Tier\.NONE -> emptyList\(\)/);
-    expect(tiers).toMatch(/Tier\.CAPTURE -> CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \}/);
+    expect(tiers).toMatch(/Tier\.CAPTURE ->\s*CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \} \+ CAPTURE_ENTERS\.map \{ type -> type to ENTER \}/);
     expect(tiers).toMatch(/Tier\.IDLE -> listOf\(DetectedActivity\.IN_VEHICLE to ENTER\)\n/);
     const trip = /Tier\.SESSION -> listOf\(([\s\S]*?)\)\n/.exec(tiers)?.[1] ?? '';
     expect(trip.split(',').map((x) => x.trim())).toEqual([
@@ -257,14 +262,16 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/EXIT = ActivityTransition\.ACTIVITY_TRANSITION_EXIT/);
   });
 
-  it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, an IN_VEHICLE EXIT to nothing', () => {
+  it('maps ENTERs to automotive/walking/running/stationary/cycling at high, EXITs of the on-foot types alone to exit: true, an IN_VEHICLE EXIT to nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/DetectedActivity\.IN_VEHICLE\s*->\s*"automotive"/);
     expect(src).toMatch(/DetectedActivity\.WALKING\s*->\s*"walking"/);
     expect(src).toMatch(/DetectedActivity\.RUNNING\s*->\s*"running"/);
+    expect(src).toMatch(/DetectedActivity\.STILL\s*->\s*"stationary"/);
+    expect(src).toMatch(/DetectedActivity\.ON_BICYCLE\s*->\s*"cycling"/);
     expect(src).toMatch(/"exit" to true/);
     expect(src).not.toMatch(/"(low|medium)"/);
-    expect(src).toMatch(/else if \(type != "automotive"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
+    expect(src).toMatch(/else if \(type == "walking" \|\| type == "running"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
   });
 
   it('activity reaches JS only while capturing; with no drive open the batch goes to the reminder, natively; the receiver writes no store or prefs itself', () => {
@@ -742,11 +749,17 @@ describe('native-android: capture service and watchdog (rev1: I2, C2)', () => {
 });
 
 describe('native-android: sensors and location (README §7, rev1: O8, I5)', () => {
-  it('uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer', () => {
-    const src = code(allKotlin());
+  it("the capture uses TYPE_ACCELEROMETER and TYPE_GYROSCOPE only — no rotation vector, no magnetometer; the rotation vector and the magnetometer's status only in the compass heading", () => {
+    const src = code(kt('SensorSource'));
     expect(src).toMatch(/Sensor\.TYPE_ACCELEROMETER\b/);
     expect(src).toMatch(/Sensor\.TYPE_GYROSCOPE\b/);
-    expect(allKotlin()).not.toMatch(/TYPE_ROTATION_VECTOR|TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/);
+    for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt'))) {
+      const banned =
+        f === 'HeadingSource.kt'
+          ? /TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/
+          : /TYPE_ROTATION_VECTOR|TYPE_MAGNETIC_FIELD|TYPE_GAME_ROTATION_VECTOR|TYPE_GRAVITY|TYPE_LINEAR_ACCELERATION/;
+      expect({ f, banned: banned.test(read(join(KT_DIR, f))) }).toEqual({ f, banned: false });
+    }
   });
 
   it('registers at 40 000 µs with 1 s of FIFO batching', () => {
@@ -817,7 +830,7 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(fn).toMatch(/else -> null/);
     expect(fn).toMatch(/catch \(_: Exception\) \{\s*null\s*\}/);
     const svc = code(kt('CaptureService'));
-    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*EventBus\.emit\("row", body\)/);
+    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*pedometer\?\.steps\?\.let \{ body\["steps"\] = it \}\s*EventBus\.emit\("row", body\)/);
     expect(code(kt('Types'))).not.toMatch(/"call"/);
     // One Kotlin reading of the call state: the audio-mode rules live in PhoneStateReceiver alone.
     for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt') && x !== 'PhoneStateReceiver.kt')) {
@@ -1164,5 +1177,118 @@ describe('native-android: the navigation bar ink (SystemBarsModule, src/ui/syste
   it('its pure half has JVM tests', () => {
     expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'NavBarInkTest.kt'))).toBe(true);
     expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'WindowTopTest.kt'))).toBe(true);
+  });
+});
+
+describe('native-android: the capture feed iOS has (steps, the call event; WP04)', () => {
+  it('rows carry the step count: TYPE_STEP_COUNTER from the drive baseline (TYPE_STEP_DETECTOR without one), batched, behind Physical activity', () => {
+    const src = code(kt('PedometerSource'));
+    expect(src).toMatch(/MAX_REPORT_LATENCY_US = 1_000_000/);
+    expect(src).toMatch(/val counter = sm\.getDefaultSensor\(Sensor\.TYPE_STEP_COUNTER\)/);
+    expect(src).toMatch(/val s = counter \?: sm\.getDefaultSensor\(Sensor\.TYPE_STEP_DETECTOR\) \?: return/);
+    expect(src).toMatch(/if \(!DriveSensePermissions\.motionGranted\(app\)\) return/);
+    expect(src).toMatch(/sm\.registerListener\(this, s, SensorManager\.SENSOR_DELAY_NORMAL, MAX_REPORT_LATENCY_US, handler\)/);
+    // Pure arithmetic, JVM-tested: the first total is the baseline, a lower one a new baseline.
+    expect(src).toMatch(/if \(b == null \|\| total < b\) \{\s*baseline = total\s*return 0\s*\}/);
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'StepCountTest.kt'))).toBe(true);
+    // A capture the system restarts goes on from its own baseline, only in the same boot.
+    expect(src).toMatch(/saved\.captureStartedAt != startedAt/);
+    expect(src).toMatch(/val thisBoot = saved\.atClockMs in 1L\.\.nowClockMs && \(boot < 0 \|\| saved\.boot == boot\)/);
+    // Registered at the capture's begin (both rates), unregistered with the capture's sources.
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/pedometer = PedometerSource\(this, handler\)\.also \{ it\.start\(startedAt\) \}/);
+    const stop = /private fun stopSources\(\) \{[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(stop).toMatch(/pedometer\?\.stop\(\)\s*pedometer = null/);
+    expect(code(kt('Types'))).not.toMatch(/"steps"/);
+  });
+
+  it('the call event: once at the start for a call up, on each change (the mode listener on 31+, the recording callback, the row tick below 31), active: false at the stop', () => {
+    const src = code(kt('PhoneStateReceiver'));
+    const start = /private fun startCallWatch\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(start).toMatch(/callActive = callState\(context\) != null\s*if \(callActive\) emitCall\(true\)/);
+    expect(start).toMatch(/if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S\) \{\s*val listener = AudioManager\.OnModeChangedListener \{ checkCall\(\) \}/);
+    expect(start).toMatch(/am\.addOnModeChangedListener\(\{ r -> handler\.post\(r\) \}, listener\)/);
+    expect(start).toMatch(/am\.registerAudioRecordingCallback\(callback, handler\)/);
+    const check = /fun checkCall\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(check).toMatch(/if \(!registered\) return\s*val now = callState\(context\) != null\s*if \(now == callActive\) return\s*callActive = now\s*emitCall\(now\)/);
+    const stop = /private fun stopCallWatch\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(stop).toMatch(/removeOnModeChangedListener\(it\)/);
+    expect(stop).toMatch(/unregisterAudioRecordingCallback\(it\)/);
+    expect(stop).toMatch(/if \(callActive\) emitCall\(false\)\s*callActive = false/);
+    expect(src).toMatch(/EventBus\.emit\("call", linkedMapOf\("active" to active, "ts" to System\.currentTimeMillis\(\)\)\)/);
+    expect(/fun register\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '').toMatch(/startCallWatch\(\)\n {2}\}$/);
+    expect(/fun unregister\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '').toMatch(/stopCallWatch\(\)\n {2}\}$/);
+    // Below API 31 the row tick re-reads the mode, before the row goes out.
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/if \(Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.S\) phone\.checkCall\(\)\s*val body = LinkedHashMap/);
+  });
+});
+
+describe('native-android: the phone heading for the driving-screen compass (PhoneHeading; WP08)', () => {
+  const HEADING = () => code(kt('HeadingSource'));
+  const PH = () => code(kt('PhoneHeadingModule'));
+
+  it('its own Android-only module, so the shared DriveSense surface stays the same on both platforms', () => {
+    const config = JSON.parse(read(join(__dirname, '..', 'expo-module.config.json'))) as { apple: { modules: string[] }; android: { modules: string[] } };
+    expect(config.android.modules).toEqual(['expo.modules.drivesense.DriveSenseModule', 'expo.modules.drivesense.PhoneHeadingModule']);
+    expect(config.apple.modules).not.toContain('PhoneHeadingModule');
+    expect(PH()).toMatch(/Name\("PhoneHeading"\)/);
+    expect(PH()).toMatch(/Events\("heading"\)/);
+    for (const f of ['available', 'start', 'stop']) expect(PH()).toContain(`Function("${f}")`);
+    expect(PH()).not.toMatch(/AsyncFunction/);
+    expect(PH()).toMatch(/OnDestroy \{ stopAll\(\) \}/);
+    // Never on the DriveSense module (its events and methods are the shared lists).
+    expect(MODULE()).not.toMatch(/HeadingSource|"heading"/);
+  });
+
+  it('starts and stops are counted: one sensor for every screen asking, off with the last stop', () => {
+    const src = PH();
+    expect(src).toMatch(/if \(!s\.start\(\)\) return@Function false\s*users \+= 1/);
+    expect(src).toMatch(/if \(users > 0\) \{\s*users -= 1\s*if \(users == 0\) source\?\.stop\(\)/);
+  });
+
+  it('the rotation vector at 10 Hz, live, to JS at most 5 a second, registered only between start and stop', () => {
+    const src = HEADING();
+    expect(src).toMatch(/SAMPLING_PERIOD_US = 100_000/);
+    expect(src).toMatch(/EMIT_MIN_INTERVAL_MS = 200L/);
+    expect(src).toMatch(/sm\.registerListener\(this, s, SAMPLING_PERIOD_US, handler\)/);
+    expect(src.match(/\bregisterListener\(/g)).toHaveLength(2); // the rotation vector and the magnetometer
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?unregisterListener\(this, s\)/);
+    expect(allKotlin().match(/HeadingSource\(/g)?.length).toBe(2); // the class and the module's one instance
+  });
+
+  it('true north from the declination at the cached location (no fix asked for), else magnetic; unreliable readings carry accuracy 0', () => {
+    const src = HEADING();
+    expect(src).toMatch(/GeomagneticField\(/);
+    expect(src).toMatch(/getLastKnownLocation\(p\)/);
+    expect(src).not.toMatch(/requestLocationUpdates|getCurrentLocation|FusedLocationProviderClient/);
+    expect(src).toMatch(/if \(!DriveSensePermissions\.hasForegroundLocation\(app\)\) return null/);
+    expect(src).toMatch(/"trueHeading" to \(declination\?\.let \{ HeadingMath\.norm\(mag \+ it\) \} \?: -1\.0\)/);
+    expect(src).toMatch(/"magHeading" to mag/);
+    expect(src).toMatch(/"accuracy" to HeadingMath\.accuracyLevel\(HeadingMath\.status\(event\.accuracy, magnetStatus\), estimate\)/);
+    expect(src).toMatch(/if \(status <= SENSOR_STATUS_UNRELIABLE\) return 0/);
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'HeadingMathTest.kt'))).toBe(true);
+  });
+
+  it("the calibration is the magnetometer's status (Android sends every rotation-vector event as high), registered slow beside it and only while the heading runs", () => {
+    const src = HEADING();
+    expect(src).toMatch(/MAGNETOMETER_PERIOD_US = 200_000/);
+    expect(src).toMatch(/getDefaultSensor\(Sensor\.TYPE_MAGNETIC_FIELD\)[\s\S]*?sm\.registerListener\(this, m, MAGNETOMETER_PERIOD_US, handler\)/);
+    expect(src).toMatch(/if \(event\.sensor\.type == Sensor\.TYPE_MAGNETIC_FIELD\) \{\s*magnetStatus = event\.accuracy\s*return/);
+    expect(src).toMatch(/if \(sensor\?\.type == Sensor\.TYPE_MAGNETIC_FIELD\) magnetStatus = accuracy/);
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?sensorManager\?\.unregisterListener\(this, m\)[\s\S]*?magnetStatus = null/);
+    expect(src).toMatch(/magnetStatus = null\s*rotation = readRotation\(\)/);
+    expect(src).toMatch(/if \(magnetStatus == null\) rotationStatus else minOf\(rotationStatus, magnetStatus\)/);
+  });
+
+  it('the top is the top of the screen: the display rotation, read at start and on every display change, is handed to the arithmetic', () => {
+    const src = HEADING();
+    expect(src).toMatch(/rotation = readRotation\(\)\s*val t = HandlerThread/);
+    expect(src).toMatch(/displayManager\?\.registerDisplayListener\(displayListener, handler\)/);
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?displayManager\?\.unregisterDisplayListener\(displayListener\)/);
+    expect(src).toMatch(/if \(displayId == Display\.DEFAULT_DISPLAY\) rotation = readRotation\(\)/);
+    expect(src).toMatch(/getDisplay\(Display\.DEFAULT_DISPLAY\)\?\.rotation/);
+    expect(src).toMatch(/HeadingMath\.heading\(HeadingMath\.rotationMatrix\([^\n]*\), rotation\)/);
+    expect(src).not.toMatch(/defaultDisplay/);
   });
 });

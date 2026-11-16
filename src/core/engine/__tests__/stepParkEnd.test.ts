@@ -338,3 +338,38 @@ describe('the car link', () => {
     expect(status(replayed)).toBe('recording');
   });
 });
+
+describe('on Android: a Start drive fed as the capture feeds it (WP04)', () => {
+  /** An Android Start-card drive (the capture's rows carry `steps`; STILL and ON_BICYCLE ENTERs come as stationary and cycling at high). */
+  async function androidStart(over: Partial<EngineDeps> = {}): Promise<H> {
+    const h = harness({ ctx: () => ({ platform: 'android' }), ...over });
+    await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues: false });
+    return h;
+  }
+  const report = (h: H, a: MotionActivity) => h.engine.dispatch({ type: 'motion', activity: a, ts: T0 });
+
+  test('the step counter on the rows (0 from the baseline, then growing) ends the drive on a walk, cut at the last movement', async () => {
+    const h = await androidStart();
+    // The step counter's first count is the baseline (0); a walk adds about 2 steps a second.
+    const rows = path(T0, DRIVE, { n: 30, mps: 0, over: (i) => ({ steps: Math.max(0, i - 2) * 2 }) });
+    await feed(h, rows.slice(0, 74));
+    expect(status(h)).toBe('recording');
+    await feed(h, rows.slice(74, 75));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'walking', cut: true, endedAt: DRIVE_END });
+  });
+
+  test('rows without a count (no step sensor, no Physical activity) never end it on steps', async () => {
+    const h = await androidStart();
+    await feed(h, path(T0, DRIVE, { n: 60, mps: 0 }));
+    expect(status(h)).toBe('recording');
+  });
+
+  test.each(['stationary', 'cycling'] as const)('a %s report (a STILL or ON_BICYCLE ENTER) after a stop near a known spot: the parking end', async (type) => {
+    const h = await androidStart({ parkingSpots: () => [PARKED] });
+    const rows = path(T0, DRIVE, { n: 90, mps: 0 });
+    await feed(h, rows.slice(0, 65));
+    await report(h, act(type, T0 + 64_000));
+    await feed(h, rows.slice(65, 120));
+    expect(h.finalized[0]).toMatchObject({ endCause: 'stopped', cut: true, endedAt: DRIVE_END });
+  });
+});

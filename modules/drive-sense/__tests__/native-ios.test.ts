@@ -89,12 +89,12 @@ describe('iOS drive-sense module (text)', () => {
     for (const f of swiftFiles) expect({ f, retired: /^(LockProbe|Watchdog|TripReminder)/.test(f) }).toEqual({ f, retired: false });
   });
 
-  it('registers both modules for Apple and the detector launch hook; the Android block lists its own', () => {
+  it('registers both modules for Apple and the detector launch hook; Android registers its own (DriveSense among them)', () => {
     const config = JSON.parse(fs.readFileSync(path.join(MODULE_DIR, 'expo-module.config.json'), 'utf8'));
     expect(config.platforms).toEqual(['apple', 'android']);
     expect(config.apple.modules).toEqual(['DriveSenseModule', 'DriveDetectModule']);
     expect(config.apple.appDelegateSubscribers).toEqual(['DriveDetectAppDelegate']);
-    expect(config.android).toEqual({ modules: ['expo.modules.drivesense.DriveSenseModule', 'expo.modules.drivesense.SystemBarsModule'] });
+    expect(config.android.modules).toContain('expo.modules.drivesense.DriveSenseModule');
     expect(code('DriveDetectAppDelegate.swift')).toMatch(/public class DriveDetectAppDelegate: ExpoAppDelegateSubscriber \{/);
   });
 

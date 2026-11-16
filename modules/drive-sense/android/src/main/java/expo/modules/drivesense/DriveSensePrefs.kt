@@ -7,7 +7,8 @@ import android.content.SharedPreferences
  * The state drive-sense persists across processes: the capture-open flag and the capture's
  * parameters (for the `START_STICKY` restart and `captureWasOpen`), the motion "requested once"
  * flag, the last native exit record ([ExitInfoReader]), the forgot-to-start reminder's state
- * ([TripReminder]) and the activity-transition request on file ([ActivityTransitions]). Every entry
+ * ([TripReminder]), the activity-transition request on file ([ActivityTransitions]) and the step
+ * counter's baseline for the open capture ([PedometerSource]). Every entry
  * point — the module, the receivers, both services — calls [init] first, so
  * [captureWasOpenAtProcessStart] is read before anything in this process writes the flag.
  */
@@ -27,6 +28,10 @@ object DriveSensePrefs {
   private const val TRANSITIONS_TIER = "transitionsTier"
   private const val TRANSITIONS_AT_NANOS = "transitionsAtNanos"
   private const val TRANSITIONS_BOOT = "transitionsBoot"
+  private const val STEPS_CAPTURE = "stepsCaptureStartedAt"
+  private const val STEPS_BASELINE = "stepsBaseline"
+  private const val STEPS_AT_CLOCK = "stepsAtClockMs"
+  private const val STEPS_BOOT = "stepsBoot"
 
   @Volatile
   private var prefs: SharedPreferences? = null
@@ -113,6 +118,29 @@ object DriveSensePrefs {
   fun addImuUnpaired(n: Int) {
     if (n > 0) p.edit().putLong(UNPAIRED_COUNT, p.getLong(UNPAIRED_COUNT, 0L) + n).apply()
   }
+
+  /**
+   * The step counter's baseline for a capture ([PedometerSource]): the capture it is for (its
+   * `captureStartedAt`), the counter total it counts from, and when it was taken (the boot clock, ms,
+   * and the boot number, -1 unknown), so a capture the system restarts goes on counting from it.
+   */
+  data class StepBaseline(val captureStartedAt: Long, val baseline: Long, val atClockMs: Long, val boot: Int)
+
+  var stepBaseline: StepBaseline?
+    get() {
+      val baseline = p.getLong(STEPS_BASELINE, -1L)
+      if (baseline < 0) return null
+      return StepBaseline(p.getLong(STEPS_CAPTURE, 0L), baseline, p.getLong(STEPS_AT_CLOCK, 0L), p.getInt(STEPS_BOOT, -1))
+    }
+    set(v) {
+      val e = p.edit()
+      if (v == null) {
+        e.remove(STEPS_CAPTURE).remove(STEPS_BASELINE).remove(STEPS_AT_CLOCK).remove(STEPS_BOOT)
+      } else {
+        e.putLong(STEPS_CAPTURE, v.captureStartedAt).putLong(STEPS_BASELINE, v.baseline).putLong(STEPS_AT_CLOCK, v.atClockMs).putInt(STEPS_BOOT, v.boot)
+      }
+      e.apply()
+    }
 
   data class ExitRecord(val ts: Long, val reason: String, val whileCapturing: Boolean)
 

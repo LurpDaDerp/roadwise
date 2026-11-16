@@ -2,7 +2,7 @@
 // (round 8 plan, decision 7): which reading counts, the smoothing, the subscription's life, and the
 // rule that a drive never goes back from its track bearing.
 import { act, render } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { Platform, Text } from 'react-native';
 
 import {
   compassHeadingOf,
@@ -39,6 +39,24 @@ jest.mock('expo-location', () => ({
     if (mockAnswer === 'hold') return new Promise((resolve) => (mockRelease = () => resolve(handle)));
     return Promise.resolve(handle);
   }),
+}));
+
+/** Android's native heading (`PhoneHeading`): its subscriptions land in the same list (it has no error stream). */
+let mockNativeAnswer: 'ok' | 'refuse' = 'ok';
+jest.mock('@drive-sense/heading', () => ({
+  PhoneHeading: {
+    available: () => true,
+    watch: jest.fn((cb: (h: unknown) => void) => {
+      if (mockNativeAnswer === 'refuse') return Promise.reject(new Error('PhoneHeading: no rotation-vector sensor'));
+      const sub: Sub = { cb, removed: false };
+      mockSubs.push(sub);
+      return Promise.resolve({
+        remove: () => {
+          sub.removed = true;
+        },
+      });
+    }),
+  },
 }));
 
 const open = () => mockSubs.filter((s) => !s.removed);
@@ -317,5 +335,65 @@ describe('useDeviceHeading', () => {
     await r.rerender(<Probe on={false} />);
     await act(async () => sub.cb(good(77)));
     expect(last()).toBeNull();
+  });
+});
+
+describe('useDeviceHeading on Android (PhoneHeading)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked modules
+  const native = () => (require('@drive-sense/heading') as { PhoneHeading: { watch: jest.Mock } }).PhoneHeading.watch;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+  const location = () => (require('expo-location') as { watchHeadingAsync: jest.Mock }).watchHeadingAsync;
+  let os: { restore(): void };
+  beforeEach(() => {
+    os = jest.replaceProperty(Platform, 'OS', 'android');
+    mockNativeAnswer = 'ok';
+    native().mockClear();
+    location().mockClear();
+  });
+  afterEach(() => os.restore());
+
+  test("reads the native heading, never expo-location's, with the same smoothing and the same unusable-reading rule", async () => {
+    await render(<Probe on />);
+    await act(async () => {});
+    expect(native()).toHaveBeenCalledTimes(1);
+    expect(location()).not.toHaveBeenCalled();
+    await emit({ trueHeading: 50, magHeading: 50, accuracy: 0 });
+    expect(last()).toBeNull();
+    // no location known yet: magnetic
+    await emit({ trueHeading: -1, magHeading: 120, accuracy: 2 });
+    expect(last()).toBe(120);
+    await emit(good(130));
+    await act(() => jest.advanceTimersByTime(DEVICE_HEADING_TICK_MS * 30));
+    expect(last()).toBe(130);
+  });
+
+  test('disabled or unmounted: the native heading is let go', async () => {
+    const r = await render(<Probe on />);
+    await act(async () => {});
+    expect(open()).toHaveLength(1);
+    await r.rerender(<Probe on={false} />);
+    expect(open()).toHaveLength(0);
+    await r.rerender(<Probe on />);
+    await act(async () => {});
+    expect(open()).toHaveLength(1);
+    await r.unmount();
+    expect(open()).toHaveLength(0);
+  });
+
+  test('no rotation-vector sensor: silent, null, nothing left running', async () => {
+    mockNativeAnswer = 'refuse';
+    const t = ticks();
+    await render(<Probe on />);
+    await act(async () => {});
+    expect(last()).toBeNull();
+    expect(t.live()).toBe(0);
+    t.restore();
+  });
+
+  test('wanted on an Android phone with the native heading, under the same conditions as iOS', () => {
+    const all = { ios: false, android: true, focused: true, active: true, recording: true, ring: true, portrait: true, hasTrack: false };
+    expect(deviceHeadingWanted(all)).toBe(true);
+    for (const k of ['android', 'focused', 'active', 'recording', 'ring', 'portrait'] as const) expect(deviceHeadingWanted({ ...all, [k]: false })).toBe(false);
+    expect(deviceHeadingWanted({ ...all, hasTrack: true })).toBe(false);
   });
 });

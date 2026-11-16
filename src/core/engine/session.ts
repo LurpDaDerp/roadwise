@@ -257,7 +257,7 @@ export interface RowFlags {
   unsafe: boolean;
   /** The speeding detector could use the row (`DetectorSuite.speedingNow() !== null`): it counts toward limit time. */
   limitUsable: boolean;
-  /** The phone that recorded the drive (`DetectorContext.platform`): on iPhone a call row is no phone time. */
+  /** The phone that recorded the drive (`DetectorContext.platform`). A call row is no phone time on either. */
   platform: 'ios' | 'android';
   /**
    * The scored limit for the row (`limitMphFor(row, limit)`, whole mph), or null: picks the row's

@@ -333,13 +333,14 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
     noEvents: true,
   }),
 
-  /** Android: the same call never hides phone motion: one pickup of 10 s. */
+  /** Android: the same call reads the same (both phones score a drive alike): nothing. */
   'phone-call-android': () => ({
     name: 'phone-call-android',
     platform: 'android',
     rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? HANDLED : {}) })),
     limits: [posted(35)],
-    expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'moderate', durationMin: 10, durationMax: 10 }],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
   }),
 
   /**

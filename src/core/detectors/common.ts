@@ -52,11 +52,11 @@ export function atDrivingSpeed(row: FeatureRow): boolean {
 
 /**
  * A second a phone pickup could have been seen in (phone plan P1, P2): the motion sensors reported
- * (not `imuAbsent`), and on iPhone no call was on (iOS cannot tell hands-free from handheld, so a
- * call row is never phone use). Android motion is never suppressed by a call.
+ * (not `imuAbsent`), and no call was on. iOS cannot tell hands-free from handheld, so a call row is
+ * never phone use, and Android reads a call row the same way so both phones score a drive alike.
  */
-export function phoneWatchable(row: FeatureRow, platform: 'ios' | 'android'): boolean {
-  return !imuAbsent(row) && !(platform === 'ios' && row.call !== undefined);
+export function phoneWatchable(row: FeatureRow): boolean {
+  return !imuAbsent(row) && row.call === undefined;
 }
 
 /** The IMU-absent encoding (drive-sense README §4): all nine IMU fields 0. Evidence of nothing. */

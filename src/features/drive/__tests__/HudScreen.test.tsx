@@ -76,6 +76,14 @@ jest.mock('expo-location', () => ({
   getLastKnownPositionAsync: jest.fn(async () => null),
   watchHeadingAsync: jest.fn((cb: (h: unknown) => void, onError?: (reason: string) => void) => mockWatchHeading(cb, onError)),
 }));
+/** Android's native heading (`PhoneHeading`): whether the phone has it; its readings land in the same subscriptions. */
+let mockPhoneHeading = false;
+jest.mock('@drive-sense/heading', () => ({
+  PhoneHeading: {
+    available: () => mockPhoneHeading,
+    watch: jest.fn((cb: (h: unknown) => void) => mockWatchHeading(cb)),
+  },
+}));
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(async () => {}),
   notificationAsync: jest.fn(async () => {}),
@@ -262,6 +270,7 @@ beforeEach(() => {
   mockBearing = { deg: null, source: null };
   mockFocused = true;
   mockHeadingSubs.length = 0;
+  mockPhoneHeading = false;
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked module
   (require('expo-location') as { watchHeadingAsync: jest.Mock }).watchHeadingAsync.mockImplementation(mockWatchHeading);
   resetDriveScreenPresence();
@@ -737,7 +746,36 @@ describe('the compass (round 8 decision 7)', () => {
     expect(heading()).toBeNull();
   });
 
-  test('Android keeps the dimmed north-up card until a track bearing (its compass is never asked)', async () => {
+  test("Android follows the phone's native heading (PhoneHeading, never expo-location's) before the first track bearing, then lets it go", async () => {
+    const os = jest.replaceProperty(Platform, 'OS', 'android');
+    mockPhoneHeading = true;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocked modules
+      const native = require('@drive-sense/heading') as { PhoneHeading: { watch: jest.Mock } };
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- ditto
+      const Location = require('expo-location') as { watchHeadingAsync: jest.Mock };
+      Location.watchHeadingAsync.mockClear();
+      native.PhoneHeading.watch.mockClear();
+      const h = await renderHud({ rowTs: T });
+      await settle();
+      expect(native.PhoneHeading.watch).toHaveBeenCalledTimes(1);
+      expect(Location.watchHeadingAsync).not.toHaveBeenCalled();
+      await phone(75);
+      expect(heading()).toBe(75);
+      // an unusable reading (rated unreliable: accuracy 0) is ignored
+      await act(async () => open().at(-1)!.emit({ trueHeading: 200, magHeading: 200, accuracy: 0 }));
+      await act(() => jest.advanceTimersByTime(1000));
+      expect(heading()).toBe(75);
+      mockBearing = track(10);
+      await h.update({ rowTs: T + 1000 });
+      expect(heading()).toBe(10);
+      expect(open()).toHaveLength(0);
+    } finally {
+      os.restore();
+    }
+  });
+
+  test('an Android phone without the rotation-vector sensor keeps the dimmed north-up card until a track bearing (nothing is asked)', async () => {
     const os = jest.replaceProperty(Platform, 'OS', 'android');
     const h = await renderHud({ rowTs: T });
     expect(subs()).toHaveLength(0);

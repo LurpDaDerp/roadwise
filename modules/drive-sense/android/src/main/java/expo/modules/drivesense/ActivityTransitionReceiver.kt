@@ -29,8 +29,11 @@ import com.google.android.gms.location.DetectedActivity
  * A transition that arrives when neither wants the feed is a leftover registration and is removed.
  *
  * Capture mapping (README §3): ENTER IN_VEHICLE → `{ automotive, high }`, ENTER WALKING →
- * `{ walking, high }`, ENTER RUNNING → `{ running, high }`; EXIT WALKING / EXIT RUNNING → the same
- * type with `exit: true`; EXIT IN_VEHICLE → nothing to JS.
+ * `{ walking, high }`, ENTER RUNNING → `{ running, high }`, ENTER STILL → `{ stationary, high }`,
+ * ENTER ON_BICYCLE → `{ cycling, high }`; EXIT WALKING / EXIT RUNNING → the same type with
+ * `exit: true`; EXIT IN_VEHICLE → nothing to JS. STILL and ON_BICYCLE are asked for with ENTER only:
+ * a still report is the parked car's evidence for the known-parking-spot end, and a cycling report
+ * says the phone is not in the car (as iOS reports both); their EXITs would say nothing more.
  */
 class ActivityTransitionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
@@ -62,11 +65,13 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
           DetectedActivity.IN_VEHICLE -> "automotive"
           DetectedActivity.WALKING -> "walking"
           DetectedActivity.RUNNING -> "running"
+          DetectedActivity.STILL -> "stationary"
+          DetectedActivity.ON_BICYCLE -> "cycling"
           else -> null
         } ?: continue
         if (enter) {
           EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts))
-        } else if (type != "automotive") {
+        } else if (type == "walking" || type == "running") {
           EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
         }
       }
@@ -136,6 +141,9 @@ object ActivityTransitions {
    */
   private val CAPTURE_TYPES = listOf(DetectedActivity.IN_VEHICLE, DetectedActivity.WALKING, DetectedActivity.RUNNING)
 
+  /** The capture's activities asked for with ENTER only: the stop (the parking-spot end's evidence) and a bicycle. */
+  private val CAPTURE_ENTERS = listOf(DetectedActivity.STILL, DetectedActivity.ON_BICYCLE)
+
   /**
    * What each tier asks for, as (activity, transition). The reminder's idle set wakes the app only
    * when the phone gets into a vehicle; its session set adds the stop (STILL ENTER), the car leaving
@@ -144,7 +152,8 @@ object ActivityTransitions {
    */
   fun transitions(tier: TripReminderPolicy.Tier): List<Pair<Int, Int>> = when (tier) {
     TripReminderPolicy.Tier.NONE -> emptyList()
-    TripReminderPolicy.Tier.CAPTURE -> CAPTURE_TYPES.flatMap { type -> listOf(type to ENTER, type to EXIT) }
+    TripReminderPolicy.Tier.CAPTURE ->
+      CAPTURE_TYPES.flatMap { type -> listOf(type to ENTER, type to EXIT) } + CAPTURE_ENTERS.map { type -> type to ENTER }
     TripReminderPolicy.Tier.IDLE -> listOf(DetectedActivity.IN_VEHICLE to ENTER)
     TripReminderPolicy.Tier.SESSION -> listOf(
       DetectedActivity.IN_VEHICLE to ENTER,
