@@ -152,6 +152,8 @@ export interface PermissionsAdapter {
   requestLocationServices(): Promise<void>;
   /** Android: the phone's Location page; the app's own page where that is unavailable, and on iOS. */
   openLocationServicesSettings(): Promise<void>;
+  /** Android: the phone's Battery Saver page; the app's own page where that is unavailable, and on iOS. */
+  openBatterySaverSettings(): Promise<void>;
   /** Android: one notification channel's page for RoadWise; the app's own page where that fails, and on iOS. */
   openNotificationChannelSettings(channelId: string): Promise<void>;
   /** The camera permission, read only: never a prompt. */
@@ -184,6 +186,7 @@ export interface PermissionsAdapter {
 export const IGNORE_BATTERY_OPTIMIZATION_SETTINGS =
   'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS';
 export const LOCATION_SOURCE_SETTINGS = 'android.settings.LOCATION_SOURCE_SETTINGS';
+export const BATTERY_SAVER_SETTINGS = 'android.settings.BATTERY_SAVER_SETTINGS';
 export const CHANNEL_NOTIFICATION_SETTINGS = 'android.settings.CHANNEL_NOTIFICATION_SETTINGS';
 export const EXTRA_APP_PACKAGE = 'android.provider.extra.APP_PACKAGE';
 export const EXTRA_CHANNEL_ID = 'android.provider.extra.CHANNEL_ID';
@@ -491,6 +494,18 @@ export function createPermissionsAdapter(
       if (deps.platform === 'android') {
         try {
           await deps.linking.sendIntent(LOCATION_SOURCE_SETTINGS);
+          return;
+        } catch {
+          // No such screen on this build: the app's own page.
+        }
+      }
+      await deps.linking.openSettings();
+    },
+
+    async openBatterySaverSettings() {
+      if (deps.platform === 'android') {
+        try {
+          await deps.linking.sendIntent(BATTERY_SAVER_SETTINGS);
           return;
         } catch {
           // No such screen on this build: the app's own page.

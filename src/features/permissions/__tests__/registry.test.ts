@@ -5,7 +5,7 @@
 import type { PermissionSnapshot } from '@/core/permissions';
 
 import { snap } from '../__fixtures__/harness';
-import { PERMISSIONS, permissionDef, signature, type PermissionBoardRead, type PermissionId, type PermState } from '../registry';
+import { disclosesBackground, PERMISSIONS, permissionDef, signature, type MissingState, type PermissionBoardRead, type PermissionId, type PermState } from '../registry';
 
 function board(over: Partial<PermissionSnapshot> = {}, rest: Partial<Omit<PermissionBoardRead, 'snapshot'>> = {}): PermissionBoardRead {
   const snapshot = snap(over);
@@ -65,9 +65,27 @@ describe("automatic drives' rows on Android", () => {
     expect(state('locationAlways', board({ platform: 'android', location: 'foreground', canAskAlways: false }))).toEqual(missing('denied', true));
   });
 
-  it('battery: only Restricted is missing (Settings only)', () => {
+  it('battery: Restricted is missing (the app page), and so is Battery Saver limiting location (its own page); Settings only', () => {
     expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'available', canAskAlways: false }))).toEqual({ kind: 'granted' });
     expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'denied', canAskAlways: false }))).toEqual(missing('denied', false));
+    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'restricted', canAskAlways: false }))).toEqual(missing('denied', false, 'batterySaver'));
+    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: null, canAskAlways: false }))).toEqual({ kind: 'unknown' });
+  });
+
+  it('the background-location disclosure: every Location Always fix; the location fix only on Android 9 and lower with the detector', () => {
+    const always = missing('notYet', true) as MissingState;
+    const loc = missing('notYet', true) as MissingState;
+    const services = missing('servicesOff', true, 'locationServices') as MissingState;
+    const old = (over: Partial<PermissionSnapshot> = {}) => board({ platform: 'android', location: 'undetermined', canAskAlways: false, ...over }, { androidApi: 28 });
+    expect(disclosesBackground('locationAlways', always, board({ platform: 'android', canAskAlways: true }))).toBe(true);
+    expect(disclosesBackground('location', loc, old())).toBe(true);
+    expect(disclosesBackground('location', services, old())).toBe(false);
+    expect(disclosesBackground('location', loc, old({ canAskAlways: null }))).toBe(false);
+    expect(disclosesBackground('location', loc, board({ platform: 'android', location: 'undetermined', canAskAlways: false }, { androidApi: 29 }))).toBe(false);
+    expect(disclosesBackground('motion', loc, old())).toBe(false);
+    for (const id of ['location', 'locationAlways'] as const) {
+      expect(disclosesBackground(id, loc, board({ platform: 'ios', location: 'undetermined', canAskAlways: true }))).toBe(false);
+    }
   });
 
   it('Pause app activity if unused: off is granted, on is missing (Settings only), unread is unknown', () => {

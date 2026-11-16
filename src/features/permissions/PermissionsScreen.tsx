@@ -8,7 +8,7 @@ import { Banner, Card, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { useBackgroundDisclosure } from './BackgroundDisclosure';
 import { fixFor, overall, settingsRows } from './board';
-import { permissionsCopy as copy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from './copy';
+import { permissionsCopy as copy, requestLabel, rowDetail, rowStatus, rowTitle, type CopyCtx } from './copy';
 import { HealthRow } from './HealthRow';
 import type { PermissionId } from './registry';
 import { usePermissionBoard, type PermissionBoardDeps } from './usePermissionBoard';
@@ -83,12 +83,14 @@ export function PermissionsScreen({ deps = {} }: { deps?: PermissionBoardDeps })
           {rows.map((r) => {
             const fix = fixFor(r.id, r.state, board.prefs);
             const label = fix === null || r.state.kind !== 'missing' ? null : fix === 'request' ? requestLabel(r.id, r.state, ctx) : copy.openSettings;
+            const status = r.autoOff ? null : rowStatus(r.id, r.state);
             return (
               <HealthRow
                 key={r.id}
                 testID={`permission-${r.id}`}
                 title={rowTitle(r.id, ctx)}
-                word={r.autoOff ? 'idle' : statusWord(r.state)}
+                word={status?.word ?? 'idle'}
+                label={status?.label}
                 required={r.def.need === 'required'}
                 detail={r.autoOff ? copy.autoOff : rowDetail(r.id, r.state, ctx)}
                 fixLabel={label}

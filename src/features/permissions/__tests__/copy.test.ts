@@ -1,5 +1,18 @@
 /** The permission words: exact lines, and the length limits (Home ≤ 60, Settings details ≤ 100). */
-import { backgroundDisclosureCopy, DETAIL_MAX, HOME_LINE_MAX, homeLine, permissionName, permissionsCopy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from '../copy';
+import {
+  backgroundDisclosureCopy,
+  DETAIL_MAX,
+  HOME_LINE_MAX,
+  homeLine,
+  permissionName,
+  permissionsCopy,
+  requestLabel,
+  rowDetail,
+  rowStatus,
+  rowTitle,
+  statusWord,
+  type CopyCtx,
+} from '../copy';
 import { PERMISSION_IDS, type MissingReason, type MissingState, type PermState, type SettingsTarget } from '../registry';
 
 const IOS: CopyCtx = { platform: 'ios', androidApi: null };
@@ -10,7 +23,15 @@ const IOS_BOTH: CopyCtx = { platform: 'ios', androidApi: null, car: true, dashpa
 const CTXS = [IOS, ANDROID, ANDROID_11, IOS_CAR, IOS_BOTH];
 
 const m = (reason: MissingReason, canAsk = false, target: SettingsTarget = 'app'): MissingState => ({ kind: 'missing', reason, canAsk, target });
-const ALL_STATES: PermState[] = [{ kind: 'granted' }, { kind: 'idle' }, { kind: 'unknown' }, m('notYet', true), m('denied'), m('servicesOff', true, 'locationServices')];
+const ALL_STATES: PermState[] = [
+  { kind: 'granted' },
+  { kind: 'idle' },
+  { kind: 'unknown' },
+  m('notYet', true),
+  m('denied'),
+  m('servicesOff', true, 'locationServices'),
+  m('denied', false, 'batterySaver'),
+];
 
 test('every Home line fits in 60 characters, every Settings detail in 100, on every platform', () => {
   for (const c of CTXS) {
@@ -97,7 +118,7 @@ test("Google Play's background-location disclosure names the data, the backgroun
     'RoadWise collects location data to detect and record your drives automatically, even when the app is closed or not in use.'
   );
   expect(backgroundDisclosureCopy.title).toBe('Allow location in the background');
-  expect(backgroundDisclosureCopy.next).toBe('Next, choose "Allow all the time".');
+  expect(backgroundDisclosureCopy.next).toEqual({ allTheTime: 'Next, choose "Allow all the time".', allow: 'Next, choose "Allow".' });
   expect(backgroundDisclosureCopy.continue).toBe('Continue');
   expect(backgroundDisclosureCopy.notNow).toBe('Not now');
 });
@@ -162,4 +183,22 @@ test('status words', () => {
   expect(statusWord({ kind: 'idle' })).toBe('idle');
   expect(statusWord({ kind: 'unknown' })).toBe('unknown');
   expect(permissionsCopy.status).toEqual({ on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" });
+});
+
+test("Pause app activity if unused prints Android's own switch: Off when RoadWise is kept (fine), On when Android may pause it (needs a look)", () => {
+  expect(rowStatus('unusedApps', { kind: 'granted' })).toEqual({ word: 'on', label: 'Off' });
+  expect(rowStatus('unusedApps', m('denied'))).toEqual({ word: 'notYet', label: 'On' });
+  expect(rowStatus('unusedApps', { kind: 'unknown' })).toEqual({ word: 'unknown', label: "Can't check" });
+  // Every other row prints its own word.
+  expect(rowStatus('backgroundRefresh', m('denied'))).toEqual({ word: 'off', label: 'Off' });
+  expect(rowStatus('locationAlways', { kind: 'granted' })).toEqual({ word: 'on', label: 'On' });
+  expect(rowDetail('unusedApps', m('denied'), ANDROID_11)).toBe("If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.");
+});
+
+test('Android Battery Saver limiting location: needs a look, in its own words', () => {
+  const saver = m('denied', false, 'batterySaver');
+  expect(rowStatus('backgroundRefresh', saver)).toEqual({ word: 'notYet', label: 'Needs a look' });
+  expect(homeLine('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location. Drives may be missed.');
+  expect(rowDetail('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location, so drives may be missed or cut short.');
+  expect(requestLabel('backgroundRefresh', saver, ANDROID)).toBe('Open Settings');
 });

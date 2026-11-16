@@ -66,6 +66,22 @@ export const permissionsCopy = {
 
 export type StatusWord = keyof typeof permissionsCopy.status;
 
+/**
+ * A Settings row's status: `word` picks the glyph and colour (fine, needs a look, off...), `label` is
+ * the word printed beside the title. They agree except where the title names a switch of the phone's
+ * own: "Pause app activity if unused" reads that switch, Off (RoadWise is kept: fine) or On (Android
+ * may pause it: needs a look). Battery Saver limiting location needs a look, not Off.
+ */
+export function rowStatus(id: PermissionId, state: PermState): { word: StatusWord; label: string } {
+  if (id === 'unusedApps' && state.kind === 'granted') return { word: 'on', label: permissionsCopy.status.off };
+  if (id === 'unusedApps' && state.kind === 'missing') return { word: 'notYet', label: permissionsCopy.status.on };
+  if (id === 'backgroundRefresh' && state.kind === 'missing' && state.target === 'batterySaver') {
+    return { word: 'notYet', label: permissionsCopy.status.notYet };
+  }
+  const word = statusWord(state);
+  return { word, label: permissionsCopy.status[word] };
+}
+
 /** The status word of a Settings row (glyph and word, never colour alone). */
 export function statusWord(state: PermState): StatusWord {
   switch (state.kind) {
@@ -136,7 +152,8 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
     case 'motion':
       return state.reason === 'notYet' ? `Allow ${motionName(c)} so RoadWise can spot drives.` : `${motionName(c)} is off. Drives won't start on their own.`;
     case 'backgroundRefresh':
-      return ios ? 'Turn on Background App Refresh to catch every drive.' : 'Battery use is set to Restricted. Drives may be missed.';
+      if (ios) return 'Turn on Background App Refresh to catch every drive.';
+      return state.target === 'batterySaver' ? 'Battery Saver is limiting location. Drives may be missed.' : 'Battery use is set to Restricted. Drives may be missed.';
     case 'unusedApps':
       return 'Turn off Pause app activity so drives keep starting.';
     case 'notifications':
@@ -175,9 +192,15 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
     }
     case 'backgroundRefresh':
       if (ios) return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
-      return on ? 'Android can wake RoadWise when a drive starts.' : "Battery use is set to Restricted, so drives won't start on their own.";
+      if (on) return 'Android can wake RoadWise when a drive starts.';
+      if (state.kind === 'missing' && state.target === 'batterySaver') return 'Battery Saver is limiting location, so drives may be missed or cut short.';
+      return "Battery use is set to Restricted, so drives won't start on their own.";
     case 'unusedApps':
-      return on ? "RoadWise keeps working even if you don't open it for months." : "If RoadWise goes unopened for a few months, Android may pause it and drives won't start.";
+      if (on) return "RoadWise keeps working even if you don't open it for months.";
+      // Android 11 takes the permissions back; 12 and later also pause the app.
+      return (c.androidApi ?? ANDROID_PAUSE_API) >= ANDROID_PAUSE_API
+        ? "If RoadWise goes unopened for a few months, Android may pause it and drives won't start."
+        : "If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.";
     case 'notifications':
       return on ? 'Drive recaps, your weekly and monthly recaps and friend requests can reach you.' : "You won't get drive recaps, your weekly and monthly recaps or friend requests.";
     case 'bluetooth':
@@ -214,9 +237,16 @@ export function requestLabel(id: PermissionId, state: MissingState, c?: CopyCtx)
 }
 
 /**
+ * The choice the phone offers after the disclosure: "Allow all the time", or on Android 9 and lower
+ * (where allowing location allows it in the background too) the location dialog's "Allow".
+ */
+export type DisclosureNext = 'allTheTime' | 'allow';
+
+/**
  * Google Play's prominent disclosure for background location (Android), shown right before every
  * "Allow all the time" request: onboarding's Location step, Home's row and Settings › Permissions
- * (which Settings › Driving's "Fix it in Permissions" opens). It names the data (location), that it
+ * (which Settings › Driving's "Fix it in Permissions" opens); on Android 9 and lower with the drive
+ * detector, before the location request itself. It names the data (location), that it
  * is collected when the app is closed or not in use, and what for. Play reviews these words: change
  * them only with the owner's approval.
  */
@@ -224,7 +254,7 @@ export const backgroundDisclosureCopy = {
   title: 'Allow location in the background',
   body: 'RoadWise collects location data to detect and record your drives automatically, even when the app is closed or not in use.',
   uses: 'During a drive, your location measures your speed and distance, finds the speed limits and checks the local weather. Your drives stay in your RoadWise account, and your location is never sold.',
-  next: 'Next, choose "Allow all the time".',
+  next: { allTheTime: 'Next, choose "Allow all the time".', allow: 'Next, choose "Allow".' },
   continue: 'Continue',
   notNow: 'Not now',
 } as const;

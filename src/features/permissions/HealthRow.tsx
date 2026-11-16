@@ -21,6 +21,7 @@ const GLYPH: Record<StatusWord, keyof typeof Ionicons.glyphMap> = {
 export function HealthRow({
   title,
   word,
+  label,
   required,
   detail,
   fixLabel,
@@ -32,6 +33,8 @@ export function HealthRow({
 }: {
   title: string;
   word: StatusWord;
+  /** The printed status, where it differs from the word's own (`rowStatus`). */
+  label?: string;
   /** Off is shown in the danger colour (a drive cannot record), not the warning one. */
   required: boolean;
   detail: string;
@@ -50,7 +53,7 @@ export function HealthRow({
     idle: th.colors.textMuted,
     unknown: th.colors.textMuted,
   }[word];
-  const status = copy.status[word];
+  const status = label ?? copy.status[word];
   return (
     <View testID={testID} style={{ gap: th.space.sm, paddingVertical: th.space.md, paddingHorizontal: th.space.lg }}>
       <View

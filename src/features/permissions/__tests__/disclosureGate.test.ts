@@ -39,19 +39,30 @@ test('only the adapter, the fix and the Location step ask for Always', () => {
 
 test('the fix passes disclosed only after the disclosure said Continue', () => {
   const src = text('features/permissions/actions.ts');
-  const gate = src.indexOf("if (!(await deps.discloseBackground())) return { kind: 'declined' };");
+  const gate = src.indexOf("if (!(await deps.discloseBackground(id === 'locationAlways' ? 'allTheTime' : 'allow'))) return { kind: 'declined' };");
   const ask = src.indexOf('await adapter.requestLocationAlways({ disclosed });');
   expect(gate).toBeGreaterThan(-1);
   expect(ask).toBeGreaterThan(-1);
   expect(src).toMatch(/disclosed = true;/);
-  // The board hands the disclosure to every Android Location Always fix and refuses one without it.
-  expect(text('features/permissions/usePermissionBoard.ts')).toMatch(/android && id === 'locationAlways' && !opts[.]disclose[)] throw/);
+  // The board hands the disclosure to every fix that needs it (`disclosesBackground`) and refuses one without it.
+  const board = text('features/permissions/usePermissionBoard.ts');
+  expect(board).toMatch(/const discloses = disclosesBackground[(]id, state, r[)];/);
+  expect(board).toMatch(/if [(]discloses && !opts[.]disclose[)] throw/);
+  expect(board).toMatch(/discloseBackground: discloses [?] opts[.]disclose : undefined/);
 });
 
 test("the Location step's Android request follows the disclosure", () => {
   const src = text('features/onboarding/steps/LocationStep.tsx');
   const ask = src.indexOf('if (!(await disclosure.ask())) return null;');
   const request = src.indexOf('await adapter.requestLocationAlways({ disclosed: true });');
+  expect(ask).toBeGreaterThan(-1);
+  expect(request).toBeGreaterThan(ask);
+});
+
+test("the Location step's Android 9-and-lower request follows the disclosure", () => {
+  const src = text('features/onboarding/steps/LocationStep.tsx');
+  const ask = src.indexOf("if (oneAsk(snapshot) && !(await disclosure.ask('allow'))) return;");
+  const request = src.indexOf('await adapter.requestLocationForeground();');
   expect(ask).toBeGreaterThan(-1);
   expect(request).toBeGreaterThan(ask);
 });

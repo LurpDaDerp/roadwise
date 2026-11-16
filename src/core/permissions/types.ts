@@ -44,8 +44,10 @@ export interface PermissionSnapshot {
   /**
    * What lets the phone wake RoadWise when a drive starts (automatic drives want it), from the drive
    * detector: iOS Background App Refresh; Android's battery usage for RoadWise, `denied` only while
-   * it is set to Restricted (Optimized, the default, and Unrestricted are both `available`). null
-   * where the phone has no drive detector or it could not be read.
+   * it is set to Restricted (Optimized, the default, and Unrestricted are both `available`), and
+   * `restricted` while Battery Saver is on with a location mode that limits background location
+   * (iOS `restricted`: the phone's management turned it off). null where the phone has no drive
+   * detector or it could not be read.
    */
   backgroundRefresh: 'available' | 'denied' | 'restricted' | null;
   /**

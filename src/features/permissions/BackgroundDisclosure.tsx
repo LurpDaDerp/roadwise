@@ -14,9 +14,19 @@ import { View } from 'react-native';
 
 import { Button, Sheet, Text, useTheme } from '@/ui';
 
-import { backgroundDisclosureCopy as copy } from './copy';
+import { backgroundDisclosureCopy as copy, type DisclosureNext } from './copy';
 
-export function BackgroundDisclosureSheet({ visible, onContinue, onNotNow }: { visible: boolean; onContinue: () => void; onNotNow: () => void }) {
+export function BackgroundDisclosureSheet({
+  visible,
+  next = 'allTheTime',
+  onContinue,
+  onNotNow,
+}: {
+  visible: boolean;
+  next?: DisclosureNext;
+  onContinue: () => void;
+  onNotNow: () => void;
+}) {
   const th = useTheme();
   return (
     <Sheet
@@ -37,22 +47,26 @@ export function BackgroundDisclosureSheet({ visible, onContinue, onNotNow }: { v
         {copy.body}
       </Text>
       <Text variant="body">{copy.uses}</Text>
-      <Text variant="callout" tone="muted">
-        {copy.next}
+      <Text variant="callout" tone="muted" testID="background-disclosure-next">
+        {copy.next[next]}
       </Text>
     </Sheet>
   );
 }
 
 export interface BackgroundDisclosure {
-  /** Shows the disclosure; true once the driver chose Continue, false for Not now (or the screen going away). */
-  ask(): Promise<boolean>;
+  /**
+   * Shows the disclosure; true once the driver chose Continue, false for Not now (or the screen going
+   * away). `next`: the choice the phone offers after it (default "Allow all the time").
+   */
+  ask(next?: DisclosureNext): Promise<boolean>;
   /** Render it once in the screen that asks. */
   sheet: ReactElement;
 }
 
 export function useBackgroundDisclosure(): BackgroundDisclosure {
   const [visible, setVisible] = useState(false);
+  const [next, setNext] = useState<DisclosureNext>('allTheTime');
   const pending = useRef<((choice: boolean) => void) | null>(null);
 
   const settle = useCallback((choice: boolean) => {
@@ -63,11 +77,12 @@ export function useBackgroundDisclosure(): BackgroundDisclosure {
   }, []);
 
   const ask = useCallback(
-    () =>
+    (choice: DisclosureNext = 'allTheTime') =>
       new Promise<boolean>((resolve) => {
         // A second ask while one shows answers the first as Not now: one sheet, one choice.
         pending.current?.(false);
         pending.current = resolve;
+        setNext(choice);
         setVisible(true);
       }),
     []
@@ -82,6 +97,6 @@ export function useBackgroundDisclosure(): BackgroundDisclosure {
     []
   );
 
-  const sheet = <BackgroundDisclosureSheet visible={visible} onContinue={() => settle(true)} onNotNow={() => settle(false)} />;
+  const sheet = <BackgroundDisclosureSheet visible={visible} next={next} onContinue={() => settle(true)} onNotNow={() => settle(false)} />;
   return { ask, sheet };
 }

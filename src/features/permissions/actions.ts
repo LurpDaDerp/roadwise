@@ -5,7 +5,9 @@
  * Refresh never request: they only open the phone's settings. Location Always asks once (iOS shows
  * that prompt once), then opens Settings. On Android every Location Always tap, a request or
  * Settings alike, first shows Google Play's prominent disclosure (`discloseBackground`): Not now
- * asks nothing and opens nothing.
+ * asks nothing and opens nothing. So does the location tap on Android 9 and lower with the drive
+ * detector, where allowing location allows it in the background too (the caller passes the
+ * disclosure only then: `disclosesBackground`).
  *
  * The no-effect rule: after a request the board is read again; if the permission is still missing
  * in the same state (a dialog the phone did not show, one dismissed, Android notifications switched
@@ -15,6 +17,7 @@
 import { recordPrompt, type NotificationAccess, type PermissionsAdapter, type SettingsStore } from '@/core/permissions';
 
 import type { Fix } from './board';
+import type { DisclosureNext } from './copy';
 import { markToSettings } from './homePrefs';
 import { permissionDef, signature, type MissingState, type PermissionBoardRead, type PermissionId } from './registry';
 import { markSettingsReturn } from './usePermissionHealth';
@@ -32,10 +35,12 @@ export interface FixDeps {
   /** Stamp the "back from Settings" acknowledgement before opening Settings (Settings › Permissions). */
   markReturn?: boolean;
   /**
-   * Android: Google Play's prominent disclosure, shown before any Location Always fix; resolves true
-   * on Continue. Only with it does the adapter ask for "Allow all the time".
+   * Android: Google Play's prominent disclosure, shown before any Location Always fix (and the
+   * location fix where that is a background request too); resolves true on Continue. Only with it
+   * does the adapter ask for "Allow all the time". Its argument names the choice the phone offers
+   * next.
    */
-  discloseBackground?: () => Promise<boolean>;
+  discloseBackground?: (next: DisclosureNext) => Promise<boolean>;
 }
 
 export type FixOutcome =
@@ -96,6 +101,8 @@ async function openTarget(state: MissingState, deps: FixDeps): Promise<void> {
   switch (state.target) {
     case 'locationServices':
       return deps.adapter.openLocationServicesSettings();
+    case 'batterySaver':
+      return deps.adapter.openBatterySaverSettings();
     case 'app':
       return deps.adapter.openAppSettings();
   }
@@ -107,8 +114,9 @@ async function openTarget(state: MissingState, deps: FixDeps): Promise<void> {
  */
 export async function runFix(id: PermissionId, state: MissingState, fix: Fix, deps: FixDeps): Promise<FixOutcome> {
   let disclosed = false;
-  if (id === 'locationAlways' && deps.discloseBackground) {
-    if (!(await deps.discloseBackground())) return { kind: 'declined' };
+  const background = id === 'locationAlways' || (id === 'location' && state.reason !== 'servicesOff');
+  if (background && deps.discloseBackground) {
+    if (!(await deps.discloseBackground(id === 'locationAlways' ? 'allTheTime' : 'allow'))) return { kind: 'declined' };
     disclosed = true;
   }
   if (fix === 'settings' || !requestable(id, state)) {

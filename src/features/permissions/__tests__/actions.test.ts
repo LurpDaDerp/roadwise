@@ -267,6 +267,18 @@ describe("Android Location Always: Google Play's disclosure first", () => {
     expect(w.calls()).toEqual(['requestLocationAlways:disclosed', 'openAppSettings']);
   });
 
+  it("the location fix shows it when the caller hands it over (Android 9 and lower), naming the dialog's Allow", async () => {
+    const w = world(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), {}, { foreground: 'always' });
+    const disclose = jest.fn(async () => false);
+    w.deps.discloseBackground = disclose;
+    expect(await w.run('location')).toEqual({ kind: 'declined' });
+    expect(disclose).toHaveBeenCalledWith('allow');
+    expect(w.calls()).toEqual([]);
+    w.deps.discloseBackground = async () => true;
+    expect(await w.run('location')).toMatchObject({ kind: 'requested' });
+    expect(w.calls()).toEqual(['requestLocationForeground']);
+  });
+
   it('other rows never show it', async () => {
     const w = world(snap({ platform: 'android', motion: 'undetermined' }));
     const disclose = jest.fn(async () => true);
@@ -274,4 +286,10 @@ describe("Android Location Always: Google Play's disclosure first", () => {
     await w.run('motion');
     expect(disclose).not.toHaveBeenCalled();
   });
+});
+
+test("Battery Saver limiting location: the fix opens Battery Saver's page", async () => {
+  const w = world(snap({ platform: 'android', canAskAlways: false, backgroundRefresh: 'restricted' }));
+  expect(await w.run('backgroundRefresh')).toEqual({ kind: 'opened' });
+  expect(w.calls()).toEqual(['openBatterySaverSettings']);
 });

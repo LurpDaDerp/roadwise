@@ -25,20 +25,20 @@ afterEach(() => {
 });
 
 const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
-function deps(adapter: FakeAdapter): PermissionBoardDeps {
+function deps(adapter: FakeAdapter, androidApi = 34): PermissionBoardDeps {
   return {
     adapter,
     appState: fakeAppState(),
-    androidApi: adapter.current.platform === 'android' ? 34 : null,
+    androidApi: adapter.current.platform === 'android' ? androidApi : null,
     watchDashcam: () => () => {},
     ensureChannels: async () => {},
     requestDeviceSync: () => {},
   };
 }
 
-async function open(adapter: FakeAdapter, opts: { settings?: Record<string, unknown> } = {}) {
+async function open(adapter: FakeAdapter, opts: { settings?: Record<string, unknown>; androidApi?: number } = {}) {
   const w = await appWorld({ settings: opts.settings });
-  await w.render(<PermissionsScreen deps={deps(adapter)} />);
+  await w.render(<PermissionsScreen deps={deps(adapter, opts.androidApi)} />);
   await screen.findByTestId('permissions-summary');
   return w;
 }
@@ -227,6 +227,54 @@ describe('Android with the drive detector', () => {
     expect(adapter.log).not.toContain('openAppSettings');
     await tap('background-disclosure-continue');
     await waitFor(() => expect(adapter.log).toContain('openAppSettings'));
+  });
+
+  it("Pause app activity if unused reads Android's own switch: On while Android may pause RoadWise, Off once it is turned off", async () => {
+    await open(android({ unusedAppPause: 'on' }));
+    expect(screen.getByTestId('permission-unusedApps-status')).toHaveTextContent('On');
+    expect(screen.getByTestId('permission-unusedApps-detail')).toHaveTextContent("If RoadWise goes unopened for a few months, Android may pause it and drives won't start.");
+    expect(screen.getByLabelText(/^Pause app activity if unused: on\./)).toBeOnTheScreen();
+    clearQueryClients();
+    await open(android({ unusedAppPause: 'off', backgroundRefresh: 'available' }));
+    expect(screen.getByTestId('permission-unusedApps-status')).toHaveTextContent('Off');
+    expect(screen.getByLabelText(/^Pause app activity if unused: off\./)).toBeOnTheScreen();
+    expect(screen.queryByTestId('permission-unusedApps-fix')).toBeNull();
+  });
+
+  it('Android 11 names its own switch and says it takes the permissions back', async () => {
+    await open(android({ unusedAppPause: 'on' }), { androidApi: 30 });
+    expect(within(screen.getByTestId('permission-unusedApps')).getByText("Remove permissions if app isn't used")).toBeOnTheScreen();
+    expect(screen.getByTestId('permission-unusedApps-status')).toHaveTextContent('On');
+    expect(screen.getByTestId('permission-unusedApps-detail')).toHaveTextContent("If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.");
+  });
+
+  it('Battery Saver limiting location needs a look, and its fix opens the Battery Saver page', async () => {
+    const adapter = android({ backgroundRefresh: 'restricted', unusedAppPause: 'off' });
+    await open(adapter);
+    expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('Needs a look');
+    expect(screen.getByTestId('permission-backgroundRefresh-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
+    expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A few things need a look');
+    await tap('permission-backgroundRefresh-fix');
+    await waitFor(() => expect(adapter.log).toContain('openBatterySaverSettings'));
+    expect(adapter.log).not.toContain('openAppSettings');
+  });
+
+  it('Android 9 and lower: the location fix shows the disclosure first (allowing location allows it in the background too)', async () => {
+    const adapter = fakeAdapter(
+      snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false, backgroundRefresh: 'available' }),
+      { foreground: 'always' }
+    );
+    await open(adapter, { androidApi: 28 });
+    await tap('permission-location-fix');
+    expect(await screen.findByTestId('background-disclosure-next')).toHaveTextContent('Next, choose "Allow".');
+    expect(adapter.log.filter((c) => c.startsWith('request'))).toEqual([]);
+    await tap('background-disclosure-not-now');
+    await waitFor(() => expect(screen.queryByTestId('background-disclosure-body')).toBeNull());
+    expect(adapter.log.filter((c) => c.startsWith('request'))).toEqual([]);
+    await tap('permission-location-fix');
+    await tap('background-disclosure-continue');
+    await waitFor(() => expect(screen.getByTestId('permission-location-status')).toHaveTextContent('On'));
+    expect(adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationForeground']);
   });
 
   it('with Automatic drives switched off, its three rows read Not in use', async () => {

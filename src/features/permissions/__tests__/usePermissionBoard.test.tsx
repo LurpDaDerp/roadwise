@@ -193,6 +193,39 @@ test('Android Location Always: a fix without the disclosure rejects and asks not
   expect(s.adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationAlways:disclosed']);
 });
 
+test("Android 9 and lower with the drive detector: the location fix needs the disclosure, naming the dialog's Allow", async () => {
+  const w = await appWorld();
+  const s = setup({ androidApi: 28 }, snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false, backgroundRefresh: 'available' }), { foreground: 'always' });
+  const { result } = await mount(w, s.deps);
+  await waitFor(() => expect(result.current.status).toBe('ready'));
+  await act(async () => {
+    await expect(result.current.fix('location')).rejects.toThrow('disclosure');
+  });
+  expect(s.adapter.log.filter((c) => c.startsWith('request'))).toEqual([]);
+  const disclose = jest.fn(async () => true);
+  await act(async () => {
+    expect(await result.current.fix('location', { disclose })).toMatchObject({ kind: 'requested' });
+  });
+  expect(disclose).toHaveBeenCalledWith('allow');
+  expect(s.adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationForeground']);
+});
+
+test.each([
+  [29, false],
+  [28, null],
+] as const)('Android %i with detector answer %p: the location fix asks with no disclosure', async (api, canAskAlways) => {
+  const w = await appWorld();
+  const s = setup({ androidApi: api }, snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways, backgroundRefresh: 'available' }));
+  const { result } = await mount(w, s.deps);
+  await waitFor(() => expect(result.current.status).toBe('ready'));
+  const disclose = jest.fn(async () => false);
+  await act(async () => {
+    expect(await result.current.fix('location', { disclose })).toMatchObject({ kind: 'requested' });
+  });
+  expect(disclose).not.toHaveBeenCalled();
+  expect(s.adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationForeground']);
+});
+
 test('iPhone Location Always never shows the disclosure (iOS explains Always in its own prompt)', async () => {
   const w = await appWorld();
   const s = setup({ androidApi: null }, snap({ platform: 'ios', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' }));

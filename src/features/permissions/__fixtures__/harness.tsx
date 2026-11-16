@@ -132,6 +132,9 @@ export function fakeAdapter(
     openLocationServicesSettings: jest.fn(async () => {
       a.log.push('openLocationServicesSettings');
     }),
+    openBatterySaverSettings: jest.fn(async () => {
+      a.log.push('openBatterySaverSettings');
+    }),
     openNotificationChannelSettings: jest.fn(async (channelId: string) => {
       a.log.push(`openNotificationChannelSettings:${channelId}`);
     }),

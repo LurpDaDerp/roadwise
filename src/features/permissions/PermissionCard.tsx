@@ -6,7 +6,8 @@
  * until Show on Home in Settings › Permissions, and the next row takes its place. Nothing shows
  * while the board loads, can't be read, or a drive records. With the Automatic drives switch off
  * (`autoDisabled`), it never asks for Location Always or Background App Refresh. On Android the
- * Location Always row first shows Google Play's background-location disclosure.
+ * Location Always row (and the Location row on Android 9 and lower with the drive detector) first
+ * shows Google Play's background-location disclosure.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
@@ -118,8 +119,10 @@ function PermissionRow({ board, read, row, ctx }: { board: PermissionBoard; read
     setBusy(true);
     setFailedOn(null);
     try {
-      // Location Always carries the background-location disclosure (Android shows it first).
-      await (row.id === 'locationAlways' ? board.fix(row.id, { disclose: disclosure.ask }) : board.fix(row.id));
+      // Location Always and location carry the background-location disclosure; the board shows it
+      // where Android needs it (Location Always, and location on Android 9 and lower with the drive
+      // detector, where allowing location allows it in the background too).
+      await (row.id === 'locationAlways' || row.id === 'location' ? board.fix(row.id, { disclose: disclosure.ask }) : board.fix(row.id));
     } catch {
       fail();
     } finally {

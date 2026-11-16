@@ -342,6 +342,20 @@ describe('Location Services', () => {
   });
 });
 
+describe('Battery Saver page', () => {
+  it("Android opens Battery Saver, falling back to the app's page; iOS opens the app's page", async () => {
+    const a = makeDeps('android');
+    await createPermissionsAdapter(a.deps).openBatterySaverSettings();
+    expect(a.calls).toEqual(['linking.sendIntent:android.settings.BATTERY_SAVER_SETTINGS']);
+    const f = makeDeps('android', { sendIntentFails: true });
+    await createPermissionsAdapter(f.deps).openBatterySaverSettings();
+    expect(f.calls).toEqual(['linking.sendIntent:android.settings.BATTERY_SAVER_SETTINGS', 'linking.openSettings']);
+    const i = makeDeps('ios');
+    await createPermissionsAdapter(i.deps).openBatterySaverSettings();
+    expect(i.calls).toEqual(['linking.openSettings']);
+  });
+});
+
 describe('notification channel page', () => {
   const extras = JSON.stringify([
     { key: 'android.provider.extra.APP_PACKAGE', value: 'app.roadwise' },

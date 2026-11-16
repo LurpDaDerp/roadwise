@@ -23,8 +23,8 @@ export type PermissionId =
   | 'camera';
 export type Need = 'required' | 'recommended' | 'optional';
 export type MissingReason = 'notYet' | 'denied' | 'servicesOff';
-/** Where "Open Settings" goes: the app's own page, or Android's Location page. */
-export type SettingsTarget = 'app' | 'locationServices';
+/** Where "Open Settings" goes: the app's own page, Android's Location page or its Battery Saver page. */
+export type SettingsTarget = 'app' | 'locationServices' | 'batterySaver';
 
 /** What one read of the phone says about one permission. */
 export type PermState =
@@ -136,7 +136,9 @@ function locationAlwaysState(read: PermissionBoardRead): PermState {
 
 /**
  * What lets the phone wake RoadWise when a drive starts: iOS Background App Refresh; Android's
- * battery usage for RoadWise, missing only while it is set to Restricted. Only Settings changes it.
+ * battery usage for RoadWise, missing while it is set to Restricted, and while Battery Saver limits
+ * location (its location mode cuts or throttles background fixes: drives can be missed or cut short;
+ * its own Settings page). Only Settings changes it.
  */
 function backgroundRefreshState(read: PermissionBoardRead): PermState {
   switch (read.snapshot.backgroundRefresh) {
@@ -144,8 +146,11 @@ function backgroundRefreshState(read: PermissionBoardRead): PermState {
       return GRANTED;
     case 'denied':
       return missing('denied', false);
+    case 'restricted':
+      // iPhone: restricted by the phone's management, nothing the driver can do.
+      return read.snapshot.platform === 'android' ? missing('denied', false, 'batterySaver') : UNKNOWN;
     default:
-      return UNKNOWN; // restricted (nothing the driver can do), or not read
+      return UNKNOWN; // not read
   }
 }
 
@@ -200,6 +205,30 @@ const ANDROID: readonly PermissionPlatform[] = ['android'];
  * answered (a phone without one, such as one with no Google Play services, has no automatic drives).
  */
 const autoRowsListed = (read: PermissionBoardRead): boolean => read.snapshot.platform === 'ios' || read.snapshot.canAskAlways !== null;
+
+/** Android 10 added background location as a permission of its own. */
+export const ANDROID_BACKGROUND_LOCATION_API = 29;
+
+/**
+ * Android 9 and lower: allowing location allows it in the background too, so on a phone with the
+ * drive detector (which would then use it with the app closed) the location request is itself a
+ * background-location request, and Google Play's disclosure comes before it. A null API reads as
+ * current.
+ */
+export const locationIsBackground = (read: Pick<PermissionBoardRead, 'snapshot' | 'androidApi'>): boolean =>
+  read.snapshot.platform === 'android' &&
+  read.snapshot.canAskAlways !== null &&
+  (read.androidApi ?? ANDROID_BACKGROUND_LOCATION_API) < ANDROID_BACKGROUND_LOCATION_API;
+
+/**
+ * Whether this fix carries Google Play's background-location disclosure first (Android only): every
+ * Location Always fix, and the location request where it allows background location too.
+ */
+export function disclosesBackground(id: PermissionId, state: MissingState, read: PermissionBoardRead): boolean {
+  if (read.snapshot.platform !== 'android') return false;
+  if (id === 'locationAlways') return true;
+  return id === 'location' && state.reason !== 'servicesOff' && locationIsBackground(read);
+}
 
 export const PERMISSIONS: readonly PermissionDef[] = [
   { id: 'location', order: 10, need: 'required', platforms: BOTH, homeRow: true, state: locationState },
