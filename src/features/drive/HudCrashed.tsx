@@ -9,6 +9,7 @@ import { useEmergencyContacts } from '@/features/emergency/useEmergencyContacts'
 import { reportError } from '@/lib/crashReport';
 import { HUD_MIN_TARGET_PT, hudPalette } from '@/ui/drive';
 import { fontFamilies } from '@/ui/fonts';
+import { useNavigationBarInk } from '@/ui/systemBars';
 import { useOptionalTheme } from '@/ui/theme';
 
 import { EmergencyButton } from './EmergencyButton';
@@ -33,8 +34,13 @@ export const HUD_CRASHED_TARGET_W_PT = 240;
  * The emergency button stays too, at the top left, on the plain HUD colours: a tap opens the
  * emergency panel in place of the words ("Call 911", the driver's contacts, Close). The contacts are
  * read in a guard of their own, so a failure there still leaves "Call 911".
+ *
+ * Expo Router draws this in place of the whole `app/drive` layout, so the layout's light status bar
+ * and light Android navigation bar buttons go with it; both are asked for again here, since the
+ * ground is the HUD's true black day and night and the drive is still recording.
  */
 export function HudCrashed({ error, retry }: ErrorBoundaryProps) {
+  useNavigationBarInk('light');
   const night = useOptionalTheme()?.hudNight ?? false;
   const p = hudPalette(night);
   const b = hudButtonColors(null, p, night);

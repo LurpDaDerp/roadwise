@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { HudCrashed } from '@/features/drive/HudCrashed';
+import { useNavigationBarInk } from '@/ui/systemBars';
 
 /**
  * A driving screen that throws while drawing shows "Something went wrong" with one 64 pt Try again,
@@ -12,9 +13,11 @@ export { HudCrashed as ErrorBoundary };
 /**
  * The driving screen. The root stack presents this group as a full-screen modal with no swipe-back:
  * a drive is left only through its own End control. The driving screen is true black whatever
- * the hour, so its status bar is always light, whatever the app's sky says elsewhere.
+ * the hour, so its status bar is always light, whatever the app's sky says elsewhere, and so are
+ * Android's navigation bar buttons.
  */
 export default function DriveLayout() {
+  useNavigationBarInk('light');
   return (
     <>
       <StatusBar style="light" />

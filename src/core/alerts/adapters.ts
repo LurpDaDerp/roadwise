@@ -62,6 +62,15 @@
 // - Each tone player is removed as soon as its tone ends: an Android expo-audio player runs a
 //   status loop every `updateInterval` for as long as it exists, which would be a timer running
 //   while the app is idle with no drive open (design §3.5).
+//
+// Speech on Android: the first `Speech.speak` binds the phone's text-to-speech engine, which takes
+// hundreds of milliseconds or more, so the first spoken alert of a launch would land late. And a
+// phone can have no voice at all (no engine, or one with no voice installed), where a phrase either
+// errors or never reports back and holds the queue (and the ducked music) for the step bound. So
+// the engine is warmed as each drive opens (`warmSpeech`, from `warmSpeechAsDrivesOpen`), which also
+// reads whether it has any voice; with none, the voice port resolves at once and alerts play their
+// tone (and pulse) alone. A warm-up that cannot tell leaves speech as it was. iPhone speech is
+// immediate and always has a voice: nothing here runs there.
 import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
 import { Platform, Vibration } from "react-native";
 
@@ -191,6 +200,77 @@ function toneSource(level: AlertLevel, tone?: AlertTone): number {
     case 3:
       return require("../../../assets/sounds/l3.wav") as number;
   }
+}
+
+/** What the last Android warm-up learned: a voice exists, none does, or not known (speak as usual). */
+type SpeechVoice = "unknown" | "ready" | "none";
+let androidVoice: SpeechVoice = "unknown";
+let warming: Promise<void> | null = null;
+
+/**
+ * Android: binds the text-to-speech engine now and reads whether it has any voice (an empty list
+ * from a failed or voiceless engine counts as none). Safe to call often: one warm-up at a time.
+ * No-op on iPhone.
+ */
+export function warmSpeech(): Promise<void> {
+  if (Platform.OS !== "android") return Promise.resolve();
+  if (warming) return warming;
+  warming = (async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module, as below
+      const Speech = require("expo-speech") as typeof import("expo-speech");
+      const voices = await Speech.getAvailableVoicesAsync();
+      androidVoice = Array.isArray(voices) && voices.length > 0 ? "ready" : "none";
+    } catch {
+      androidVoice = "unknown";
+    } finally {
+      warming = null;
+    }
+  })();
+  return warming;
+}
+
+/** Android: whether the last warm-up found no voice, so phrases are skipped (the tone plays alone). */
+export function speechHasNoVoice(): boolean {
+  return Platform.OS === "android" && androidVoice === "none";
+}
+
+/** Tests only: forget what the warm-up learned. */
+export function resetSpeechWarmForTests(): void {
+  androidVoice = "unknown";
+  warming = null;
+}
+
+/**
+ * Android: warms speech each time a drive opens (from idle to waiting, recording or finalizing; a
+ * diagnostics simulation does not count) while `wanted` says the alert style can speak. Returns
+ * the unsubscribe. No-op on iPhone.
+ */
+export function warmSpeechAsDrivesOpen(
+  host: {
+    snapshot(): { status: string; dryRun: boolean };
+    subscribe(fn: (s: { status: string; dryRun: boolean }) => void): () => void;
+  },
+  wanted: () => boolean,
+): () => void {
+  if (Platform.OS !== "android") return () => {};
+  const open = (s: { status: string; dryRun: boolean }) => s.status !== "idle" && !s.dryRun;
+  let wasOpen = false;
+  const check = (s: { status: string; dryRun: boolean }) => {
+    const now = open(s);
+    if (now && !wasOpen) {
+      let want = true;
+      try {
+        want = wanted();
+      } catch {
+        // An unreadable preference: warm anyway, it only binds the engine.
+      }
+      if (want) void warmSpeech();
+    }
+    wasOpen = now;
+  };
+  check(host.snapshot());
+  return host.subscribe(check);
 }
 
 export interface ExpoAlertPortOptions {
@@ -348,6 +428,8 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
 
   const voice: VoicePort = {
     speak(text, { volume }) {
+      // Android with no voice (the last warm-up said so): the tone already played; nothing to say.
+      if (speechHasNoVoice()) return Promise.resolve();
       return new Promise<void>((resolve, reject) => {
         Speech.speak(text, {
           volume,

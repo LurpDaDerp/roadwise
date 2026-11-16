@@ -1,8 +1,8 @@
-import * as Haptics from 'expo-haptics';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 
 import { Banner, Button, Text, useTheme } from '@/ui';
+import { haptics } from '@/ui/haptics';
 
 import { dashpalCopy } from '../../copy';
 import type { PairedDashcam } from '../../keys';
@@ -28,7 +28,7 @@ export function StepDone({
   const th = useTheme();
   useEffect(() => {
     announce(copy.title);
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    haptics.success();
   }, []);
   return (
     <View style={{ gap: th.space.md }}>

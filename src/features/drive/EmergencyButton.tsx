@@ -5,12 +5,12 @@
 // panel (911 and the driver's contacts); the call itself takes a tap there and the phone's own
 // confirmation, which is the guard against a pocket or an elbow.
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { memo, useMemo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ensureGround } from '@/ui';
 import { HUD_MIN_TARGET_PT, type HudPalette } from '@/ui/drive';
+import { haptics } from '@/ui/haptics';
 
 import type { HudButtonColors } from './hudButtons';
 import { hudCopy } from './hudCopy';
@@ -47,7 +47,7 @@ export const EmergencyButton = memo(function EmergencyButton({
       accessibilityHint={hudCopy.sos.hint}
       accessibilityState={{ expanded: open }}
       onPress={() => {
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        haptics.press();
         onPress();
       }}
       style={styles.target}

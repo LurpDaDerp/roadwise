@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -14,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { haptics } from '../haptics';
 import type { IconName } from './Button';
 
 export type SwipeButtonColors = {
@@ -139,11 +139,11 @@ export function SwipeButton({
   }, [x]);
 
   const tick = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    haptics.tick();
   }, []);
 
   const commit = useCallback(() => {
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    haptics.success();
     onSwipe();
     setSwipes((n) => n + 1);
   }, [onSwipe]);

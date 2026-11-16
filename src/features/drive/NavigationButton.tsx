@@ -8,7 +8,6 @@
 // change as the "Change navigation app" action once an app is saved. When a tap shows the saved
 // places first (`places`), the screen reader hears "Navigate with {app}" instead of "Open {app}".
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -18,6 +17,7 @@ import { navCopy } from '@/features/navigation/copy';
 import { mix } from '@/ui';
 import { fontFamilies } from '@/ui/fonts';
 import type { HudPalette } from '@/ui/drive';
+import { haptics } from '@/ui/haptics';
 
 import type { HudButtonColors } from './hudButtons';
 import { HUD_NAV_BUTTON_PT, HUD_NAV_H_PT, HUD_NAV_W_PT } from './hudLayout';
@@ -111,7 +111,7 @@ export const NavigationButton = memo(function NavigationButton({
   const d = Math.min(HUD_NAV_BUTTON_PT, width, height - CAPTION_PT);
   const label = appLabel === null ? navCopy.chooseLabel : places ? navCopy.placesLabel(appLabel) : navCopy.openLabel(appLabel);
   const hint = locked ? navCopy.lockedHint(units) : [places && appLabel !== null ? navCopy.placesHint : null, canChange ? navCopy.changeHint : null].filter((h) => h !== null).join(' ') || undefined;
-  const buzz = () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  const buzz = () => haptics.press();
   return (
     <View style={[styles.slot, { width }]}>
       <Pressable

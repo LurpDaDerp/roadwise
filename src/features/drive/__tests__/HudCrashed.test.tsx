@@ -10,6 +10,9 @@ import { hudCopy } from '../hudCopy';
 
 jest.mock('@/lib/crashReport', () => ({ reportError: jest.fn() }));
 
+const mockBarInk = jest.fn();
+jest.mock('@/ui/systemBars', () => ({ useNavigationBarInk: (ink: string) => mockBarInk(ink) }));
+
 let mockContacts: EmergencyContact[] | 'throw' = 'throw';
 jest.mock('@/features/emergency/useEmergencyContacts', () => ({
   useEmergencyContacts: () => {
@@ -27,6 +30,13 @@ beforeEach(() => {
 });
 
 afterEach(() => jest.restoreAllMocks());
+
+test('it holds light navigation bar buttons on Android, since it replaces the drive layout that asked for them', async () => {
+  mockBarInk.mockClear();
+  await renderCrashed();
+  expect(mockBarInk).toHaveBeenCalledWith('light');
+  expect(mockBarInk).not.toHaveBeenCalledWith('dark');
+});
 
 test('the emergency button stays on the crash screen beside Try again', async () => {
   await renderCrashed();

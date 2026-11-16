@@ -9,7 +9,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { AppState, Platform } from 'react-native';
 
-import { createExpoAlertPorts } from '@/core/alerts/adapters';
+import { createExpoAlertPorts, warmSpeechAsDrivesOpen } from '@/core/alerts/adapters';
 import { createAlertPlayer, type AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
 import type { AdoptedTrip, TripSession } from '@/core/engine/engine.types';
@@ -582,7 +582,11 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
     let notifier: LaunchSummaryNotifier | null = null;
     let headsUp: LaunchWeatherHeadsUp | null = null;
     let unmountDiagnostics: () => void = () => {};
+    // Android: the speech engine is warmed as each drive opens, so the first spoken alert is on
+    // time and a phone with no voice plays tones alone (`warmSpeechAsDrivesOpen`; no-op on iPhone).
+    let stopSpeechWarm: () => void = () => {};
     try {
+      stopSpeechWarm = warmSpeechAsDrivesOpen(drive, () => alertStylePref() !== 'vibration');
       if (attach) {
         try {
           notifier = attach(drive, db);
@@ -629,6 +633,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
         }
       }
       const release = async (): Promise<void> => {
+        stopSpeechWarm();
         unmountDiagnostics();
         await notifier?.settled?.().catch((error: unknown) => onError(error, 'summary notifier'));
         notifier?.detach();
@@ -649,6 +654,7 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       // may post, and it lets go of native, leaving its drive recording for the next launch to take
       // in, so a Retry's host is the only one listening.
       try {
+        stopSpeechWarm();
         unmountDiagnostics();
         notifier?.detach();
         headsUp?.detach();

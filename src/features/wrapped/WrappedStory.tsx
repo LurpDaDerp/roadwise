@@ -7,6 +7,7 @@ import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, wi
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text, useTheme, withAlpha } from '@/ui';
+import { useNavigationBarInk } from '@/ui/systemBars';
 
 import { wrappedCopy as copy } from './copy';
 
@@ -78,6 +79,8 @@ export function WrappedStory({
   const t = useTheme();
   const { width } = useWindowDimensions();
   const reader = useScreenReader();
+  // The gradients are always dark: light navigation bar buttons too (Android).
+  useNavigationBarInk('light');
   const auto = !t.reduceMotion && !reader;
   const [index, setIndex] = useState(0);
   const [held, setHeld] = useState(false);

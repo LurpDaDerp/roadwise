@@ -1,8 +1,9 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useRef, type ReactNode } from 'react';
 import { ScrollView, View, type ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useKeyboardLift } from '../keyboard';
 import { useSkyScrollHandler } from '../sky/scroll';
 import { useTheme } from '../theme';
 import { Text } from './Text';
@@ -55,6 +56,12 @@ export function ScreenTitle({
  * it in the content rather than the container lets a scrolling screen still scroll beneath the
  * indicator, as the rest of the platform does. Tab screens pass `bottomInset={false}`: the tab bar
  * sits between them and the indicator and pads itself.
+ *
+ * The keyboard: on iPhone a scrolling screen insets itself (`automaticallyAdjustKeyboardInsets`).
+ * On Android, which draws edge to edge and is not resized for the keyboard, the page pads its
+ * bottom by however far the keyboard covers it (`useKeyboardLift`), so the scroll view ends at the
+ * keyboard's top and keeps the focused field in sight; the home-indicator inset is dropped while it
+ * is up, since the keyboard covers the navigation bar too.
  */
 export function Screen({
   children,
@@ -82,12 +89,14 @@ export function Screen({
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const page = useRef<View>(null);
+  const lift = useKeyboardLift(page);
   const pad = padded ? t.space.lg : 0;
   const content: ViewStyle = {
     flexGrow: 1,
     paddingHorizontal: pad,
     paddingTop: pad,
-    paddingBottom: pad + (bottomInset ? insets.bottom : 0),
+    paddingBottom: pad + (bottomInset && lift === 0 ? insets.bottom : 0),
     gap: t.space.lg,
   };
 
@@ -101,7 +110,8 @@ export function Screen({
   return (
     <OnSky.Provider value={sky}>
       <SafeAreaView
-        style={{ flex: 1, backgroundColor: sky ? 'transparent' : t.colors.bg }}
+        ref={page}
+        style={{ flex: 1, backgroundColor: sky ? 'transparent' : t.colors.bg, ...(lift > 0 ? { paddingBottom: lift } : null) }}
         edges={['top', 'left', 'right']}
       >
         {scroll && sky ? (

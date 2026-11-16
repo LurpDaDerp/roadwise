@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, View } from 'react-native';
 
 import { Text, useTheme } from '@/ui';
+import { haptics } from '@/ui/haptics';
 
 import { AIM_STALE_MS, aimLevel, aimLine, createAimAnnouncer, createGoodLatch } from '../../aim';
 import { dashpalCopy } from '../../copy';
@@ -107,7 +107,7 @@ export function AimView({
         const now = latch.current.push(a ? a.score : null, at);
         setAim(a);
         setGood(now);
-        if (now && !was) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        if (now && !was) haptics.success();
         if (a) {
           const said = announcer.current.next(goodHint !== undefined && a.hint === 0 ? goodHint : aimLine(a), now && !was, at);
           if (said) announce(said);
