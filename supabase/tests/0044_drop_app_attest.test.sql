@@ -1,4 +1,4 @@
--- 0042_drop_app_attest: the App Attest tables, functions and rate-limit rows are gone, nothing left
+-- 0044_drop_app_attest: the App Attest tables, functions and rate-limit rows are gone, nothing left
 -- reads them, and register_device still registers an iPhone (with no iPhone time to stamp) and an
 -- Android phone as before: the same grants, definer, search_path and refusals.
 create extension if not exists pgtap with schema extensions;

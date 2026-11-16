@@ -1,6 +1,9 @@
--- 0042_drop_app_attest: App Attest is gone from the app and the server, so the objects 0031 made for
+-- 0044_drop_app_attest: App Attest is gone from the app and the server, so the objects 0031 made for
 -- it go too. Nothing a driver sees changes; every object dropped has no caller left in the app, the
 -- edge functions or another SQL function.
+--
+-- Numbered 0044: 0042 and 0043 were taken by migrations that were later dropped from the repo, so a
+-- database that recorded either version still runs this one.
 --
 --   * The functions only the app-attest and finalize-trip functions called:
 --     app_attest_issue_challenge, app_attest_take_challenge, app_attest_save_key,
