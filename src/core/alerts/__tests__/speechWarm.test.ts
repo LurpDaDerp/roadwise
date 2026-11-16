@@ -118,7 +118,7 @@ describe("warmSpeechAsDrivesOpen", () => {
       listeners: () => fns.size,
     };
   }
-  const flush = () => new Promise((r) => setImmediate(r));
+  const flush = () => new Promise<void>((r) => setImmediate(() => r()));
 
   it("iPhone: does not subscribe", () => {
     setOS("ios");
