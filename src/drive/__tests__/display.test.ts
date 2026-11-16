@@ -4,7 +4,6 @@ import { MPS_PER_MPH } from '@/core/detectors/common';
 import {
   createDriveDisplay,
   DISPLAY_KEEPALIVE_MS,
-  DISPLAY_MIN_INTERVAL_MS,
   LIVE_CONFIRM_MS,
   LIVE_MIN_INTERVAL_MS,
   LIVE_PACE_MS,
@@ -73,7 +72,7 @@ test('Android: no Live Activity; the end goes through the display call with `end
   expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ ended: true, speed: 30 }));
 });
 
-test('updates are throttled to one per 3 s and sent only on change', () => {
+test("Android takes the Live Activity's pace: a new number every 5 s at most, sent only on change", () => {
   let now = 0;
   const { set } = sinks();
   const d = createDriveDisplay({ setDriveDisplay: set }, { now: () => now, platform: 'android' });
@@ -82,15 +81,30 @@ test('updates are throttled to one per 3 s and sent only on change', () => {
     now = i * 1000;
     d.update(state({ speed: 30 + i }));
   }
-  // t=0 (start), then 3 s, 6 s, 9 s.
-  expect(set).toHaveBeenCalledTimes(4);
+  // t=0 (start), then 5 s and 10 s, each with the newest number then.
+  expect(speeds(set)).toEqual([30, 35, 40]);
   now = 20_000;
   d.update(state({ speed: 40 }));
   d.update(state({ speed: 40 }));
   now = 30_000;
   d.update(state({ speed: 40 }));
+  expect(set).toHaveBeenCalledTimes(3);
+  // the limit a second after the last update; the tint alone 15 s after it
+  now = 30_500;
+  d.update(state({ speed: 40, limit: 45 }));
+  expect(set).toHaveBeenCalledTimes(4);
+  now = 31_000;
+  d.update(state({ speed: 40, limit: 50 }));
+  expect(set).toHaveBeenCalledTimes(4);
+  now = 31_500;
+  d.update(state({ speed: 40, limit: 50 }));
   expect(set).toHaveBeenCalledTimes(5);
-  expect(DISPLAY_MIN_INTERVAL_MS).toBe(3000);
+  now = 46_499;
+  d.update(state({ speed: 40, limit: 50, speedTint: '#FFCC00' }));
+  expect(set).toHaveBeenCalledTimes(5);
+  now = 46_500;
+  d.update(state({ speed: 40, limit: 50, speedTint: '#FFCC00' }));
+  expect(set).toHaveBeenCalledTimes(6);
 });
 
 test('tolerates missing sinks and a rejecting sink', () => {
@@ -106,7 +120,7 @@ test('tolerates missing sinks and a rejecting sink', () => {
   return new Promise((r) => setTimeout(r, 0)).then(() => expect(errors).toHaveLength(1));
 });
 
-test('an unchanged display is re-sent every 60 s (a long stop never goes stale); a change keeps the 3 s minimum; end resets', () => {
+test('an unchanged display is re-sent every 60 s (a long stop never goes stale); a new number keeps the 5 s pace; end resets', () => {
   expect(DISPLAY_KEEPALIVE_MS).toBe(60_000);
   let now = 0;
   const { set } = sinks();
@@ -122,14 +136,14 @@ test('an unchanged display is re-sent every 60 s (a long stop never goes stale);
   expect(set).toHaveBeenCalledTimes(2);
   now = 61_000;
   d.update(state({ speed: 3, stopped: true, points: 40, pointsDelta: 2 }));
-  expect(set).toHaveBeenCalledTimes(2); // a change inside 3 s still waits
-  now = 63_000;
+  expect(set).toHaveBeenCalledTimes(2); // a new number inside 5 s still waits
+  now = 65_000;
   d.update(state({ speed: 3, stopped: true, points: 40, pointsDelta: 2 }));
   expect(set).toHaveBeenCalledTimes(3);
   d.end();
   expect(set).toHaveBeenCalledTimes(4); // Android's final `ended` state
   d.start(stopped);
-  now = 64_000;
+  now = 66_000;
   d.update(stopped);
   expect(set).toHaveBeenCalledTimes(5); // the new drive's start; the unchanged update waits
 });
@@ -189,7 +203,7 @@ test('the Live Activity state carries the tint, the speeding flag, the hint and 
   });
 });
 
-test('a change in the tint, the hint or the weather is a change; refresh sends it at once, outside the 3 s throttle, once', () => {
+test('a change in the tint, the hint or the weather is a change; refresh sends it at once, outside the pace, once', () => {
   let now = 0;
   const { set } = sinks();
   const d = createDriveDisplay({ setDriveDisplay: set }, { now: () => now, platform: 'ios' });
@@ -243,7 +257,7 @@ test('isRunning asks LiveDrive on iOS only; false where none can run or it fails
   expect(await failing.isRunning!()).toBe(false);
 });
 
-test('the first known speed and the first known limit go out at once after a start; later changes keep the 3 s throttle', () => {
+test('the first known speed and the first known limit go out at once after a start; later changes keep the pace', () => {
   let now = 0;
   const { set, live } = sinks();
   const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'android' });
@@ -251,15 +265,15 @@ test('the first known speed and the first known limit go out at once after a sta
   expect(set).toHaveBeenCalledTimes(1);
   now = 200;
   d.update(state({ speed: 12, limit: null }));
-  // The first speed, inside the 3 s.
+  // The first speed, inside the second.
   expect(set).toHaveBeenCalledTimes(2);
   now = 900;
   d.update(state({ speed: 14, limit: null }));
-  // Throttled.
+  // Paced.
   expect(set).toHaveBeenCalledTimes(2);
-  now = 1500;
+  now = 1100;
   d.update(state({ speed: 15, limit: 25 }));
-  // The first limit, inside the 3 s.
+  // The first limit, inside the 5 s.
   expect(set).toHaveBeenCalledTimes(3);
   expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 15, limit: 25 }));
   now = 2000;
@@ -276,7 +290,7 @@ test('the first known speed and the first known limit go out at once after a sta
   expect(set).toHaveBeenCalledTimes(6);
 });
 
-test('a start that already carries a speed and a limit spends both bypasses (the next change waits for the throttle)', () => {
+test('a start that already carries a speed and a limit spends both bypasses (the next change waits for the pace)', () => {
   let now = 0;
   const sent: DriveDisplayState[] = [];
   const d = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android' });
@@ -284,7 +298,7 @@ test('a start that already carries a speed and a limit spends both bypasses (the
   now = 500;
   d.update(state({ speed: 31, limit: 35 }));
   expect(sent).toHaveLength(1);
-  now = DISPLAY_MIN_INTERVAL_MS;
+  now = LIVE_PACE_MS;
   d.update(state({ speed: 32, limit: 35 }));
   expect(sent).toHaveLength(2);
 });
@@ -342,10 +356,9 @@ function ticking() {
 // The carry tests pace the speed at a second (`paceMs: 1000`), so the halo's re-reads show from one
 // update to the next; the 5 s pace has its own tests.
 describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
-  test('a new number inside 5 s is held and goes out, the newest one, when the 5 s are up; never two inside 5 s; one after 5 s without an update goes at once; Android keeps its 3 s', () => {
+  test('a new number inside 5 s is held and goes out, the newest one, when the 5 s are up; never two inside 5 s; one after 5 s without an update goes at once; Android goes with the next update past them', () => {
     expect(LIVE_MIN_INTERVAL_MS).toBe(1000);
     expect(LIVE_PACE_MS).toBe(5000);
-    expect(DISPLAY_MIN_INTERVAL_MS).toBe(3000);
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
@@ -418,15 +431,24 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
     expect(speeds(set)).toEqual([30, 41, 42, 43, 45, 46]);
     expect(at).toEqual([0, 5000, 10_000, 16_000, 21_000, 26_200]);
 
-    // Android never holds: its change goes out with the first update past its 3 s
+    // Android never holds (its JS timers are paused behind): its change goes out with the first
+    // update past its 5 s, the newest number then
     const android = manual();
     const sent: DriveDisplayState[] = [];
     const a = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android', later: android.later });
+    const t0 = now;
     a.start(state());
-    now += 500;
+    now = t0 + 500;
     a.update(state({ speed: 31 }));
     expect(android.armed()).toEqual([]);
     expect(sent).toHaveLength(1);
+    now = t0 + 4999;
+    a.update(state({ speed: 33 }));
+    expect(sent).toHaveLength(1);
+    now = t0 + 5400;
+    a.update(state({ speed: 34 }));
+    expect(sent.map((s) => s.speed)).toEqual([30, 34]);
+    expect(android.armed()).toEqual([]);
   });
 
   test("a held change goes out with the halo's number at that moment: a row with nothing new yet still waits while the number is carried", () => {
@@ -492,7 +514,7 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
     expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 34 }));
   });
 
-  test('km/h is carried in km/h; a slowing car reads 0 (never below) under 1 mph; an unknown speed stays "-"; Android never carries', () => {
+  test('km/h is carried in km/h; a slowing car reads 0 (never below) under 1 mph; an unknown speed stays "-"; Android carries too', () => {
     let now = 0;
     const { set, live } = sinks();
     const d = createDriveDisplay({ setDriveDisplay: set, liveDrive: live }, { now: () => now, platform: 'ios', paceMs: 1000 });
@@ -518,15 +540,20 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
 
     let at = 0;
     const sent: DriveDisplayState[] = [];
-    const android = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => at, platform: 'android' });
+    const android = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => at, platform: 'android', paceMs: 1000 });
     android.start(state());
     at = 5000;
     android.update(state({ speed: 30 }), { mps: mph(30), accel: mph(3), at: 4000 });
-    // the host's own speed (carried, it would read 33)
-    expect(sent.map((s) => s.speed)).toEqual([30]);
-    at = 8000;
+    // the halo's number, carried a second on: 33, not the host's 30
+    expect(sent.map((s) => s.speed)).toEqual([30, 33]);
+    at = 6000;
+    // carried on to the halo's own cap, 1.5 s after its fix: 35 (the host says 34)
     android.update(state({ speed: 34 }), { mps: mph(30), accel: mph(3), at: 4000 });
-    expect(sent.map((s) => s.speed)).toEqual([30, 34]);
+    expect(sent.map((s) => s.speed)).toEqual([30, 33, 35]);
+    // an unknown speed stays "-"
+    at = 7000;
+    android.update(state({ speed: null }), { mps: mph(30), accel: mph(3), at: 7000 });
+    expect(sent.at(-1)?.speed).toBeNull();
   });
 
   test("the halo's re-reads between updates are walked through, so its number and the Live Activity's agree through the hysteresis", async () => {
@@ -785,7 +812,7 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
     expect(aAt).toEqual([0, 60_000, 120_000, 180_000]);
   });
 
-  test('a change the Live Activity cannot show (the stopped flag, the points) sends nothing on iOS; Android still takes it', () => {
+  test('a change the Live Activity cannot show (the stopped flag, the points) sends nothing, on Android neither', () => {
     let now = 0;
     const clock = manual();
     const { set, live } = sinks();
@@ -810,16 +837,19 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
     expect(set).toHaveBeenCalledTimes(2);
     expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ speed: 3, stopped: true, points: 12, pointsDelta: 1 }));
 
+    // Android's notification shows what the Live Activity shows: neither is a change there either
     const sent: DriveDisplayState[] = [];
     const a = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android' });
     now = 0;
     a.start(state({ speed: 0 }));
     now = 3000;
     a.update(state({ speed: 0, stopped: true }));
-    expect(sent.map((s) => s.stopped)).toEqual([false, true]);
     now = 6000;
     a.update(state({ speed: 0, stopped: true, points: 12, pointsDelta: 1 }));
-    expect(sent.map((s) => s.points)).toEqual([null, null, 12]);
+    expect(sent).toHaveLength(1);
+    now = 7000;
+    a.update(state({ speed: 3, stopped: true, points: 12, pointsDelta: 1 }));
+    expect(sent.at(-1)).toMatchObject({ speed: 3, stopped: true, points: 12 });
   });
 
   // Ten minutes of each, in a 35 mph limit, an update at every fix and every row (two a second).
@@ -892,7 +922,7 @@ describe('iOS: the Live Activity at its pace, with the halo’s number', () => {
     const a = createDriveDisplay({ setDriveDisplay: (s) => void sent.push(s) }, { now: () => now, platform: 'android' });
     a.setFront!(true);
     a.start(state());
-    now = 3000;
+    now = 5000;
     a.update(state({ speed: 31 }));
     expect(sent.map((s) => s.speed)).toEqual([30, 31]);
     a.setFront!(false);

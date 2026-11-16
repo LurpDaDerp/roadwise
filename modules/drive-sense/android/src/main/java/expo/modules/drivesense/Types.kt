@@ -30,44 +30,91 @@ data class FixSample(
 
 data class PhoneSample(val locked: Boolean, val screenOn: Boolean, val appForeground: Boolean)
 
-/** `setDriveDisplay`'s argument (plan §6): what the foreground notification shows. */
+/**
+ * `setDriveDisplay`'s argument (plan §6): what the drive notification shows, the Live Activity's
+ * content field for field (`LiveDriveAttributes.ContentState`, validated as `liveDriveStateSchema`
+ * validates it in JS: a value that does not fit is left out, never guessed at). The points and the
+ * stopped flag JS still sends are not read: nothing on the notification shows them.
+ */
 data class DriveDisplay(
+  /** Current speed in [unit]; null shows "-". */
   val speed: Double?,
+  /** Posted limit in [unit]; null shows "-". */
   val limit: Double?,
+  /** "mph" draws the US SPEED LIMIT plate, "km/h" the round red-ringed sign. */
   val unit: String,
-  val points: Double?,
-  val pointsDelta: Double?,
-  val stopped: Boolean,
-  val ended: Boolean,
+  /** The drive is over (JS's last call before `stopCapture`): nothing more is posted for it. */
+  val ended: Boolean = false,
+  /** The driving screen's numeral colour at its speeding tint ("#RRGGBB"); null: the plain text colour. */
+  val speedTint: String? = null,
+  /** Over the limit now (the ticker's words only). */
+  val speeding: Boolean = false,
+  /** The "Not driving?" hint shows. */
+  val notDrivingAvailable: Boolean = false,
+  /** The driving screen's dangerous-weather alert: its kind (a DangerKind id) and its title; both or neither. */
+  val weatherKind: String? = null,
+  val weatherText: String? = null,
   /** The app's sky ("#RRGGBB"): the driving screen's deepened sky top to bottom, and the sky accent. */
   val skyTop: String? = null,
   val skyMid: String? = null,
   val skyLow: String? = null,
   val accent: String? = null
 ) {
+  /**
+   * What shows once no update has come for [DriveNotificationText.STALE_AFTER_MS] (the app is gone),
+   * as the widget's `displayState` does past its stale date: speed unknown, no tint, no hint, no
+   * weather; the limit, the unit and the sky stay.
+   */
+  fun stale(): DriveDisplay = copy(
+    speed = null,
+    speedTint = null,
+    speeding = false,
+    notDrivingAvailable = false,
+    weatherKind = null,
+    weatherText = null
+  )
+
   companion object {
-    /** Before JS has sent anything: "— mph · limit —", no points, no action, the plain look. */
-    val EMPTY = DriveDisplay(null, null, "mph", null, null, stopped = false, ended = false)
+    /** Before JS has sent anything: "- mph", "Limit -", navy. */
+    val EMPTY = DriveDisplay(null, null, "mph")
 
     private fun num(v: Any?): Double? = (v as? Number)?.toDouble()?.takeIf { it.isFinite() }
 
     private val HEX = Regex("^#[0-9A-Fa-f]{6}$")
 
+    /** A DangerKind id, as `liveDriveStateSchema` takes it. */
+    private val KIND = Regex("^[a-z][a-z_]{0,31}$")
+
+    /** The weather title's longest (`liveDriveStateSchema`: 1 to 60 characters). */
+    private const val WEATHER_TEXT_MAX = 60
+
     private fun hex(v: Any?): String? = (v as? String)?.takeIf { HEX.matches(it) }
 
-    fun from(m: Map<String, Any?>): DriveDisplay = DriveDisplay(
-      speed = num(m["speed"]),
-      limit = num(m["limit"]),
-      unit = if (m["unit"] == "km/h") "km/h" else "mph",
-      points = num(m["points"]),
-      pointsDelta = num(m["pointsDelta"]),
-      stopped = m["stopped"] as? Boolean ?: false,
-      ended = m["ended"] as? Boolean ?: false,
-      skyTop = hex(m["skyTop"]),
-      skyMid = hex(m["skyMid"]),
-      skyLow = hex(m["skyLow"]),
-      accent = hex(m["accent"])
-    )
+    private fun kind(v: Any?): String? = (v as? String)?.takeIf { KIND.matches(it) }
+
+    private fun title(v: Any?): String? = (v as? String)?.takeIf { it.isNotEmpty() && it.length <= WEATHER_TEXT_MAX }
+
+    fun from(m: Map<String, Any?>): DriveDisplay {
+      // The weather line shows its symbol and its words, so it is both or nothing (the widget's WeatherLine).
+      val kind = kind(m["weatherKind"])
+      val text = title(m["weatherText"])
+      val weather = kind != null && text != null
+      return DriveDisplay(
+        speed = num(m["speed"]),
+        limit = num(m["limit"]),
+        unit = if (m["unit"] == "km/h") "km/h" else "mph",
+        ended = m["ended"] as? Boolean ?: false,
+        speedTint = hex(m["speedTint"]),
+        speeding = m["speeding"] as? Boolean ?: false,
+        notDrivingAvailable = m["notDrivingAvailable"] as? Boolean ?: false,
+        weatherKind = if (weather) kind else null,
+        weatherText = if (weather) text else null,
+        skyTop = hex(m["skyTop"]),
+        skyMid = hex(m["skyMid"]),
+        skyLow = hex(m["skyLow"]),
+        accent = hex(m["accent"])
+      )
+    }
   }
 }
 

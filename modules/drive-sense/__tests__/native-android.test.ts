@@ -12,6 +12,7 @@ import { REMINDER } from '../src/reminder/policy';
 import { FIRST_WINDOW_MS, MAX_ROW_GAP_MS, TIMEBASE_MAX_SKEW_MS } from '../src/extract/timebase';
 import { EVENT_BUFFER_MAX } from '../src/fake';
 import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE_SENSE_SYNC_METHODS } from '../src/types';
+import { DANGER_ORDER } from '../../../src/features/weather/danger';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -536,56 +537,146 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
   });
 });
 
-describe('native-android: the background surface (plan §6) — the foreground notification', () => {
-  it('title "Driving", "34 mph · limit 35" with "-" for unknowns, points line only with points', () => {
-    const src = code(kt('NotificationFactory'));
-    expect(src).toMatch(/const val TITLE = "Driving"/);
-    expect(src).toMatch(/setContentTitle\(TITLE\)/);
-    expect(src).toMatch(/"\$speed · limit \$limit"/);
-    expect(src).toMatch(/\?: "- \$\{d\.unit\}"/);
-    expect(src).toMatch(/\?: "-"/);
-    expect(src).toMatch(/val points = d\.points \?: return null/);
-    expect(src).toMatch(/pointsLine\(d\)\?\.let \{ builder\.setSubText\(it\) \}/);
-    // the total only
-    expect(src).toMatch(/return "\$\{n\.format\(Math\.round\(points\)\)\} pts"/);
-    expect(src).not.toMatch(/pointsDelta|deltaText/);
-  });
+describe("native-android: the drive notification, Android's Live Activity (plan §6, ruling 6)", () => {
+  const FACTORY = () => code(kt('NotificationFactory'));
+  const CONTROLLER = () => code(kt('DriveNotificationController'));
+  const TEXT = () => code(kt('DriveNotificationText'));
 
-  it("wears the app's sky: colorized in its middle stop once JS sends one, plain before", () => {
-    const src = code(kt('NotificationFactory'));
-    expect(src).toMatch(/fun skyColor\(d: DriveDisplay\): Int\? = d\.skyMid\?\.let \{ runCatching \{ Color\.parseColor\(it\) \}\.getOrNull\(\) \}/);
-    expect(src).toMatch(/skyColor\(d\)\?\.let \{ builder\.setColor\(it\)\.setColorized\(true\) \}/);
-    const types = code(kt('Types'));
-    for (const k of ['skyTop', 'skyMid', 'skyLow', 'accent']) {
-      expect(types).toContain(`val ${k}: String? = null`);
-      expect(types).toContain(`${k} = hex(m["${k}"])`);
+  it('its files exist', () => {
+    for (const name of ['NotificationFactory', 'DriveNotificationController', 'DriveNotificationText', 'DriveNotificationRules', 'LimitSignBitmap', 'LimitSignGeometry', 'WeatherSymbol']) {
+      expect({ name, exists: existsSync(join(KT_DIR, `${name}.kt`)) }).toEqual({ name, exists: true });
     }
-    // "#RRGGBB" only; anything else is no colour
-    expect(types).toContain('Regex("^#[0-9A-Fa-f]{6}$")');
-    expect(types).toMatch(/private fun hex\(v: Any\?\): String\? = \(v as\? String\)\?\.takeIf \{ HEX\.matches\(it\) \}/);
   });
 
-  it('the End drive action only while stopped (and not ended); tapping opens the app', () => {
-    const src = code(kt('NotificationFactory'));
-    expect(src).toMatch(/if \(d\.stopped && !d\.ended\) \{[\s\S]{0,400}addAction\(0, "End drive", pi\)/);
-    expect(src).toMatch(/getLaunchIntentForPackage/);
+  it("shows the Live Activity's content: the tinted speed and its unit, the limit, the weather line, \"Not driving?\"", () => {
+    const text = TEXT();
+    expect(text).toMatch(/fun title\(d: DriveDisplay\): String = "\$\{number\(d\.speed\)\} \$\{d\.unit\}"/);
+    expect(text).toMatch(/fun limitLine\(d: DriveDisplay\): String = "Limit \$\{number\(d\.limit\)\}"/);
+    expect(text).toMatch(/const val NOT_DRIVING = "Not driving\?"/);
+    expect(text).toMatch(/if \(v == null \|\| !v\.isFinite\(\)\) return "-"/);
+    expect(text).toMatch(/"\$\{WeatherSymbol\.of\(kind\)\} \$text"/);
+    // VoiceOver's words, the ticker
+    expect(text).toContain('"Speed unknown"');
+    expect(text).toContain('"kilometers per hour" else "miles per hour"');
+    expect(text).toContain('", over the limit"');
+    expect(text).toContain('"Speed limit unknown"');
+    const f = FACTORY();
+    expect(f).toMatch(/setContentTitle\(title\(d\)\)/);
+    expect(f).toMatch(/ForegroundColorSpan\(tint\)/);
+    expect(f).toMatch(/setContentText\(DriveNotificationText\.text\(d\)\)/);
+    expect(f).toMatch(/setTicker\(DriveNotificationText\.accessibility\(d\)\)/);
+    expect(f).toMatch(/NotificationCompat\.BigTextStyle\(\)\.bigText\(it\)/);
+    expect(f).toMatch(/LimitSignBitmap\.of\(context, DriveNotificationText\.number\(d\.limit\), d\.unit\)\?\.let \{ builder\.setLargeIcon\(it\) \}/);
+    // nothing about points, scores or spots
+    expect(f + text).not.toMatch(/points|pts|setSubText|score/i);
+  });
+
+  it('every danger kind has its weather symbol (DANGER_ORDER), an unknown one the warning sign', () => {
+    const src = code(kt('WeatherSymbol'));
+    const cases = [...src.matchAll(/"([a-z_]+)" -> [A-Z_]+/g)].map((m) => m[1]!);
+    expect([...cases].sort()).toEqual([...DANGER_ORDER].sort());
+    expect(src).toMatch(/else -> WARNING/);
+  });
+
+  it('the parsed display takes the Live Activity keys, validated as liveDriveStateSchema validates them; no points', () => {
+    const types = code(kt('Types'));
+    for (const k of ['speedTint', 'skyTop', 'skyMid', 'skyLow', 'accent']) expect(types).toContain(`${k} = hex(m["${k}"])`);
+    expect(types).toContain('notDrivingAvailable = m["notDrivingAvailable"] as? Boolean ?: false');
+    expect(types).toContain('speeding = m["speeding"] as? Boolean ?: false');
+    expect(types).toContain('Regex("^#[0-9A-Fa-f]{6}$")');
+    expect(types).toContain('Regex("^[a-z][a-z_]{0,31}$")');
+    expect(types).toMatch(/WEATHER_TEXT_MAX = 60/);
+    expect(types).not.toMatch(/points|pointsDelta|stopped/);
+    // the stale form keeps the limit, the unit and the sky
+    const stale = /fun stale\(\): DriveDisplay = copy\([\s\S]*?\)/.exec(types)?.[0] ?? '';
+    for (const k of ['speed = null', 'speedTint = null', 'speeding = false', 'notDrivingAvailable = false', 'weatherKind = null', 'weatherText = null']) expect(stale).toContain(k);
+    expect(stale).not.toMatch(/limit|unit|sky|accent/);
+  });
+
+  it('no button: a tap opens the driving screen (roadwise://drive) through an immutable PendingIntent', () => {
+    const f = FACTORY();
+    expect(f).not.toMatch(/addAction\(|End drive|ACTION_END_DRIVE/);
+    // (raw source: the comment stripper would take the "//" in the link for a comment)
+    expect(kt('NotificationFactory')).toMatch(/const val DRIVE_LINK = "roadwise:\/\/drive"/);
+    expect(f).toMatch(/Intent\(Intent\.ACTION_VIEW, Uri\.parse\(DRIVE_LINK\)\)\.setPackage\(context\.packageName\)/);
+    expect(f).toMatch(/getLaunchIntentForPackage/);
+    expect(f).toMatch(/PendingIntent\.getActivity\([\s\S]{0,120}PendingIntent\.FLAG_UPDATE_CURRENT or PendingIntent\.FLAG_IMMUTABLE/);
+  });
+
+  it('a Live Update on Android 16 QPR1+ when allowed (never colorized then); else colorized in the sky, navy by default', () => {
+    const f = FACTORY();
+    expect(f).toMatch(/SDK_INT_FULL_36_1 = 36 \* 100_000 \+ 1/);
+    expect(f).toMatch(/@RequiresApi\(API_36\)\s*private fun sdkIntFull\(\): Int = Build\.VERSION\.SDK_INT_FULL/);
+    expect(f).toMatch(/Build\.VERSION\.SDK_INT > API_36 \|\| \(Build\.VERSION\.SDK_INT == API_36 && sdkIntFull\(\) >= SDK_INT_FULL_36_1\)/);
+    expect(f).toMatch(/NotificationManagerCompat\.from\(context\)\.canPostPromotedNotifications\(\)/);
+    const promoted = /if \(promoted\) \{([\s\S]*?)\} else \{([\s\S]*?)\}/.exec(f);
+    expect(promoted?.[1]).toMatch(/setRequestPromotedOngoing\(true\)/);
+    expect(promoted?.[1]).toMatch(/setShortCriticalText\(DriveNotificationText\.chip\(d\)\)/);
+    expect(promoted?.[1]).toMatch(/setColor\(accentColor\(d\)\)/);
+    expect(promoted?.[1]).not.toMatch(/setColorized/);
+    expect(promoted?.[2]).toMatch(/setColor\(skyColor\(d\)\)\.setColorized\(true\)/);
+    expect(f).toMatch(/NAVY = 0xFF001D3D/);
+    expect(f).toMatch(/GOLD = 0xFFFFC300/);
+    expect(f.match(/setColorized\(/g)).toHaveLength(1);
+    expect(MANIFEST()).toContain('<uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS"');
+  });
+
+  it('its channel: drive_live at default importance (lock screens show it; it can be promoted), silent, public; drive_recording deleted', () => {
+    const f = FACTORY();
+    expect(f).toMatch(/const val CHANNEL_ID = "drive_live"/);
+    expect(f).toMatch(/NotificationChannel\(CHANNEL_ID, "Drive in progress", NotificationManager\.IMPORTANCE_DEFAULT\)/);
+    expect(f).toMatch(/setSound\(null, null\)\s*enableVibration\(false\)\s*enableLights\(false\)\s*setShowBadge\(false\)\s*lockscreenVisibility = Notification\.VISIBILITY_PUBLIC/);
+    expect(f).toMatch(/deleteNotificationChannel\(OLD_CHANNEL_ID\)/);
+    expect(f).toMatch(/OLD_CHANNEL_ID = "drive_recording"/);
+    expect(f).not.toMatch(/IMPORTANCE_HIGH|IMPORTANCE_MIN|IMPORTANCE_LOW|Recording your drive|Checking for a drive/);
+    for (const s of ['setOngoing(true)', 'setOnlyAlertOnce(true)', 'setVisibility(NotificationCompat.VISIBILITY_PUBLIC)', 'setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)']) {
+      expect(f).toContain(s);
+    }
+    // the RoadWise mark: the app's own glyph, the module's as the fallback
+    expect(f).toMatch(/"expo\.modules\.notifications\.default_notification_icon"/);
+    expect(f).toMatch(/R\.drawable\.ic_drive_notification/);
+  });
+
+  it('posted only on a change; stale after 2 min; a swiped-away one stays away until RoadWise is in front or the next capture', () => {
+    expect(TEXT()).toMatch(/const val STALE_AFTER_MS = 120_000L/);
+    const c = CONTROLLER();
+    expect(c).toMatch(/if \(key == postedKey\) return/);
+    expect(c).toMatch(/if \(!CaptureService\.isCapturing \|\| ended \|\| dismissed\) return/);
+    expect(c).toMatch(/armStale\(DriveNotificationText\.STALE_AFTER_MS\)/);
+    expect(c).toMatch(/return if \(stale\) d\.stale\(\) else d/);
+    // the delete intent: explicit to the package, immutable, to an unexported runtime receiver
+    expect(c).toMatch(/ContextCompat\.registerReceiver\(ctx, dismissReceiver, IntentFilter\(ACTION_DISMISSED\), ContextCompat\.RECEIVER_NOT_EXPORTED\)/);
+    expect(c).toMatch(/Intent\(ACTION_DISMISSED\)\.setPackage\(ctx\.packageName\)/);
+    expect(c).toMatch(/PendingIntent\.FLAG_UPDATE_CURRENT or PendingIntent\.FLAG_IMMUTABLE/);
+    expect(c).not.toMatch(/FLAG_MUTABLE/);
+    expect(code(kt('AppVisibility'))).toMatch(/val wasBehind = started == 0[\s\S]*?if \(wasBehind && started > 0\) \{\s*try \{\s*DriveNotificationController\.onAppFront\(\)/);
+    // the kept state is the open capture's only, and the end forgets it
+    expect(c).toMatch(/if \(!drive\.captureOpen \|\| p\.getLong\(KEY_DRIVE, -1L\) != drive\.captureStartedAt\)/);
+    expect(c).toMatch(/if \(display\.ended\) \{[\s\S]*?forget\(ctx\)\s*return\s*\}/);
+    // restored on the sticky restart only; a new capture starts empty and forgets the kept state
+    const rules = code(kt('DriveNotificationRules'));
+    expect(rules).toMatch(/hasDisplay -> Source\.DISPLAY\s*restart -> Source\.KEPT\s*capturing -> Source\.CURRENT\s*else -> Source\.EMPTY/);
+    expect(c).toMatch(/DriveNotificationRules\.Source\.KEPT -> \{\s*val kept = restore\(ctx\)/);
+    expect(c).toMatch(/DriveNotificationRules\.Source\.EMPTY -> \{\s*latest = null\s*latestAt = now\s*forget\(ctx\)\s*\}/);
+    expect(c.match(/restore\(ctx\)/g)).toHaveLength(1);
+    // the stale timer goes by the newest state's age: an update that lands as it fires is not marked stale
+    expect(rules).toMatch(/fun staleIn\(now: Long, latestAt: Long\): Long = DriveNotificationText\.STALE_AFTER_MS - \(now - latestAt\)/);
+    expect(c).toMatch(/private fun onStale\(\) \{\s*if \(latest == null \|\| stale\) return\s*val left = DriveNotificationRules\.staleIn\(SystemClock\.elapsedRealtime\(\), latestAt\)\s*if \(left > 0\) \{\s*armStale\(left\)\s*return\s*\}\s*stale = true/);
   });
 
   it('setDriveDisplay reaches the running capture only, and the display resets with each capture', () => {
     expect(MODULE()).toMatch(/AsyncFunction\("setDriveDisplay"\) \{ state: Map<String, Any\?> ->\s*CaptureService\.setDriveDisplay\(DriveDisplay\.from\(state\)\)/);
     const svc = code(kt('CaptureService'));
     expect(svc).toMatch(/fun setDriveDisplay\(display: DriveDisplay\) \{\s*val inst = instance \?: return/);
-    expect(svc).toMatch(/NotificationFactory\.build\(this, display\)/);
+    expect(svc).toMatch(/private fun goForeground\(restart: Boolean = false\): String\?/);
+    expect(svc).toMatch(/val notification = DriveNotificationController\.foreground\(this, display, restart\)/);
+    // only the START_STICKY restart (no intent) restores the kept state
+    expect(svc).toMatch(/if \(intent == null\) \{[\s\S]*?if \(goForeground\(restart = true\) != null\)/);
+    expect(svc.match(/goForeground\(restart = true\)/g)).toHaveLength(1);
+    expect(svc).toMatch(/display\?\.let \{ DriveNotificationController\.update\(this, it\) \}/);
     const begin = /private fun beginCapture\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(begin).toMatch(/display = null/);
     expect(code(kt('Types'))).toMatch(/data class DriveDisplay\(/);
-  });
-
-  it('the notification channel is drive_recording at low importance', () => {
-    const src = code(kt('NotificationFactory'));
-    expect(src).toMatch(/"drive_recording"/);
-    expect(src).toMatch(/IMPORTANCE_LOW/);
-    expect(src).not.toMatch(/Recording your drive|Checking for a drive/);
   });
 });
 

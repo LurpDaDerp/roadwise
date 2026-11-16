@@ -37,9 +37,9 @@
 //   (focused, RoadWise active) and never for a replayed row; with RoadWise not active nothing plays
 //   or is posted. The drive records the same either way.
 // - **Battery.** Nothing runs while idle: no timer, no read. While recording, one timeout at most
-//   (the automatic end, `ticks.ts`), the display throttled (on iOS a new speed every 5 s at most
-//   and other changes within a second, `display.ts`; one update per 3 s on Android), the weather
-//   checked every 15 min or 20 km, the state published at most once per row.
+//   (the automatic end, `ticks.ts`), the display throttled (a new speed every 5 s at most and
+//   other changes within a second, `display.ts`, on both platforms), the weather checked every
+//   15 min or 20 km, the state published at most once per row.
 // - **Background (Android).** Each row first pumps the process's timers (`src/lib/timers.ts`): with
 //   the app in the Android background JS timers are paused, and the rows are what keeps the alert
 //   player, the waiting clock and the DashPal link moving.
@@ -2426,10 +2426,11 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         })
       ),
       remover(
-        // Android's drive notification offers End drive while stopped: a manual end at the tap, with
-        // the same rules as the swipe (cut after 2 min standing still, dropped if it never moved;
-        // while a Start-card drive still waits, its Cancel: unsaved, saying nothing). A tap buffered
-        // from before this drive, or one landing while it is already closing, does nothing.
+        // The contract's `notificationAction` (End drive): a manual end at the tap, with the same
+        // rules as the swipe (cut after 2 min standing still, dropped if it never moved; while a
+        // Start-card drive still waits, its Cancel: unsaved, saying nothing). A tap buffered from
+        // before this drive, or one landing while it is already closing, does nothing. No surface
+        // sends it now: Android's drive notification, like the Live Activity, has no button.
         source.addListener('notificationAction', (a) => {
           if (a.action !== 'endDrive') return;
           void run(async () => {
