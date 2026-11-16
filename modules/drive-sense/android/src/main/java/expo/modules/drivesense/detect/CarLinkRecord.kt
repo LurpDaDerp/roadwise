@@ -16,12 +16,16 @@ import org.json.JSONObject
 // address in that hidden form and a full one with the same last two bytes are the same output here
 // ([CarUids.same]): once the full address is readable it replaces the hidden form wherever the
 // record holds it, and while it is not, an output whose hidden form matches a full address the
-// record holds is listed under that full address. JS, which matches uids exactly, only ever sees one
-// uid for one car. Two of the driver's devices sharing their last two bytes (1 in 65,536) are told
-// apart only once their full addresses are readable.
+// record holds is listed under that full address. The live state then holds one uid per car; drives
+// JS stored before the upgrade keep the hidden form, which JS matches by the same rule
+// (`src/lib/carUid.ts`). Two of the driver's devices sharing their last two bytes (1 in 65,536) are
+// told apart only once their full addresses are readable.
 
 /** One Bluetooth or Android Auto output (types.ts `CarOutput`; `carAudio` is Android Auto, iOS's CarPlay). */
 data class CarOutput(val uid: String, val name: String, val type: String)
+
+/** A connected Bluetooth output as the phone reports it, with its Bluetooth device class (`BluetoothClass.getDeviceClass`) when readable. */
+data class BluetoothOutput(val output: CarOutput, val deviceClass: Int?)
 
 data class PairedCar(val uid: String, val name: String, val type: String, val pairedAt: Double)
 
@@ -136,10 +140,70 @@ object CarOutputs {
   const val NAME_MAX = 128
   const val CURRENT_MAX = 16
 
+  /** Android Auto when the car it projects to cannot be told ([listed]): one output for any car, its uid fixed. */
+  const val ANDROID_AUTO_UID = "android-auto"
+  const val ANDROID_AUTO_NAME = "Android Auto"
+
+  // android.bluetooth.BluetoothClass.Device values (compile-time constants, kept here so the rules
+  // stay JVM-testable): the major class, and the minor audio classes read below.
+  private const val MAJOR_MASK = 0x1F00
+  private const val MAJOR_COMPUTER = 0x0100
+  private const val MAJOR_PHONE = 0x0200
+  private const val MAJOR_WEARABLE = 0x0700
+  private const val AUDIO_VIDEO_WEARABLE_HEADSET = 0x0404
+  private const val AUDIO_VIDEO_HANDSFREE = 0x0408
+  private const val AUDIO_VIDEO_LOUDSPEAKER = 0x0414
+  private const val AUDIO_VIDEO_HEADPHONES = 0x0418
+  private const val AUDIO_VIDEO_PORTABLE_AUDIO = 0x041C
+  private const val AUDIO_VIDEO_CAR_AUDIO = 0x0420
+
+  /**
+   * A device that holds the phone's audio link but is never a car: a watch (a Galaxy Watch or Pixel
+   * Watch takes the hands-free link), another phone, a computer. An unknown class rules nothing out.
+   */
+  fun notACar(deviceClass: Int?): Boolean =
+    deviceClass != null && (deviceClass and MAJOR_MASK).let { it == MAJOR_WEARABLE || it == MAJOR_PHONE || it == MAJOR_COMPUTER }
+
+  /** A car's own Bluetooth class: car audio or hands-free. */
+  private fun carClass(deviceClass: Int?): Boolean = deviceClass == AUDIO_VIDEO_CAR_AUDIO || deviceClass == AUDIO_VIDEO_HANDSFREE
+
+  /** Headphones, earbuds or a speaker by class: never the car Android Auto projects to. */
+  private fun listenerClass(deviceClass: Int?): Boolean =
+    deviceClass == AUDIO_VIDEO_HEADPHONES || deviceClass == AUDIO_VIDEO_WEARABLE_HEADSET ||
+      deviceClass == AUDIO_VIDEO_LOUDSPEAKER || deviceClass == AUDIO_VIDEO_PORTABLE_AUDIO
+
+  /**
+   * The outputs to list, from the connected Bluetooth outputs and whether Android Auto projects.
+   * Bluetooth: one per uid ([normalize]), leaving out the devices [notACar] (a uid's class taken from
+   * any of its reports). Android Auto is iPhone's CarPlay, the car's own screen, and CarPlay is
+   * listed under the car's own uid and name, so each car is its own. Android Auto's connection says
+   * nothing of the car, so it takes the car's Bluetooth: the one connected output of a car's class,
+   * else the only output connected (unless its class is headphones or a speaker), is listed as
+   * `carAudio` under its own uid and name. With no such output (none, or several that cannot be told
+   * apart), Android Auto is listed alone as [ANDROID_AUTO_UID], one output for any car.
+   */
+  fun listed(bluetooth: List<BluetoothOutput>, projecting: Boolean): List<CarOutput> {
+    val classes = HashMap<String, Int>()
+    for (b in bluetooth) b.deviceClass?.let { classes[capped(CarUids.normalize(b.output.uid), UID_MAX)] = it }
+    val outs = normalize(bluetooth.map { it.output }).filter { !notACar(classes[it.uid]) }
+    if (!projecting) return outs
+    val car = outs.filter { carClass(classes[it.uid]) }.singleOrNull() ?: outs.singleOrNull()?.takeIf { !listenerClass(classes[it.uid]) }
+    if (car != null) return outs.map { if (it.uid == car.uid) it.copy(type = "carAudio") else it }
+    return normalize(outs + CarOutput(ANDROID_AUTO_UID, ANDROID_AUTO_NAME, "carAudio"))
+  }
+
+  /** The stronger of two types reported for one uid: Android Auto's car, then A2DP, then HFP. */
+  private fun stronger(a: String, b: String): String = when {
+    a == "carAudio" || b == "carAudio" -> "carAudio"
+    a == "bluetoothA2DP" || b == "bluetoothA2DP" -> "bluetoothA2DP"
+    else -> a
+  }
+
   /**
    * One entry per uid, in the order reported: a device connected for media (A2DP) and calls (SCO)
-   * is one output, its type A2DP; its newest non-empty name. Uids and names capped as JS reads them,
-   * an empty uid or an unknown type dropped, at most [CURRENT_MAX].
+   * is one output, its type A2DP (Android Auto's car stays `carAudio`); its newest non-empty name.
+   * Uids and names capped as JS reads them, an empty uid or an unknown type dropped, at most
+   * [CURRENT_MAX].
    */
   fun normalize(raw: List<CarOutput>): List<CarOutput> {
     val out = LinkedHashMap<String, CarOutput>()
@@ -149,12 +213,7 @@ object CarOutputs {
       if (uid.isEmpty()) continue
       val name = capped(o.name.trim(), NAME_MAX)
       val was = out[uid]
-      out[uid] =
-        if (was == null) {
-          CarOutput(uid, name, o.type)
-        } else {
-          CarOutput(uid, name.ifEmpty { was.name }, if (was.type == "bluetoothA2DP" || o.type == "bluetoothA2DP") "bluetoothA2DP" else was.type)
-        }
+      out[uid] = if (was == null) CarOutput(uid, name, o.type) else CarOutput(uid, name.ifEmpty { was.name }, stronger(was.type, o.type))
     }
     return out.values.take(CURRENT_MAX)
   }

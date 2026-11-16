@@ -2,7 +2,12 @@ package expo.modules.drivesense.detect
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -20,39 +25,47 @@ import androidx.core.content.ContextCompat
 /**
  * The car link on Android (the iOS `CarLink.swift`; the rules and the record are
  * [CarLinkRecord.kt]): which Bluetooth audio outputs and whether Android Auto are connected now, the
- * cars the driver paired, and what each drive saw. Read-only: it lists AudioManager's output
- * devices and hears their changes (an [AudioDeviceCallback]), and asks Android Auto whether it is
- * projecting; it never routes audio, starts SCO, sets a communication device or touches a
- * connection, so nothing of the driver's audio, calls or connections moves.
+ * cars the driver paired, and what each drive saw. Read-only: it reads the devices connected on
+ * Bluetooth's audio profiles and AudioManager's output devices, hears their changes, and asks
+ * Android Auto whether it is projecting; it never routes audio, starts SCO, sets a communication
+ * device or touches a connection, so nothing of the driver's audio, calls or connections moves.
  *
- * - **Bluetooth outputs**: A2DP (`bluetoothA2DP`) and SCO, Android's HFP output (`bluetoothHFP`),
- *   matched on the device's Bluetooth address. LE audio outputs and hearing aids are never listed,
- *   as on iPhone (an LE audio output is a hearing aid or earbuds, never a car). Android lists every
- *   connected output, not only the one playing now, so a car connected for calls only shows too.
- *   Android 14+ hides the address from an app without Nearby devices (BLUETOOTH_CONNECT), which
+ * - **Bluetooth outputs**: A2DP (`bluetoothA2DP`) and hands-free (HFP, `bluetoothHFP`), matched on
+ *   the device's Bluetooth address. "Connected" is the Bluetooth connection, not the audio route:
+ *   AudioManager lists only the active A2DP and hands-free device (switching the sound to earbuds
+ *   drops the car from its list though the car stays connected), so with Nearby devices allowed
+ *   (BLUETOOTH_CONNECT, Android 12+; always below 12) the A2DP and headset profiles' connected
+ *   devices are the list, a car connected for calls only included, and their connection broadcasts
+ *   say when it changes. Without it AudioManager's outputs are all there is (the active device
+ *   only). LE audio outputs and hearing aids are never listed, as on iPhone (an LE audio output is
+ *   a hearing aid or earbuds, never a car), nor a device whose Bluetooth class is a watch, a phone
+ *   or a computer ([CarOutputs.notACar]; a watch holds the phone's hands-free link, which iPhone
+ *   never lists as audio). Android 14+ hides the address from an app without Nearby devices, which
  *   RoadWise asks for before "Use this car" (ruling 14); [CarLinkRules.reconcile] keeps one uid per
- *   car across the two forms. Android 7 to 8.1 report no address: the bonded device of that name
- *   gives it, else the name itself is the uid.
- * - **Android Auto** (iOS's CarPlay, `carAudio`, uid [ANDROID_AUTO_UID], named "Android Auto"):
- *   androidx.car.app's CarConnection contract, read without the library (its LiveData, its main
- *   thread and its Guava are not needed for one number): Android Auto's content provider answers the
- *   connection type, and its broadcast says when it changes. Projection (2) is connected; anything
- *   else, no provider (Android Auto not installed) or no answer, is not.
+ *   car across the two forms. Android 7 to 8.1 report no address on an audio output: the bonded
+ *   device of that name gives it, else the name itself is the uid.
+ * - **Android Auto** (iOS's CarPlay, `carAudio`): androidx.car.app's CarConnection contract, read
+ *   without the library (its LiveData, its main thread and its Guava are not needed for one
+ *   number): Android Auto's content provider answers the connection type, and its broadcast says
+ *   when it changes. Projection (2) is connected; anything else, no provider (Android Auto not
+ *   installed) or no answer, is not. It is listed as the car's own Bluetooth output when that can be
+ *   told, else alone as "Android Auto" ([CarOutputs.listed]).
  *
  * The record (its own preferences file, JSON) holds at most CARS_MAX paired cars, the outputs
  * connected for most of each of the last CAR_DRIVES_KEPT drives that reached driving speed (JS's "Is
  * <name> your car?") and the uids the driver said are not their car; the detector reads it with no
  * JS, a new process keeps it, and [wipe] (sign-out, account switch) empties it. Pairing happens only
  * from the driver's tap in JS, never silently. Everything here runs on the detector's thread
- * ([handler]): the device callback and the Android Auto receiver are registered on it.
+ * ([handler]): the device callback and the receivers are registered on it, and the profile proxies'
+ * answers (main thread) are posted to it.
  */
 internal class CarLink(context: Context, private val handler: Handler, private val onChange: () -> Unit) {
   companion object {
     private const val PREFS = "expo.modules.drivesense.carLink"
     private const val KEY = "record"
     private const val TAG = "DriveSense"
-    const val ANDROID_AUTO_UID = "android-auto"
-    const val ANDROID_AUTO_NAME = "Android Auto"
+    /** The Bluetooth profiles read, and the type each lists as. */
+    private val PROFILES = listOf(BluetoothProfile.A2DP to "bluetoothA2DP", BluetoothProfile.HEADSET to "bluetoothHFP")
     /** androidx.car.app 1.7.0 CarConnection: ACTION_CAR_CONNECTION_UPDATED, CAR_CONNECTION_STATE, its provider and CONNECTION_TYPE_PROJECTION. */
     const val CAR_CONNECTION_UPDATED = "androidx.car.app.connection.action.CAR_CONNECTION_UPDATED"
     private const val CAR_CONNECTION_STATE = "CarConnectionState"
@@ -68,6 +81,11 @@ internal class CarLink(context: Context, private val handler: Handler, private v
   private val app = context.applicationContext
   private val store = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
   private val audio: AudioManager? = app.getSystemService(AudioManager::class.java)
+  private val adapter: BluetoothAdapter? = try {
+    app.getSystemService(BluetoothManager::class.java)?.adapter
+  } catch (_: Exception) {
+    null
+  }
 
   /** The Bluetooth and Android Auto outputs as last read. */
   var current: List<CarOutput> = emptyList()
@@ -86,10 +104,35 @@ internal class CarLink(context: Context, private val handler: Handler, private v
   /** Android Auto projects now (its provider's last answer). */
   private var projecting = false
   private var started = false
+  /** The A2DP and headset profile proxies, once Bluetooth hands them over (only with Nearby devices). */
+  private val proxies = HashMap<Int, BluetoothProfile>()
+  private var proxiesAsked = false
 
   private val devices = object : AudioDeviceCallback() {
     override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = refresh()
     override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = refresh()
+  }
+
+  /** Bluetooth hands each profile proxy over on the main thread: kept, and read, on the detector's. */
+  private val profiles = object : BluetoothProfile.ServiceListener {
+    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+      handler.post {
+        proxies[profile] = proxy
+        refresh()
+      }
+    }
+
+    override fun onServiceDisconnected(profile: Int) {
+      handler.post {
+        proxies.remove(profile)
+        refresh()
+      }
+    }
+  }
+
+  /** A device connecting or leaving on A2DP or hands-free: read again (the broadcast's extras are not used). */
+  private val profileChanges = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) = refresh()
   }
 
   /** Android Auto's broadcast carries nothing read: it only says to ask its provider again. */
@@ -113,7 +156,20 @@ internal class CarLink(context: Context, private val handler: Handler, private v
     } catch (e: Exception) {
       Log.w(TAG, "android auto receiver not registered: ${e.javaClass.simpleName}")
     }
+    try {
+      // Sent by the Bluetooth stack (its own app), only to an app with Nearby devices: exported, as
+      // the manifest's ACL_CONNECTED receiver is. Protected broadcasts no app can fake, and they only
+      // make RoadWise read again.
+      val filter = IntentFilter().apply {
+        addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+        addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+      }
+      ContextCompat.registerReceiver(app, profileChanges, filter, null, handler, ContextCompat.RECEIVER_EXPORTED)
+    } catch (e: Exception) {
+      Log.w(TAG, "bluetooth profile receiver not registered: ${e.javaClass.simpleName}")
+    }
     readProjection()
+    askProxies()
     try {
       // Calls onAudioDevicesAdded with every output connected now, then each change, on [handler].
       audio?.registerAudioDeviceCallback(devices, handler)
@@ -139,9 +195,28 @@ internal class CarLink(context: Context, private val handler: Handler, private v
     }
   }
 
-  /** The connected Bluetooth and Android Auto outputs, read and nothing else. */
+  /**
+   * Asks Bluetooth once for the A2DP and headset profile proxies, as soon as Nearby devices allows
+   * reading them (at the start, or at the first read after it is granted). Binding a proxy connects
+   * nothing; it only answers what is connected.
+   */
+  private fun askProxies() {
+    if (proxiesAsked || !addressesReadable(app)) return
+    val a = adapter ?: return
+    proxiesAsked = true
+    for ((profile, _) in PROFILES) {
+      try {
+        a.getProfileProxy(app, profiles, profile)
+      } catch (e: Exception) {
+        Log.w(TAG, "bluetooth profile $profile not read: ${e.javaClass.simpleName}")
+      }
+    }
+  }
+
+  /** The connected Bluetooth and Android Auto outputs, read and nothing else (both sources: one entry per uid). */
   private fun read(): List<CarOutput> {
-    val raw = mutableListOf<CarOutput>()
+    val readable = addressesReadable(app)
+    val raw = mutableListOf<BluetoothOutput>()
     val outputs = try {
       audio?.getDevices(AudioManager.GET_DEVICES_OUTPUTS) ?: emptyArray()
     } catch (_: Exception) {
@@ -151,10 +226,47 @@ internal class CarLink(context: Context, private val handler: Handler, private v
       val type = portType(d.type) ?: continue
       val name = d.productName?.toString()?.trim().orEmpty()
       val uid = uidOf(d, name) ?: continue
-      raw.add(CarOutput(uid, name, type))
+      raw.add(BluetoothOutput(CarOutput(uid, name, type), if (readable) classOf(uid) else null))
     }
-    if (projecting) raw.add(CarOutput(ANDROID_AUTO_UID, ANDROID_AUTO_NAME, "carAudio"))
-    return CarOutputs.normalize(raw)
+    // After AudioManager's: a device's name from Bluetooth (its alias) is the newest, so it does not
+    // change as the device becomes or stops being the active one.
+    if (readable) raw.addAll(connectedOnProfiles())
+    return CarOutputs.listed(raw, projecting)
+  }
+
+  /** The devices connected on A2DP and hands-free now (Nearby devices allowed, the proxies handed over). */
+  @SuppressLint("MissingPermission")
+  private fun connectedOnProfiles(): List<BluetoothOutput> {
+    val out = mutableListOf<BluetoothOutput>()
+    for ((profile, type) in PROFILES) {
+      val proxy = proxies[profile] ?: continue
+      val devices = try {
+        proxy.connectedDevices
+      } catch (_: Exception) {
+        emptyList<BluetoothDevice>()
+      }
+      for (d in devices) {
+        try {
+          val address = d.address?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+          val name = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) d.alias else null) ?: d.name
+          out.add(BluetoothOutput(CarOutput(CarUids.normalize(address), name?.trim().orEmpty(), type), d.bluetoothClass?.deviceClass))
+        } catch (_: Exception) {
+          // Nearby devices taken back between the check and the read: this device is skipped.
+        }
+      }
+    }
+    return out
+  }
+
+  /** A full address's Bluetooth class (the stack's cached one; no connection), when Nearby devices allows it. */
+  @SuppressLint("MissingPermission")
+  private fun classOf(uid: String): Int? {
+    if (!CarUids.address(uid)) return null
+    return try {
+      adapter?.getRemoteDevice(uid)?.bluetoothClass?.deviceClass
+    } catch (_: Exception) {
+      null
+    }
   }
 
   /** A2DP and SCO (HFP) only: never LE audio (headsets, speakers, broadcast) or a hearing aid. */
@@ -184,6 +296,7 @@ internal class CarLink(context: Context, private val handler: Handler, private v
    */
   fun refresh(force: Boolean = false) {
     if (!started) return
+    askProxies()
     val (next, r) = CarLinkRules.reconcile(read(), rec)
     var changed = force || next != current
     current = next

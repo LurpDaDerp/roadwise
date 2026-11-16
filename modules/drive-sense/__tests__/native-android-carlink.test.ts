@@ -4,8 +4,9 @@
 // rest of the Kotlin. The rules (the outputs listed, the drive's tally, pairing, "Not my car", the
 // hidden Bluetooth address, the record and the state's shape, the car wake's gate) are proven by
 // the JVM tests (`CarLinkRecordTest.kt`); this suite pins what can be checked statically: read-only
-// audio, the outputs Android lists (A2DP and SCO; never LE audio or a hearing aid), Android Auto
-// through CarConnection's contract, no polling, one thread, the detector's use of it (the link
+// audio, the outputs Android lists (A2DP and hands-free, by their Bluetooth connection with Nearby
+// devices, else AudioManager's active outputs; never LE audio, a hearing aid or a watch), Android
+// Auto through CarConnection's contract, no polling, one thread, the detector's use of it (the link
 // start, the tally, the car-link end, the wipe, the live `carLink` event) and the car's wake
 // (ruling 2) with its receiver switched on only while the wakes run with a car paired.
 
@@ -41,15 +42,51 @@ describe('native-android: the car link reads, never changes, the audio', () => {
     expect(port).toMatch(/AudioDeviceInfo\.TYPE_BLUETOOTH_A2DP -> "bluetoothA2DP"/);
     expect(port).toMatch(/AudioDeviceInfo\.TYPE_BLUETOOTH_SCO -> "bluetoothHFP"/);
     expect(port).toMatch(/else -> null/);
-    expect(link()).not.toMatch(/TYPE_BLE_|TYPE_HEARING_AID/);
+    expect(link()).not.toMatch(/TYPE_BLE_|TYPE_HEARING_AID|LE_AUDIO|HEARING_AID/);
     expect(link()).toMatch(/getDevices\(AudioManager\.GET_DEVICES_OUTPUTS\)/);
-    expect(link()).toMatch(/if \(projecting\) raw\.add\(CarOutput\(ANDROID_AUTO_UID, ANDROID_AUTO_NAME, "carAudio"\)\)/);
-    expect(link()).toMatch(/const val ANDROID_AUTO_NAME = "Android Auto"/);
+    expect(link()).toMatch(/PROFILES = listOf\(BluetoothProfile\.A2DP to "bluetoothA2DP", BluetoothProfile\.HEADSET to "bluetoothHFP"\)/);
+    expect(fn(link(), '  private fun read(', 2)).toMatch(/return CarOutputs\.listed\(raw, projecting\)/);
+    expect(det('CarLinkRecord')).toMatch(/const val ANDROID_AUTO_UID = "android-auto"/);
+    expect(det('CarLinkRecord')).toMatch(/const val ANDROID_AUTO_NAME = "Android Auto"/);
     expect(det('CarLinkRecord')).toMatch(/val TYPES = listOf\("bluetoothA2DP", "bluetoothHFP", "carAudio"\)/);
   });
 
+  it('connected means the Bluetooth connection (A2DP and hands-free profiles) with Nearby devices, not only the active audio device', () => {
+    const r = fn(link(), '  private fun read(', 2);
+    expect(r).toMatch(/if \(readable\) raw\.addAll\(connectedOnProfiles\(\)\)/);
+    expect(fn(link(), '  private fun connectedOnProfiles(', 2)).toMatch(/proxy\.connectedDevices/);
+    // The proxies are asked for only once Nearby devices allows reading them, at the start or the
+    // first read after it is granted; their answers come on the main thread and are posted to the detector's.
+    const ask = fn(link(), '  private fun askProxies(', 2);
+    expect(ask).toMatch(/if \(proxiesAsked \|\| !addressesReadable\(app\)\) return/);
+    expect(ask).toMatch(/a\.getProfileProxy\(app, profiles, profile\)/);
+    expect(fn(link(), '  fun refresh(', 2)).toMatch(/askProxies\(\)/);
+    expect(link()).toMatch(/override fun onServiceConnected\(profile: Int, proxy: BluetoothProfile\) \{\s*handler\.post \{\s*proxies\[profile\] = proxy\s*refresh\(\)/);
+    // Each profile connection change is read again, on the detector's thread.
+    const start = fn(link(), '  fun start(', 2);
+    expect(start).toMatch(/addAction\(BluetoothA2dp\.ACTION_CONNECTION_STATE_CHANGED\)/);
+    expect(start).toMatch(/addAction\(BluetoothHeadset\.ACTION_CONNECTION_STATE_CHANGED\)/);
+    expect(start).toMatch(/ContextCompat\.registerReceiver\(app, profileChanges, filter, null, handler, ContextCompat\.RECEIVER_EXPORTED\)/);
+  });
+
+  it('a watch, a phone or a computer holding the audio link is never listed (its Bluetooth class); JVM-tested', () => {
+    expect(fn(link(), '  private fun connectedOnProfiles(', 2)).toMatch(/d\.bluetoothClass\?\.deviceClass/);
+    expect(fn(link(), '  private fun read(', 2)).toMatch(/if \(readable\) classOf\(uid\) else null/);
+    expect(fn(det('CarLinkRecord'), '  fun listed(', 2)).toMatch(/\.filter \{ !notACar\(classes\[it\.uid\]\) \}/);
+    const t = read(join(TEST_DIR, 'detect', 'CarLinkRecordTest.kt'));
+    expect(t).toMatch(/fun listed_aWatchAPhoneOrAComputerIsNeverACar_byAnyOfItsReports\(/);
+  });
+
+  it('Android Auto takes the car’s own Bluetooth (each car its own, as CarPlay), else is one output for any car; JVM-tested', () => {
+    const l = fn(det('CarLinkRecord'), '  fun listed(', 2);
+    expect(l).toMatch(/if \(car != null\) return outs\.map \{ if \(it\.uid == car\.uid\) it\.copy\(type = "carAudio"\) else it \}/);
+    expect(l).toMatch(/return normalize\(outs \+ CarOutput\(ANDROID_AUTO_UID, ANDROID_AUTO_NAME, "carAudio"\)\)/);
+    const t = read(join(TEST_DIR, 'detect', 'CarLinkRecordTest.kt'));
+    expect(t).toMatch(/fun listed_androidAutoTakesTheCarsBluetooth_elseIsOneOutputForAnyCar\(/);
+  });
+
   it('read-only: no routing, no SCO, no communication device, no mode, no scan or connection', () => {
-    for (const call of ['setCommunicationDevice', 'startBluetoothSco', 'setBluetoothScoOn', 'setSpeakerphoneOn', 'setMode(', 'startDiscovery', 'bluetoothLeScanner', 'connectGatt', 'getProfileProxy']) {
+    for (const call of ['setCommunicationDevice', 'startBluetoothSco', 'setBluetoothScoOn', 'setSpeakerphoneOn', 'setMode(', 'startDiscovery', 'bluetoothLeScanner', 'connectGatt', '.connect(', '.disconnect(', 'setActiveDevice', 'setConnectionPolicy', 'createBond']) {
       expect({ call, used: link().includes(call) }).toEqual({ call, used: false });
     }
   });

@@ -125,6 +125,58 @@ class CarLinkRecordTest {
     assertTrue(CarLinkRules.linked(listOf(auto), CarLinkRecord()))
   }
 
+  // BluetoothClass.Device values.
+  private val watchClass = 0x0704
+  private val phoneClass = 0x020C
+  private val carClass = 0x0420
+  private val handsFreeClass = 0x0408
+  private val headphonesClass = 0x0418
+
+  @Test
+  fun listed_aWatchAPhoneOrAComputerIsNeverACar_byAnyOfItsReports() {
+    val watch = CarOutput("12:34:56:78:9A:BC", "Galaxy Watch6 (A1B2)", "bluetoothHFP")
+    val laptop = CarOutput("AA:AA:AA:AA:AA:AA", "Pixelbook", "bluetoothA2DP")
+    val raw = listOf(
+      BluetoothOutput(watch, null), // AudioManager's report: no class
+      BluetoothOutput(watch.copy(uid = watch.uid.lowercase()), watchClass), // the headset profile's
+      BluetoothOutput(laptop, 0x010C),
+      BluetoothOutput(CarOutput("BB:BB:BB:BB:BB:BB", "Old phone", "bluetoothHFP"), phoneClass),
+      BluetoothOutput(civic, carClass),
+      BluetoothOutput(volvo, null)
+    )
+    assertEquals(listOf(civic, volvo), CarOutputs.listed(raw, projecting = false))
+    assertTrue(CarOutputs.notACar(watchClass))
+    assertFalse(CarOutputs.notACar(carClass))
+    assertFalse(CarOutputs.notACar(null))
+  }
+
+  @Test
+  fun listed_androidAutoTakesTheCarsBluetooth_elseIsOneOutputForAnyCar() {
+    val buds = CarOutput("CC:CC:CC:CC:CC:CC", "Pixel Buds", "bluetoothA2DP")
+    // The one output of a car's class, among others: Android Auto is that car, under its own uid and name.
+    assertEquals(
+      listOf(civic.copy(type = "carAudio"), buds),
+      CarOutputs.listed(listOf(BluetoothOutput(civic, carClass), BluetoothOutput(buds, headphonesClass)), projecting = true)
+    )
+    assertEquals(listOf(volvo.copy(type = "carAudio")), CarOutputs.listed(listOf(BluetoothOutput(volvo, handsFreeClass)), projecting = true))
+    // The only output connected, its class unknown (Nearby devices not allowed): that car.
+    assertEquals(listOf(civicHidden.copy(type = "carAudio")), CarOutputs.listed(listOf(BluetoothOutput(civicHidden, null)), projecting = true))
+    // Nothing, only headphones, or two that cannot be told apart: Android Auto alone.
+    assertEquals(listOf(auto), CarOutputs.listed(emptyList(), projecting = true))
+    assertEquals(listOf(buds, auto), CarOutputs.listed(listOf(BluetoothOutput(buds, headphonesClass)), projecting = true))
+    assertEquals(listOf(civic, volvo, auto), CarOutputs.listed(listOf(BluetoothOutput(civic, null), BluetoothOutput(volvo, null)), projecting = true))
+    // Not projecting: the Bluetooth outputs as they are.
+    assertEquals(listOf(civic), CarOutputs.listed(listOf(BluetoothOutput(civic, carClass)), projecting = false))
+    // Two cars with Android Auto are two cars: each is paired and tagged under its own Bluetooth.
+    var r = CarLinkRules.pair(CarLinkRecord(), CarOutputs.listed(listOf(BluetoothOutput(civic, carClass)), true), civic.uid, 1.0)
+    r = CarLinkRules.pair(r, CarOutputs.listed(listOf(BluetoothOutput(volvo, handsFreeClass)), true), volvo.uid, 2.0)
+    assertEquals(listOf(civic.uid to "carAudio", volvo.uid to "carAudio"), r.cars.map { it.uid to it.type })
+    // The car stays one output as Android Auto comes and goes (its uid is its Bluetooth's), and the
+    // link holds through it.
+    assertEquals(listOf(civic.copy(type = "carAudio")), CarOutputs.normalize(listOf(civic.copy(type = "carAudio"), civic)))
+    assertTrue(CarLinkRules.linked(listOf(civic), r))
+  }
+
   @Test
   fun record_roundTrips_andADamagedOneReadsAsNone() {
     val r = CarLinkRecord(
