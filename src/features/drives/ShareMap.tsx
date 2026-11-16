@@ -152,14 +152,34 @@ function androidMapsKey(): string | undefined {
 }
 
 /**
- * Whether this build can draw the map backdrop: iPhone (Apple's map needs no key), or Android with
- * a Google Maps key built in (without one Google draws blank grey tiles), and the maps module in
- * the build either way.
+ * Whether Android offers the map backdrop at all: off. The backdrop there is Google's
+ * `GoogleMap.snapshot()`, and the Maps SDK's terms say its images "must not be transmitted to your
+ * servers, or otherwise used outside of the application" (send data to rebuild the map instead).
+ * A shared card leaves the app, so Android shares the plain card until the owner picks a backdrop
+ * whose terms allow it (ruling 10 is on hold). Everything below still works when this is turned on.
  */
-export function mapsAvailable(os: string = Platform.OS, androidKey: string | undefined = os === 'android' ? androidMapsKey() : undefined): boolean {
+const ANDROID_SHARE_MAP = false;
+
+let androidShareMapForTests: boolean | undefined;
+
+/** Tests: turn the Android map backdrop on or off; undefined goes back to `ANDROID_SHARE_MAP`. */
+export function setAndroidShareMapForTests(on: boolean | undefined): void {
+  androidShareMapForTests = on;
+}
+
+/**
+ * Whether this build can draw the map backdrop: iPhone (Apple's map needs no key), or Android with
+ * the backdrop turned on (`ANDROID_SHARE_MAP`) and a Google Maps key built in (without one Google
+ * draws blank grey tiles), and the maps module in the build either way.
+ */
+export function mapsAvailable(
+  os: string = Platform.OS,
+  androidKey: string | undefined = os === 'android' ? androidMapsKey() : undefined,
+  androidOn: boolean = androidShareMapForTests ?? ANDROID_SHARE_MAP
+): boolean {
   if (loadMaps() === null) return false;
   if (os === 'ios') return true;
-  return os === 'android' && typeof androidKey === 'string' && androidKey.trim() !== '';
+  return os === 'android' && androidOn && typeof androidKey === 'string' && androidKey.trim() !== '';
 }
 
 /** Whether the share sheet offers "Show map": the map backdrop can be drawn here, and there is a route to frame. */

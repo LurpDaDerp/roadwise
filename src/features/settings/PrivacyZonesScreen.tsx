@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, Switch, TextInput, View } from 'react-native';
+import { Alert, Pressable, Switch, TextInput, useColorScheme, View } from 'react-native';
 
 import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -13,6 +13,7 @@ import { Banner, Button, Chip, EmptyState, IconButton, ListRow, Screen, Sheet, T
 
 import { settingsCopy } from './copy';
 import { loadMaps, US_REGION } from './maps';
+import { androidMapLook } from './mapStyle';
 import { LinkRow, RowIcon, Section, TopBar } from './parts';
 import { SETTINGS_HREFS } from './routes';
 import {
@@ -368,6 +369,9 @@ function ZoneEditor({
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<'denied' | 'failed' | null>(null);
   const maps = loadMaps();
+  // Android: Google's map takes the system appearance only when it is made, so it is given it (and
+  // the quiet style Apple's map gets from showsPointsOfInterests) and remade when it changes.
+  const look = androidMapLook(useColorScheme() === 'dark' ? 'dark' : 'light');
   const hasCenter = draft.lat !== null && draft.lng !== null;
   // A saved place's zone: named and centred by the place, so only its size is set here.
   const linked = draft.placeId !== undefined;
@@ -496,7 +500,9 @@ function ZoneEditor({
               style={{ height: 220, borderRadius: th.radius.lg, overflow: 'hidden', borderCurve: 'continuous' }}
             >
               <maps.default
+                key={look?.key}
                 style={{ flex: 1 }}
+                {...(look ? { userInterfaceStyle: look.userInterfaceStyle, customMapStyle: look.customMapStyle } : null)}
                 initialRegion={
                   hasCenter
                     ? { latitude: draft.lat as number, longitude: draft.lng as number, latitudeDelta: 0.03, longitudeDelta: 0.03 }

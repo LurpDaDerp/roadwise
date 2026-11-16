@@ -38,7 +38,7 @@ import java.net.URI
  *
  * The chooser answers nothing about what was picked, and the app picked may still be reading the
  * file after RoadWise is back in front, so the file is not deleted here: JS sweeps share images
- * about 10 minutes old at launch and on each return to the front (`sweepStaleShareImages`).
+ * about 10 minutes old at launch and on each return to the front (`sweepStaleShareFiles`).
  */
 internal object ShareIntent {
   /** [ShareFileProvider]'s authority after the package name (the manifest's `${applicationId}.drivesense.share`). */

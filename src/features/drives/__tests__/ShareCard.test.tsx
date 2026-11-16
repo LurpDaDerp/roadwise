@@ -11,7 +11,7 @@ import { draw, press, ROUTE } from '../__fixtures__/drives';
 import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
-import { bandAlpha, leadPath, mapCredit, mapsAvailable, MAP_TIMEOUT_MS, routePath, setMapsKeyForTests, shareFrame } from '../ShareMap';
+import { bandAlpha, leadPath, mapCredit, mapsAvailable, MAP_TIMEOUT_MS, routePath, setAndroidShareMapForTests, setMapsKeyForTests, shareFrame } from '../ShareMap';
 import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -433,75 +433,93 @@ describe('Android', () => {
     expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
   });
 
-  test('Show map needs a Google Maps key in the build; iPhone needs none', () => {
-    expect(mapsAvailable('android', 'AIza-key')).toBe(true);
-    expect(mapsAvailable('android', undefined)).toBe(false);
-    expect(mapsAvailable('android', '  ')).toBe(false);
+  test("Show map is off on Android (Google's snapshot may not leave the app), even with a key; iPhone keeps it", async () => {
+    expect(mapsAvailable('android', 'AIza-key')).toBe(false);
     expect(mapsAvailable('ios', undefined)).toBe(true);
-    expect(mapsAvailable('web', 'AIza-key')).toBe(false);
-  });
-
-  test('with a key in a dark phone: the dark, quiet Google map is snapshotted once its tiles load, and credited to Google', async () => {
     const key = withMapsKey('AIza-key');
-    const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('dark');
-    try {
-      await draw(sheet());
-      await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
-      const view = screen.getByTestId('share-map-view', H);
-      expect(view).toHaveProp('userInterfaceStyle', 'dark');
-      expect(view.props.onMapReady).toBeUndefined();
-      expect(typeof view.props.onMapLoaded).toBe('function');
-      expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
-      expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
-      await mapLoads();
-      expect(mockTakeSnapshot).toHaveBeenCalledTimes(1);
-      expect(within(screen.getByTestId('share-card')).getByText('Map data © Google')).toBeOnTheScreen();
-      expect(within(screen.getByTestId('share-card')).queryByText('Map © Apple')).toBeNull();
-    } finally {
-      scheme.mockRestore();
-      key.restore();
-    }
-  });
-
-  test('in a light phone the shared map is the light, quiet Google map, as the iPhone snapshot follows the phone', async () => {
-    const key = withMapsKey('AIza-key');
-    const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('light');
-    try {
-      await draw(sheet());
-      await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
-      const view = screen.getByTestId('share-map-view', H);
-      expect(view).toHaveProp('userInterfaceStyle', 'light');
-      expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
-      expect(view.props.customMapStyle).not.toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
-    } finally {
-      scheme.mockRestore();
-      key.restore();
-    }
-  });
-
-  test("the key comes from the bundle's EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY (Expo strips android.config from the app's config)", async () => {
-    const before = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
-    try {
-      process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = 'AIza-from-env';
-      expect(mapsAvailable('android')).toBe(true);
-      await draw(sheet());
-      expect(screen.getByTestId('share-map-toggle')).toBeOnTheScreen();
-      process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = '';
-      expect(mapsAvailable('android')).toBe(false);
-    } finally {
-      if (before === undefined) delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
-      else process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = before;
-    }
-  });
-
-  test('without a key there is no Show map', async () => {
-    const key = withMapsKey(undefined);
     try {
       await draw(sheet());
       expect(screen.queryByTestId('share-map-toggle')).toBeNull();
+      expect(within(screen.getByTestId('share-card')).queryByText('Map data © Google')).toBeNull();
     } finally {
       key.restore();
     }
+  });
+
+  describe('with the map backdrop turned on', () => {
+    beforeEach(() => setAndroidShareMapForTests(true));
+    afterEach(() => setAndroidShareMapForTests(undefined));
+
+    test('Show map needs a Google Maps key in the build; iPhone needs none', () => {
+      expect(mapsAvailable('android', 'AIza-key')).toBe(true);
+      expect(mapsAvailable('android', undefined)).toBe(false);
+      expect(mapsAvailable('android', '  ')).toBe(false);
+      expect(mapsAvailable('ios', undefined)).toBe(true);
+      expect(mapsAvailable('web', 'AIza-key')).toBe(false);
+    });
+
+    test('with a key in a dark phone: the dark, quiet Google map is snapshotted once its tiles load, and credited to Google', async () => {
+      const key = withMapsKey('AIza-key');
+      const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('dark');
+      try {
+        await draw(sheet());
+        await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+        const view = screen.getByTestId('share-map-view', H);
+        expect(view).toHaveProp('userInterfaceStyle', 'dark');
+        expect(view.props.onMapReady).toBeUndefined();
+        expect(typeof view.props.onMapLoaded).toBe('function');
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
+        await mapLoads();
+        expect(mockTakeSnapshot).toHaveBeenCalledTimes(1);
+        expect(within(screen.getByTestId('share-card')).getByText('Map data © Google')).toBeOnTheScreen();
+        expect(within(screen.getByTestId('share-card')).queryByText('Map © Apple')).toBeNull();
+      } finally {
+        scheme.mockRestore();
+        key.restore();
+      }
+    });
+
+    test('in a light phone the shared map is the light, quiet Google map, as the iPhone snapshot follows the phone', async () => {
+      const key = withMapsKey('AIza-key');
+      const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('light');
+      try {
+        await draw(sheet());
+        await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+        const view = screen.getByTestId('share-map-view', H);
+        expect(view).toHaveProp('userInterfaceStyle', 'light');
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
+        expect(view.props.customMapStyle).not.toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
+      } finally {
+        scheme.mockRestore();
+        key.restore();
+      }
+    });
+
+    test("the key comes from the bundle's EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY (Expo strips android.config from the app's config)", async () => {
+      const before = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
+      try {
+        process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = 'AIza-from-env';
+        expect(mapsAvailable('android')).toBe(true);
+        await draw(sheet());
+        expect(screen.getByTestId('share-map-toggle')).toBeOnTheScreen();
+        process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = '';
+        expect(mapsAvailable('android')).toBe(false);
+      } finally {
+        if (before === undefined) delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
+        else process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = before;
+      }
+    });
+
+    test('without a key there is no Show map', async () => {
+      const key = withMapsKey(undefined);
+      try {
+        await draw(sheet());
+        expect(screen.queryByTestId('share-map-toggle')).toBeNull();
+      } finally {
+        key.restore();
+      }
+    });
   });
 
   test('the credit names whose map it is', () => {

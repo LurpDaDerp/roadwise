@@ -232,7 +232,7 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
       // The image carries the whole route: on iPhone it is deleted however the sheet ends (the sheet
       // is done with it by then). Android's chooser answers as soon as it is up (or a target is
       // picked), and the target may still be reading the file: there it stays in the cache until
-      // the sweep of share images about 10 minutes old (`sweepStaleShareImages`, at launch and on
+      // the sweep of share images about 10 minutes old (`sweepStaleShareFiles`, at launch and on
       // each return to the front), or the next wipe.
       let handed = false;
       try {
