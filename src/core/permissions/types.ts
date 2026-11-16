@@ -45,14 +45,16 @@ export interface PermissionSnapshot {
    * What lets the phone wake RoadWise when a drive starts (automatic drives want it), from the drive
    * detector: iOS Background App Refresh; Android's battery usage for RoadWise, `denied` only while
    * it is set to Restricted (Optimized, the default, and Unrestricted are both `available`), and
-   * `restricted` while Battery Saver is on with a location mode that limits background location
-   * (iOS `restricted`: the phone's management turned it off). null where the phone has no drive
-   * detector or it could not be read.
+   * `restricted` while Battery Saver is on with a location mode that stops background fixes (never in
+   * the detector's `missing`) (iOS `restricted`: the phone's management turned it off). null where
+   * the phone has no drive detector (on Android also one without Google Play services) or it could
+   * not be read.
    */
   backgroundRefresh: 'available' | 'denied' | 'restricted' | null;
   /**
    * The Location Always request (Android: "Allow all the time") can still be shown: While Using
-   * held, not yet asked (iOS asks once). From the drive detector; null where it has none or unreadable.
+   * held, not yet asked (iOS asks once). From the drive detector; null where it has none (Android: or
+   * no Google Play services) or unreadable.
    */
   canAskAlways: boolean | null;
   /** The drive's lock-screen surface is allowed: iOS Live Activities, Android the drive notification. null without a detector or unreadable. */

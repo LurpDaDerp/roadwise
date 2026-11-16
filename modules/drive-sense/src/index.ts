@@ -49,6 +49,8 @@ export { ANDROID_SHARE_METHODS, nativeShareImage, setShareModuleForTests } from 
 export type { ShareImage, ShareImageOptions } from './share';
 export { ANDROID_GEOCODE_METHODS, GEOCODE_QUERY_MAX, nativeAddressSchema, nativeGeocoder, setGeocodeModuleForTests } from './geocode';
 export type { NativeAddress, NativeGeocoder, NativePoint } from './geocode';
+// Android only (ruling 15): the "Pause app activity if unused" read and its page.
+export { ANDROID_UNUSED_APP_METHODS } from './unusedApps';
 // The iOS drive detector (plan §3.1.1): its bridge, fake, rules, decision table, self-test and journal format.
 export {
   carLinkStateSchema,

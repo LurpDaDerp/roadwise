@@ -133,7 +133,12 @@ export type DetectReason =
   | 'notDriving'
   | 'suppressionEnded'
   | 'resumed'
-  | 'permissionLost';
+  | 'permissionLost'
+  /**
+   * Android only: Battery Saver switched on or off while RoadWise's JS runs (the permission rows
+   * read the phone again; nothing in detection changes).
+   */
+  | 'batterySaver';
 
 export const DETECT_REASONS: readonly DetectReason[] = [
   'armed',
@@ -159,6 +164,7 @@ export const DETECT_REASONS: readonly DetectReason[] = [
   'suppressionEnded',
   'resumed',
   'permissionLost',
+  'batterySaver',
 ];
 
 export interface DetectStateEvent extends DetectState {

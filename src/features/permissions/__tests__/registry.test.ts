@@ -88,9 +88,9 @@ describe("automatic drives' rows on Android", () => {
     }
   });
 
-  it('Pause app activity if unused: off is granted, on is missing (Settings only), unread is unknown', () => {
+  it('Pause app activity if unused: off is granted, on is missing (Settings only: the page with its switch), unread is unknown', () => {
     expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'off' }))).toEqual({ kind: 'granted' });
-    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'on' }))).toEqual(missing('denied', false));
+    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'on' }))).toEqual(missing('denied', false, 'unusedApps'));
     expect(state('unusedApps', board({ platform: 'android', unusedAppPause: null }))).toEqual({ kind: 'unknown' });
     expect(state('unusedApps', board({ platform: 'android' }))).toEqual({ kind: 'unknown' });
   });

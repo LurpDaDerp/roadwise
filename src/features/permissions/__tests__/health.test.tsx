@@ -9,7 +9,7 @@ import { HOME_HIDDEN_KEY } from '@/core/permissions';
 import type { AutoDrives } from '@/features/autoDrives/useAutoDrives';
 import { PAIRED_KEY } from '@/dashcam/keys';
 
-import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap, type FakeAdapter } from '../__fixtures__/harness';
+import { appWorld, clearQueryClients, fakeAdapter, fakeAppState, snap, tap, type FakeAdapter, type FakeAppState } from '../__fixtures__/harness';
 import { PermissionsScreen } from '../PermissionsScreen';
 import type { PermissionBoardDeps } from '../usePermissionBoard';
 
@@ -25,10 +25,11 @@ afterEach(() => {
 });
 
 const PAIRED = { dashcamId: 'a1b2c3d4e5f6', peripheralId: 'AA:BB', name: 'DashPal-E5F6', pairedAt: 1, secure: true as const };
-function deps(adapter: FakeAdapter, androidApi = 34): PermissionBoardDeps {
+function deps(adapter: FakeAdapter, androidApi = 34, appState: FakeAppState = fakeAppState(), watchBatterySaver?: PermissionBoardDeps['watchBatterySaver']): PermissionBoardDeps {
   return {
     adapter,
-    appState: fakeAppState(),
+    appState,
+    watchBatterySaver,
     androidApi: adapter.current.platform === 'android' ? androidApi : null,
     watchDashcam: () => () => {},
     ensureChannels: async () => {},
@@ -36,9 +37,12 @@ function deps(adapter: FakeAdapter, androidApi = 34): PermissionBoardDeps {
   };
 }
 
-async function open(adapter: FakeAdapter, opts: { settings?: Record<string, unknown>; androidApi?: number } = {}) {
+async function open(
+  adapter: FakeAdapter,
+  opts: { settings?: Record<string, unknown>; androidApi?: number; appState?: FakeAppState; watchBatterySaver?: PermissionBoardDeps['watchBatterySaver'] } = {}
+) {
   const w = await appWorld({ settings: opts.settings });
-  await w.render(<PermissionsScreen deps={deps(adapter, opts.androidApi)} />);
+  await w.render(<PermissionsScreen deps={deps(adapter, opts.androidApi, opts.appState, opts.watchBatterySaver)} />);
   await screen.findByTestId('permissions-summary');
   return w;
 }
@@ -241,6 +245,20 @@ describe('Android with the drive detector', () => {
     expect(screen.queryByTestId('permission-unusedApps-fix')).toBeNull();
   });
 
+  it("Pause app activity if unused: Open Settings opens the switch's own page, and back in front the row reads the phone again", async () => {
+    const adapter = android({ unusedAppPause: 'on', backgroundRefresh: 'available' });
+    const appState = fakeAppState();
+    await open(adapter, { appState });
+    await tap('permission-unusedApps-fix');
+    await waitFor(() => expect(adapter.log).toContain('openUnusedAppSettings'));
+    expect(adapter.log).not.toContain('openAppSettings');
+    // The driver turns the switch off there and comes back.
+    adapter.current = { ...adapter.current, unusedAppPause: 'off' };
+    appState.foreground();
+    await waitFor(() => expect(screen.getByTestId('permission-unusedApps-status')).toHaveTextContent('Off'));
+    expect(screen.queryByTestId('permission-unusedApps-fix')).toBeNull();
+  });
+
   it('Android 11 names its own switch and says it takes the permissions back', async () => {
     await open(android({ unusedAppPause: 'on' }), { androidApi: 30 });
     expect(within(screen.getByTestId('permission-unusedApps')).getByText("Remove permissions if app isn't used")).toBeOnTheScreen();
@@ -259,6 +277,24 @@ describe('Android with the drive detector', () => {
     expect(adapter.log).not.toContain('openAppSettings');
   });
 
+  it('Battery Saver switched from the quick settings (RoadWise stays in front): the row reads the phone again', async () => {
+    const adapter = android({ backgroundRefresh: 'available', unusedAppPause: 'off' });
+    let changed: (() => void) | null = null;
+    const watchBatterySaver = (fn: () => void) => {
+      changed = fn;
+      return () => {
+        changed = null;
+      };
+    };
+    await open(adapter, { watchBatterySaver });
+    expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('On');
+    adapter.current = { ...adapter.current, backgroundRefresh: 'restricted' };
+    expect(changed).not.toBeNull();
+    changed!();
+    await waitFor(() => expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('Needs a look'));
+    expect(screen.getByTestId('permission-backgroundRefresh-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
+  });
+
   it('Android 9 and lower: the location fix shows the disclosure first (allowing location allows it in the background too)', async () => {
     const adapter = fakeAdapter(
       snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false, backgroundRefresh: 'available' }),
@@ -275,6 +311,8 @@ describe('Android with the drive detector', () => {
     await tap('background-disclosure-continue');
     await waitFor(() => expect(screen.getByTestId('permission-location-status')).toHaveTextContent('On'));
     expect(adapter.log.filter((c) => c.startsWith('request'))).toEqual(['requestLocationForeground']);
+    // The adapter asks only with the disclosure shown.
+    expect(adapter.requestLocationForeground).toHaveBeenCalledWith({ disclosed: true });
   });
 
   it('with Automatic drives switched off, its three rows read Not in use', async () => {

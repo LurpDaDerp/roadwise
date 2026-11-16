@@ -135,6 +135,9 @@ export function fakeAdapter(
     openBatterySaverSettings: jest.fn(async () => {
       a.log.push('openBatterySaverSettings');
     }),
+    openUnusedAppSettings: jest.fn(async () => {
+      a.log.push('openUnusedAppSettings');
+    }),
     openNotificationChannelSettings: jest.fn(async (channelId: string) => {
       a.log.push(`openNotificationChannelSettings:${channelId}`);
     }),

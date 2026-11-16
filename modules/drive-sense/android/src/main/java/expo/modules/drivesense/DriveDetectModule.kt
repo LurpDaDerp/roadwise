@@ -1,8 +1,13 @@
 package expo.modules.drivesense
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import expo.modules.drivesense.detect.DriveDetector
 import expo.modules.drivesense.detect.notDriving
 import expo.modules.interfaces.permissions.PermissionsResponseListener
@@ -33,6 +38,13 @@ class DriveDetectModule : Module() {
 
   private fun detector(): DriveDetector = DriveDetector.get(context)
 
+  /**
+   * Battery Saver switching (ACTION_POWER_SAVE_MODE_CHANGED), registered only while this JS runtime
+   * holds the module (RoadWise open, or its headless drive), never from the manifest: the detector
+   * sends its state (`batterySaver`), and the permission rows read the phone again.
+   */
+  private var powerSaveReceiver: BroadcastReceiver? = null
+
   override fun definition() = ModuleDefinition {
     Name("DriveDetect")
 
@@ -41,11 +53,32 @@ class DriveDetectModule : Module() {
 
     OnCreate {
       DetectEventBus.attach(emitter)
-      DriveDetector.get(context)
+      val ctx = context
+      DriveDetector.get(ctx)
+      val receiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+          DriveDetector.get(c).batterySaverChanged()
+        }
+      }
+      try {
+        // A system broadcast reaches an unexported receiver.
+        ContextCompat.registerReceiver(ctx, receiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        powerSaveReceiver = receiver
+      } catch (_: Exception) {
+        // Without it the rows still read the phone at every return to the front.
+      }
     }
 
     OnDestroy {
       DetectEventBus.detach(emitter)
+      powerSaveReceiver?.let { r ->
+        try {
+          appContext.reactContext?.applicationContext?.unregisterReceiver(r)
+        } catch (_: Exception) {
+          // already gone with the runtime
+        }
+      }
+      powerSaveReceiver = null
     }
 
     // Buffering (README §3): a drive event nobody listens for waits for the first listener.

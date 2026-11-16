@@ -159,8 +159,11 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
   const listeners = new Map<DriveDetectEvent, Set<(p: unknown) => void>>();
   let buffer: { event: DriveDetectEvent; payload: unknown }[] = [];
 
+  // Android's `restricted` is Battery Saver limiting location, which its status never counts (only
+  // the battery set to Restricted, `denied`, is a need there: DetectAccess.kt); iOS's counts.
+  const statusRefresh = () => (platform === 'android' && permissions.backgroundRefresh === 'restricted' ? 'available' : permissions.backgroundRefresh);
   const status = () =>
-    statusOf({ armed: intent, hardware: true, location: permissions.location, precise: permissions.precise, motion: permissions.motion, backgroundRefresh: permissions.backgroundRefresh, liveActivities: permissions.liveActivities });
+    statusOf({ armed: intent, hardware: true, location: permissions.location, precise: permissions.precise, motion: permissions.motion, backgroundRefresh: statusRefresh(), liveActivities: permissions.liveActivities });
 
   function snapshot(): DetectState {
     const s = status();

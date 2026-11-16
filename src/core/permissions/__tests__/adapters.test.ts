@@ -225,6 +225,26 @@ describe('requestLocationForeground', () => {
     expect(await createPermissionsAdapter(deps).requestLocationForeground()).toBe('denied');
     expect(calls.filter((c) => c.includes('request'))).toEqual(['location.requestForeground']);
   });
+
+  it('Android 9 and lower with the drive detector asks only right after the disclosure (allowing location allows it in the background there)', async () => {
+    const detect = () => createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', canAskAlways: false } });
+    const ask = async (platform: PermissionPlatform, api: number, driveDetect: DriveDetectPort | null, disclosed?: boolean) => {
+      const { deps, calls } = makeDeps(platform, { fg: loc({ status: 'undetermined' }), fgAfterRequest: loc(), driveDetect });
+      const answer = await createPermissionsAdapter({ ...deps, androidApiLevel: () => api }).requestLocationForeground(disclosed === undefined ? undefined : { disclosed });
+      return { answer, asked: calls.includes('location.requestForeground') };
+    };
+    expect(await ask('android', 28, detect())).toEqual({ answer: 'undetermined', asked: false });
+    expect(await ask('android', 28, detect(), false)).toEqual({ answer: 'undetermined', asked: false });
+    expect(await ask('android', 28, detect(), true)).toEqual({ answer: 'foreground', asked: true });
+    // Android 10 and later (background location is its own permission), a phone without the
+    // detector, and an iPhone ask as before.
+    expect(await ask('android', 29, detect())).toEqual({ answer: 'foreground', asked: true });
+    expect(await ask('android', 28, null)).toEqual({ answer: 'foreground', asked: true });
+    expect(await ask('ios', 0, createFakeDriveDetect({ permissions: { location: 'none', canAskAlways: false } }))).toEqual({ answer: 'foreground', asked: true });
+    // No Google Play services: no automatic drives, so not a background request.
+    const noPlay = createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', motion: 'unavailable', canAskAlways: false } });
+    expect(await ask('android', 28, noPlay)).toEqual({ answer: 'foreground', asked: true });
+  });
 });
 
 describe('requestMotion — through the drive-sense port on both platforms', () => {
@@ -356,6 +376,29 @@ describe('Battery Saver page', () => {
   });
 });
 
+describe('"Pause app activity if unused" page', () => {
+  const ds = createFakeDriveSense({ platform: 'android' });
+  const port = (open?: () => Promise<boolean>): DriveSensePort => ({ ...withBattery(ds), ...(open ? { openUnusedAppRestrictionsSettings: open } : {}) });
+  const open = async (platform: PermissionPlatform, p: DriveSensePort | null) => {
+    const { deps, calls } = makeDeps(platform, { driveSense: p });
+    await createPermissionsAdapter(deps).openUnusedAppSettings();
+    return calls;
+  };
+
+  it("Android opens the switch's own page through the native build; the app's page where it can't, and on iOS", async () => {
+    const opened = jest.fn(async () => true);
+    expect(await open('android', port(opened))).toEqual([]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(await open('android', port(async () => false))).toEqual(['linking.openSettings']);
+    expect(await open('android', port(() => Promise.reject(new Error('x'))))).toEqual(['linking.openSettings']);
+    expect(await open('android', port())).toEqual(['linking.openSettings']);
+    expect(await open('android', null)).toEqual(['linking.openSettings']);
+    const never = jest.fn(async () => true);
+    expect(await open('ios', port(never))).toEqual(['linking.openSettings']);
+    expect(never).not.toHaveBeenCalled();
+  });
+});
+
 describe('notification channel page', () => {
   const extras = JSON.stringify([
     { key: 'android.provider.extra.APP_PACKAGE', value: 'app.roadwise' },
@@ -405,6 +448,19 @@ describe('automatic drives: Location Always, Background App Refresh, Live Activi
     expect(await createPermissionsAdapter(makeDeps('android', { driveDetect: null }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null, liveActivities: null });
     const failing: DriveDetectPort = { getState: () => Promise.reject(new Error('x')), requestAlways: () => Promise.reject(new Error('x')) };
     expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: failing }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null });
+  });
+
+  it('an Android phone without Google Play services (motion unavailable) reads as one without the detector; an iPhone reads as it is', async () => {
+    const perms = { motion: 'unavailable', backgroundRefresh: 'available', canAskAlways: true, liveActivities: true } as const;
+    const android = createFakeDriveDetect({ platform: 'android', permissions: perms });
+    expect(await createPermissionsAdapter(makeDeps('android', { driveDetect: android }).deps).snapshot()).toMatchObject({ backgroundRefresh: null, canAskAlways: null, liveActivities: null });
+    const ios = createFakeDriveDetect({ permissions: perms });
+    expect(await createPermissionsAdapter(makeDeps('ios', { driveDetect: ios }).deps).snapshot()).toMatchObject({ backgroundRefresh: 'available', canAskAlways: true, liveActivities: true });
+  });
+
+  it("Android's Battery Saver limiting location comes through as restricted", async () => {
+    const detect = createFakeDriveDetect({ platform: 'android', permissions: { backgroundRefresh: 'restricted', canAskAlways: false } });
+    expect(await createPermissionsAdapter(makeDeps('android', { driveDetect: detect }).deps).snapshot()).toMatchObject({ backgroundRefresh: 'restricted' });
   });
 
   it('iOS: the one Always request through the detector', async () => {

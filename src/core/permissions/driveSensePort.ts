@@ -4,7 +4,8 @@
 // granted. `isIgnoringBatteryOptimizations` is feature-detected on the native module, so a dev
 // build that predates it reads as "can't check" rather than a rejected call. So is Android's
 // "Pause app activity if unused" read (`getUnusedAppRestrictions`, native's
-// PackageManagerCompat.getUnusedAppRestrictionsStatus): a build without it reads as not readable. The
+// PackageManagerCompat.getUnusedAppRestrictionsStatus: a build without it reads as not readable)
+// and its page (`openUnusedAppRestrictionsSettings`: without it, the app's settings page). The
 // drive detector (`DriveDetect`, iOS and Android) is a second port: what automatic drives need
 // (Location Always / Allow all the time, Background App Refresh / battery not Restricted, the
 // lock-screen surface) and the Always request; null where the phone has none.
@@ -19,6 +20,11 @@ export interface DriveSensePort {
   isIgnoringBatteryOptimizations?(): Promise<boolean>;
   /** Android 11+: present only in a native build that has it. */
   getUnusedAppRestrictions?(): Promise<UnusedAppRestrictions>;
+  /**
+   * Android 11+: the page with that switch (the app's info page on 12+, its permissions page on 11);
+   * false where the phone has no such page. Present only in a native build that has it.
+   */
+  openUnusedAppRestrictionsSettings?(): Promise<boolean>;
 }
 
 /** The drive detector's permission reads and its Always request (iOS and Android). */
@@ -78,6 +84,10 @@ export function createDriveSenseResolver(
           if (typeof v !== 'string' || !UNUSED_APP_RESTRICTIONS.includes(v)) throw new Error('getUnusedAppRestrictions: unexpected answer');
           return v as UnusedAppRestrictions;
         };
+      }
+      const openUnused = native.openUnusedAppRestrictionsSettings;
+      if (typeof openUnused === 'function') {
+        port.openUnusedAppRestrictionsSettings = async () => (await (openUnused as () => Promise<unknown>).call(native)) === true;
       }
       return port;
     })().catch(() => {

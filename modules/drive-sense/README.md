@@ -114,15 +114,18 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 ### Android only: share images and the geocoder
 
 Not in `DRIVE_SENSE_METHODS` (the iOS module has none of them): `ANDROID_SHARE_METHODS`
-(`src/share.ts`) and `ANDROID_GEOCODE_METHODS` (`src/geocode.ts`), each reached through a wrapper
-that answers `null` where the build has no such function (iOS, Jest, an older Android build), so
-the caller keeps its own path. None of them ever rejects.
+(`src/share.ts`), `ANDROID_GEOCODE_METHODS` (`src/geocode.ts`) and `ANDROID_UNUSED_APP_METHODS`
+(`src/unusedApps.ts`), each reached through a wrapper or a feature check that answers `null` (or
+leaves the row out) where the build has no such function (iOS, Jest, an older Android build), so
+the caller keeps its own path. None of them rejects but `getUnusedAppRestrictions` (`E_IO`).
 
 | Method | Behaviour |
 |---|---|
 | `shareImage(uri, text, title)` | The system chooser with the image at `uri` (a `file://` URI or a path; only a `.png`/`.jpg`/`.jpeg` inside the app's cache directory, after resolving links and `..`; a react-native-view-shot capture in the external cache is first moved into the cache, off the main thread, and the chooser then starts on the main thread) as a content URI of `ShareFileProvider` (`${applicationId}.drivesense.share`, `<cache-path>` only, not exported) in `EXTRA_STREAM` and the ClipData with a read grant, `text` in `EXTRA_TEXT` when given, `title` over the sheet. **Save image** on Android 10+: a chooser custom action on 14+ (an explicit, immutable broadcast to the unexported `SaveImageReceiver`), the sheet's first row on 10 to 13 (the unexported, translucent `SaveImageActivity`, which the chooser starts as RoadWise); both copy the image into `Pictures/RoadWise` through MediaStore (written pending, then published; no storage permission) and toast **"Image saved"** or **"Couldn't save the image. Try again."**. Below 10 there is no Save image. Resolves `true` once the sheet is up, `false` with no activity on screen or a file that is not a share image. The file is left in place: JS sweeps shared files 10 minutes old (`sweepStaleShareFiles`). |
 | `reverseGeocode(lat, lng)` | `android.location.Geocoder` at the point (the `GeocodeListener` form on API 33+; below it the blocking call on a pool of two background threads, so a drive's start and end labels go side by side, with a lookup whose timeout passed while it waited skipped), with no activity, so it answers with RoadWise behind or headless. Resolves expo-location's address shape (`city`, `district`, `streetNumber`, `street`, `region`, `subregion`, `country`, `postalCode`, `name`, `isoCountryCode`; `district` = the sub-locality, else the feature's name when it has letters, no digit or comma, and is not the street, city, county, state, postcode or country again), `[]` for none, `null` when `Geocoder.isPresent()` is false, on a failure or after 5 s. |
 | `forwardGeocode(query)` | The same geocoder for a typed address (1-200 characters): `[{ latitude, longitude }]`, `[]` for none, `null` as above. |
+| `getUnusedAppRestrictions()` | Android 11+'s "Pause app activity if unused" for RoadWise, from androidx.core's `PackageManagerCompat.getUnusedAppRestrictionsStatus` (a future, never waited on: its listener runs on the thread that completes it): `'enabled'` (API_30_BACKPORT, API_30, API_31), `'disabled'` (DISABLED), `'unavailable'` (FEATURE_NOT_AVAILABLE). Rejects `E_IO` on its ERROR or with no answer in 5 s. |
+| `openUnusedAppRestrictionsSettings()` | The page with that switch (`IntentCompat.createManageUnusedAppRestrictionsIntent`: the app's info page on 12+, its permissions page on 11), started on the main thread. `true` once started, `false` where the phone has no such page (JS then opens the app's settings page). |
 
 ### Errors
 
@@ -135,7 +138,7 @@ tests for one. Anything else a native method throws is a bug.
 | `E_PERMISSION` | `startCapture` | no location permission at all, or (Android) the OS refused the location foreground service for lack of it |
 | `E_FGS_REFUSED` | `startCapture` (Android) | the OS refused the foreground service for a reason other than permission |
 | `E_NOT_FOUND` | `excludeFromBackup` (iOS) | nothing at the URI |
-| `E_IO` | `excludeFromBackup` (iOS) | the file exists but `isExcludedFromBackup` could not be set |
+| `E_IO` | `excludeFromBackup` (iOS); `getUnusedAppRestrictions` (Android) | the file exists but `isExcludedFromBackup` could not be set; the phone could not say whether "Pause app activity if unused" is on |
 | `E_INVALID_INPUT` | `selfTest` | the vectors JSON is unparseable |
 
 The detector's bridge (`DriveDetect`, §11) has its own list, `DRIVE_DETECT_ERROR_CODES`: `E_BUSY`

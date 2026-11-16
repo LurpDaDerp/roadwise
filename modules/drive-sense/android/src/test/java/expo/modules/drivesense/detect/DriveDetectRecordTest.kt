@@ -102,4 +102,37 @@ class DriveDetectRecordTest {
     // back, never left running unsensed with no safety stop or 12 h cap.
     assertEquals(CaptureRowFate.TAKE_BACK, captureRowFate(sensing = false, starting = false, resuming = false, recording = true))
   }
+
+  @Test
+  fun batterySaver_isReportedAsRestricted_butNeverANeed() {
+    val auto = access.copy(location = LocationAccess.ALWAYS, hardware = true)
+    val armed = DriveDetectRecord(armed = true, ownerId = "user-1", state = "armed")
+    // Battery Saver limiting location: JS reads `restricted`, the status stays on with nothing missing.
+    val saver = armed.state(auto.copy(batterySaver = true))
+    assertEquals("restricted", (saver["permissions"] as Map<*, *>)["backgroundRefresh"])
+    assertEquals("on", saver["status"])
+    assertEquals(emptyList<String>(), saver["missing"])
+    assertEquals(true, auto.copy(batterySaver = true).requiredOk)
+    // Restricted battery use comes first and stays the need (ruling 5).
+    val restricted = armed.state(auto.copy(backgroundRefresh = BackgroundRefresh.DENIED, batterySaver = true))
+    assertEquals("denied", (restricted["permissions"] as Map<*, *>)["backgroundRefresh"])
+    assertEquals("needs", restricted["status"])
+    assertEquals(listOf("backgroundRefresh"), restricted["missing"])
+    // Neither: available.
+    assertEquals("available", (armed.state(auto)["permissions"] as Map<*, *>)["backgroundRefresh"])
+  }
+
+  @Test
+  fun batterySaver_countsOnlyTheLocationModesThatStopBackgroundFixes() {
+    val p = 28
+    assertEquals(false, BatterySaver.limitsLocation(false, p, android.os.PowerManager.LOCATION_MODE_ALL_DISABLED_WHEN_SCREEN_OFF))
+    assertEquals(true, BatterySaver.limitsLocation(true, p, android.os.PowerManager.LOCATION_MODE_GPS_DISABLED_WHEN_SCREEN_OFF))
+    assertEquals(true, BatterySaver.limitsLocation(true, p, android.os.PowerManager.LOCATION_MODE_ALL_DISABLED_WHEN_SCREEN_OFF))
+    assertEquals(true, BatterySaver.limitsLocation(true, p, android.os.PowerManager.LOCATION_MODE_FOREGROUND_ONLY))
+    assertEquals(false, BatterySaver.limitsLocation(true, p, android.os.PowerManager.LOCATION_MODE_NO_CHANGE))
+    assertEquals(false, BatterySaver.limitsLocation(true, 34, android.os.PowerManager.LOCATION_MODE_THROTTLE_REQUESTS_WHEN_SCREEN_OFF))
+    // Below Android 9 the mode can't be read: Battery Saver on counts.
+    assertEquals(true, BatterySaver.limitsLocation(true, 27, null))
+    assertEquals(false, BatterySaver.limitsLocation(false, 27, null))
+  }
 }

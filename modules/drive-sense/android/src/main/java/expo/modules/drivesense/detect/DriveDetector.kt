@@ -259,6 +259,15 @@ class DriveDetector private constructor(context: Context) {
   }
 
   /**
+   * Battery Saver switched on or off (heard only while RoadWise's JS runtime runs: DriveDetectModule).
+   * Nothing in detection follows it (it is never a need, [DetectAccess]); the state goes to JS so the
+   * permission rows read the phone again.
+   */
+  fun batterySaverChanged() {
+    handler.post { emitState("batterySaver") }
+  }
+
+  /**
    * Brings the state in line with the arming and the permissions (Android tells no app when one is
    * revoked: this runs at every wake, foreground and arming). A drive in progress finishes first.
    * Armed again, the parked geofence goes back to the last end's place, as iOS's region does.

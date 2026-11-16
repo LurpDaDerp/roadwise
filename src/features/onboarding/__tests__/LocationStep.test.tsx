@@ -288,6 +288,8 @@ describe('Android 9 and lower: allowing location allows it in the background too
     await press(screen.getByTestId('background-disclosure-continue'));
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
     expect(requests(adapter)).toEqual(['requestLocationForeground']);
+    // The adapter asks only when told the disclosure was shown.
+    expect(adapter.requestLocationForeground).toHaveBeenCalledWith({ disclosed: true });
     expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
   });
 
@@ -309,5 +311,6 @@ describe('Android 9 and lower: allowing location allows it in the background too
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
     expect(requests(adapter)).toEqual(['requestLocationForeground']);
+    expect(adapter.requestLocationForeground).toHaveBeenCalledWith({ disclosed: false });
   });
 });

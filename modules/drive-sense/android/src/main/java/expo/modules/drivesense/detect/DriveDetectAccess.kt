@@ -22,9 +22,12 @@ import expo.modules.drivesense.NotificationFactory
  * The Start card needs While Using and Precise, as on iPhone: an approximate grant alone is refused
  * (`permission`). The Android meanings of the iOS-only fields: `backgroundRefresh` is `denied` only
  * while the app's battery use is Restricted (`ActivityManager.isBackgroundRestricted`, ruling 5:
- * Optimized, the default, is fine), and `liveActivities` is whether the drive notification can show
- * (notifications allowed and the `drive_live` channel not blocked). `canAskAlways`: While Using held
- * on Android 10+ (Android 11+ answers the request with the app's location settings page, every time).
+ * Optimized, the default, is fine); otherwise the wire's `backgroundRefresh` reads `restricted` while
+ * Battery Saver limits location ([BatterySaver], never part of the status: [DetectAccess]), and
+ * `liveActivities` is whether the drive notification can show (notifications allowed and the
+ * `drive_live` channel not blocked). `canAskAlways`: While Using held on Android 10+ (Android 11+
+ * answers the request with the app's location settings page, every time). JS reads a phone without
+ * Play services (`motion` unavailable) as one without the detector.
  */
 class DriveDetectAccess(context: Context) {
   private val app = context.applicationContext
@@ -41,7 +44,8 @@ class DriveDetectAccess(context: Context) {
       backgroundRefresh = if (backgroundRestricted()) BackgroundRefresh.DENIED else BackgroundRefresh.AVAILABLE,
       liveActivities = driveNotificationAllowed(),
       canAskAlways = location == LocationAccess.WHEN_IN_USE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
-      hardware = DriveSensePermissions.playServicesAvailable(app)
+      hardware = DriveSensePermissions.playServicesAvailable(app),
+      batterySaver = BatterySaver.read(app)
     )
   }
 

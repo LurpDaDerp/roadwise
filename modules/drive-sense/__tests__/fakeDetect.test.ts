@@ -325,4 +325,13 @@ describe('the fake detector as an Android build (WP01: hosts and screens run as 
     expect(heard).toEqual([]);
     expect(await d.setArmed(true, OWNER)).toMatchObject({ armed: true, status: 'on' });
   });
+
+  test("Android's Battery Saver limiting location (`restricted`) is reported but never a need; Restricted battery use is; an iPhone's restricted is", async () => {
+    const a = createFakeDriveDetect({ platform: 'android', permissions: { backgroundRefresh: 'restricted' } });
+    expect(await a.setArmed(true, OWNER)).toMatchObject({ status: 'on', missing: [], permissions: { backgroundRefresh: 'restricted' } });
+    a.setPermissions({ backgroundRefresh: 'denied' });
+    expect(await a.getState()).toMatchObject({ status: 'needs', missing: ['backgroundRefresh'] });
+    const i = createFakeDriveDetect({ permissions: { backgroundRefresh: 'restricted' } });
+    expect(await i.setArmed(true, OWNER)).toMatchObject({ status: 'needs', missing: ['backgroundRefresh'] });
+  });
 });

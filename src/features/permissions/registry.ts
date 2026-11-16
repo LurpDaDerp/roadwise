@@ -23,8 +23,11 @@ export type PermissionId =
   | 'camera';
 export type Need = 'required' | 'recommended' | 'optional';
 export type MissingReason = 'notYet' | 'denied' | 'servicesOff';
-/** Where "Open Settings" goes: the app's own page, Android's Location page or its Battery Saver page. */
-export type SettingsTarget = 'app' | 'locationServices' | 'batterySaver';
+/**
+ * Where "Open Settings" goes: the app's own page, Android's Location page, its Battery Saver page or
+ * the page with "Pause app activity if unused".
+ */
+export type SettingsTarget = 'app' | 'locationServices' | 'batterySaver' | 'unusedApps';
 
 /** What one read of the phone says about one permission. */
 export type PermState =
@@ -137,8 +140,9 @@ function locationAlwaysState(read: PermissionBoardRead): PermState {
 /**
  * What lets the phone wake RoadWise when a drive starts: iOS Background App Refresh; Android's
  * battery usage for RoadWise, missing while it is set to Restricted, and while Battery Saver limits
- * location (its location mode cuts or throttles background fixes: drives can be missed or cut short;
- * its own Settings page). Only Settings changes it.
+ * location (its location mode stops fixes with the screen off or RoadWise behind: drives can be
+ * missed or cut short; its own Settings page, and never a need of the Automatic drives switch, whose
+ * native status leaves it out). Only Settings changes it.
  */
 function backgroundRefreshState(read: PermissionBoardRead): PermState {
   switch (read.snapshot.backgroundRefresh) {
@@ -157,14 +161,15 @@ function backgroundRefreshState(read: PermissionBoardRead): PermState {
 /**
  * Android 11 and later: "Pause app activity if unused", which takes RoadWise's permissions back (and
  * on 12 and later stops its background work) after a few months unopened, so automatic drives would
- * stop. A tip: only Settings changes it, and nothing can be done where it can't be read.
+ * stop. A tip: only Settings changes it (the page with the switch), and nothing can be done where it
+ * can't be read.
  */
 function unusedAppsState(read: PermissionBoardRead): PermState {
   switch (read.snapshot.unusedAppPause) {
     case 'off':
       return GRANTED;
     case 'on':
-      return missing('denied', false);
+      return missing('denied', false, 'unusedApps');
     default:
       return UNKNOWN;
   }

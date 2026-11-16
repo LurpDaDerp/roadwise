@@ -59,12 +59,22 @@ test("the Location step's Android request follows the disclosure", () => {
   expect(request).toBeGreaterThan(ask);
 });
 
-test("the Location step's Android 9-and-lower request follows the disclosure", () => {
+test("the Location step's Android 9-and-lower request follows the disclosure, and says so to the adapter", () => {
   const src = text('features/onboarding/steps/LocationStep.tsx');
-  const ask = src.indexOf("if (oneAsk(snapshot) && !(await disclosure.ask('allow'))) return;");
-  const request = src.indexOf('await adapter.requestLocationForeground();');
+  const ask = src.indexOf("if (disclosed && !(await disclosure.ask('allow'))) return;");
+  const request = src.indexOf('await adapter.requestLocationForeground({ disclosed });');
+  expect(src).toMatch(/const disclosed = oneAsk[(]snapshot[)];/);
   expect(ask).toBeGreaterThan(-1);
   expect(request).toBeGreaterThan(ask);
+});
+
+test('on Android 9 and lower the location fix passes disclosed (the adapter asks only then), and no other caller passes it', () => {
+  expect(text('features/permissions/actions.ts')).toMatch(/await adapter[.]requestLocationForeground[(][{] disclosed [}][)];/);
+  const passing = sources(SRC)
+    .filter((full) => /requestLocationForeground[(][{]/.test(fs.readFileSync(full, 'utf8')))
+    .map(rel)
+    .sort();
+  expect(passing).toEqual(['features/onboarding/steps/LocationStep.tsx', 'features/permissions/actions.ts']);
 });
 
 test('every screen with a Location Always fix renders the disclosure and hands it to the fix', () => {
