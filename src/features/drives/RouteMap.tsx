@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { EventType, Tier } from '@scoring';
 import { useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, useColorScheme, View, type LayoutChangeEvent } from 'react-native';
 import type MapViewType from 'react-native-maps';
 
 import { useUnits } from '@/data/queries/units';
+import { androidMapLook } from '@/features/settings/mapStyle';
 import type { LatLng } from '@/lib/geo';
 import type { Units } from '@/lib/units';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
@@ -57,8 +58,9 @@ export function resetMapsCache(): void {
 }
 
 /**
- * Map tiles follow the system appearance, not the app's scheme, so the route inks are pinned to
- * the light palette's signal fills: strong enough on both light and dark tiles. Every pin also
+ * Map tiles follow the system appearance, not the app's scheme (Apple's map by itself; Google's on
+ * Android through `androidMapLook`), so the route inks are pinned to the light palette's signal
+ * fills: strong enough on both light and dark tiles. Every pin also
  * carries its event's icon, so no mark relies on colour alone.
  */
 const INK = tokens.color.light.signal;
@@ -227,6 +229,9 @@ export function RouteMap({
   const lastPinTap = useRef(0);
   const mapRef = useRef<MapViewType>(null);
   const maps = loadMaps();
+  // Android: Google's map takes the system appearance only when it is made, so it is given it (and
+  // the quiet style Apple's map gets from showsPointsOfInterests) and remade when it changes.
+  const look = androidMapLook(useColorScheme() === 'dark' ? 'dark' : 'light');
   const ring = highlighted && highlighted.lat !== null && highlighted.lng !== null ? { lat: highlighted.lat, lng: highlighted.lng } : null;
   const shown = view && region && view.base === region ? view.at : region;
   const mPerPx = shown ? metersPerPixel(shown, side) : 0;
@@ -279,9 +284,11 @@ export function RouteMap({
         {/* One spoken summary of the map; each pin is its own button after it. */}
         <View style={StyleSheet.absoluteFill} pointerEvents="none" accessible testID="map-summary" {...summary} />
         <MapView
+          key={look?.key}
           ref={mapRef}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
+          {...(look ? { userInterfaceStyle: look.userInterfaceStyle, customMapStyle: look.customMapStyle } : null)}
           onRegionChangeComplete={onRegionChangeComplete}
           onPress={onMapPress}
           scrollEnabled

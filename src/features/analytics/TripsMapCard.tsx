@@ -7,6 +7,7 @@ import { PIN, PIN_PLACE, TeardropPin, useSettling } from '@/features/drives/Pin'
 import { awayFrom } from '@/features/drives/route';
 import { RECENTER_MS } from '@/features/drives/RouteMap';
 import { loadMaps, type Region } from '@/features/settings/maps';
+import { androidMapLook } from '@/features/settings/mapStyle';
 import { chipText } from '@/features/spots/format';
 import { spotInk } from '@/features/spots/ink';
 import type { LatLng } from '@/lib/geo';
@@ -136,6 +137,9 @@ export function TripsMapCard({
 }) {
   const t = useTheme();
   const maps = loadMaps();
+  // Android: the scheme is read only when Google's map is made, so it is remade when it flips, with
+  // the quiet style Apple's map gets from showsPointsOfInterests.
+  const look = androidMapLook(t.scheme === 'dark' ? 'dark' : 'light');
   const ink = withAlpha(t.colors.accent, t.scheme === 'dark' ? 0.45 : 0.35);
   const spotLine = spotInk(t.scheme);
   const settling = useSettling(`${t.scheme}|${spots.map((s) => `${s.id}:${s.label ?? ''}`).join(',')}`);
@@ -204,9 +208,11 @@ export function TripsMapCard({
         <View testID="trips-map-frame" style={{ height: TRIPS_MAP_HEIGHT }} onLayout={onLayout}>
           <View testID="trips-map" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
             <maps.default
+              key={look?.key}
               ref={mapRef}
               style={{ flex: 1 }}
               initialRegion={region}
+              customMapStyle={look?.customMapStyle}
               onRegionChangeComplete={(r: Region) => setAway(awayOnMap(r, region, aspect))}
               scrollEnabled
               zoomEnabled

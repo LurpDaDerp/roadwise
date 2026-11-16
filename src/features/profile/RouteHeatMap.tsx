@@ -3,6 +3,7 @@ import { View } from 'react-native';
 
 import { routeLines } from '@/features/analytics/model';
 import { loadMaps, regionFor } from '@/features/settings/maps';
+import { androidMapLook } from '@/features/settings/mapStyle';
 import { Text, useTheme, withAlpha } from '@/ui';
 
 import { profileCopy } from './copy';
@@ -36,6 +37,9 @@ export function RouteHeatMap({ polylines, height = 360, testID }: { polylines: r
 
   // The sky's accent, translucent, so overlapping drives build up into heat.
   const ink = withAlpha(th.colors.accent, th.scheme === 'dark' ? 0.4 : 0.3);
+  // Android: the scheme is read only when Google's map is made, so it is remade when it flips, with
+  // the quiet style Apple's map gets from showsPointsOfInterests.
+  const look = androidMapLook(th.scheme === 'dark' ? 'dark' : 'light');
   return (
     <View
       testID={testID}
@@ -44,8 +48,10 @@ export function RouteHeatMap({ polylines, height = 360, testID }: { polylines: r
       style={{ height, borderRadius: th.radius.card, borderCurve: 'continuous', overflow: 'hidden' }}
     >
       <maps.default
+        key={look?.key}
         style={{ flex: 1 }}
         initialRegion={region}
+        customMapStyle={look?.customMapStyle}
         showsPointsOfInterests={false}
         showsBuildings={false}
         showsTraffic={false}

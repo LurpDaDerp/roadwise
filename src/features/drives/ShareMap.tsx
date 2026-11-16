@@ -1,9 +1,11 @@
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Platform, StyleSheet, View } from 'react-native';
 import type MapViewType from 'react-native-maps';
 import Svg, { Circle, Path } from 'react-native-svg';
 
+import { mapStyleFor } from '@/features/settings/mapStyle';
 import { removeShareImage } from '@/lib/shareImages';
 import { withAlpha } from '@/ui';
 
@@ -128,13 +130,44 @@ export function routePath(runs: Runs, b: Bounds, w: number, h: number, max = 240
   return parts.join(' ');
 }
 
-/**
- * Whether the share sheet offers "Show map": iOS with the maps module in the build, and a route to
- * frame. Android is frozen for now and shares the plain card.
- */
-export function mapOffered(runs: Runs, w: number, h: number, box: Box): boolean {
-  return Platform.OS === 'ios' && loadMaps() !== null && shareFrame(runs, w, h, box) !== null;
+let keyForTests: { key: string | undefined } | undefined;
+
+/** Tests: stand in for the build's Google Maps key (`{ key }`); undefined goes back to the real one. */
+export function setMapsKeyForTests(k: { key: string | undefined } | undefined): void {
+  keyForTests = k;
 }
+
+/** The Google Maps key this Android build was made with (app.config.ts `android.config.googleMaps`); undefined when none. */
+function androidMapsKey(): string | undefined {
+  if (keyForTests) return keyForTests.key;
+  const key: unknown = (Constants.expoConfig?.android as { config?: { googleMaps?: { apiKey?: unknown } } } | undefined)?.config?.googleMaps?.apiKey;
+  return typeof key === 'string' ? key : undefined;
+}
+
+/**
+ * Whether this build can draw the map backdrop: iPhone (Apple's map needs no key), or Android with
+ * a Google Maps key built in (without one Google draws blank grey tiles), and the maps module in
+ * the build either way.
+ */
+export function mapsAvailable(os: string = Platform.OS, androidKey: string | undefined = os === 'android' ? androidMapsKey() : undefined): boolean {
+  if (loadMaps() === null) return false;
+  if (os === 'ios') return true;
+  return os === 'android' && typeof androidKey === 'string' && androidKey.trim() !== '';
+}
+
+/** Whether the share sheet offers "Show map": the map backdrop can be drawn here, and there is a route to frame. */
+export function mapOffered(runs: Runs, w: number, h: number, box: Box): boolean {
+  return mapsAvailable() && shareFrame(runs, w, h, box) !== null;
+}
+
+/** The map's credit on the card: whose map it is (Apple's on iPhone, Google's on Android). */
+export const mapCredit = (os: string = Platform.OS): string => (os === 'android' ? 'Map data © Google' : 'Map © Apple');
+
+/**
+ * The dark, quiet Google map behind an Android card (no points of interest, as Apple's map with
+ * `showsPointsOfInterests` off): Android ignores that prop, so the style hides them.
+ */
+const ANDROID_SHARE_STYLE = mapStyleFor('dark');
 
 /**
  * The share card's map backdrop: the map of the route's area, a light wash of the card's sky over
@@ -144,7 +177,9 @@ export function mapOffered(runs: Runs, w: number, h: number, box: Box): boolean 
  *
  * How the map gets into the image: `captureRef` cannot be trusted with a live native map view (it
  * often comes out blank or black), so the live map is only a placeholder. Once it is ready, its
- * `takeSnapshot` (MKMapSnapshotter on iOS) renders the exact region this card computed into a PNG;
+ * `takeSnapshot` renders the exact region this card computed into a PNG: MKMapSnapshotter on iOS;
+ * on Android Google's snapshot of the live map itself, which fills the card and opened on exactly
+ * that region, taken once its tiles have loaded (`onMapLoaded`; `onMapReady` comes before them);
  * a plain `Image` of that PNG replaces the live map, and the route (with its dashed lead-in, when
  * it has one) is drawn over it in SVG with the same Web Mercator projection from the same edges. The captured card then holds only an image and
  * SVG, which `captureRef` draws reliably. The snapshot's own overlays are never relied on.
@@ -243,6 +278,9 @@ export function ShareMapBackdrop({
   const topFade = useMemo(() => easedFade(top, 1, 0), [top]);
   const bottomFade = useMemo(() => easedFade(low, 0, 1), [low]);
   const MapView = maps?.default;
+  // iPhone snapshots as soon as the map is ready (MKMapSnapshotter loads its own tiles); Android's
+  // snapshot is of the live map, so it waits for the tiles.
+  const android = Platform.OS === 'android';
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID="share-map">
       {MapView && region && status === 'loading' ? (
@@ -250,7 +288,7 @@ export function ShareMapBackdrop({
           ref={mapRef}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
-          onMapReady={onMapReady}
+          {...(android ? { onMapLoaded: onMapReady, customMapStyle: ANDROID_SHARE_STYLE } : { onMapReady })}
           scrollEnabled={false}
           zoomEnabled={false}
           zoomTapEnabled={false}
