@@ -50,7 +50,9 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
   const confirmed = typed.trim() === copy.confirmWord;
 
   // Typing DELETE: the page lifts above the keyboard (the button with it) and scrolls the field
-  // into view once the keyboard is up.
+  // into view once the keyboard is up. On Android the lift is the Screen's own (`useKeyboardLift`:
+  // the page is padded by the keyboard's overlap a moment after the keyboard reports), so the
+  // scroll to the end also follows the scroll view's shrink, when its new height lands.
   const scroll = useRef<ScrollView>(null);
   const typing = useRef(false);
   useEffect(() => {
@@ -95,6 +97,13 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets
+          onLayout={
+            Platform.OS === 'android'
+              ? () => {
+                  if (typing.current && Keyboard.isVisible()) scroll.current?.scrollToEnd({ animated: true });
+                }
+              : undefined
+          }
           testID="delete-scroll"
         >
           <Text variant="title2" accessibilityRole="header">
