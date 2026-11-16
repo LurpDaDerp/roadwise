@@ -4,6 +4,8 @@
  * privacy zones; a sign-out removes them. The stored shape and its read are core's
  * (`core/places/saved.ts`): the drive labels read the same list.
  */
+import type { Ionicons } from '@expo/vector-icons';
+
 import { ADDRESS_MAX, FIXED_KINDS, MAX_CUSTOM_PLACES, parsePlaces, PLACES_KEY, placeProblem, sortPlaces, type PlaceKind, type PlaceProblem, type SavedPlace } from '@/core/places/saved';
 import type { SettingsRepo } from '@/data/db/settings';
 
@@ -29,6 +31,14 @@ export const PROMPT_OFF_KEY = 'places.promptOff';
 export const PROMPT_DECLINED_KEY = 'places.promptDeclined';
 
 export const FIXED_NAME: Record<(typeof FIXED_KINDS)[number], string> = { home: 'Home', work: 'Work', school: 'School' };
+
+/** Each kind's icon wherever a place shows: Places, a place's sheet, the recap's "Save as …?" card and its route map. */
+export const PLACE_ICON: Record<PlaceKind, keyof typeof Ionicons.glyphMap> = {
+  home: 'home-outline',
+  work: 'briefcase-outline',
+  school: 'school-outline',
+  custom: 'location-outline',
+};
 
 /** The stored places; anything malformed, a second Home and customs past the cap are skipped. */
 export async function readPlaces(settings: Pick<SettingsRepo, 'get'>): Promise<SavedPlace[]> {

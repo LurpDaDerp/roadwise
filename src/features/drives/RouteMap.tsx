@@ -5,15 +5,16 @@ import { StyleSheet, useColorScheme, View, type LayoutChangeEvent } from 'react-
 import type MapViewType from 'react-native-maps';
 
 import { useUnits } from '@/data/queries/units';
+import { PLACE_ICON, type FixedKind } from '@/features/places/model';
 import { androidMapLook } from '@/features/settings/mapStyle';
 import type { LatLng } from '@/lib/geo';
 import type { Units } from '@/lib/units';
 import { IconButton, Text, tokens, useTheme } from '@/ui';
 
 import { EventIcon } from './EventIcon';
-import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, pickupDetail, spokenEventDuration, TIER_SIGNAL } from './format';
-import type { LocalDriveEvent } from './model';
-import { PIN, PIN_PLACE, TeardropPin, useSettling } from './Pin';
+import { DASHPAL_MARK, EVENT_LABEL, eventKind, eventName, formatClock, formatEventDuration, pickupDetail, spokenEventDuration, spokenRoute, TIER_SIGNAL } from './format';
+import type { LocalDrive, LocalDriveEvent } from './model';
+import { PIN, PIN_PLACE, START, StartDisc, TeardropPin, useSettling } from './Pin';
 import {
   allPoints,
   awayFrom,
@@ -23,6 +24,7 @@ import {
   MIN_MARK_PX,
   regionFor,
   sameZoom,
+  screenOffset,
   tipAnchor,
   type EventMark,
   type Lead,
@@ -76,6 +78,22 @@ const ROUTE_WIDTH = 5;
 const LEAD_WIDTH = 3;
 export const LEAD_DASH = [4, 6];
 const TIER_Z: Record<Tier, number> = { minor: 1, moderate: 2, severe: 3 };
+/**
+ * The drive's two ends wear the app's ink (light `primary`, #111113) with white: apart from the
+ * tier colours, the green route and the blue ring, white-rimmed so they hold on dark tiles too.
+ * They sit over the route and the event stretches and dots, under the ring and the event pins, so
+ * a pin at either end is still the one a tap reaches. The destination draws over the start.
+ */
+export const END_INK = tokens.color.light.primary;
+export const END_ON = tokens.color.light.onPrimary;
+export const START_Z = 5;
+export const END_Z = 6;
+/** The white dot in the head of the destination pin when the end is no saved Home, Work or School. */
+export const END_DOT = 10;
+/** A saved place's icon in the start disc and the destination pin's head (the pins' glyph size). */
+const PLACE_GLYPH = 16;
+/** The start disc's placement: centred on its point on both map engines. */
+export const START_PLACE = { anchor: { x: 0.5, y: 0.5 }, centerOffset: { x: 0, y: 0 } } as const;
 /** How long Recenter takes to bring the map back to the view it opened on. */
 export const RECENTER_MS = 300;
 
@@ -101,12 +119,41 @@ const SPOKEN: Record<EventType, [string, string]> = {
   drowsy: ['drowsy alert', 'drowsy alerts'],
 };
 
-/** What the map shows, for a screen reader: "Route map, 2 hard brakes, 1 speeding". */
-export function mapLabel(marks: readonly Pick<EventMark, 'type'>[]): string {
-  if (marks.length === 0) return 'Route map, no events marked';
+/** What the map knows of the drive's two ends: its "from → to" labels and the saved places they are. */
+export type RouteEnds = Pick<LocalDrive, 'fromLabel' | 'toLabel' | 'fromPlace' | 'toPlace'>;
+
+/**
+ * The saved place an end's marker shows: Home, Work or School, read from the place stored with the
+ * drive (`fromPlace` / `toPlace`, the match that also named its "from → to" line), so the icon and
+ * the line always agree. A place of your own, an end that matched none and a restored drive: null.
+ */
+export function endPlace(id: string | null | undefined): FixedKind | null {
+  return id === 'home' || id === 'work' || id === 'school' ? id : null;
+}
+
+/**
+ * The start disc would sit under the destination pin on screen at this zoom: anywhere a 30 pt disc
+ * would touch the 32 × 44 pin standing on `end`. On a drive back to the same saved place the start
+ * then shows the plain circle round the pin's tip, and the pin's head alone carries the place;
+ * zooming in far enough to part them brings the icon back. False before the map has a scale.
+ */
+export function startUnderPin(start: LatLng, end: LatLng, metersPerPx: number): boolean {
+  const o = screenOffset(end, start, metersPerPx);
+  if (o === null) return false;
+  const r = START.place / 2;
+  return Math.abs(o.x) < PIN.width / 2 + r && o.y > -r && o.y < PIN.tipY + r;
+}
+
+/**
+ * What the map shows, for a screen reader: "Route map, from Home to Work, 2 hard brakes, 1
+ * speeding". The ends are named as the recap's "from → to" line names them, and only when it shows.
+ */
+export function mapLabel(marks: readonly Pick<EventMark, 'type'>[], ends: RouteEnds | null = null): string {
+  const head = ends && (ends.fromLabel !== null || ends.toLabel !== null) ? `Route map, from ${spokenRoute(ends)}` : 'Route map';
+  if (marks.length === 0) return `${head}, no events marked`;
   const n = new Map<EventType, number>();
   for (const m of marks) n.set(m.type, (n.get(m.type) ?? 0) + 1);
-  return `Route map, ${[...n].map(([type, k]) => `${k} ${SPOKEN[type][k === 1 ? 0 : 1]}`).join(', ')}`;
+  return `${head}, ${[...n].map(([type, k]) => `${k} ${SPOKEN[type][k === 1 ? 0 : 1]}`).join(', ')}`;
 }
 
 /** A pin for a screen reader: "Hard brake, 2 seconds, moderate", "Phone pickup, in hand 24 seconds, at 38 miles per hour". */
@@ -126,7 +173,39 @@ export function eventDetail(e: Pick<LocalDriveEvent, 'type' | 'tier' | 'duration
 /** A map pin in its tier's colour with the event's icon, its tip on the spot. */
 function Pin({ mark }: { mark: EventMark }) {
   const ink = INK[TIER_SIGNAL[mark.tier]];
-  return <TeardropPin fill={ink.fill} edge={PAPER} type={mark.type} iconColor={ink.onFill} />;
+  return (
+    <TeardropPin fill={ink.fill} edge={PAPER}>
+      <EventIcon type={mark.type} size={16} color={ink.onFill} />
+    </TeardropPin>
+  );
+}
+
+/**
+ * Where the drive began: Google Maps' origin circle, a white disc with an ink ring (20 pt), or for
+ * a saved Home, Work or School a 30 pt disc with the place's icon in ink in its face.
+ */
+function StartMarker({ place }: { place: FixedKind | null }) {
+  return (
+    <StartDisc ring={END_INK} face={PAPER} size={place ? START.place : START.plain} testID="map-start-view">
+      {place ? <Ionicons name={PLACE_ICON[place]} size={PLACE_GLYPH} color={END_INK} /> : null}
+    </StartDisc>
+  );
+}
+
+/**
+ * Where the drive ended: the teardrop pin in ink with a white rim, its tip on the spot, a white dot
+ * in its head, or a saved Home, Work or School's icon in white.
+ */
+function EndMarker({ place }: { place: FixedKind | null }) {
+  return (
+    <TeardropPin fill={END_INK} edge={PAPER} testID="map-end-view">
+      {place ? (
+        <Ionicons name={PLACE_ICON[place]} size={PLACE_GLYPH} color={END_ON} />
+      ) : (
+        <View testID="map-end-dot" style={{ width: END_DOT, height: END_DOT, borderRadius: END_DOT / 2, backgroundColor: END_ON }} />
+      )}
+    </TeardropPin>
+  );
 }
 
 /** The small card a tapped pin opens over the bottom of the map: what happened and for how long. */
@@ -198,11 +277,16 @@ export function highlightCaption(e: LocalDriveEvent): string {
  * restored from the server, has one per stretch between privacy cuts) and each is drawn apart: no
  * line joins one run to the next across a cut. With a `lead`-in (`leadIn`: the drive began 30 m or
  * more before its first fix), a dashed line in the route's green runs from where it began to the
- * route, framed with it.
+ * route, framed with it. The drive's ends are marked: a round start marker where it began (the
+ * lead-in's start, else the route's first point) and an ink teardrop pin with its tip on the
+ * route's last point, each with the icon of a saved Home, Work or School (`ends`, `endPlace`);
+ * on a drive back to the same saved place, a start under the pin on screen stays the plain circle
+ * (`startUnderPin`). Event pins draw over both ends, so a pin at either end keeps its tap.
  */
 export function RouteMap({
   runs: visible,
   lead = null,
+  ends = null,
   events,
   highlighted,
   testID = 'route-map',
@@ -210,6 +294,8 @@ export function RouteMap({
   runs: Runs;
   /** The dashed lead-in from where the drive began (`leadIn`), or null. */
   lead?: Lead | null;
+  /** The drive's "from → to" labels and stored places: the end markers' icons and the spoken summary. */
+  ends?: RouteEnds | null;
   events: readonly LocalDriveEvent[];
   highlighted: LocalDriveEvent | null;
   testID?: string;
@@ -221,6 +307,16 @@ export function RouteMap({
   const marks = useMemo(() => eventMarks(visible, events), [visible, events]);
   // The view frames the lead-in too, so the dashed line from where the drive began shows whole.
   const region = useMemo(() => regionFor(lead && points.length >= 2 ? [...points, lead[0]] : points), [points, lead]);
+  // The ends of what is drawn: where the drive began (the lead-in's start, else the first drawn
+  // run's first point) and the last drawn run's last point. A lone fix is never drawn, so never an end.
+  const [startAt, endAt] = useMemo(() => {
+    const drawn = visible.filter((r) => r.length >= 2);
+    const first = drawn[0];
+    const last = drawn[drawn.length - 1];
+    return [lead ? lead[0] : (first?.[0] ?? null), last ? (last[last.length - 1] ?? null) : null] as const;
+  }, [visible, lead]);
+  const fromPlace = endPlace(ends?.fromPlace);
+  const toPlace = endPlace(ends?.toPlace);
   /** Where the map was last left, with the fitted region it belongs to (a new route starts over). */
   const [view, setView] = useState<{ base: Region; at: Region } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -236,7 +332,10 @@ export function RouteMap({
   const shown = view && region && view.base === region ? view.at : region;
   const mPerPx = shown ? metersPerPixel(shown, side) : 0;
   const shapes = marks.map((m) => (m.stretch.length >= 2 && markShape(m.lengthM, mPerPx) === 'line' ? 'line' : 'dot'));
-  const settling = useSettling(`${side > 0}|${marks.map((m, i) => `${m.id}:${shapes[i]}`).join(',')}|${ring ? highlighted?.id : ''}`);
+  // A drive back to the same saved place: the pin's head carries it, the start under it is plain.
+  // Any other start keeps its icon, partly under the pin if need be, so the place is never lost.
+  const startIcon = fromPlace && fromPlace === toPlace && startAt && endAt && startUnderPin(startAt, endAt, mPerPx) ? null : fromPlace;
+  const settling = useSettling(`${side > 0}|${marks.map((m, i) => `${m.id}:${shapes[i]}`).join(',')}|${ring ? highlighted?.id : ''}|${startIcon}|${toPlace}`);
   const selected = selectedId && marks.some((m) => m.id === selectedId) ? (events.find((e) => e.id === selectedId) ?? null) : null;
   const onLayout = (e: LayoutChangeEvent) => setSide(Math.round(e.nativeEvent.layout.width));
 
@@ -247,7 +346,7 @@ export function RouteMap({
     backgroundColor: t.colors.surfaceRaised,
   };
   const square = [frame, { width: '100%' as const, aspectRatio: 1 }];
-  const summary = { accessibilityRole: 'image' as const, accessibilityLabel: mapLabel(marks) };
+  const summary = { accessibilityRole: 'image' as const, accessibilityLabel: mapLabel(marks, ends) };
   const hidden = { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const };
 
   let body: React.ReactNode;
@@ -351,6 +450,32 @@ export function RouteMap({
               </Marker>
             );
           })}
+          {startAt ? (
+            <Marker
+              key={`start-${startIcon ?? 'plain'}`}
+              testID="map-start"
+              coordinate={{ latitude: startAt.lat, longitude: startAt.lng }}
+              {...START_PLACE}
+              tracksViewChanges={settling}
+              zIndex={START_Z}
+              {...hidden}
+            >
+              <StartMarker place={startIcon} />
+            </Marker>
+          ) : null}
+          {endAt ? (
+            <Marker
+              key={`end-${toPlace ?? 'plain'}`}
+              testID="map-end"
+              coordinate={{ latitude: endAt.lat, longitude: endAt.lng }}
+              {...PIN_PLACE}
+              tracksViewChanges={settling}
+              zIndex={END_Z}
+              {...hidden}
+            >
+              <EndMarker place={toPlace} />
+            </Marker>
+          ) : null}
           {ring ? (
             <Marker
               key={`ring-${highlighted?.id}`}

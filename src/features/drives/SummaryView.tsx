@@ -170,7 +170,7 @@ export function SummaryView({
         </View>
 
         {/* 2. Route map */}
-        <RouteMap runs={runs} lead={lead} events={rows.map((r) => r.event)} highlighted={selected} />
+        <RouteMap runs={runs} lead={lead} ends={drive} events={rows.map((r) => r.event)} highlighted={selected} />
         {/* "Save as Home?" when this drive's end or start is surely Home, Work or School (nothing otherwise) */}
         <DrivePlacePrompt clientTripId={drive.clientTripId} />
 

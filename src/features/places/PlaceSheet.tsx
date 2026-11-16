@@ -12,7 +12,7 @@ import { Button, ListRow, Sheet, Text, useFontScale, useTheme } from '@/ui';
 
 import { placesCopy } from './copy';
 import { useLearnedPlaces, useSuggestions, type Suggestion } from './learned';
-import { FIXED_NAME, idFor, PLACE_NAME_MAX, placeProblem, type PlaceKind, type PlaceProblem, type SavedPlace } from './model';
+import { FIXED_NAME, idFor, PLACE_ICON, PLACE_NAME_MAX, placeProblem, type PlaceKind, type PlaceProblem, type SavedPlace } from './model';
 import { addressAt, lookUpExact, MIN_QUERY, searchAddresses, searchBias, SEARCH_DEBOUNCE_MS, type AddressHit, type SearchResult } from './search';
 
 const copy = placesCopy.sheet;
@@ -51,13 +51,7 @@ const partsOf = (a: { number?: string | null; street?: string | null }): Pick<Ch
 
 type SearchState = { state: 'idle' | 'loading' | 'done' | 'failed'; hits: AddressHit[] };
 
-const icons: Record<PlaceKind, keyof typeof Ionicons.glyphMap> = {
-  home: 'home-outline',
-  work: 'briefcase-outline',
-  school: 'school-outline',
-  custom: 'location-outline',
-};
-export const placeIcon = (kind: PlaceKind) => icons[kind];
+export const placeIcon = (kind: PlaceKind) => PLACE_ICON[kind];
 
 const isAddressLike = (s: string) => /^\d/.test(s.trim());
 

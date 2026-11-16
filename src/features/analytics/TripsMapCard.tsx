@@ -3,6 +3,7 @@ import { Text as RNText, StyleSheet, View, type LayoutChangeEvent } from 'react-
 import type MapViewType from 'react-native-maps';
 
 import type { ProblemSpot } from '@/data/queries/spots';
+import { EventIcon } from '@/features/drives/EventIcon';
 import { PIN, PIN_PLACE, TeardropPin, useSettling } from '@/features/drives/Pin';
 import { awayFrom } from '@/features/drives/route';
 import { RECENTER_MS } from '@/features/drives/RouteMap';
@@ -102,7 +103,9 @@ function SpotMarkerView({ spot, scheme }: { spot: ProblemSpot; scheme: 'light' |
   return (
     <View collapsable={false} style={{ flexDirection: 'row', alignItems: 'flex-start', height: PIN.height }}>
       <SpotChip spot={spot} ghost />
-      <TeardropPin fill={ink.line} edge={ink.pinEdge} type={spot.kind} iconColor={ink.onLine} />
+      <TeardropPin fill={ink.line} edge={ink.pinEdge}>
+        <EventIcon type={spot.kind} size={16} color={ink.onLine} />
+      </TeardropPin>
       <SpotChip spot={spot} />
     </View>
   );

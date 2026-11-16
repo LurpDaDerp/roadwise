@@ -9,13 +9,11 @@ import { Button, Card, Text, useTheme } from '@/ui';
 
 import { placesCopy } from './copy';
 import { declinePrompt, PROMPT_QUERY, useDrivePrompt, type DrivePrompt } from './drivePrompt';
-import { FIXED_NAME, PROMPT_OFF_KEY } from './model';
+import { FIXED_NAME, PLACE_ICON, PROMPT_OFF_KEY } from './model';
 import { addressAt } from './search';
 import { usePlaces } from './usePlaces';
 
 const copy = placesCopy.prompt;
-
-const ICON = { home: 'home-outline', work: 'briefcase-outline', school: 'school-outline' } as const;
 
 /** Why it asks, in a few words. */
 export function promptWhy(p: Pick<DrivePrompt, 'kind' | 'why'>): string {
@@ -95,7 +93,7 @@ export function DrivePlacePrompt({ clientTripId }: { clientTripId: string }) {
     <Card padded={false} testID="drive-place-prompt">
       <View style={{ padding: th.space.md, gap: th.space.sm }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: th.space.sm }}>
-          <RowIcon name={ICON[p.kind]} />
+          <RowIcon name={PLACE_ICON[p.kind]} />
           <View style={{ flex: 1 }}>
             <Text variant="headline">{copy.title(p.kind)}</Text>
             <Text variant="footnote" tone="muted" numberOfLines={1}>

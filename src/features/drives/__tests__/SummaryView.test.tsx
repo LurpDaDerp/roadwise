@@ -166,6 +166,11 @@ describe('the lead-in from where the drive began', () => {
   });
 });
 
+test('the route map gets the drive’s ends: its summary names them as the “from → to” line does', async () => {
+  await draw(<SummaryView {...props()} />);
+  expect(screen.getByTestId('map-unavailable', { includeHiddenElements: true })).toHaveProp('accessibilityLabel', expect.stringMatching(/^Route map, from Home to School, /));
+});
+
 describe('the hero mirrors the share card', () => {
   test('the tier icon beside the score, then distance and time, labelled, all three in the tier ink on its wash', async () => {
     await draw(<SummaryView {...props()} />);
