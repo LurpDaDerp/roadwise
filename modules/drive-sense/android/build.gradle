@@ -38,6 +38,10 @@ dependencies {
   implementation 'androidx.core:core:1.17.0'
   implementation 'com.facebook.react:react-android'
 
-  // JVM unit tests (src/test: the pure time base); not part of the app build.
+  // JVM unit tests (src/test: the pure time base, the drive detector's policy and its decision
+  // table); not part of the app build. org.json: the unit-test android.jar stubs every method of
+  // the platform's copy, and the detector's self-test (DetectSelfTest) reads and answers its rows as
+  // org.json, so the tests run it on the real library.
   testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.json:json:20180813'
 }
