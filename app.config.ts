@@ -191,9 +191,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       ...optional('intentFilters', androidAppLinks(linkDomain)),
       // Left out when there is no FCM credential: see `googleServicesFile` above.
       ...optional('googleServicesFile', googleServicesFile(projectRoot)),
-      // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) and BLUETOOTH_CONNECT on Android 12+,
-      // BLUETOOTH/BLUETOOTH_ADMIN (maxSdkVersion 30) below, come from react-native-ble-manager's own
-      // manifest. The DashPal link service (connectedDevice, with FOREGROUND_SERVICE_CONNECTED_DEVICE,
+      // Bluetooth (DashPal): BLUETOOTH_SCAN (neverForLocation) on Android 12+ and BLUETOOTH_ADMIN
+      // (maxSdkVersion 30) below come from plugins/withAndroidBluetoothScan.js (react-native-ble-manager's
+      // own manifest never reaches the build); BLUETOOTH_CONNECT and BLUETOOTH (maxSdkVersion 30) from
+      // the drive-sense module manifest. The DashPal link service (connectedDevice, with FOREGROUND_SERVICE_CONNECTED_DEVICE,
       // both in the drive-sense module manifest) keeps the process alive while a DashPal is paired, so
       // the phone plays the dashcam's alerts in the background; the drive's location service does so
       // during a drive.
@@ -263,9 +264,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // Apple extension targets from /targets: the Live Activity widget (targets/live-drive-widget).
       '@bacons/apple-targets',
       // Android only (plugins/): nothing is backed up or moved to a new phone; no unused
-      // media-playback service.
+      // media-playback service; DashPal's Bluetooth scan permissions.
       './plugins/withAndroidNoDataExtraction',
       './plugins/withAndroidNoMediaPlaybackService',
+      './plugins/withAndroidBluetoothScan',
     ],
     experiments: { typedRoutes: true },
   };

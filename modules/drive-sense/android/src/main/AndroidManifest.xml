@@ -30,8 +30,9 @@
   <!-- The car link (CarLink.kt): a paired car's Bluetooth connecting wakes the drive detector
        (CarConnectReceiver: Android sends ACL_CONNECTED only to an app holding Bluetooth), and on
        Android 14+ a car's full Bluetooth address is readable only with Nearby devices
-       (BLUETOOTH_CONNECT, Android 12+), asked for before "Use this car". The same declarations as
-       react-native-ble-manager's (DashPal); never a scan. -->
+       (BLUETOOTH_CONNECT, Android 12+), asked for before "Use this car". DashPal's BLE (react-native-ble-manager)
+       uses these too; its scan permissions come from plugins/withAndroidBluetoothScan.js. The car
+       link never scans. -->
   <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 

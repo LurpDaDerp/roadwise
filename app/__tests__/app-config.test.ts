@@ -202,9 +202,10 @@ test('iOS: the add-to-Photos usage string, and no photo-library read string', ()
 });
 
 // DashPal (plan §7.1): react-native-ble-manager with no config plugin. iOS gets the Bluetooth usage
-// string and the `bluetooth-central` background mode; Android takes its permissions from the
-// library's manifest, which must never put a maxSdkVersion on fine location (drive location on
-// Android 12+ depends on it).
+// string and the `bluetooth-central` background mode. On Android the library's manifest never
+// reaches the build (AGP 7.3+ points it at a file the package doesn't ship), so the scan permissions
+// come from plugins/withAndroidBluetoothScan.js and the rest from drive-sense; nothing may put a
+// maxSdkVersion on fine location (drive location on Android 12+ depends on it).
 describe('Bluetooth (DashPal and the car check)', () => {
   const ROOT_DIR = path.join(__dirname, '..', '..');
   const manifest = (rel: string) => fs.readFileSync(path.join(ROOT_DIR, rel), 'utf8');
@@ -224,13 +225,31 @@ describe('Bluetooth (DashPal and the car check)', () => {
     expect(build().android?.blockedPermissions?.some((p) => /BLUETOOTH/.test(p))).toBe(false);
   });
 
-  test('the library manifest: SCAN never-for-location, CONNECT, legacy BLUETOOTH capped at 30, fine location uncapped everywhere', () => {
-    const ble = manifest('node_modules/react-native-ble-manager/android/src/main/AndroidManifest.xml');
-    expect(ble).toMatch(/android\.permission\.BLUETOOTH_SCAN"\s+android:usesPermissionFlags="neverForLocation"/);
-    expect(ble).toContain('android.permission.BLUETOOTH_CONNECT');
-    expect(ble).toMatch(/android\.permission\.BLUETOOTH"\s+android:maxSdkVersion="30"/);
+  test("the library's manifest never reaches the build: the app declares SCAN never-for-location and ADMIN capped at 30", () => {
+    // AGP 7.3+: ble-manager's build.gradle switches to a manifest the package doesn't ship.
+    expect(manifest('node_modules/react-native-ble-manager/android/build.gradle')).toContain('manifest.srcFile "src/main/AndroidManifestNew.xml"');
+    expect(fs.existsSync(path.join(ROOT_DIR, 'node_modules/react-native-ble-manager/android/src/main/AndroidManifestNew.xml'))).toBe(false);
+    expect(build().plugins).toContain('./plugins/withAndroidBluetoothScan');
+    type Perm = { $: Record<string, string> };
+    type Manifest = { manifest: { $: Record<string, string>; 'uses-permission'?: Perm[] } };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the plugin is CommonJS, run by prebuild
+    const scan = require('../../plugins/withAndroidBluetoothScan') as { addBluetoothScan(m: Manifest): Manifest };
+    const fine = { $: { 'android:name': 'android.permission.ACCESS_FINE_LOCATION' } };
+    const out = scan.addBluetoothScan({ manifest: { $: {}, 'uses-permission': [fine, { $: { 'android:name': 'android.permission.BLUETOOTH_SCAN' } }] } });
+    expect(out.manifest.$['xmlns:tools']).toBe('http://schemas.android.com/tools');
+    expect(out.manifest['uses-permission']).toEqual([
+      fine,
+      { $: { 'android:name': 'android.permission.BLUETOOTH_SCAN', 'android:usesPermissionFlags': 'neverForLocation', 'tools:targetApi': 's' } },
+      { $: { 'android:name': 'android.permission.BLUETOOTH_ADMIN', 'android:maxSdkVersion': '30' } },
+    ]);
+    // CONNECT and legacy BLUETOOTH (capped at 30): the drive-sense module manifest.
+    const ds = manifest('modules/drive-sense/android/src/main/AndroidManifest.xml');
+    expect(ds).toContain('<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />');
+    expect(ds).toMatch(/android\.permission\.BLUETOOTH"\s+android:maxSdkVersion="30"/);
+  });
+
+  test('fine location uncapped in every manifest that reaches the build', () => {
     for (const rel of [
-      'node_modules/react-native-ble-manager/android/src/main/AndroidManifest.xml',
       'node_modules/expo-location/android/src/main/AndroidManifest.xml',
       'modules/drive-sense/android/src/main/AndroidManifest.xml',
     ]) {
