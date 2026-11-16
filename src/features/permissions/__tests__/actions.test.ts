@@ -296,6 +296,6 @@ test('"Pause app activity if unused": the fix opens the page with its switch', a
 
 test("Battery Saver limiting location: the fix opens Battery Saver's page", async () => {
   const w = world(snap({ platform: 'android', canAskAlways: false, backgroundRefresh: 'restricted' }));
-  expect(await w.run('backgroundRefresh')).toEqual({ kind: 'opened' });
+  expect(await w.run('batterySaver')).toEqual({ kind: 'opened' });
   expect(w.calls()).toEqual(['openBatterySaverSettings']);
 });

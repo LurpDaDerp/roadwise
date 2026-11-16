@@ -5,6 +5,8 @@ import { Alert, Pressable, Switch, TextInput, useColorScheme, View } from 'react
 
 import { createPermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
+import type { DisclosureNext } from '@/features/permissions/copy';
+import { useBackgroundDisclosure } from '@/features/permissions/BackgroundDisclosure';
 import { useDb } from '@/data/queries/context';
 import type { SavedPlace } from '@/features/places/model';
 import { usePlaces } from '@/features/places/usePlaces';
@@ -34,15 +36,24 @@ import {
 const copy = settingsCopy.zones;
 const placeCopy = copy.places;
 
-export type LocateResult = { ok: true; lat: number; lng: number } | { ok: false; reason: 'denied' | 'failed' };
+/** `notAsked`: location is not allowed yet and nothing was asked (the disclosure's Not now). */
+export type LocateResult = { ok: true; lat: number; lng: number } | { ok: false; reason: 'denied' | 'notAsked' | 'failed' };
+
+/** Shows Google Play's background-location disclosure (`useBackgroundDisclosure().ask`); true for Continue. */
+export type Disclose = (next: DisclosureNext) => Promise<boolean>;
 
 /**
  * One fix from the phone. While Using location is asked for through the one permission adapter
- * (the OS shows a prompt only while it still can).
+ * (the OS shows a prompt only while it still can). On Android 9 and lower with the drive detector,
+ * where allowing location allows it in the background too, `disclose` shows Google Play's
+ * disclosure first; Not now (or no `disclose`) asks nothing and answers `notAsked`.
  */
-export async function locateOnce(): Promise<LocateResult> {
+export async function locateOnce(disclose?: Disclose): Promise<LocateResult> {
   try {
-    const access = await createPermissionsAdapter().requestLocationForeground();
+    const adapter = createPermissionsAdapter();
+    const background = await adapter.locationAskIsBackground();
+    if (background && !(disclose !== undefined && (await disclose('allow')))) return { ok: false, reason: 'notAsked' };
+    const access = await adapter.requestLocationForeground({ disclosed: background });
     if (access !== 'foreground' && access !== 'always') return { ok: false, reason: 'denied' };
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
     const Location = require('expo-location') as typeof import('expo-location');
@@ -79,7 +90,7 @@ function draftProblem(d: Draft): ZoneProblem | null {
 }
 
 export interface PrivacyZonesDeps {
-  locate?: () => Promise<LocateResult>;
+  locate?: (disclose?: Disclose) => Promise<LocateResult>;
 }
 
 /**
@@ -360,14 +371,16 @@ function ZoneEditor({
   /** A centre that arrives later (the location fix): applied to the draft as it is by then. */
   onCenter: (lat: number, lng: number) => void;
   problem: ZoneProblem | null;
-  locate: () => Promise<LocateResult>;
+  locate: (disclose?: Disclose) => Promise<LocateResult>;
   onSave: () => void;
   onRemove?: () => void;
 }) {
   const th = useTheme();
   const scale = useFontScale();
   const [locating, setLocating] = useState(false);
-  const [locateError, setLocateError] = useState<'denied' | 'failed' | null>(null);
+  const [locateError, setLocateError] = useState<'denied' | 'notAsked' | 'failed' | null>(null);
+  // Android 9 and lower with the drive detector: "Use my location" shows Google Play's disclosure first.
+  const disclosure = useBackgroundDisclosure();
   const maps = loadMaps();
   // Android: Google's map takes the system appearance only when it is made, so it is given it (and
   // the quiet style Apple's map gets from showsPointsOfInterests) and remade when it changes.
@@ -387,7 +400,7 @@ function ZoneEditor({
   const locateHere = async () => {
     setLocating(true);
     setLocateError(null);
-    const r = await locate();
+    const r = await locate(disclosure.ask);
     if (!mounted.current) return;
     setLocating(false);
     if (r.ok) onCenter(r.lat, r.lng);
@@ -484,7 +497,7 @@ function ZoneEditor({
         )}
         {locateError ? (
           <Text variant="footnote" tone="danger" accessibilityRole="alert">
-            {locateError === 'denied' ? copy.locationDenied : copy.locationFailed}
+            {locateError === 'denied' ? copy.locationDenied : locateError === 'notAsked' ? copy.locationNotAsked : copy.locationFailed}
           </Text>
         ) : null}
         {maps ? (
@@ -545,6 +558,7 @@ function ZoneEditor({
 
       <Button label={linked ? placeCopy.saveSize : copy.save} onPress={onSave} testID="zone-save" />
       {onRemove ? <Button label={linked ? placeCopy.stop : copy.remove} variant="destructive" size="md" onPress={onRemove} testID="zone-remove" /> : null}
+      {disclosure.sheet}
     </View>
   );
 }

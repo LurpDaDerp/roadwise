@@ -199,10 +199,15 @@ test("Pause app activity if unused prints Android's own switch: Off when RoadWis
   expect(rowDetail('unusedApps', m('denied'), ANDROID_11)).toBe("If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.");
 });
 
-test('Android Battery Saver limiting location: needs a look, in its own words', () => {
+test('Android Battery Saver limiting location: its own row, reading On (needs a look), in its own words', () => {
   const saver = m('denied', false, 'batterySaver');
-  expect(rowStatus('backgroundRefresh', saver)).toEqual({ word: 'notYet', label: 'Needs a look' });
-  expect(homeLine('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location. Drives may be missed.');
-  expect(rowDetail('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location, so drives may be missed or cut short.');
-  expect(requestLabel('backgroundRefresh', saver, ANDROID)).toBe('Open Settings');
+  expect(rowTitle('batterySaver', ANDROID)).toBe('Battery Saver');
+  expect(permissionName('batterySaver', ANDROID)).toBe('Battery Saver');
+  expect(rowStatus('batterySaver', saver)).toEqual({ word: 'notYet', label: 'On' });
+  expect(homeLine('batterySaver', saver, ANDROID)).toBe('Battery Saver is limiting location. Drives may be missed.');
+  expect(rowDetail('batterySaver', saver, ANDROID)).toBe('Battery Saver is limiting location, so drives may be missed or cut short.');
+  expect(requestLabel('batterySaver', saver, ANDROID)).toBe('Open Settings');
+  // Battery use set to Restricted keeps its own words.
+  expect(homeLine('backgroundRefresh', m('denied'), ANDROID)).toBe('Battery use is set to Restricted. Drives may be missed.');
+  expect(permissionName('backgroundRefresh', ANDROID)).toBe('App battery usage');
 });

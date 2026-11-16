@@ -6,8 +6,9 @@
  * Bluetooth and the camera are never requested from here (their `canAsk` is always false): the OS
  * asks for them only where the spec puts them: the DashPal setup, pairing a car and a QR scanner. Location Always
  * (Android: "Allow all the time") and Background App Refresh (Android: battery usage not Restricted)
- * are automatic drives' rows, listed on Android only where the phone has the drive detector; "Pause
- * app activity if unused" is Android's own tip for them (Android 11 and later, where it can be read).
+ * are automatic drives' rows, listed on Android only where the phone has the drive detector; Battery
+ * Saver limiting location and "Pause app activity if unused" are Android's own rows for them (the
+ * second on Android 11 and later, where it can be read).
  */
 import type { BluetoothPermission, CameraAccess, PermissionPlatform, PermissionSnapshot } from '@/core/permissions';
 
@@ -17,6 +18,7 @@ export type PermissionId =
   | 'locationAlways'
   | 'motion'
   | 'backgroundRefresh'
+  | 'batterySaver'
   | 'unusedApps'
   | 'notifications'
   | 'bluetooth'
@@ -139,10 +141,7 @@ function locationAlwaysState(read: PermissionBoardRead): PermState {
 
 /**
  * What lets the phone wake RoadWise when a drive starts: iOS Background App Refresh; Android's
- * battery usage for RoadWise, missing while it is set to Restricted, and while Battery Saver limits
- * location (its location mode stops fixes with the screen off or RoadWise behind: drives can be
- * missed or cut short; its own Settings page, and never a need of the Automatic drives switch, whose
- * native status leaves it out). Only Settings changes it.
+ * battery usage for RoadWise, missing while it is set to Restricted. Only Settings changes it.
  */
 function backgroundRefreshState(read: PermissionBoardRead): PermState {
   switch (read.snapshot.backgroundRefresh) {
@@ -151,11 +150,24 @@ function backgroundRefreshState(read: PermissionBoardRead): PermState {
     case 'denied':
       return missing('denied', false);
     case 'restricted':
+      // Android: battery use is not Restricted, and Battery Saver limits location (its own row).
       // iPhone: restricted by the phone's management, nothing the driver can do.
-      return read.snapshot.platform === 'android' ? missing('denied', false, 'batterySaver') : UNKNOWN;
+      return read.snapshot.platform === 'android' ? GRANTED : UNKNOWN;
     default:
       return UNKNOWN; // not read
   }
+}
+
+/**
+ * Android: Battery Saver is on with a location mode that stops fixes with the screen off or RoadWise
+ * behind (the detector reports it as `backgroundRefresh` `restricted`), so drives can be missed or
+ * cut short. A row of its own, so hiding it from Home never hides battery use set to Restricted.
+ * Never a need of the Automatic drives switch (its native status leaves it out); only Battery
+ * Saver's own page changes it. Not in use while Battery Saver leaves location alone, or while battery
+ * use is Restricted (that row comes first and the detector reports only it).
+ */
+function batterySaverState(read: PermissionBoardRead): PermState {
+  return read.snapshot.backgroundRefresh === 'restricted' ? missing('denied', false, 'batterySaver') : IDLE;
 }
 
 /**
@@ -241,6 +253,7 @@ export const PERMISSIONS: readonly PermissionDef[] = [
   { id: 'locationAlways', order: 25, need: 'recommended', platforms: BOTH, homeRow: true, listed: autoRowsListed, state: locationAlwaysState },
   { id: 'motion', order: 30, need: 'recommended', platforms: BOTH, homeRow: true, state: motionState },
   { id: 'backgroundRefresh', order: 35, need: 'recommended', platforms: BOTH, homeRow: true, listed: autoRowsListed, state: backgroundRefreshState },
+  { id: 'batterySaver', order: 36, need: 'recommended', platforms: ANDROID, homeRow: true, listed: autoRowsListed, state: batterySaverState },
   { id: 'unusedApps', order: 37, need: 'optional', platforms: ANDROID, homeRow: false, listed: autoRowsListed, state: unusedAppsState },
   { id: 'notifications', order: 40, need: 'recommended', platforms: BOTH, homeRow: true, state: notificationsState },
   { id: 'bluetooth', order: 60, need: 'optional', platforms: BOTH, homeRow: true, state: bluetoothState },

@@ -177,6 +177,7 @@ export const settingsCopy = {
     removeBody: 'Routes near this place will show on your maps again.',
     cancel: 'Cancel',
     locationDenied: 'Location is off for RoadWise, so we can’t find you. Turn it on in Settings, or tap the map.',
+    locationNotAsked: 'Location isn’t allowed yet, so we can’t find you. Try again, or tap the map.',
     locationFailed: "Couldn't get your location. Try again.",
     problems: {
       name_empty: 'Give the zone a name.',

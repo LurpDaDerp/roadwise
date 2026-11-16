@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import type { PermissionsAdapter } from '@/core/permissions';
+import type { DisclosureNext } from '@/features/permissions/copy';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 
 import { dashpalSecrets, type DashpalSecrets } from '../../secure';
@@ -16,6 +17,11 @@ export interface SetupFlowDeps {
   flow?: (base: SetupDeps) => SetupFlow;
   secrets?: DashpalSecrets;
   now?: () => number;
+  /**
+   * Shows Google Play's background-location disclosure (the sheet's `useBackgroundDisclosure().ask`):
+   * true once the driver chose Continue. Without it, a request that needs it asks nothing.
+   */
+  disclose?: (next: DisclosureNext) => Promise<boolean>;
 }
 
 /**
@@ -33,13 +39,23 @@ export function useSetupFlow({ start, deps = {}, active = true, onPhase }: { sta
   const [seen, setSeen] = useState<{ flow: SetupFlow | null; phase: SetupPhase }>({ flow: null, phase: { kind: 'idle' } });
   const [attempt, setAttempt] = useState(0);
   const adapter = useMemo(() => deps.adapter ?? defaultPermissionsAdapter(), [deps.adapter]);
+  // A stable callback (`useBackgroundDisclosure().ask`), so it never starts a new flow by itself.
+  const disclose = deps.disclose;
 
   const flow = useMemo(() => {
     void attempt;
     const base: SetupDeps = {
       platform,
       transport: () => runtime?.transport() ?? null,
-      requestBluetooth: () => adapter.requestBluetooth(),
+      // Android 11 and lower ask fine location for the DashPal's scans; on Android 9 and lower with the
+      // drive detector that allows background location too, so Google Play's disclosure comes first,
+      // and Not now asks nothing (the step then reads not allowed, with Try again).
+      requestBluetooth: async () => {
+        if (platform !== 'android' || !(await adapter.locationAskIsBackground())) return adapter.requestBluetooth();
+        const ask = disclose;
+        if (!ask || !(await ask('allow'))) return 'undetermined';
+        return adapter.requestBluetooth({ disclosed: true });
+      },
       isBusy,
       onDriveChange,
       optIn: async () => runtime?.optIn(),
@@ -64,7 +80,7 @@ export function useSetupFlow({ start, deps = {}, active = true, onPhase }: { sta
     return (deps.flow ?? createSetupFlow)(base);
     // A new flow for each attempt and each opening (a cancelled one finishes its undo on its own).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attempt, active, adapter, deps.flow, deps.secrets, platform, runtime, isBusy, onDriveChange]);
+  }, [attempt, active, adapter, deps.flow, deps.secrets, disclose, platform, runtime, isBusy, onDriveChange]);
 
   const startKey = JSON.stringify(start);
   useEffect(() => {

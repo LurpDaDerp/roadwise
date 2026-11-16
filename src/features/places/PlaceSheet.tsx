@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, Pressable, TextInput, useColorScheme, View } from 'react-native';
 
 import type { PlaceSlot } from '@/core/places/learn';
-import { locateOnce, type LocateResult } from '@/features/settings/PrivacyZonesScreen';
+import { useBackgroundDisclosure } from '@/features/permissions/BackgroundDisclosure';
+import { locateOnce, type Disclose, type LocateResult } from '@/features/settings/PrivacyZonesScreen';
 import { loadMaps } from '@/features/settings/maps';
 import { androidMapLook } from '@/features/settings/mapStyle';
 import { RowIcon, Section } from '@/features/settings/parts';
@@ -27,7 +28,7 @@ export interface PlaceSheetDeps {
   search?: (q: string, near: LatLng | null, opts: { signal?: AbortSignal }) => Promise<SearchResult>;
   exact?: (q: string) => Promise<AddressHit | null>;
   addressAt?: (p: LatLng) => Promise<{ title: string; subtitle: string; number?: string | null; street?: string | null } | null>;
-  locate?: () => Promise<LocateResult>;
+  locate?: (disclose?: Disclose) => Promise<LocateResult>;
   bias?: () => Promise<LatLng | null>;
 }
 
@@ -111,6 +112,8 @@ function PlaceEditor({
   const exact = deps.exact ?? lookUpExact;
   const reverse = deps.addressAt ?? addressAt;
   const locate = deps.locate ?? locateOnce;
+  // Android 9 and lower with the drive detector: "Use my location" shows Google Play's disclosure first.
+  const disclosure = useBackgroundDisclosure();
 
   const [mode, setMode] = useState<'search' | 'confirm'>(place ? 'confirm' : 'search');
   const [query, setQuery] = useState('');
@@ -209,11 +212,11 @@ function PlaceEditor({
   const locateHere = async () => {
     setBusy('locate');
     setNote(null);
-    const r = await locate();
+    const r = await locate(disclosure.ask);
     if (!live.current) return;
     if (!r.ok) {
       setBusy(null);
-      setNote(r.reason === 'denied' ? copy.locationDenied : copy.locationFailed);
+      setNote(r.reason === 'denied' ? copy.locationDenied : r.reason === 'notAsked' ? copy.locationNotAsked : copy.locationFailed);
       return;
     }
     const lines = await reverse({ lat: r.lat, lng: r.lng });
@@ -495,6 +498,7 @@ function PlaceEditor({
       <Text variant="caption" tone="muted">
         {copy.credit}
       </Text>
+      {disclosure.sheet}
     </View>
   );
 }

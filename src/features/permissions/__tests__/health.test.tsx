@@ -269,10 +269,13 @@ describe('Android with the drive detector', () => {
   it('Battery Saver limiting location needs a look, and its fix opens the Battery Saver page', async () => {
     const adapter = android({ backgroundRefresh: 'restricted', unusedAppPause: 'off' });
     await open(adapter);
-    expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('Needs a look');
-    expect(screen.getByTestId('permission-backgroundRefresh-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
+    expect(within(screen.getByTestId('permission-batterySaver')).getByText('Battery Saver')).toBeOnTheScreen();
+    expect(screen.getByTestId('permission-batterySaver-status')).toHaveTextContent('On');
+    expect(screen.getByTestId('permission-batterySaver-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
+    // Battery use itself is not Restricted.
+    expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('On');
     expect(screen.getByTestId('permissions-summary')).toHaveTextContent('A few things need a look');
-    await tap('permission-backgroundRefresh-fix');
+    await tap('permission-batterySaver-fix');
     await waitFor(() => expect(adapter.log).toContain('openBatterySaverSettings'));
     expect(adapter.log).not.toContain('openAppSettings');
   });
@@ -287,12 +290,12 @@ describe('Android with the drive detector', () => {
       };
     };
     await open(adapter, { watchBatterySaver });
-    expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('On');
+    expect(screen.queryByTestId('permission-batterySaver')).toBeNull();
     adapter.current = { ...adapter.current, backgroundRefresh: 'restricted' };
     expect(changed).not.toBeNull();
     changed!();
-    await waitFor(() => expect(screen.getByTestId('permission-backgroundRefresh-status')).toHaveTextContent('Needs a look'));
-    expect(screen.getByTestId('permission-backgroundRefresh-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
+    await waitFor(() => expect(screen.getByTestId('permission-batterySaver-status')).toHaveTextContent('On'));
+    expect(screen.getByTestId('permission-batterySaver-detail')).toHaveTextContent('Battery Saver is limiting location, so drives may be missed or cut short.');
   });
 
   it('Android 9 and lower: the location fix shows the disclosure first (allowing location allows it in the background too)', async () => {

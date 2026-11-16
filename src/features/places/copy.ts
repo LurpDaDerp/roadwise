@@ -22,6 +22,7 @@ export const placesCopy = {
     useLocation: 'Use my current location',
     locating: 'Finding you',
     locationDenied: 'Location is off for RoadWise. Search for the address instead.',
+    locationNotAsked: "Location isn't allowed yet. Try again or search instead.",
     locationFailed: "Couldn't get your location. Try again or search instead.",
     suggestions: 'Suggestions',
     results: 'Addresses',

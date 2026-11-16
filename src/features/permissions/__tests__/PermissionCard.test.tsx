@@ -314,6 +314,28 @@ test('Android with the drive detector: the Allow all the time row, whose tap car
   await expect(choice).resolves.toBe(false);
 });
 
+test("Android: Battery Saver limiting location is its own Home row, and Don't remind me names and hides only it", async () => {
+  const saver = read({ platform: 'android', location: 'always', canAskAlways: false, backgroundRefresh: 'restricted' });
+  const board = fakeBoard(saver);
+  const { rerender } = await draw(board);
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Battery Saver is limiting location. Drives may be missed.');
+  expect(screen.getByTestId('home-permission-action')).toHaveTextContent('Open Settings');
+  await act(async () => {
+    (mockSwipeProps.onSwipeableOpen as () => void)();
+  });
+  expect(lastAlert()[1]).toBe("Home won't remind you about Battery Saver again. You can undo this in Profile › Settings › Permissions.");
+  await act(async () => {
+    lastAlert()[2][1]!.onPress?.();
+  });
+  expect(board.hide).toHaveBeenCalledWith('batterySaver');
+  // Hidden; later battery use is set to Restricted: Home shows that line.
+  const prefs = { ...EMPTY_HOME_PREFS, hidden: ['batterySaver' as const] };
+  await act(async () => rerender(fakeBoard(saver, prefs)));
+  expect(screen.queryByTestId('home-permissions')).toBeNull();
+  await act(async () => rerender(fakeBoard(read({ platform: 'android', location: 'always', canAskAlways: false, backgroundRefresh: 'denied' }), prefs)));
+  expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Battery use is set to Restricted. Drives may be missed.');
+});
+
 test('Android: battery set to Restricted is a Home row; Android without the detector shows no automatic-drive row', async () => {
   await draw(fakeBoard(read({ platform: 'android', location: 'always', canAskAlways: false, backgroundRefresh: 'denied' })));
   expect(screen.getByTestId('home-permission-line')).toHaveTextContent('Battery use is set to Restricted. Drives may be missed.');

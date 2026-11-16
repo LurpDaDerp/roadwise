@@ -533,8 +533,11 @@ describe('readiness', () => {
 // DashPal (plan §7.9, §10 row 22): Bluetooth is asked only on the driver's DashPal tap, and a read
 // never prompts — on iOS it never even creates the BLE manager.
 describe('Bluetooth (DashPal)', () => {
-  function bt(platform: PermissionPlatform, o: { radio?: RadioState | null; started?: RadioState; level?: number; checks?: Record<string, boolean>; answers?: Record<string, string> } = {}) {
-    const { deps, calls } = makeDeps(platform);
+  function bt(
+    platform: PermissionPlatform,
+    o: { radio?: RadioState | null; started?: RadioState; level?: number; checks?: Record<string, boolean>; answers?: Record<string, string>; driveDetect?: DriveDetectPort | null; fg?: LocationAnswer } = {}
+  ) {
+    const { deps, calls } = makeDeps(platform, { driveDetect: o.driveDetect, fg: o.fg });
     const full: PermissionsAdapterDeps = {
       ...deps,
       bluetooth: {
@@ -592,6 +595,29 @@ describe('Bluetooth (DashPal)', () => {
     const a = bt('android', { level: 30 });
     expect(await a.adapter.requestBluetooth()).toBe('granted');
     expect(a.calls[0]).toBe('request:android.permission.ACCESS_FINE_LOCATION');
+  });
+
+  it('Android 9 and lower with the drive detector: fine location only right after the disclosure, while location is not allowed', async () => {
+    const detect = () => createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', canAskAlways: false } });
+    const notAsked = loc({ status: 'undetermined' });
+    const undisclosed = bt('android', { level: 28, driveDetect: detect(), fg: notAsked });
+    expect(await undisclosed.adapter.locationAskIsBackground()).toBe(true);
+    expect(await undisclosed.adapter.requestBluetooth()).toBe('undetermined');
+    expect(await undisclosed.adapter.requestBluetooth({ disclosed: false })).toBe('undetermined');
+    expect(undisclosed.calls.some((c) => c.startsWith('request') || c.startsWith('bt.'))).toBe(false);
+    const disclosed = bt('android', { level: 28, driveDetect: detect(), fg: notAsked });
+    expect(await disclosed.adapter.requestBluetooth({ disclosed: true })).toBe('granted');
+    expect(disclosed.calls).toContain('request:android.permission.ACCESS_FINE_LOCATION');
+    // Location already allowed (nothing new is allowed), Android 10 and later, a phone without the
+    // detector or without Play services, and an iPhone: no disclosure.
+    const allowed = bt('android', { level: 28, driveDetect: detect() });
+    expect(await allowed.adapter.locationAskIsBackground()).toBe(false);
+    expect(await allowed.adapter.requestBluetooth()).toBe('granted');
+    expect(await bt('android', { level: 29, driveDetect: detect(), fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
+    expect(await bt('android', { level: 28, driveDetect: null, fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
+    const noPlay = createFakeDriveDetect({ platform: 'android', permissions: { location: 'none', motion: 'unavailable', canAskAlways: false } });
+    expect(await bt('android', { level: 28, driveDetect: noPlay, fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
+    expect(await bt('ios', { driveDetect: createFakeDriveDetect({ permissions: { location: 'none', canAskAlways: false } }), fg: notAsked }).adapter.locationAskIsBackground()).toBe(false);
   });
 
   it('Android read: not granted is undetermined with no prompt and no radio; granted reads the radio', async () => {

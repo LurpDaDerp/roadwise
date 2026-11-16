@@ -87,7 +87,7 @@ export interface HomeCard {
  * The permissions only automatic drives use (Motion stays: it also ends a drive when the driver
  * walks away). While the Automatic drives switch is off, nothing asks for them.
  */
-export const AUTO_ONLY: ReadonlySet<PermissionId> = new Set<PermissionId>(['locationAlways', 'backgroundRefresh', 'unusedApps']);
+export const AUTO_ONLY: ReadonlySet<PermissionId> = new Set<PermissionId>(['locationAlways', 'backgroundRefresh', 'batterySaver', 'unusedApps']);
 
 /** A missing permission that only automatic drives use, while they are switched off. */
 const autoOff = (r: BoardRow, autoDisabled: boolean) => autoDisabled && AUTO_ONLY.has(r.id) && r.state.kind === 'missing';
@@ -113,13 +113,14 @@ export interface SettingsRow extends BoardRow {
 
 /**
  * Settings › Permissions: every permission this phone lists, except Precise Location while location
- * is not allowed, and motion, Background App Refresh or "Pause app activity if unused" on a phone
- * that cannot report it.
+ * is not allowed, Battery Saver while it does not limit location, and motion, Background App Refresh
+ * or "Pause app activity if unused" on a phone that cannot report it.
  */
 export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs, autoDisabled = false): SettingsRow[] {
   return boardRows(read)
     .filter((r) => {
       if (r.id === 'precise') return r.state.kind !== 'idle';
+      if (r.id === 'batterySaver') return r.state.kind === 'missing';
       if (r.id === 'motion' || r.id === 'backgroundRefresh' || r.id === 'unusedApps') return r.state.kind !== 'unknown';
       return true;
     })

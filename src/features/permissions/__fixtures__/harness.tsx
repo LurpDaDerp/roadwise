@@ -92,6 +92,7 @@ export function fakeAdapter(
       a.current = { ...a.current, location: next === 'always' ? 'always' : a.current.location, canAskAlways: false };
       return next;
     }),
+    locationAskIsBackground: jest.fn(async () => false),
     requestBluetooth: jest.fn(async () => {
       a.log.push('requestBluetooth');
       a.bt = answers.bluetooth ?? 'granted';

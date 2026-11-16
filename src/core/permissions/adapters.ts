@@ -182,9 +182,18 @@ export interface PermissionsAdapter {
   /**
    * DashPal only, on the driver's tap (never asked of anyone without a DashPal): iOS creates the
    * BLE manager and reads its first state; Android 12+ asks Nearby devices (scan + connect),
-   * Android 11 and below fine location (Bluetooth scans need it there).
+   * Android 11 and below fine location (Bluetooth scans need it there). Where that location request
+   * would allow background location too (`locationAskIsBackground`), it asks only with `disclosed`,
+   * as `requestLocationForeground` does; without it, it asks nothing and answers `undetermined`.
    */
-  requestBluetooth(): Promise<BluetoothAccess>;
+  requestBluetooth(opts?: { disclosed?: boolean }): Promise<BluetoothAccess>;
+  /**
+   * Whether asking for location now would allow it in the background too, so Google Play's
+   * disclosure must come first: Android 9 and lower on a phone with the drive detector, while
+   * RoadWise's location is not allowed. Every other phone, and an iPhone: false. A failed read: true
+   * (the request then waits for the disclosure rather than ask without it).
+   */
+  locationAskIsBackground(): Promise<boolean>;
   /**
    * On the driver's tap (onboarding, Home's row, the Permissions screen): the Location Always request
    * automatic drives need, through the drive detector (While Using must already be held). iOS asks
@@ -429,6 +438,17 @@ export function createPermissionsAdapter(
     return (await readDetect()).canAskAlways !== null;
   }
 
+  /** `PermissionsAdapter.locationAskIsBackground`: a background request while location is not allowed yet. */
+  async function locationAskIsBackground(): Promise<boolean> {
+    if (!(await locationRequestIsBackground())) return false;
+    try {
+      const access = await locationAccess();
+      return access !== 'foreground' && access !== 'always';
+    } catch {
+      return true;
+    }
+  }
+
   /**
    * Android 11 and later: "Pause app activity if unused" (null on iOS, older Android, a native build
    * without the read, a phone without the feature, or a failed read).
@@ -483,6 +503,8 @@ export function createPermissionsAdapter(
         checkedAt: deps.now(),
       };
     },
+
+    locationAskIsBackground,
 
     async requestLocationForeground(opts) {
       // Google Play: no background-location request on Android without the disclosure just shown.
@@ -634,11 +656,14 @@ export function createPermissionsAdapter(
       }
     },
 
-    async requestBluetooth() {
+    async requestBluetooth(opts) {
       const radio = deps.bluetooth ?? lazyBluetooth;
       if (deps.platform === 'ios') return fromRadio(await radio.startRadio());
       const perms = deps.androidPermissions ?? rnAndroidPermissions;
       const needed = androidBluetoothPermissions();
+      // Android 11 and lower ask fine location here; on Android 9 and lower with the drive detector
+      // that allows background location too, so Google Play's disclosure must come first.
+      if (opts?.disclosed !== true && needed.includes(ANDROID_FINE_LOCATION) && (await locationAskIsBackground())) return 'undetermined';
       const answers = await perms.requestMultiple([...needed]);
       if (!needed.every((p) => answers[p] === 'granted')) return 'denied';
       return fromRadio(await radio.startRadio());

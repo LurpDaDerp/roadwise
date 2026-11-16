@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 
+import { useBackgroundDisclosure } from '@/features/permissions/BackgroundDisclosure';
+
 import { dashpalCopy } from '../../copy';
 import type { SetupPhase, SetupStart } from '../../setup';
 import { CancelConfirm } from './CancelConfirm';
@@ -101,7 +103,9 @@ export function PairWizardSheet({
   deps?: SetupFlowDeps;
 }) {
   const visible = start !== null;
-  const { phase, flow, adapter, restart } = useSetupFlow({ start: start ?? {}, deps, active: visible, onPhase });
+  // Android 9 and lower with the drive detector: the DashPal's location request shows Google Play's disclosure first.
+  const disclosure = useBackgroundDisclosure();
+  const { phase, flow, adapter, restart } = useSetupFlow({ start: start ?? {}, deps: { ...deps, disclose: deps?.disclose ?? disclosure.ask }, active: visible, onPhase });
   const [confirming, setConfirming] = useState(false);
 
   // A closed sheet forgets its open question.
@@ -229,6 +233,7 @@ export function PairWizardSheet({
       overlay={confirming ? <CancelConfirm paired={holdsPairing(phase)} onStop={stop} onKeep={() => setConfirming(false)} /> : null}
     >
       <StepTransition stepKey={stepKey(phase)}>{body}</StepTransition>
+      {disclosure.sheet}
     </WizardFrame>
   );
 }
