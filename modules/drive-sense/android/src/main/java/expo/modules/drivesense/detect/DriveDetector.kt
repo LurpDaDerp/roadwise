@@ -98,6 +98,9 @@ class DriveDetector private constructor(context: Context) {
   /** A resume reads the journal. */
   internal var resuming = false
 
+  /** The wakes that came while [resuming], replayed once the resume settles. */
+  internal val heldWakes = HeldWakes<() -> Unit>()
+
   /** A resume Android refused to start sensing for: tried again at the next foreground or process start. */
   internal var resumePending = false
 

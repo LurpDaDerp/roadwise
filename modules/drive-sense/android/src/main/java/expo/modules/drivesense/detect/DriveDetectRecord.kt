@@ -227,3 +227,29 @@ fun captureRowFate(sensing: Boolean, starting: Boolean, resuming: Boolean, recor
     !recording -> CaptureRowFate.STOP
     else -> CaptureRowFate.TAKE_BACK
   }
+
+/**
+ * The wakes that came while a resume read the journal (a broadcast that restarted the process lands
+ * behind `resumeAtLaunch`). Each is held with its `done`, so the broadcast's `goAsync` and its
+ * background start allowance last, and is replayed once the resume settles: a drive resumed answers
+ * them busy; a drive ended (an orphan, or no journal) lets them open a watch. Detector thread only.
+ */
+class HeldWakes<D> {
+  private val held = mutableListOf<Pair<WakeReason, D>>()
+
+  fun hold(reason: WakeReason, done: D) {
+    held += reason to done
+  }
+
+  /**
+   * The wakes to replay, oldest first, and the list emptied. [ended]: the resume ended the drive;
+   * [sticky]: the system's sticky restart has the service in the foreground. A sticky restart whose
+   * drive ended with no wake held replays one `app` wake ([noop] its done), motion-gated as RoadWise
+   * coming to the front, before its service is let go: the phone may still be in the car.
+   */
+  fun drain(ended: Boolean, sticky: Boolean, noop: D): List<Pair<WakeReason, D>> {
+    val out = held.toList()
+    held.clear()
+    return if (out.isEmpty() && ended && sticky) listOf(WakeReason.APP to noop) else out
+  }
+}

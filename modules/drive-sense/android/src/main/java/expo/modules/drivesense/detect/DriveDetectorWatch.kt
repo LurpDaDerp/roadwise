@@ -63,6 +63,12 @@ fun DriveDetector.onCarConnected(address: String, done: () -> Unit) {
  * ([DetectPolicy.motionGate]).
  */
 internal fun DriveDetector.onWake(reason: WakeReason, done: () -> Unit = {}) {
+  // The journal is being read: the wake waits for the resume to settle (a drive ended as an orphan
+  // then lets it watch), its done held with it.
+  if (resuming) {
+    heldWakes.hold(reason, done)
+    return
+  }
   if (reason == WakeReason.REGION && lingerToWatch()) {
     done()
     return

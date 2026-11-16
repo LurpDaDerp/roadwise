@@ -303,7 +303,31 @@ class CaptureService : Service() {
      */
     fun releaseIfIdle() {
       val inst = instance ?: return
-      main.post { if (!isCapturing && !inst.holding && inst.lastStartId > 0) inst.stopIdle() }
+      main.post { if (!releaseHeld && !isCapturing && !inst.holding && inst.lastStartId > 0) inst.stopIdle() }
+    }
+
+    /** The detector replays a resume's wakes: [releaseIfIdle] keeps the sticky restart's service meanwhile. */
+    @Volatile private var releaseHeld = false
+
+    /** A sticky restart's service is kept while the detector replays the wakes a resume held. */
+    fun holdRelease() {
+      releaseHeld = true
+    }
+
+    /**
+     * The replayed wakes are in: the hold ends on the service's thread, behind any watch they began
+     * there (so that watch is capturing by then), and an idle service is let go.
+     */
+    fun endReleaseHold() {
+      val inst = instance
+      if (inst == null) {
+        releaseHeld = false
+        return
+      }
+      inst.handler.post {
+        releaseHeld = false
+        releaseIfIdle()
+      }
     }
 
     /** The service runs in the foreground in this process (a detector start then needs no new start). */

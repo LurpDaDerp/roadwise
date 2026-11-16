@@ -364,37 +364,49 @@ internal fun DriveDetector.finishSensing(holdMs: Long, demote: Boolean = false) 
  * The journal says where the drive got to: a last row 5 min old or less resumes it (sensing again,
  * then a `gap` line and rows from past the gap's seq); older, it ends as an orphan for JS to
  * finalize. A start Android refuses leaves the drive as it is, for the next foreground or process.
+ * The wakes that came meanwhile are replayed once it settles ([HeldWakes]); a sticky restart's
+ * service (already in the foreground) is kept through them, so a drive that ended can watch at once.
  */
 internal fun DriveDetector.resumeDrive(driveId: String) {
   resuming = true
   journal.reopen(driveId) { summary ->
     handler.post {
       resuming = false
-      val r = rec
-      if (r == null || r.driveId != driveId || !r.recording || sensing) return@post
-      val now = DriveDetector.now()
-      if (summary == null) {
-        // No journal: nothing to resume or hand over.
-        save(settle(r, now))
-        resumePending = false
-        clearStaleCapture()
-        CaptureService.releaseIfIdle()
-        emitState("ended")
-        return@post
-      }
-      nextSeq = summary.lastSeq + 1
-      lastRowTs = summary.lastRowTs
-      val lat = summary.lastFixLat
-      val lng = summary.lastFixLng
-      if (lat != null && lng != null) lastFix = LatLng(lat, lng)
-      val startedAt = r.startedAt ?: now
-      if (DetectPolicy.resumeDecision(summary.lastRowTs, startedAt, now) != ResumeDecision.RESUME) {
-        commitEnd("orphan", now)
-        return@post
-      }
-      startResumed(driveId, summary, startedAt, if (r.origin == "manual") "mounted" else "auto", retry = true)
+      val sticky = CaptureService.foregroundRunning() && !CaptureService.isCapturing
+      if (sticky) CaptureService.holdRelease()
+      val ended = settleResume(driveId, summary)
+      for ((reason, done) in heldWakes.drain(ended, sticky, noop = {})) onWake(reason, done)
+      if (sticky) CaptureService.endReleaseHold()
     }
   }
+}
+
+/** The resume's answer from the journal ([resumeDrive]). True when the drive ended here. */
+private fun DriveDetector.settleResume(driveId: String, summary: JournalSummary?): Boolean {
+  val r = rec
+  if (r == null || r.driveId != driveId || !r.recording || sensing) return false
+  val now = DriveDetector.now()
+  if (summary == null) {
+    // No journal: nothing to resume or hand over.
+    save(settle(r, now))
+    resumePending = false
+    clearStaleCapture()
+    CaptureService.releaseIfIdle()
+    emitState("ended")
+    return true
+  }
+  nextSeq = summary.lastSeq + 1
+  lastRowTs = summary.lastRowTs
+  val lat = summary.lastFixLat
+  val lng = summary.lastFixLng
+  if (lat != null && lng != null) lastFix = LatLng(lat, lng)
+  val startedAt = r.startedAt ?: now
+  if (DetectPolicy.resumeDecision(summary.lastRowTs, startedAt, now) != ResumeDecision.RESUME) {
+    commitEnd("orphan", now)
+    return true
+  }
+  startResumed(driveId, summary, startedAt, if (r.origin == "manual") "mounted" else "auto", retry = true)
+  return false
 }
 
 /**

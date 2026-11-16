@@ -135,4 +135,23 @@ class DriveDetectRecordTest {
     assertEquals(true, BatterySaver.limitsLocation(true, 27, null))
     assertEquals(false, BatterySaver.limitsLocation(false, 27, null))
   }
+
+  @Test
+  fun wakesHeldThroughAResumeAreReplayedInOrder_andAStickyOrphanGetsAnAppWake() {
+    // An activity ENTER and a car connecting land while the journal is read: both kept, in order.
+    val h = HeldWakes<String>()
+    h.hold(WakeReason.SLC, "slc")
+    h.hold(WakeReason.CAR, "car")
+    assertEquals(listOf(WakeReason.SLC to "slc", WakeReason.CAR to "car"), h.drain(ended = true, sticky = false, noop = "noop"))
+    // Drained once: a second settle replays nothing.
+    assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = false, sticky = false, noop = "noop"))
+    // A drive resumed: the held wake is replayed (the gate answers it busy and calls its done).
+    h.hold(WakeReason.REGION, "region")
+    assertEquals(listOf(WakeReason.REGION to "region"), h.drain(ended = false, sticky = true, noop = "noop"))
+    // The sticky restart's drive ended as an orphan with nothing held: one app wake before the service goes.
+    assertEquals(listOf(WakeReason.APP to "noop"), h.drain(ended = true, sticky = true, noop = "noop"))
+    // Not sticky, or the drive resumed: nothing to replay.
+    assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = true, sticky = false, noop = "noop"))
+    assertEquals(emptyList<Pair<WakeReason, String>>(), h.drain(ended = false, sticky = true, noop = "noop"))
+  }
 }
