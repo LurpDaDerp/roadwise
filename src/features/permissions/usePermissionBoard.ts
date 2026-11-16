@@ -4,7 +4,9 @@
  *
  * When it reads (never on a timer, never in the background): when the screen asks (Home on focus,
  * deduped within 2 s), every time RoadWise returns to the front, after a row's own request, on
- * pull to refresh, and when the DashPal link enters or leaves `unauthorized` or the pairing changes.
+ * pull to refresh, when the DashPal link enters or leaves `unauthorized` or the pairing changes,
+ * and on Android when Battery Saver switches on or off (the drive detector's `batterySaver` state:
+ * the quick settings toggle leaves RoadWise in front).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
@@ -95,6 +97,26 @@ async function readCarBluetooth(settings: Pick<SettingsRepo, 'get' | 'set'>): Pr
 
 const defaultEnsureChannels = async () => (await import('@/features/notifications/channels')).ensureAndroidChannels();
 
+/**
+ * Calls `onChange` when Battery Saver switches (Android's drive detector sends its state with the
+ * reason `batterySaver`, only while RoadWise runs). Nothing on iOS, web or a phone without the
+ * detector. Returns the unsubscribe.
+ */
+export function watchBatterySaver(onChange: () => void): () => void {
+  if (Platform.OS !== 'android') return () => {};
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the drive detector
+    const { DriveDetect } = require('@drive-sense') as typeof import('@drive-sense');
+    if (!DriveDetect.available) return () => {};
+    const sub = DriveDetect.addListener('detectState', (e) => {
+      if (e.reason === 'batterySaver') onChange();
+    });
+    return () => sub.remove();
+  } catch {
+    return () => {};
+  }
+}
+
 export interface PermissionBoardDeps {
   adapter?: PermissionsAdapter;
   appState?: AppStateLike;
@@ -103,6 +125,8 @@ export interface PermissionBoardDeps {
   carPaired?: () => Promise<boolean>;
   /** Default: the live DashPal runtime (`watchDashcamPermissions`). */
   watchDashcam?: (onChange: () => void) => () => void;
+  /** Default: Android's drive detector (`watchBatterySaver`). */
+  watchBatterySaver?: (onChange: () => void) => () => void;
   ensureChannels?: () => Promise<void>;
   requestDeviceSync?: () => void;
   now?: () => number;
@@ -132,6 +156,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   const appState = deps.appState ?? AppState;
   const androidApi = deps.androidApi === undefined ? defaultAndroidApi() : deps.androidApi;
   const watch = deps.watchDashcam ?? watchDashcamPermissions;
+  const watchSaver = deps.watchBatterySaver ?? watchBatterySaver;
   const now = deps.now ?? Date.now;
   const carPaired = deps.carPaired ?? defaultCarPaired;
   const db = useDb();
@@ -197,6 +222,7 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   }, [appState, refresh]);
 
   useEffect(() => watch(() => void refresh('shared')), [watch, refresh]);
+  useEffect(() => watchSaver(() => void refresh('shared')), [watchSaver, refresh]);
 
   /**
    * Puts a stored change in the cache at once. A prefs read still in flight began before the write,

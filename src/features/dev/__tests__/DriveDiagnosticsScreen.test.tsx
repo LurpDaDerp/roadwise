@@ -255,7 +255,7 @@ describe('the drive detector and the opportunities (tuning)', () => {
     detect.calls.length = 0;
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense({ platform: 'android' })} detect={detect} />));
     await waitFor(() => expect(screen.getByTestId('diag-detect-status')).toBeTruthy());
-    expect(screen.getByText('Battery (available unless Restricted)')).toBeTruthy();
+    expect(screen.getByText('Battery (denied: Restricted; restricted: Battery Saver limits location)')).toBeTruthy();
     expect(screen.getByText('Drive notification')).toBeTruthy();
     expect(screen.getByText('All the time can be asked')).toBeTruthy();
     expect(screen.queryByText('Background App Refresh')).toBeNull();

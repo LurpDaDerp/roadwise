@@ -335,6 +335,25 @@ describe('the Places screen', () => {
     expect((await readPlaces(w.settings))[0]).not.toHaveProperty('unknownAddress');
   });
 
+  it("Use my location passes the sheet's disclosure along; Not now there says location isn't allowed yet, never that it is off", async () => {
+    const w = await appWorld();
+    withTrips(w.db, []);
+    // Android 9 and lower with the drive detector: locateOnce shows the disclosure first.
+    const locate = jest.fn(async (disclose?: (next: 'allow' | 'allTheTime') => Promise<boolean>) =>
+      disclose && (await disclose('allow')) ? { ok: true as const, lat: 47.62, lng: -122.35 } : { ok: false as const, reason: 'notAsked' as const }
+    );
+    await w.render(<PlacesScreen deps={{ search: jest.fn(), bias: async () => null, addressAt: async () => null, locate }} />);
+    await tap('places-home');
+    await tap('place-use-location');
+    expect(await screen.findByTestId('background-disclosure-next')).toHaveTextContent('Next, choose "Allow".');
+    await tap('background-disclosure-not-now');
+    expect(await screen.findByText(placesCopy.sheet.locationNotAsked)).toBeOnTheScreen();
+    expect(screen.queryByText(placesCopy.sheet.locationDenied)).toBeNull();
+    await tap('place-use-location');
+    await tap('background-disclosure-continue');
+    expect(await screen.findByTestId('place-address')).toHaveTextContent(placesCopy.sheet.unnamed);
+  });
+
   it('offers the place your drives say is home under a plain Suggestions title, with no guess or chance shown', async () => {
     const w = await appWorld({ settings: { [PLACE_NAMES_KEY]: [{ lat: 47.62, lng: -122.35, title: '742 Evergreen Ter', subtitle: 'Seattle' }] } });
     withTrips(w.db, commuteRows(Date.now()));

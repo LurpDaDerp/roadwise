@@ -288,8 +288,14 @@ describe("Android Location Always: Google Play's disclosure first", () => {
   });
 });
 
+test('"Pause app activity if unused": the fix opens the page with its switch', async () => {
+  const w = world(snap({ platform: 'android', canAskAlways: false, unusedAppPause: 'on' }));
+  expect(await w.run('unusedApps')).toEqual({ kind: 'opened' });
+  expect(w.calls()).toEqual(['openUnusedAppSettings']);
+});
+
 test("Battery Saver limiting location: the fix opens Battery Saver's page", async () => {
   const w = world(snap({ platform: 'android', canAskAlways: false, backgroundRefresh: 'restricted' }));
-  expect(await w.run('backgroundRefresh')).toEqual({ kind: 'opened' });
+  expect(await w.run('batterySaver')).toEqual({ kind: 'opened' });
   expect(w.calls()).toEqual(['openBatterySaverSettings']);
 });

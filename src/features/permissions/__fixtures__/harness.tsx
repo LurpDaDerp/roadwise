@@ -92,6 +92,7 @@ export function fakeAdapter(
       a.current = { ...a.current, location: next === 'always' ? 'always' : a.current.location, canAskAlways: false };
       return next;
     }),
+    locationAskIsBackground: jest.fn(async () => false),
     requestBluetooth: jest.fn(async () => {
       a.log.push('requestBluetooth');
       a.bt = answers.bluetooth ?? 'granted';
@@ -134,6 +135,9 @@ export function fakeAdapter(
     }),
     openBatterySaverSettings: jest.fn(async () => {
       a.log.push('openBatterySaverSettings');
+    }),
+    openUnusedAppSettings: jest.fn(async () => {
+      a.log.push('openUnusedAppSettings');
     }),
     openNotificationChannelSettings: jest.fn(async (channelId: string) => {
       a.log.push(`openNotificationChannelSettings:${channelId}`);

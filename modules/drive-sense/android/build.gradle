@@ -4,8 +4,12 @@
 // builds must be reproducible.
 //   com.google.android.gms:play-services-location 21.3.0  activity transitions + fused location
 //   androidx.core:core                           1.17.0  NotificationCompat, ServiceCompat,
-//                                                          ContextCompat (the version
-//                                                          expo-modules-core 57 already ships)
+//                                                          ContextCompat, PackageManagerCompat and
+//                                                          IntentCompat ("Pause app activity if
+//                                                          unused"; its ListenableFuture comes with
+//                                                          core's own api dependency,
+//                                                          com.google.guava:listenablefuture) (the
+//                                                          version expo-modules-core 57 already ships)
 //   com.facebook.react:react-android              (none)  HeadlessJsTaskService. Deliberately
 //                                                          versionless: React Native's Gradle plugin
 //                                                          substitutes the exact installed

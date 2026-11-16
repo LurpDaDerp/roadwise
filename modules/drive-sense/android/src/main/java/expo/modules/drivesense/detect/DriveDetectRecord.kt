@@ -163,11 +163,16 @@ data class DriveDetectRecord(
 }
 
 /**
- * The permissions now (`DetectState.permissions`), with the Android meanings: `backgroundRefresh`
- * is `denied` only while the app's battery use is Restricted (ruling 5: Optimized, the default, is
- * fine), `liveActivities` is whether the drive notification can show (notifications allowed and its
- * channel not blocked: the Live Activity's Android twin, ruling 6), and [hardware] whether the
- * automatic wakes exist on this phone (Play services: the activity transitions and the geofence).
+ * The permissions now (`DetectState.permissions`), with the Android meanings: [backgroundRefresh]
+ * is `DENIED` only while the app's battery use is Restricted (ruling 5: Optimized, the default, is
+ * fine) and is the one the status reads, `liveActivities` is whether the drive notification can show
+ * (notifications allowed and its channel not blocked: the Live Activity's Android twin, ruling 6),
+ * and [hardware] whether the automatic wakes exist on this phone (Play services: the activity
+ * transitions and the geofence). [batterySaver]: Battery Saver is on with a location mode that stops
+ * background fixes ([BatterySaver.limitsLocation]); JS is told through the wire's `backgroundRefresh`
+ * = `restricted` (when battery use is not Restricted), which Settings › Permissions and Home show as
+ * their own Battery Saver line, while the status, its `missing` and the arming never count it (ruling
+ * 5: only Restricted is a need; Battery Saver leaves the wakes working and only limits fixes).
  */
 data class DetectAccess(
   val location: LocationAccess,
@@ -176,17 +181,22 @@ data class DetectAccess(
   val backgroundRefresh: BackgroundRefresh,
   val liveActivities: Boolean,
   val canAskAlways: Boolean,
-  val hardware: Boolean
+  val hardware: Boolean,
+  val batterySaver: Boolean = false
 ) {
   fun inputs(armed: Boolean): StatusInputs = StatusInputs(armed, hardware, location, precise, motion, backgroundRefresh, liveActivities)
 
   val requiredOk: Boolean get() = DetectPolicy.statusOf(inputs(true)).requiredOk
 
+  /** What JS reads as `backgroundRefresh`: Restricted first, then Battery Saver limiting location. */
+  val reportedRefresh: BackgroundRefresh
+    get() = if (backgroundRefresh == BackgroundRefresh.AVAILABLE && batterySaver) BackgroundRefresh.RESTRICTED else backgroundRefresh
+
   fun json(): Map<String, Any?> = linkedMapOf(
     "location" to location.wire,
     "precise" to precise,
     "motion" to motion.wire,
-    "backgroundRefresh" to backgroundRefresh.wire,
+    "backgroundRefresh" to reportedRefresh.wire,
     "liveActivities" to liveActivities,
     "canAskAlways" to canAskAlways
   )

@@ -70,14 +70,11 @@ export type StatusWord = keyof typeof permissionsCopy.status;
  * A Settings row's status: `word` picks the glyph and colour (fine, needs a look, off...), `label` is
  * the word printed beside the title. They agree except where the title names a switch of the phone's
  * own: "Pause app activity if unused" reads that switch, Off (RoadWise is kept: fine) or On (Android
- * may pause it: needs a look). Battery Saver limiting location needs a look, not Off.
+ * may pause it: needs a look); Battery Saver limiting location reads On (needs a look).
  */
 export function rowStatus(id: PermissionId, state: PermState): { word: StatusWord; label: string } {
   if (id === 'unusedApps' && state.kind === 'granted') return { word: 'on', label: permissionsCopy.status.off };
-  if (id === 'unusedApps' && state.kind === 'missing') return { word: 'notYet', label: permissionsCopy.status.on };
-  if (id === 'backgroundRefresh' && state.kind === 'missing' && state.target === 'batterySaver') {
-    return { word: 'notYet', label: permissionsCopy.status.notYet };
-  }
+  if ((id === 'unusedApps' || id === 'batterySaver') && state.kind === 'missing') return { word: 'notYet', label: permissionsCopy.status.on };
   const word = statusWord(state);
   return { word, label: permissionsCopy.status[word] };
 }
@@ -115,6 +112,8 @@ export function rowTitle(id: PermissionId, c: CopyCtx): string {
       return c.platform === 'ios' ? 'Location Always' : 'Location all the time';
     case 'backgroundRefresh':
       return c.platform === 'ios' ? 'Background App Refresh' : 'App battery usage';
+    case 'batterySaver':
+      return 'Battery Saver';
     case 'unusedApps':
       return pauseName(c);
     case 'notifications':
@@ -152,8 +151,9 @@ export function homeLine(id: PermissionId, state: MissingState, c: CopyCtx): str
     case 'motion':
       return state.reason === 'notYet' ? `Allow ${motionName(c)} so RoadWise can spot drives.` : `${motionName(c)} is off. Drives won't start on their own.`;
     case 'backgroundRefresh':
-      if (ios) return 'Turn on Background App Refresh to catch every drive.';
-      return state.target === 'batterySaver' ? 'Battery Saver is limiting location. Drives may be missed.' : 'Battery use is set to Restricted. Drives may be missed.';
+      return ios ? 'Turn on Background App Refresh to catch every drive.' : 'Battery use is set to Restricted. Drives may be missed.';
+    case 'batterySaver':
+      return 'Battery Saver is limiting location. Drives may be missed.';
     case 'unusedApps':
       return 'Turn off Pause app activity so drives keep starting.';
     case 'notifications':
@@ -192,9 +192,9 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
     }
     case 'backgroundRefresh':
       if (ios) return on ? 'iOS can wake RoadWise when a drive starts.' : "iOS can't wake RoadWise, so drives won't start on their own.";
-      if (on) return 'Android can wake RoadWise when a drive starts.';
-      if (state.kind === 'missing' && state.target === 'batterySaver') return 'Battery Saver is limiting location, so drives may be missed or cut short.';
-      return "Battery use is set to Restricted, so drives won't start on their own.";
+      return on ? 'Android can wake RoadWise when a drive starts.' : "Battery use is set to Restricted, so drives won't start on their own.";
+    case 'batterySaver':
+      return on ? 'Battery Saver leaves location alone.' : 'Battery Saver is limiting location, so drives may be missed or cut short.';
     case 'unusedApps':
       if (on) return "RoadWise keeps working even if you don't open it for months.";
       // Android 11 takes the permissions back; 12 and later also pause the app.

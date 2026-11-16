@@ -106,7 +106,7 @@ export const diagCopy = {
   canAskAlways: 'Always can be asked',
   /** The same permission lines in Android's names. */
   android: {
-    backgroundRefresh: 'Battery (available unless Restricted)',
+    backgroundRefresh: 'Battery (denied: Restricted; restricted: Battery Saver limits location)',
     liveActivities: 'Drive notification',
     canAskAlways: 'All the time can be asked',
   },

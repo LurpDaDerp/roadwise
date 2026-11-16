@@ -609,3 +609,53 @@ describe('focus and motion', () => {
     expect(screen.getByTestId('wizard-instructions-title')).toHaveTextContent(wiz.instructions.title);
   });
 });
+
+describe("Android 9 and lower with the drive detector: the DashPal's location request", () => {
+  function AndroidHost({ s }: { s: ReturnType<typeof scriptedFlow> }) {
+    return (
+      <ThemeProvider>
+        <PairWizardSheet start={{}} onClose={(o) => void outcomes.push(o)} deps={{ adapter, platform: 'android', flow: s.make, secrets: memSecrets() }} />
+      </ThemeProvider>
+    );
+  }
+
+  async function openAndroid(background: boolean) {
+    setActiveDashcam(createFakeDashcamRuntime());
+    (adapter.locationAskIsBackground as jest.Mock).mockResolvedValue(background);
+    const s = scriptedFlow();
+    const w = await appWorld();
+    await w.render(<AndroidHost s={s} />);
+    return s.bases[s.bases.length - 1]!;
+  }
+
+  it('shows Google Play\'s disclosure first: Not now asks nothing, Continue asks with it', async () => {
+    const base = await openAndroid(true);
+    let answer: Promise<string> = Promise.resolve('');
+    await act(async () => {
+      answer = base.requestBluetooth();
+    });
+    expect(await screen.findByTestId('background-disclosure-next')).toHaveTextContent('Next, choose "Allow".');
+    await tap('background-disclosure-not-now');
+    expect(await answer).toBe('undetermined');
+    expect(adapter.requestBluetooth).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer = base.requestBluetooth();
+    });
+    await tap('background-disclosure-continue');
+    expect(await answer).toBe('granted');
+    expect(adapter.requestBluetooth).toHaveBeenCalledTimes(1);
+    expect(adapter.requestBluetooth).toHaveBeenCalledWith({ disclosed: true });
+  });
+
+  it('every other phone asks at once, with no disclosure', async () => {
+    const base = await openAndroid(false);
+    let answer: Promise<string> = Promise.resolve('');
+    await act(async () => {
+      answer = base.requestBluetooth();
+    });
+    expect(await answer).toBe('granted');
+    expect(adapter.requestBluetooth).toHaveBeenCalledWith();
+    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+  });
+});

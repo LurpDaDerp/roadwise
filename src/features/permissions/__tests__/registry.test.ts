@@ -31,6 +31,7 @@ test('every permission has a unique order; only the camera and the Android unuse
     ['locationAlways', 25],
     ['motion', 30],
     ['backgroundRefresh', 35],
+    ['batterySaver', 36],
     ['unusedApps', 37],
     ['notifications', 40],
     ['bluetooth', 60],
@@ -38,9 +39,10 @@ test('every permission has a unique order; only the camera and the Android unuse
   ]);
   expect(PERMISSIONS.filter((d) => !d.homeRow).map((d) => d.id)).toEqual(['unusedApps', 'camera']);
   expect(PERMISSIONS.filter((d) => d.need === 'required').map((d) => d.id)).toEqual(['location', 'precise']);
-  // Both phones list every row but the Android unused-app tip (an iPhone has no such switch).
+  // Both phones list every row but Android's Battery Saver and unused-app rows (an iPhone has no such switches).
   expect(PERMISSIONS.filter((d) => !d.platforms.includes('android')).map((d) => d.id)).toEqual([]);
-  expect(PERMISSIONS.filter((d) => !d.platforms.includes('ios')).map((d) => d.id)).toEqual(['unusedApps']);
+  expect(PERMISSIONS.filter((d) => !d.platforms.includes('ios')).map((d) => d.id)).toEqual(['batterySaver', 'unusedApps']);
+  expect(permissionDef('batterySaver').need).toBe('recommended');
   expect(permissionDef('locationAlways').need).toBe('recommended');
   expect(permissionDef('backgroundRefresh').need).toBe('recommended');
   expect(permissionDef('unusedApps').need).toBe('optional');
@@ -65,11 +67,18 @@ describe("automatic drives' rows on Android", () => {
     expect(state('locationAlways', board({ platform: 'android', location: 'foreground', canAskAlways: false }))).toEqual(missing('denied', true));
   });
 
-  it('battery: Restricted is missing (the app page), and so is Battery Saver limiting location (its own page); Settings only', () => {
-    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'available', canAskAlways: false }))).toEqual({ kind: 'granted' });
-    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'denied', canAskAlways: false }))).toEqual(missing('denied', false));
-    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: 'restricted', canAskAlways: false }))).toEqual(missing('denied', false, 'batterySaver'));
-    expect(state('backgroundRefresh', board({ platform: 'android', backgroundRefresh: null, canAskAlways: false }))).toEqual({ kind: 'unknown' });
+  it('battery: Restricted is missing (the app page); Battery Saver limiting location is its own row (its own page); Settings only', () => {
+    const android = (backgroundRefresh: PermissionSnapshot['backgroundRefresh']) => board({ platform: 'android', backgroundRefresh, canAskAlways: false });
+    expect(state('backgroundRefresh', android('available'))).toEqual({ kind: 'granted' });
+    expect(state('backgroundRefresh', android('denied'))).toEqual(missing('denied', false));
+    // Battery Saver limiting location: battery use is not Restricted (the detector reports Restricted first).
+    expect(state('backgroundRefresh', android('restricted'))).toEqual({ kind: 'granted' });
+    expect(state('backgroundRefresh', android(null))).toEqual({ kind: 'unknown' });
+    expect(state('batterySaver', android('restricted'))).toEqual(missing('denied', false, 'batterySaver'));
+    for (const v of ['available', 'denied', null] as const) expect(state('batterySaver', android(v))).toEqual({ kind: 'idle' });
+    // An iPhone has no Battery Saver row; its restricted Background App Refresh is nothing the driver can do.
+    expect(state('backgroundRefresh', board({ platform: 'ios', backgroundRefresh: 'restricted' }))).toEqual({ kind: 'unknown' });
+    expect(PERMISSIONS.find((d) => d.id === 'batterySaver')?.platforms).toEqual(['android']);
   });
 
   it('the background-location disclosure: every Location Always fix; the location fix only on Android 9 and lower with the detector', () => {
@@ -88,9 +97,9 @@ describe("automatic drives' rows on Android", () => {
     }
   });
 
-  it('Pause app activity if unused: off is granted, on is missing (Settings only), unread is unknown', () => {
+  it('Pause app activity if unused: off is granted, on is missing (Settings only: the page with its switch), unread is unknown', () => {
     expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'off' }))).toEqual({ kind: 'granted' });
-    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'on' }))).toEqual(missing('denied', false));
+    expect(state('unusedApps', board({ platform: 'android', unusedAppPause: 'on' }))).toEqual(missing('denied', false, 'unusedApps'));
     expect(state('unusedApps', board({ platform: 'android', unusedAppPause: null }))).toEqual({ kind: 'unknown' });
     expect(state('unusedApps', board({ platform: 'android' }))).toEqual({ kind: 'unknown' });
   });

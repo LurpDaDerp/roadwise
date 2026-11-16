@@ -229,7 +229,7 @@ describe('Android with the drive detector', () => {
     board({ platform: 'android', location: 'foreground', canAskAlways: true, backgroundRefresh: 'denied', unusedAppPause: 'on', ...over });
 
   it("lists automatic drives' rows (and the unused-app tip) only once the detector answered", () => {
-    expect(boardRows(detector()).map((r) => r.id)).toEqual(['location', 'precise', 'locationAlways', 'motion', 'backgroundRefresh', 'unusedApps', 'notifications', 'bluetooth', 'camera']);
+    expect(boardRows(detector()).map((r) => r.id)).toEqual(['location', 'precise', 'locationAlways', 'motion', 'backgroundRefresh', 'batterySaver', 'unusedApps', 'notifications', 'bluetooth', 'camera']);
     expect(boardRows(board({ platform: 'android' })).map((r) => r.id)).toEqual(['location', 'precise', 'motion', 'notifications', 'bluetooth', 'camera']);
   });
 
@@ -238,6 +238,24 @@ describe('Android with the drive detector', () => {
     expect(homeCard(detector({ location: 'always' }), prefs(), false)).toMatchObject({ row: { id: 'backgroundRefresh' }, more: 0 });
     expect(homeCard(detector({ location: 'always', backgroundRefresh: 'available' }), prefs(), false)).toEqual({ row: null, more: 0 });
     expect(homeCard(detector(), prefs(), false, true)).toEqual({ row: null, more: 0 });
+  });
+
+  it('Battery Saver limiting location is a row of its own: hiding it from Home never hides battery use set to Restricted', () => {
+    const saver = detector({ location: 'always', backgroundRefresh: 'restricted' });
+    expect(homeCard(saver, prefs(), false)).toMatchObject({ row: { id: 'batterySaver' }, more: 0 });
+    expect(settingsRows(saver, prefs(), false).map((r) => r.id)).toContain('batterySaver');
+    expect(settingsRows(saver, prefs(), false).find((r) => r.id === 'backgroundRefresh')?.state).toEqual({ kind: 'granted' });
+    // Hidden while Battery Saver limits location; later battery use is set to Restricted: Home shows that.
+    const hidden = prefs({ hidden: ['batterySaver'] });
+    expect(homeCard(saver, hidden, false)).toEqual({ row: null, more: 0 });
+    expect(homeCard(detector({ location: 'always', backgroundRefresh: 'denied' }), hidden, false)).toMatchObject({ row: { id: 'backgroundRefresh' }, more: 0 });
+    // Battery Saver off (or leaving location alone): no row in Settings or on Home.
+    const off = detector({ location: 'always', backgroundRefresh: 'available' });
+    expect(settingsRows(off, prefs(), false).map((r) => r.id)).not.toContain('batterySaver');
+    expect(homeCard(off, prefs(), false)).toEqual({ row: null, more: 0 });
+    // Never with Automatic drives off.
+    expect(homeCard(saver, prefs(), false, true)).toEqual({ row: null, more: 0 });
+    expect(settingsRows(saver, prefs(), true).find((r) => r.id === 'batterySaver')?.autoOff).toBe(true);
   });
 
   it('Settings marks all three Not in use while Automatic drives is off, and the summary leaves them out', () => {

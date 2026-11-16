@@ -345,5 +345,32 @@ class DriveSenseModule : Module() {
       }
       if (ctx == null) promise.resolve(null) else Geocode.forward(ctx, query) { promise.resolve(it) }
     }
+
+    // ---- "Pause app activity if unused" (ruling 15). Android only: ANDROID_UNUSED_APP_METHODS in
+    // src/unusedApps.ts, outside DRIVE_SENSE_METHODS (iPhone has no such switch). ----
+
+    // `enabled` / `disabled` / `unavailable` (UnusedAppRestrictions.read: the androidx.core future,
+    // never waited on). Rejects with E_IO only when the phone could not answer (its ERROR, or no
+    // answer within 5 s); JS then lists no row.
+    AsyncFunction("getUnusedAppRestrictions") { promise: Promise ->
+      UnusedAppRestrictions.read(context) { answer ->
+        if (answer != null) promise.resolve(answer) else promise.reject(coded("E_IO", "the unused-app restriction could not be read"))
+      }
+    }
+
+    // The page with the switch, started on the main thread; false where the phone has none (JS then
+    // opens the app's settings page). Never rejects.
+    AsyncFunction("openUnusedAppRestrictionsSettings") { promise: Promise ->
+      val ctx = try {
+        context
+      } catch (_: Exception) {
+        null
+      }
+      if (ctx == null) {
+        promise.resolve(false)
+      } else {
+        Handler(Looper.getMainLooper()).post { promise.resolve(UnusedAppRestrictions.open(ctx, appContext.currentActivity)) }
+      }
+    }
   }
 }

@@ -15,6 +15,7 @@ import { DRIVE_DETECT_ERROR_CODES } from '../src/detect/types';
 import { DANGER_ORDER } from '../../../src/features/weather/danger';
 import { ANDROID_GEOCODE_METHODS } from '../src/geocode';
 import { ANDROID_SHARE_METHODS } from '../src/share';
+import { ANDROID_UNUSED_APP_METHODS } from '../src/unusedApps';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
 // tsconfig's `types` is ["jest"], so Node's own typings are not in the program — hence the local
@@ -111,9 +112,9 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(MODULE()).toContain(`AsyncFunction("${name}")`);
   });
 
-  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share and geocoder ones, and none twice', () => {
+  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share, geocoder and unused-app ones, and none twice', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
-    expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS].sort());
+    expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS, ...ANDROID_UNUSED_APP_METHODS].sort());
   });
 
   it.each([...DRIVE_SENSE_SYNC_METHODS])('Function("%s") is declared (sync, never an AsyncFunction)', (name) => {
@@ -314,6 +315,58 @@ describe('native-android: the background-safe geocoder (WP10)', () => {
   it("answers in expo-location's address shape", () => {
     const keys = [...geo().matchAll(/"(\w+)" to (?:clean\(|district\(\))/g)].map((x) => x[1]);
     expect(keys).toEqual(['city', 'district', 'streetNumber', 'street', 'region', 'subregion', 'country', 'postalCode', 'name', 'isoCountryCode']);
+  });
+});
+
+describe('native-android: "Pause app activity if unused" (ruling 15)', () => {
+  const src = () => code(kt('UnusedAppRestrictions'));
+  const fn = (name: string) => {
+    const start = MODULE().indexOf(`AsyncFunction("${name}")`);
+    expect(start).toBeGreaterThan(-1);
+    return MODULE().slice(start, MODULE().indexOf('\n    }\n', start));
+  };
+
+  it('both are Android-only functions (never in the shared contract)', () => {
+    for (const name of ANDROID_UNUSED_APP_METHODS) expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain(name);
+  });
+
+  it("maps androidx.core's statuses to the contract: the three restricted kinds enabled, DISABLED disabled, FEATURE_NOT_AVAILABLE unavailable, anything else (ERROR) a failed read", () => {
+    const s = src();
+    expect(s).toMatch(/UnusedAppRestrictionsConstants\.API_30_BACKPORT,\s*UnusedAppRestrictionsConstants\.API_30,\s*UnusedAppRestrictionsConstants\.API_31 -> "enabled"/);
+    expect(s).toMatch(/UnusedAppRestrictionsConstants\.DISABLED -> "disabled"/);
+    expect(s).toMatch(/UnusedAppRestrictionsConstants\.FEATURE_NOT_AVAILABLE -> "unavailable"/);
+    expect(s).toMatch(/else -> null/);
+  });
+
+  it('reads the future without blocking: a listener on the completing thread, get() only once done, one answer, a 5 s timeout', () => {
+    const s = src();
+    expect(s).toMatch(/PackageManagerCompat\.getUnusedAppRestrictionsStatus\(context\.applicationContext\)/);
+    expect(s).toMatch(/future\.addListener\(\{[\s\S]*future\.get\(\)[\s\S]*\}, direct\)/);
+    expect(s).toMatch(/private val direct = Executor \{ it\.run\(\) \}/);
+    expect(s).toMatch(/compareAndSet\(false, true\)/);
+    expect(s).toMatch(/const val TIMEOUT_MS = 5_000L/);
+    expect(s).toMatch(/postDelayed\(\{ settle\(null\) \}, TIMEOUT_MS\)/);
+    expect(s).not.toMatch(/\.get\(\s*\d/);
+  });
+
+  it('getUnusedAppRestrictions resolves the answer and rejects only with E_IO', () => {
+    const f = fn('getUnusedAppRestrictions');
+    expect(f).toMatch(/UnusedAppRestrictions\.read\(context\)/);
+    expect(f).toMatch(/promise\.resolve\(answer\)/);
+    expect(f).toMatch(/promise\.reject\(coded\("E_IO"/);
+  });
+
+  it("opens androidx.core's page for the switch on the main thread, false (never a rejection) where there is none", () => {
+    const s = src();
+    expect(s).toMatch(/IntentCompat\.createManageUnusedAppRestrictionsIntent\(context, context\.packageName\)/);
+    expect(s).toMatch(/FLAG_ACTIVITY_NEW_TASK/);
+    const f = fn('openUnusedAppRestrictionsSettings');
+    expect(f).toMatch(/Handler\(Looper\.getMainLooper\(\)\)\.post \{ promise\.resolve\(UnusedAppRestrictions\.open\(ctx, appContext\.currentActivity\)\) \}/);
+    expect(f).not.toMatch(/reject/);
+  });
+
+  it('androidx.core (PackageManagerCompat, IntentCompat, ListenableFuture through its api dependency) is on the module classpath', () => {
+    expect(read(join(ANDROID, 'build.gradle'))).toMatch(/implementation 'androidx\.core:core:1\.17\.0'/);
   });
 });
 
@@ -662,6 +715,26 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(a).toMatch(/hardware = DriveSensePermissions\.playServicesAvailable\(app\)/);
     expect(a).toMatch(/canAskAlways = location == LocationAccess\.WHEN_IN_USE && Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.Q/);
     expect(a).toMatch(/backgroundRefresh = if \(backgroundRestricted\(\)\) BackgroundRefresh\.DENIED else BackgroundRefresh\.AVAILABLE/);
+  });
+
+  it('Battery Saver limiting location reaches JS as restricted, never as a need, and is heard only while the JS runtime runs (ruling 5)', () => {
+    const a = det('DriveDetectAccess');
+    expect(a).toMatch(/batterySaver = BatterySaver\.read\(app\)/);
+    const rec = det('DriveDetectRecord');
+    // The status reads the battery's own Restricted only; the wire says restricted for Battery Saver.
+    expect(rec).toMatch(/fun inputs\(armed: Boolean\): StatusInputs = StatusInputs\(armed, hardware, location, precise, motion, backgroundRefresh, liveActivities\)/);
+    expect(rec).toMatch(/if \(backgroundRefresh == BackgroundRefresh\.AVAILABLE && batterySaver\) BackgroundRefresh\.RESTRICTED else backgroundRefresh/);
+    expect(rec).toMatch(/"backgroundRefresh" to reportedRefresh\.wire/);
+    const saver = det('BatterySaver');
+    expect(saver).toMatch(/isPowerSaveMode/);
+    expect(saver).toMatch(/locationPowerSaveMode/);
+    expect(saver).toMatch(/SDK_INT >= Build\.VERSION_CODES\.P/);
+    // A runtime receiver of the module, never one in the manifest; the detector only sends its state.
+    const m = code(kt('DriveDetectModule'));
+    expect(m).toMatch(/ContextCompat\.registerReceiver\(ctx, receiver, IntentFilter\(PowerManager\.ACTION_POWER_SAVE_MODE_CHANGED\), ContextCompat\.RECEIVER_NOT_EXPORTED\)/);
+    expect(m).toMatch(/OnDestroy \{[\s\S]*unregisterReceiver\(r\)/);
+    expect(MANIFEST()).not.toMatch(/POWER_SAVE_MODE_CHANGED/);
+    expect(det('DriveDetector')).toMatch(/fun batterySaverChanged\(\) \{\s*handler\.post \{ emitState\("batterySaver"\) \}\s*\}/);
   });
 
   it('its pure half has JVM tests', () => {

@@ -68,7 +68,8 @@ async function request(id: PermissionId, state: MissingState, deps: FixDeps, dis
         await adapter.requestLocationServices();
         return;
       }
-      await adapter.requestLocationForeground();
+      // Android 9 and lower with the drive detector: the disclosure was shown (the adapter asks only then).
+      await adapter.requestLocationForeground({ disclosed });
       await stamp(deps, 'location');
       return;
     case 'precise':
@@ -103,6 +104,8 @@ async function openTarget(state: MissingState, deps: FixDeps): Promise<void> {
       return deps.adapter.openLocationServicesSettings();
     case 'batterySaver':
       return deps.adapter.openBatterySaverSettings();
+    case 'unusedApps':
+      return deps.adapter.openUnusedAppSettings();
     case 'app':
       return deps.adapter.openAppSettings();
   }

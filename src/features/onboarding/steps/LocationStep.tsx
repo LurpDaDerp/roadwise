@@ -86,9 +86,11 @@ export function LocationStep({ ctx, onNext, onBack, deps, api = deviceAndroidApi
     setBusy(true);
     setFailed(false);
     try {
-      // Android 9 and lower: Google Play's disclosure first (Not now asks nothing).
-      if (oneAsk(snapshot) && !(await disclosure.ask('allow'))) return;
-      const access = await adapter.requestLocationForeground();
+      // Android 9 and lower: Google Play's disclosure first (Not now asks nothing; the adapter asks
+      // only with it).
+      const disclosed = oneAsk(snapshot);
+      if (disclosed && !(await disclosure.ask('allow'))) return;
+      const access = await adapter.requestLocationForeground({ disclosed });
       await recordPrompt(settings, 'location', now()).catch(() => {});
       let next = await phone.reload();
       const precise = next?.precise !== false;
