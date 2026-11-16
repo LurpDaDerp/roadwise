@@ -253,7 +253,10 @@ object ActivityTransitions {
  * capture service starts and stops it with its sensors), never while idle or resting. Every report
  * goes to the drive detector (the walking end, the on-foot veto, car motion, the slow-traffic start,
  * the fix-less hold) before the duplicate filter that keeps the JS feed quiet; JS hears it
- * ([LiveActivity] mapping) only while a drive or a plain capture records, never during a watch.
+ * ([LiveActivity] mapping) while a drive or a plain capture records, and through the watch after an
+ * automatic end, there every report, the same one again included (JS's "Where you parked" watches
+ * the walk away from the car on them, and pumps its paused timers with each), never during another
+ * watch.
  */
 object ActivitySource {
   const val ACTION = "expo.modules.drivesense.ACTIVITY_UPDATE"
@@ -306,9 +309,11 @@ object ActivitySource {
     val report = LiveActivity.of(result.probableActivities.map { LiveActivity.Rated(it.type, it.confidence) }) ?: return
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
-    DriveDetector.peek()?.onActivity(report.motion(arrival.toDouble()))
-    if (CaptureService.watching) return
-    if (lastEmitted == report) return
+    val detector = DriveDetector.peek()
+    detector?.onActivity(report.motion(arrival.toDouble()))
+    val afterEnd = CaptureService.watching && detector?.watchAfterEnd == true
+    if (CaptureService.watching && !afterEnd) return
+    if (lastEmitted == report && !afterEnd) return
     lastEmitted = report
     val ts = ActivityTransitions.epochMs(result.elapsedRealtimeMillis * 1_000_000L, anchor, arrival)
     EventBus.emit("activity", linkedMapOf("type" to report.type, "confidence" to report.confidence, "ts" to ts))

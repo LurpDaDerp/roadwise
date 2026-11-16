@@ -3,8 +3,8 @@
 // promise naming the method. Event payloads are validated too; one that fails is dropped and
 // counted, never passed on.
 //
-// The lookup is `requireOptionalNativeModule`: iOS and Android register the module (Android's
-// without the car link yet: no `carLinkState`, so `carLinkAvailable` is false there). In Jest, Expo
+// The lookup is `requireOptionalNativeModule`: iOS and Android register the module, both with the
+// car link (`carLinkState`, so `carLinkAvailable`; an older native build without it reads false). In Jest, Expo
 // Go and web `available` is false, every method but `wipe` and `appForeground` rejects (those two
 // resolve: there is nothing to wipe or wake) and every listener is inert.
 // Tests inject `createFakeDriveDetect()`.
@@ -128,7 +128,8 @@ export const startWaitingResultSchema: z.ZodType<StartWaitingResult> = z.union([
 ]);
 
 /**
- * A car output's uid (what a pairing matches, AVAudioSession's port uid) and name. Native caps them
+ * A car output's uid (what a pairing matches: AVAudioSession's port uid, Android's Bluetooth
+ * address) and name. Native caps them
  * at these UTF-16 lengths; a longer one is cut here rather than refused, so one odd name never
  * takes the whole state down.
  */

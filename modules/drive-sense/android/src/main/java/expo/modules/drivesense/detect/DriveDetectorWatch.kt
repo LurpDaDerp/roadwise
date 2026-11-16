@@ -8,8 +8,9 @@ import expo.modules.drivesense.CaptureService
 // the geofence, its motion gate over the motion history, then opens an auto candidate: the location
 // service in its watch form (GPS, IMU and rows into the buffer, "Checking for a drive", no JS),
 // watching while it sees vehicle signs, at most 30 min (`DetectPolicy.candidateDue`). A
-// confirmation (the speed hold or slow traffic; the car link comes with it on Android) traces the
-// start back over the buffer and the motion history and becomes the drive in place. An automatic
+// confirmation (the speed hold, slow traffic or the car link) traces the start back over the buffer
+// and the motion history and becomes the drive in place. A paired car's Bluetooth connecting is a
+// wake too on Android (ruling 2; iPhone has no such wake). An automatic
 // end opens the linger's watch in place; a geofence exit during the linger turns it into an
 // ordinary watch. A candidate's end decides the rest, the hourly cap's record and a parked spot.
 // Detector thread only (every function here runs on `DriveDetector.handler`).
@@ -43,11 +44,23 @@ fun DriveDetector.onRegionExit(done: () -> Unit) {
 }
 
 /**
+ * A Bluetooth device connected ([expo.modules.drivesense.CarConnectReceiver]): when it is a paired
+ * car, a `car` wake (its broadcast may start the location service from the background, Android 12+
+ * with Nearby devices). Any other device does nothing.
+ */
+fun DriveDetector.onCarConnected(address: String, done: () -> Unit) {
+  handler.post {
+    if (carLink.isPaired(address)) onWake(WakeReason.CAR, done) else done()
+  }
+}
+
+/**
  * A wake. A rest past its end ends first and a permission change is taken in; then the policy's
  * wake gate (armed, an owner, the permissions, nothing under way, the rest after an empty watch
- * for all but the geofence and the app, at most 6 empty watches an hour). The geofence's exit is
- * car-motion evidence enough; the others need the motion history's car motion in the last 2 min
- * with the driver not on foot or on a bike ([DetectPolicy.motionGate]).
+ * for all but the geofence, a paired car and the app, at most 6 empty watches an hour). The
+ * geofence's exit and a paired car connecting are car-motion evidence enough; the others need the
+ * motion history's car motion in the last 2 min with the driver not on foot or on a bike
+ * ([DetectPolicy.motionGate]).
  */
 internal fun DriveDetector.onWake(reason: WakeReason, done: () -> Unit = {}) {
   if (reason == WakeReason.REGION && lingerToWatch()) {
@@ -78,6 +91,11 @@ internal fun DriveDetector.onWake(reason: WakeReason, done: () -> Unit = {}) {
   }
   if (reason == WakeReason.REGION) {
     beginCandidate("wake:region", done = done)
+    return
+  }
+  // The car just came on (usually before it moves): car-motion evidence enough, as the geofence's exit.
+  if (reason == WakeReason.CAR) {
+    beginCandidate("wake:car", done = done)
     return
   }
   val m = motionSince(now - DetectPolicy.MOTION_LOOKBACK_MS, now)
@@ -135,12 +153,14 @@ internal fun DriveDetector.beginCandidate(reason: String, carMotionAt: Double = 
   )
   clearWatch()
   lingering = linger
+  watchAfterEnd = linger
   watching = true
   // The standing report is this candidate's own: an older one may no longer stand.
   carStanding = false
   vehicleStanding = false
   walkSince = null
   lastCarMotionAt = maxOf(lastCarMotionAt, carMotionAt)
+  carLink.refresh()
   startClock()
   emitState(reason)
   if (linger) {
@@ -172,8 +192,10 @@ internal fun DriveDetector.clearWatch() {
   buffer.clear()
   confirmState = ConfirmState()
   slowState = SlowTrafficState()
+  linkState = LinkState()
   lastVehicleTs = null
   lingering = false
+  watchAfterEnd = false
 }
 
 /**
@@ -248,7 +270,9 @@ internal fun DriveDetector.candidateTick(r: DriveDetectRecord, now: Double) {
 
 /**
  * One watch row: into the buffer; a trusted row at 10 mph or more with no fresh walk, run or ride
- * report is a vehicle sign; then the speed evidence and slow traffic (each confirms on its own).
+ * report is a vehicle sign; then the speed evidence, slow traffic and the car link (a paired car or
+ * Android Auto connected: two trusted rows at 5 mph or more with fresh car motion; Android Auto at
+ * 15 mph or more without it too), each confirming on its own.
  */
 internal fun DriveDetector.candidateRow(d: DetectRow, body: Map<String, Any?>) {
   buffer.append(d, body)
@@ -263,7 +287,13 @@ internal fun DriveDetector.candidateRow(d: DetectRow, body: Map<String, Any?>) {
   }
   val slow = DetectPolicy.slowTrafficStep(slowState, d)
   slowState = slow.state
-  if (slow.confirmed) confirm(slowState.runStartTs)
+  val link = DetectPolicy.linkStep(linkState, d, linked = carLink.linked, carPlay = DetectPolicy.carPlayOn(CarLinkRules.ports(carLink.current)), carFresh = carFresh())
+  linkState = link.state
+  if (slow.confirmed) {
+    confirm(slowState.runStartTs)
+  } else if (link.confirmed) {
+    confirm(linkState.runStartTs)
+  }
 }
 
 /**

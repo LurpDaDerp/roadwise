@@ -251,14 +251,15 @@ object DetectPolicy {
 
   /**
    * The cheap checks a wake passes before any motion query or GPS, in order. A region exit and
-   * RoadWise coming to the front ignore the rest.
+   * RoadWise coming to the front ignore the rest, and so does Android's paired car connecting
+   * ([WakeReason.CAR], which policy.ts does not have: iPhone has no such wake).
    */
   fun wakeGate(c: WakeCtx): WakeGate {
     if (!c.armed) return WakeGate.OFF
     if (!c.hasOwner) return WakeGate.NO_OWNER
     if (!c.permissionsOk) return WakeGate.PERMISSION
     if (c.phase != DetectPhase.ARMED) return WakeGate.BUSY
-    if (c.reason != WakeReason.REGION && c.reason != WakeReason.APP && c.now < c.candidateRestUntil) return WakeGate.RESTING
+    if (c.reason != WakeReason.REGION && c.reason != WakeReason.APP && c.reason != WakeReason.CAR && c.now < c.candidateRestUntil) return WakeGate.RESTING
     if (recentStarts(c.candidateStarts, c.now).size >= CANDIDATES_PER_HOUR_MAX) return WakeGate.CAPPED
     return WakeGate.OK
   }

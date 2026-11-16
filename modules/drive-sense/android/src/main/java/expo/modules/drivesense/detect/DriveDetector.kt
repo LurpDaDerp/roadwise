@@ -80,6 +80,8 @@ class DriveDetector private constructor(context: Context) {
   }
   internal val access = DriveDetectAccess(app)
   internal val wakes = WakeSources(app) { onFile -> handler.post { fenceOwed(!onFile) } }
+  /** The car link (CarLink.kt): its record read and its outputs heard from the first post on this thread. */
+  internal val carLink = CarLink(app, handler) { onCarLink() }
   private val store: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   // ——— detector thread only ———
@@ -115,6 +117,8 @@ class DriveDetector private constructor(context: Context) {
   internal val buffer = RowBuffer<Map<String, Any?>>()
   internal var confirmState = ConfirmState()
   internal var slowState = SlowTrafficState()
+  /** The car link start (two trusted rows at 5 mph or more with a paired car or Android Auto connected). */
+  internal var linkState = LinkState()
   /** The candidate is the watch after an automatic end: no hourly cap, rest or parked spot. */
   internal var lingering = false
   /** This candidate's last vehicle sign (a trusted row at 10 mph or more, unvetoed, or a confident automotive report). */
@@ -141,6 +145,16 @@ class DriveDetector private constructor(context: Context) {
   var liveDriveId: String? = null
     private set
 
+  /**
+   * The watch that began as the linger after an automatic end runs (a geofence exit during it
+   * leaves this set: the same watch, the driver walking off): read by the live activity feed, which
+   * then hands JS every report, as iOS's motion reports keep coming through its linger. JS's "Where
+   * you parked" watches the walk away from the car on them, and pumps its timers with them.
+   */
+  @Volatile
+  var watchAfterEnd = false
+    internal set
+
   init {
     // The disk is read on the detector's thread, never the caller's (Application.onCreate is main).
     handler.post {
@@ -148,6 +162,7 @@ class DriveDetector private constructor(context: Context) {
       rec = DriveDetectRecord.fromJson(store.getString(KEY, null))
       history = ActivityHistory.decode(store.getString(HISTORY_KEY, null))
       view()
+      carLink.start()
       WatchNotification.retireReminderChannel(app)
     }
   }
@@ -281,7 +296,18 @@ class DriveDetector private constructor(context: Context) {
     val r = rec
     val run = r != null && allowed(r) && r.state != "off"
     if (!run && r?.parked != null) save(r.copy(parked = null))
+    syncCarWake()
     wakes.sync(run, force, onDone)
+  }
+
+  /**
+   * A paired car's Bluetooth connecting is a wake (ruling 2) while detection runs and a car is
+   * paired: its receiver is enabled only then, so no other phone's Bluetooth connection ever starts
+   * RoadWise.
+   */
+  internal fun syncCarWake() {
+    val r = rec
+    wakes.setCarWake(r != null && allowed(r) && r.state != "off" && carLink.hasCars())
   }
 
   /** The parked spot moves to [place]: kept (a reboot sets it again) and the geofence replaced. */
@@ -483,6 +509,7 @@ class DriveDetector private constructor(context: Context) {
       vetoState = VetoState()
       save(DriveDetectRecord())
       clearHistory()
+      carLink.wipe()
       wakes.setParked(null)
       syncWakes()
       clearStaleCapture()
@@ -508,6 +535,35 @@ class DriveDetector private constructor(context: Context) {
       refreshParked()
       onWake(WakeReason.APP)
     }
+  }
+
+  // ——— the car link (JS's taps; each answers the state) ———
+
+  /** `carLinkState`: the outputs read afresh, then the state. */
+  fun carLinkState(done: (Map<String, Any?>) -> Unit) {
+    handler.post { done(carLink.state()) }
+  }
+
+  /** `pairCar`: only from the driver's tap. A first car turns its connecting into a wake. */
+  fun pairCar(uid: String, done: (Map<String, Any?>) -> Unit) {
+    handler.post {
+      val out = carLink.pair(uid)
+      syncCarWake()
+      done(out)
+    }
+  }
+
+  fun forgetCar(uid: String, done: (Map<String, Any?>) -> Unit) {
+    handler.post {
+      val out = carLink.forget(uid)
+      syncCarWake()
+      done(out)
+    }
+  }
+
+  /** `notMyCar`: never suggested again. */
+  fun notMyCar(uid: String, done: (Map<String, Any?>) -> Unit) {
+    handler.post { done(carLink.notMine(uid)) }
   }
 
   // ——— the clock ———

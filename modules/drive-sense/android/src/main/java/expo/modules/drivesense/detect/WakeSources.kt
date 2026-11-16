@@ -14,6 +14,7 @@ import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import expo.modules.drivesense.ActivityTransitions
+import expo.modules.drivesense.CarConnectReceiver
 import expo.modules.drivesense.DetectBootReceiver
 import expo.modules.drivesense.GeofenceReceiver
 
@@ -29,6 +30,11 @@ import expo.modules.drivesense.GeofenceReceiver
  *   time" (Android 10+) and the phone's location on, and in the background it may arrive a couple
  *   of minutes late, so the start is traced back with the motion history;
  * - RoadWise coming to the front (the detector's `appForeground`);
+ * - a paired car's Bluetooth connecting (ruling 2; iPhone has no such wake): [CarConnectReceiver]
+ *   hears every Bluetooth connection (ACL_CONNECTED, a broadcast only the system sends) while it is
+ *   enabled, which is only while the wakes run and a car is paired, and wakes the detector for a
+ *   paired car's address alone. Android sends it only to an app with Nearby devices (Android 12+),
+ *   and it may start the location service from the background;
  * - a reboot or an app update, which drop every registration: [DetectBootReceiver] (enabled only
  *   while the wakes run) sets them again; a force stop, which cancels RoadWise's PendingIntents (and
  *   so Play services' registrations): the next launch or foreground finds them gone and sets them
@@ -144,9 +150,14 @@ class WakeSources(context: Context, private val onParked: (onFile: Boolean) -> U
   }
 
   /** The boot receiver hears a reboot or an update only while the wakes run (DONT_KILL_APP). */
-  private fun setBootReceiver(on: Boolean) {
+  private fun setBootReceiver(on: Boolean) = setReceiver(DetectBootReceiver::class.java, on)
+
+  /** The car's wake ([CarConnectReceiver]) hears Bluetooth connections only while the wakes run with a car paired. */
+  fun setCarWake(on: Boolean) = setReceiver(CarConnectReceiver::class.java, on)
+
+  private fun setReceiver(receiver: Class<*>, on: Boolean) {
     try {
-      val component = ComponentName(app, DetectBootReceiver::class.java)
+      val component = ComponentName(app, receiver)
       val want = if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED
       if (app.packageManager.getComponentEnabledSetting(component) != want) {
         app.packageManager.setComponentEnabledSetting(component, want, PackageManager.DONT_KILL_APP)

@@ -3,8 +3,8 @@
 // `RowJournal*.kt`, the capture service's detector mode), read as text as `native-android.test.ts`
 // reads the rest of the Kotlin. Behaviour is proven by the JVM unit tests (`RowJournalTest.kt`,
 // `DriveDetectRecordTest.kt`) and the host's Android tests with the fake detector; this suite pins
-// what can be checked statically: the bridge's surface against `src/detect/types.ts` (without the
-// car link, which JS reads as absent), the journal's place and its sync rules, the one thread, the
+// what can be checked statically: the bridge's surface against `src/detect/types.ts` (the car link
+// included, so JS reads `carLinkAvailable` as on iPhone), the journal's place and its sync rules, the one thread, the
 // policy the safety stop and the resume decide with, the capture service's detector mode (no
 // watchdog, a refusal that never loses the drive) and the launch hook. The automatic wakes, the
 // watch, the linger and the rest are held in native-android.test.ts.
@@ -32,7 +32,7 @@ const det = (name: string): string => kt(`detect/${name}`);
 const fn = (src: string, decl: string, indent = 0): string =>
   new RegExp(`${decl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?\\n {${indent}}\\}`).exec(src)?.[0] ?? '';
 
-/** The car link's half of the contract: not on Android yet (JS reads `carLinkAvailable` from `carLinkState`). */
+/** The car link's half of the contract (JS reads `carLinkAvailable` from `carLinkState`). */
 const CAR_METHODS = ['carLinkState', 'pairCar', 'forgetCar', 'notMyCar'];
 
 describe('native-android: DriveDetect, the bridge (src/detect/types.ts)', () => {
@@ -46,18 +46,20 @@ describe('native-android: DriveDetect, the bridge (src/detect/types.ts)', () => 
     expect(MODULE()).toMatch(/Name\("DriveDetect"\)/);
   });
 
-  it('declares the contract events but the car link’s, in order', () => {
+  it('declares the contract events, the car link’s included, in order', () => {
     const m = /Events\(([^)]*)\)/.exec(MODULE());
-    expect([...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual(DRIVE_DETECT_EVENTS.filter((e) => e !== 'carLink'));
+    expect([...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual([...DRIVE_DETECT_EVENTS]);
     const observed = /OBSERVED_EVENTS = listOf\(([^)]*)\)/.exec(MODULE());
-    expect([...observed![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual(DRIVE_DETECT_EVENTS.filter((e) => e !== 'carLink'));
+    expect([...observed![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1])).toEqual([...DRIVE_DETECT_EVENTS]);
   });
 
-  it('declares one AsyncFunction per contract method but the car link’s, none twice, and none of the car link’s', () => {
+  it('declares one AsyncFunction per contract method, the car link’s included, none twice; each car call answers from the detector’s thread', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
-    expect([...declared].sort()).toEqual(DRIVE_DETECT_METHODS.filter((x) => !CAR_METHODS.includes(x)).sort());
-    for (const car of CAR_METHODS) expect(MODULE()).not.toContain(`"${car}"`);
-    expect(MODULE()).not.toContain('"carLink"');
+    expect([...declared].sort()).toEqual([...DRIVE_DETECT_METHODS].sort());
+    expect(new Set(declared).size).toBe(declared.length);
+    for (const car of CAR_METHODS) expect(fn(MODULE(), `AsyncFunction("${car}")`, 4)).toMatch(new RegExp(`detector\\(\\)\\.${car}[ (]`));
+    const d = det('DriveDetector');
+    for (const car of CAR_METHODS) expect({ car, posts: /^\s*handler\.post \{/m.test(fn(d, `  fun ${car}(`, 2).split('\n').slice(1, 3).join('\n')) }).toEqual({ car, posts: true });
   });
 
   it('rejects only discardDrive on the live drive, with E_BUSY', () => {
@@ -149,7 +151,7 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
 
   it('the safety stop: endDue on every row and every 5 s tick; the journal’s end before driveEnded', () => {
     expect(fn(drive(), 'internal fun DriveDetector.record(')).toMatch(/evaluateEnd\(\)/);
-    expect(fn(drive(), 'internal fun DriveDetector.evaluateEnd(')).toMatch(/DetectPolicy\.endDue\(endClock, startedAt, now, walkSince, r\.waitUntil, null\)/);
+    expect(fn(drive(), 'internal fun DriveDetector.evaluateEnd(')).toMatch(/DetectPolicy\.endDue\(endClock, startedAt, now, walkSince, r\.waitUntil, carLink\.goneSince\)/);
     expect(det('DriveDetector')).toMatch(/handler\.postDelayed\(tickTask, DetectPolicy\.TICK_MS\.toLong\(\)\)/);
     const commit = fn(drive(), 'internal fun DriveDetector.commitEnd(');
     expect(commit.indexOf('journal.appendMarker(')).toBeLessThan(commit.indexOf('"driveEnded"'));
@@ -234,7 +236,7 @@ describe('native-android: the capture service’s detector mode', () => {
 
   it('the live activity reports reach the detector’s safety stop during its drive (a walk is walking or running, as iOS counts it)', () => {
     const r = kt('ActivityTransitionReceiver');
-    expect(r).toMatch(/DriveDetector\.peek\(\)\?\.onActivity\(report\.motion\(arrival\.toDouble\(\)\)\)/);
+    expect(r).toMatch(/val detector = DriveDetector\.peek\(\)\s*detector\?\.onActivity\(report\.motion\(arrival\.toDouble\(\)\)\)/);
     expect(det('LiveActivity')).toMatch(/walking = type == "walking" \|\| type == "running"/);
     // A confident walk stands from its first report until a report other than a walk replaces it.
     const on = fn(det('DriveDetectorSensing'), 'fun DriveDetector.onActivity(');

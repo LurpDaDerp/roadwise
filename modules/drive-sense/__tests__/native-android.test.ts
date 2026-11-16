@@ -191,11 +191,15 @@ describe('native-android: manifest (While Using for the Start card, "Allow all t
     expect(m![0]).toContain('android:exported="false"');
   });
 
-  it("the receivers: the activity feeds, the parked geofence, the detector's boot one and the share sheet's Save image, none exported; the boot one disabled until automatic drives are armed", () => {
+  it("the receivers: the activity feeds, the parked geofence, the detector's boot one, the car's wake and the share sheet's Save image; only the car's exported (the Bluetooth stack sends it); the boot one and the car's disabled until the wakes run", () => {
     const receivers = [...MANIFEST().matchAll(/<receiver[^>]*android:name="([^"]+)"[^>]*>/g)];
-    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.GeofenceReceiver', '.DetectBootReceiver', '.SaveImageReceiver']);
-    for (const r of receivers) expect(r[0]).toContain('android:exported="false"');
+    expect(receivers.map((r) => r[1])).toEqual(['.ActivityTransitionReceiver', '.GeofenceReceiver', '.DetectBootReceiver', '.CarConnectReceiver', '.SaveImageReceiver']);
+    for (const r of receivers) expect(r[0]).toContain(r[1] === '.CarConnectReceiver' ? 'android:exported="true"' : 'android:exported="false"');
     expect(receivers[2]![0]).toContain('android:enabled="false"');
+    expect(receivers[3]![0]).toContain('android:enabled="false"');
+    // The car's receiver hears exactly the protected ACL_CONNECTED broadcast.
+    const car = /<receiver[^>]*\.CarConnectReceiver[\s\S]*?<\/receiver>/.exec(MANIFEST())?.[0] ?? '';
+    expect([...car.matchAll(/<action android:name="([^"]+)"/g)].map((a) => a[1])).toEqual(['android.bluetooth.device.action.ACL_CONNECTED']);
     expect(receivers[0]![0]).not.toContain('android:enabled');
     expect(receivers[1]![0]).not.toContain('android:enabled');
     expect(MANIFEST()).not.toMatch(/ReminderActionReceiver|NOT_DRIVING/);
@@ -414,14 +418,15 @@ describe('native-android: the activity feeds (the transitions while armed, the l
     expect(src).toMatch(/return if \(t\.isFinite\(\) && t <= arrival && t > 0\) Math\.round\(t\) else arrival/);
   });
 
-  it('the live reports: every 5 s while a capture senses (started and stopped with its sensors); every one to the detector, to JS only a change and never during a watch', () => {
+  it('the live reports: every 5 s while a capture senses (started and stopped with its sensors); every one to the detector, to JS only a change while a drive records, every one through the watch after an automatic end, and nothing during any other watch', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/const val INTERVAL_MS = 5_000L/);
     const res = /fun onResult\([\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
     expect(res).toMatch(/if \(!live \|\| !CaptureService\.isCapturing\) \{\s*stop\(context\)\s*return/);
-    const toDetector = res.indexOf('DriveDetector.peek()?.onActivity(');
-    const watchGate = res.indexOf('if (CaptureService.watching) return');
-    const dedupe = res.indexOf('if (lastEmitted == report) return');
+    const toDetector = res.indexOf('detector?.onActivity(');
+    expect(res).toMatch(/val afterEnd = CaptureService\.watching && detector\?\.watchAfterEnd == true/);
+    const watchGate = res.indexOf('if (CaptureService.watching && !afterEnd) return');
+    const dedupe = res.indexOf('if (lastEmitted == report && !afterEnd) return');
     expect(toDetector).toBeGreaterThan(-1);
     expect(toDetector).toBeLessThan(watchGate);
     expect(watchGate).toBeLessThan(dedupe);
@@ -544,7 +549,8 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     const switchers = all.filter((f) => /setComponentEnabledSetting\(/.test(code(read(f))));
     expect(switchers.map((f) => f.replace(/^.*[\\/]/, ''))).toEqual(['WakeSources.kt']);
     expect(det('WakeSources')).toMatch(/setComponentEnabledSetting\(component, want, PackageManager\.DONT_KILL_APP\)/);
-    expect(det('WakeSources')).toMatch(/ComponentName\(app, DetectBootReceiver::class\.java\)/);
+    expect(det('WakeSources')).toMatch(/private fun setBootReceiver\(on: Boolean\) = setReceiver\(DetectBootReceiver::class\.java, on\)/);
+    expect(det('WakeSources')).toMatch(/fun setCarWake\(on: Boolean\) = setReceiver\(CarConnectReceiver::class\.java, on\)/);
   });
 
   it('a wake: the rest and the permissions first, then the policy\'s wake gate, then (but for the geofence) its motion gate over the motion history', () => {

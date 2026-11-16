@@ -118,6 +118,7 @@ internal fun DriveDetector.beginDrive(startedAt: Double, startSource: String, st
   lingering = false
   lastVehicleTs = null
   endClock = DetectPolicy.endClockAt(now)
+  carLink.beginDrive()
   sensing = true
   resumePending = false
   DetectEventBus.emit(
@@ -186,6 +187,8 @@ internal fun DriveDetector.record(d: DetectRow, body: Map<String, Any?>, evaluat
   journalLine(line)?.let { journal.appendRow(driveId, it) }
   EventBus.emit("row", line)
   lastRowTs = d.ts
+  // Only live rows count toward the car link's tally: a buffered row is from before the confirmation.
+  if (evaluate) carLink.countRow()
   if (DetectPolicy.trusted(d)) lastFix = LatLng(d.lat, d.lng)
   endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow = automotiveNow())
   (line["steps"] as? Number)?.let { endClock = DetectPolicy.endOnSteps(endClock, d.ts, it.toDouble()) }
@@ -205,15 +208,16 @@ private fun journalLine(line: Map<String, Any?>): JSONObject? =
 
 /**
  * The safety stop: native ends the drive 10 s after the JS walking end or a minute after another JS
- * rule would have; meanwhile the state says `ending` while a JS end is overdue and `recording`
- * again once the car moves. The car link's end comes with the car link.
+ * rule would have (the car link's end: a minute after JS's 15 s, the paired car or Android Auto gone
+ * with nothing over 3 mph since); meanwhile the state says `ending` while a JS end is overdue and
+ * `recording` again once the car moves.
  */
 internal fun DriveDetector.evaluateEnd() {
   val r = rec ?: return
   val startedAt = r.startedAt
   if (!r.recording || startedAt == null) return
   val now = DriveDetector.now()
-  val d = DetectPolicy.endDue(endClock, startedAt, now, walkSince, r.waitUntil, null)
+  val d = DetectPolicy.endDue(endClock, startedAt, now, walkSince, r.waitUntil, carLink.goneSince)
   val due = d.due
   if (due != null) {
     commitEnd(due.wire, now, linger = due == SafetyCause.STILL || due == SafetyCause.WALKING)
@@ -242,6 +246,8 @@ internal fun DriveDetector.commitEnd(cause: String, endedAt: Double, linger: Boo
   if (!r.recording || driveId == null) return
   val now = DriveDetector.now()
   val lingerAfter = linger && r.waitUntil == null && sensing && CaptureService.detectorRunning()
+  // A drive that reached driving speed tells the car link which outputs it had (before the clock resets).
+  carLink.endDrive(driveId, endedAt, drove = endClock.lastDroveTs != null)
   val lastSeq = nextSeq - 1
   val rowTs = lastRowTs
   journal.appendMarker(
@@ -286,7 +292,7 @@ internal fun DriveDetector.automaticEndDue(): Boolean {
   val r = rec ?: return false
   val startedAt = r.startedAt ?: return false
   if (!r.recording) return false
-  return DetectPolicy.lingerAfterJsEnd(endClock, startedAt, DriveDetector.now(), walkSince, r.waitUntil, null)
+  return DetectPolicy.lingerAfterJsEnd(endClock, startedAt, DriveDetector.now(), walkSince, r.waitUntil, carLink.goneSince)
 }
 
 /**
@@ -307,6 +313,7 @@ fun DriveDetector.notDriving(done: () -> Unit) {
     val now = DriveDetector.now()
     val lastSeq = nextSeq - 1
     val rowTs = lastRowTs
+    carLink.endDrive(driveId, now, drove = false)
     journal.delete(driveId)
     save(
       r.copy(
@@ -429,6 +436,7 @@ private fun DriveDetector.onResumeSensing(driveId: String, s: JournalSummary, st
   )
   // The still clock restarts at the last row journaled (a kill at a light does not end the drive).
   endClock = DetectPolicy.endClockAt(s.lastRowTs ?: now)
+  carLink.beginDrive()
   walkSince = null
   carStanding = false
   sensing = true

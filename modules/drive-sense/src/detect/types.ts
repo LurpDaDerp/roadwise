@@ -116,6 +116,8 @@ export type DetectReason =
   | 'wake:region'
   | 'wake:visit'
   | 'wake:app'
+  /** Android only: a paired car's Bluetooth connecting (iPhone has no such wake). */
+  | 'wake:car'
   | 'linger'
   | 'waiting'
   | 'extended'
@@ -140,6 +142,7 @@ export const DETECT_REASONS: readonly DetectReason[] = [
   'wake:region',
   'wake:visit',
   'wake:app',
+  'wake:car',
   'linger',
   'waiting',
   'extended',
@@ -179,12 +182,19 @@ export interface JournaledDrive {
   ended: { endedAt: number; cause: EndCauseNative | 'js'; decidedAt: number } | null;
 }
 
-/** An audio-route port the car link reads (AVAudioSession's names; `carAudio` is CarPlay). */
-/** Bluetooth LE outputs are never read: on iPhone an LE audio output is a hearing aid, never a car. */
+/**
+ * An output the car link reads (AVAudioSession's names; `carAudio` is CarPlay on iPhone, Android
+ * Auto on Android, and `bluetoothHFP` Android's SCO output). Bluetooth LE outputs and hearing aids
+ * are never read: an LE audio output is a hearing aid or earbuds, never a car.
+ */
 export type CarPortType = 'bluetoothA2DP' | 'bluetoothHFP' | 'carAudio';
 export const CAR_PORT_TYPES: readonly CarPortType[] = ['bluetoothA2DP', 'bluetoothHFP', 'carAudio'];
 
-/** One Bluetooth or CarPlay output of the audio route: matched on `uid` (a renamed car keeps it); `name` is the phone's name for it now. */
+/**
+ * One Bluetooth or CarPlay (Android Auto) output: matched on `uid` (a renamed car keeps it: iOS's
+ * port uid, Android's Bluetooth address, `android-auto` for Android Auto); `name` is the phone's
+ * name for it now.
+ */
 export interface CarOutput {
   uid: string;
   name: string;
@@ -203,9 +213,10 @@ export interface CarDriveSeen {
 }
 
 /**
- * The car link (round 11), all native: the route's Bluetooth and CarPlay outputs now (read only,
- * never changed), the paired cars (at most 3, kept in UserDefaults so the detector reads them with
- * no JS), whether a paired car or CarPlay is current, the outputs of the last 3 drives (oldest
+ * The car link (round 11), all native: the Bluetooth and CarPlay outputs now (iPhone: the audio
+ * route's; Android: every connected Bluetooth audio output, and Android Auto in CarPlay's place;
+ * read only, never changed), the paired cars (at most 3, kept natively so the detector reads them
+ * with no JS), whether a paired car or CarPlay is current, the outputs of the last 3 drives (oldest
  * first) and the uids marked "Not my car". `goneSince`: the debounced "car disconnected since" of
  * the live drive: when the link went away, continuously since, in a drive that had it; null while a
  * paired car or CarPlay is current, outside a drive, or when the link was never up during it (a
@@ -253,7 +264,7 @@ export interface DetectSubscription {
 export interface DriveDetectApi {
   /** False in Jest, Expo Go and web: every method but `wipe` and `appForeground` then rejects and every listener is inert. */
   readonly available: boolean;
-  /** The native build has the car link (`carLinkState`); false on Android (not yet there), Jest, web and older iOS builds. */
+  /** The native build has the car link (`carLinkState`): iPhone and Android; false in Jest, web and older native builds. */
   readonly carLinkAvailable?: boolean;
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
@@ -302,7 +313,7 @@ export interface DriveDetectApi {
    * transitions built. With no native module (or a native build without it), a no-op that resolves.
    */
   appForeground(): Promise<void>;
-  /** The car link now (the route read afresh). Rejects on Android, or in a native build without it. */
+  /** The car link now (the outputs read afresh). Rejects in a native build without it. */
   carLinkState(): Promise<CarLinkState>;
   /**
    * Pairs an output by uid: one current now, else one a recent drive saw; at most 3 cars, each once;

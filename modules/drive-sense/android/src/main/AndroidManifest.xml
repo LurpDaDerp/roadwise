@@ -27,6 +27,13 @@
   <!-- The drive detector sets its wakes again after a reboot (DetectBootReceiver, enabled only while
        automatic drives are armed). -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- The car link (CarLink.kt): a paired car's Bluetooth connecting wakes the drive detector
+       (CarConnectReceiver: Android sends ACL_CONNECTED only to an app holding Bluetooth), and on
+       Android 14+ a car's full Bluetooth address is readable only with Nearby devices
+       (BLUETOOTH_CONNECT, Android 12+), asked for before "Use this car". The same declarations as
+       react-native-ble-manager's (DashPal); never a scan. -->
+  <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
   <!-- The navigation button (README §2): the navigation apps RoadWise may find and open, by package
        (API 30+ package visibility). Exactly the Android packages of src/features/navigation/catalog.ts;
@@ -44,6 +51,9 @@
     <package android:name="app.organicmaps" />
     <package android:name="com.mapquest.android.ace" />
     <package android:name="ru.yandex.yandexnavi" />
+    <!-- The car link: Android Auto's connection provider (androidx.car.app's CarConnection
+         contract), asked whether it projects to a car. -->
+    <provider android:authorities="androidx.car.app.connection" />
   </queries>
 
   <application>
@@ -84,6 +94,18 @@
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+
+    <!-- A paired car's Bluetooth connecting: a drive detector wake (ruling 2). Disabled until
+         automatic drives run with a car paired (the detector enables it with DONT_KILL_APP).
+         Exported: the Bluetooth stack sends ACL_CONNECTED, a protected broadcast no app can fake. -->
+    <receiver
+        android:name=".CarConnectReceiver"
+        android:exported="true"
+        android:enabled="false">
+      <intent-filter>
+        <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
       </intent-filter>
     </receiver>
 

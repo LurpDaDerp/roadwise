@@ -1,5 +1,7 @@
 package expo.modules.drivesense.detect
 
+import expo.modules.drivesense.DetectEventBus
+
 // The drive detector's live motion and the "Not driving?" rest on Android (the iOS
 // `DriveDetectorSensing.swift`, ruling 4). Live reports come while RoadWise senses (a watch, a
 // drive); the rest senses nothing itself (no GPS, no service): it reads the activity transitions
@@ -23,10 +25,9 @@ fun DriveDetector.onActivity(a: MotionReport) {
     if (vehicleStanding && candidate) lastVehicleTs = a.at
     vetoState = DetectPolicy.noteVeto(vetoState, VetoReport(a.at, onFoot = a.walking || a.cycling, automotive = a.automotive, confident = a.confident))
     if (candidate) {
-      slowState = DetectPolicy.slowTrafficReport(
-        slowState,
-        SlowReport(a.at, automotive = a.automotive, stationary = a.stationary, onFoot = a.walking || a.cycling, confident = a.confident)
-      )
+      val report = SlowReport(a.at, automotive = a.automotive, stationary = a.stationary, onFoot = a.walking || a.cycling, confident = a.confident)
+      slowState = DetectPolicy.slowTrafficReport(slowState, report)
+      linkState = DetectPolicy.linkReport(linkState, report)
     }
     if (a.walking) {
       if (a.confident && walkSince == null) walkSince = a.at
@@ -89,6 +90,16 @@ internal fun DriveDetector.endSuppression() {
   if (settled.state == "armed") wakes.lastKnown { spot -> if (spot != null) handler.post { park(spot) } }
   syncWakes()
   emitState("suppressionEnded")
+}
+
+/**
+ * The car link changed (the outputs, a pairing, a drive's outputs): JS hears it at once (`carLink`,
+ * never buffered). Mid-drive, [CarLink.goneSince] is the "car disconnected since" (null again once
+ * the car is back): JS's car-link end reads it, and the safety stop's mirror ([evaluateEnd], every
+ * row and tick) does too.
+ */
+internal fun DriveDetector.onCarLink() {
+  DetectEventBus.emitLive("carLink", carLink.json())
 }
 
 /** The standing report is moving car motion (a tunnel, a garage): a fix-less row holds the still clock. */

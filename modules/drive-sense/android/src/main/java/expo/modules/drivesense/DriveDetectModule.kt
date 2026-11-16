@@ -17,13 +17,13 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * contract, the iOS `DriveDetectModule.swift` its other half). A second Expo module beside
  * DriveSense, its events on their own buffer ([DetectEventBus]). Every method hands its work to the
  * process's [DriveDetector] (its own thread) and answers from there; only `discardDrive` on the live
- * drive rejects (E_BUSY). The car link's methods and its `carLink` event are not here yet: JS reads
- * their absence as no car link (`DriveDetect.carLinkAvailable`).
+ * drive rejects (E_BUSY). The car link's methods and its `carLink` event are here (CarLink.kt), so JS
+ * reads `DriveDetect.carLinkAvailable` as true, as on iPhone.
  */
 class DriveDetectModule : Module() {
   companion object {
     /** Same names as `Events(...)` below. */
-    private val OBSERVED_EVENTS = listOf("detectState", "driveStarted", "driveEnded")
+    private val OBSERVED_EVENTS = listOf("detectState", "driveStarted", "driveEnded", "carLink")
   }
 
   private val context: Context
@@ -36,8 +36,8 @@ class DriveDetectModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("DriveDetect")
 
-    // DRIVE_DETECT_EVENTS in src/detect/types.ts without the car link's `carLink`.
-    Events("detectState", "driveStarted", "driveEnded")
+    // Keep this list identical to DRIVE_DETECT_EVENTS in src/detect/types.ts.
+    Events("detectState", "driveStarted", "driveEnded", "carLink")
 
     OnCreate {
       DetectEventBus.attach(emitter)
@@ -154,6 +154,24 @@ class DriveDetectModule : Module() {
     AsyncFunction("appForeground") { promise: Promise ->
       detector().appForeground()
       promise.resolve(null)
+    }
+
+    // The car link: the connected Bluetooth audio outputs and Android Auto, read only; the paired
+    // cars live natively, so the detector reads them with no JS. Each answers the state.
+    AsyncFunction("carLinkState") { promise: Promise ->
+      detector().carLinkState { promise.resolve(it) }
+    }
+
+    AsyncFunction("pairCar") { uid: String, promise: Promise ->
+      detector().pairCar(uid) { promise.resolve(it) }
+    }
+
+    AsyncFunction("forgetCar") { uid: String, promise: Promise ->
+      detector().forgetCar(uid) { promise.resolve(it) }
+    }
+
+    AsyncFunction("notMyCar") { uid: String, promise: Promise ->
+      detector().notMyCar(uid) { promise.resolve(it) }
     }
   }
 }
