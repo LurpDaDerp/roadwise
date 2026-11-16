@@ -14,16 +14,22 @@ import java.util.Locale
  * shuts it down for good when the activity is destroyed, while on Android the drive (its location
  * service) and JS run on without one: every later phrase then went to a dead engine. This engine
  * outlives any activity, and one that dies (its service crashed, the engine was updated or removed)
- * is bound again at the next phrase or warm-up. iPhone keeps expo-speech: nothing here runs there.
+ * is bound again at the next phrase or warm-up: a phrase it refuses, or a voice list it can't read. iPhone keeps expo-speech: nothing here runs there.
  * Main thread only (every entry point posts there; the engine's callbacks are posted back).
  */
 internal object AlertSpeech {
   /** How long the engine has to answer its binding before it counts as failed. */
   private const val INIT_TIMEOUT_MS = 10_000L
 
+  /** [onInit]'s status for a binding that never answered (none of TextToSpeech's). */
+  private const val TIMED_OUT = Int.MIN_VALUE
+
   private val main = Handler(Looper.getMainLooper())
   private var tts: TextToSpeech? = null
   private var ready = false
+
+  /** The last binding failed by never answering (read by the calls it hands null). */
+  private var timedOut = false
   private val waiting = mutableListOf<(TextToSpeech?) -> Unit>()
   private val pending = HashMap<String, (String) -> Unit>()
   private var nextId = 0L
@@ -55,7 +61,10 @@ internal object AlertSpeech {
           TextToSpeech.ERROR
         }
         // The engine's service is gone (it answers ERROR at once): bound again next time.
-        if (code != TextToSpeech.SUCCESS) drop()
+        if (code != TextToSpeech.SUCCESS) {
+          settle(id, SpeechOutcome.ERROR)
+          drop(t)
+        }
       }
     }
   }
@@ -75,23 +84,30 @@ internal object AlertSpeech {
     }
   }
 
-  /** How many voices the engine has (binding it now): 0 with no engine, null when it can't be read. */
+  /**
+   * How many voices the engine has (binding it now): 0 when a live engine has none or none binds at
+   * all; null when it can't be read: a binding that never answered, or an engine whose service died
+   * (its voice list unreadable), let go and bound once more first. JS then keeps trying phrases, and
+   * a phrase the engine refuses lets it go too.
+   */
   fun voiceCount(context: Context, done: (Int?) -> Unit) {
     val app = context.applicationContext
-    main.post {
-      withEngine(app) { t ->
-        if (t == null) {
-          done(0)
-          return@withEngine
-        }
-        done(
-          try {
-            t.voices?.size ?: 0
-          } catch (_: Exception) {
-            null
-          }
-        )
+    main.post { countVoices(app, rebind = true, done) }
+  }
+
+  private fun countVoices(app: Context, rebind: Boolean, done: (Int?) -> Unit) {
+    withEngine(app) { t ->
+      if (t == null) {
+        done(if (timedOut) null else 0)
+        return@withEngine
       }
+      val n = VoiceCount.read { t.voices }
+      if (n != null) {
+        done(n)
+        return@withEngine
+      }
+      drop(t)
+      if (rebind) countVoices(app, rebind = false, done) else done(null)
     }
   }
 
@@ -111,13 +127,14 @@ internal object AlertSpeech {
     engine = created
     created.setOnUtteranceProgressListener(Progress)
     tts = created
-    main.postDelayed({ onInit(created, TextToSpeech.ERROR) }, INIT_TIMEOUT_MS)
+    main.postDelayed({ onInit(created, TIMED_OUT) }, INIT_TIMEOUT_MS)
   }
 
   /** The engine [t] answered its binding (or timed out): the calls waiting on it go on. */
   private fun onInit(t: TextToSpeech?, status: Int) {
     if (t == null || t !== tts || ready) return
     val ok = status == TextToSpeech.SUCCESS
+    timedOut = status == TIMED_OUT
     if (ok) {
       ready = true
     } else {
@@ -133,13 +150,16 @@ internal object AlertSpeech {
     for (w in those) w(if (ok) t else null)
   }
 
-  /** The engine died: let it go (bound again on the next call); its phrases answer `error`. */
-  private fun drop() {
-    val t = tts
+  /**
+   * The engine [t] died: let it go (bound again on the next call); its phrases answer `error`. One
+   * already let go (a newer engine may be binding) is left as it is.
+   */
+  private fun drop(t: TextToSpeech) {
+    if (t !== tts) return
     tts = null
     ready = false
     try {
-      t?.shutdown()
+      t.shutdown()
     } catch (_: Exception) {
       // already dead
     }
@@ -176,6 +196,20 @@ internal object AlertSpeech {
       utteranceId?.let { id -> main.post { settle(id, SpeechOutcome.ERROR) } }
     }
   }
+}
+
+/**
+ * The engine's voice list read: its size, or null when it can't be read. `getVoices()` answers null
+ * only for an engine it can't reach (its service died or never bound); a live engine with no voice
+ * answers an empty set.
+ */
+internal object VoiceCount {
+  fun read(voices: () -> Collection<*>?): Int? =
+    try {
+      voices()?.size
+    } catch (_: Exception) {
+      null
+    }
 }
 
 /** What a spoken phrase came to (`speakAlert`'s answer; src/speech.ts reads it). */

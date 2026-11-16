@@ -348,10 +348,22 @@ describe('native-android: spoken alerts on the process engine (AlertSpeech)', ()
 
   it('a dead engine (speak answers ERROR) is let go and bound again; a binding that never answers times out', () => {
     const s = src();
-    expect(s).toMatch(/if \(code != TextToSpeech\.SUCCESS\) drop\(\)/);
-    expect(s).toMatch(/private fun drop\(\)[\s\S]*?tts = null[\s\S]*?settleAll\(SpeechOutcome\.ERROR\)/);
-    expect(s).toMatch(/postDelayed\(\{ onInit\(created, TextToSpeech\.ERROR\) \}, INIT_TIMEOUT_MS\)/);
+    expect(s).toMatch(/if \(code != TextToSpeech\.SUCCESS\) \{\s*settle\(id, SpeechOutcome\.ERROR\)\s*drop\(t\)\s*\}/);
+    // Only the engine still held is let go: a newer one binding is left alone.
+    expect(s).toMatch(/private fun drop\(t: TextToSpeech\) \{\s*if \(t !== tts\) return\s*tts = null[\s\S]*?settleAll\(SpeechOutcome\.ERROR\)/);
+    expect(s).toMatch(/postDelayed\(\{ onInit\(created, TIMED_OUT\) \}, INIT_TIMEOUT_MS\)/);
     expect(s).toMatch(/if \(t == null \|\| t !== tts \|\| ready\) return/);
+  });
+
+  it('a voice list it cannot read is a dead engine (let go, bound once more, then unknown), never "no voice"; a timeout is unknown', () => {
+    const s = src();
+    const count = /private fun countVoices\([\s\S]*?\n {2}\}/.exec(s)?.[0] ?? '';
+    expect(count).toMatch(/done\(if \(timedOut\) null else 0\)/);
+    expect(count).toMatch(/val n = VoiceCount\.read \{ t\.voices \}/);
+    expect(count).toMatch(/drop\(t\)\s*if \(rebind\) countVoices\(app, rebind = false, done\) else done\(null\)/);
+    expect(s).toMatch(/main\.post \{ countVoices\(app, rebind = true, done\) \}/);
+    expect(s).toMatch(/timedOut = status == TIMED_OUT/);
+    expect(s).not.toMatch(/voices\?\.size \?: 0/);
   });
 });
 
