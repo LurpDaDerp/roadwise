@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import { linkDomain } from '@/lib/linkDomain';
 
 /**
@@ -10,6 +12,9 @@ import { linkDomain } from '@/lib/linkDomain';
  * one configured link domain (`@/lib/linkDomain`; none is set yet, so no web link opens anything).
  * Nothing a link can open starts a drive (plan §1.4): the driving screen only shows a drive
  * already recording. The dev client's launcher links pass untouched in development builds only.
+ * On Android, Apple's web sign-in comes back on `roadwise://auth-callback`: while the app runs that
+ * link moves nothing (the sign-in screen is waiting for it and makes the session itself); one that
+ * cold-starts the app opens Home like any other.
  */
 const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$|^drive$|^wrapped(\/\d{4}-(0[1-9]|1[0-2]))?$/;
 /**
@@ -29,8 +34,13 @@ function appPath(path: string): string {
   return path.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^\/+/, '');
 }
 
-export async function redirectSystemPath({ path }: { path: string; initial: boolean }): Promise<string> {
+/** Apple's web sign-in coming back (Android): `roadwise://auth-callback`, with its query or fragment. */
+const AUTH_CALLBACK = /^auth-callback\/?([?#].*)?$/;
+
+export async function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): Promise<string> {
   try {
+    // An empty answer is a link expo-router leaves alone.
+    if (Platform.OS === 'android' && !initial && AUTH_CALLBACK.test(appPath(path))) return '';
     // A development build's launcher links (`exp+<scheme>://expo-development-client/...`) are not
     // app routes; leave them to the dev client. A release build sends them through the allowlist.
     if (__DEV__ && DEV_CLIENT.test(path)) return path;

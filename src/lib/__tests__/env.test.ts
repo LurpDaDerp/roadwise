@@ -41,4 +41,21 @@ describe('env', () => {
       expect(require('@/lib/env').env.diagnostics).toBe(false);
     });
   });
+
+  describe('Apple web sign-in flag (Android)', () => {
+    beforeEach(() => {
+      process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
+      process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'k';
+    });
+
+    test('is off when unset', () => {
+      delete process.env.EXPO_PUBLIC_APPLE_WEB_SIGNIN;
+      expect(require('@/lib/env').env.appleWebSignIn).toBe(false);
+    });
+
+    test.each([['1', true], ['0', false], ['true', false], ['', false]])('%p gives %p', (value, on) => {
+      process.env.EXPO_PUBLIC_APPLE_WEB_SIGNIN = value;
+      expect(require('@/lib/env').env.appleWebSignIn).toBe(on);
+    });
+  });
 });

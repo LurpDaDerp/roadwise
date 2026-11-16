@@ -10,9 +10,26 @@ import { Platform } from 'react-native';
 import { supabase } from '@/data/supabase/client';
 import { env } from '@/lib/env';
 
+import { GOOGLE_CREDENTIAL_CANCELLED, googleCredentialModule } from './googleCredential';
+
 WebBrowser.maybeCompleteAuthSession();
 
-export function useGoogleSignIn(): { signIn: () => Promise<void>; ready: boolean } {
+export interface GoogleSignIn {
+  signIn: () => Promise<void>;
+  ready: boolean;
+}
+
+/**
+ * Sign in with Google. The iPhone (and the web) goes through Google's own page in a browser sheet
+ * (expo-auth-session); Android through Credential Manager's account sheet (`./googleCredential`),
+ * which needs no redirect back into the app. Either way Supabase gets a Google ID token and the raw
+ * nonce whose SHA-256 is inside it. The platform never changes while the app runs, so each build
+ * always calls the same hooks.
+ */
+export const useGoogleSignIn: () => GoogleSignIn = Platform.OS === 'android' ? useGoogleSignInAndroid : useGoogleSignInAuthSession;
+
+/** The iPhone's (and the web's) Google sign-in: expo-auth-session's id-token request. */
+export function useGoogleSignInAuthSession(): GoogleSignIn {
   const platformClientId = Platform.select({
     ios: env.googleIosClientId,
     android: env.googleAndroidClientId,
@@ -80,4 +97,32 @@ export function useGoogleSignIn(): { signIn: () => Promise<void>; ready: boolean
   }
 
   return { signIn, ready: configured && !!request };
+}
+
+/**
+ * Android's Google sign-in: Credential Manager's "Sign in with Google" sheet for the web client id.
+ * Google checks the app's package and signing certificate against the project's Android OAuth
+ * clients itself, so the app carries no Android client id. A fresh nonce per sign-in: the sheet
+ * gets its SHA-256, Supabase the raw value. Backing out of the sheet leaves the screen as it was.
+ */
+export function useGoogleSignInAndroid(): GoogleSignIn {
+  const [native] = useState(googleCredentialModule);
+  const clientId = env.googleWebClientId;
+
+  async function signIn(): Promise<void> {
+    if (!native || !clientId) return;
+    const raw = bytesToHex(getRandomBytes(32));
+    let idToken: string;
+    try {
+      idToken = await native.signInAsync(clientId, bytesToHex(sha256(utf8ToBytes(raw))));
+    } catch (e) {
+      if ((e as { code?: string }).code === GOOGLE_CREDENTIAL_CANCELLED) return;
+      throw e;
+    }
+    if (!idToken) throw new Error('Google returned no identity token');
+    const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken, nonce: raw });
+    if (error) throw error;
+  }
+
+  return { signIn, ready: native !== null && !!clientId };
 }

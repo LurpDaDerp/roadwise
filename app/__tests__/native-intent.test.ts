@@ -136,3 +136,28 @@ describe('with a link domain set', () => {
     'https://roadwise.app/wrapped/2026-10',
   ])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
 });
+
+describe('Apple web sign-in coming back (Android)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the same module +native-intent reads
+  const { Platform } = require('react-native') as typeof import('react-native');
+  const callback = 'roadwise://auth-callback?code=8f2c1a';
+
+  test('while the app runs, the callback moves nothing (the sign-in screen makes the session)', async () => {
+    const restore = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    try {
+      for (const path of [callback, 'roadwise:///auth-callback#error=access_denied', '/auth-callback?code=1', 'roadwise://auth-callback']) {
+        expect(await redirectSystemPath({ path, initial: false })).toBe('');
+      }
+      // a cold start on it opens Home, as any unknown link does
+      expect(await redirectSystemPath({ path: callback, initial: true })).toBe('/');
+      // nothing that only starts like it is let through
+      expect(await redirectSystemPath({ path: 'roadwise://auth-callbackx', initial: false })).toBe('/');
+    } finally {
+      restore();
+    }
+  });
+
+  test('on the iPhone the link opens Home, as before', async () => {
+    expect(await redirectSystemPath({ path: callback, initial: false })).toBe('/');
+  });
+});
