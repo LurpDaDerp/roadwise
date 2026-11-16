@@ -21,6 +21,7 @@ export type BarInk = 'light' | 'dark';
 
 interface SystemBarsModule {
   setNavigationBarInk(ink: BarInk): Promise<void>;
+  windowTopOnScreen?(): Promise<number>;
 }
 
 let native: SystemBarsModule | null | undefined;
@@ -81,6 +82,24 @@ export function useNavigationBarInk(ink: BarInk): void {
     entry.ink = ink;
     show();
   }, [ink]);
+}
+
+/**
+ * The top of RoadWise's window on the screen, in points, for the keyboard lift (`./keyboard`):
+ * React Native gives the keyboard's top in screen coordinates and a view's frame in the window's.
+ * 0 full screen on a phone; the pane's or window's offset in split screen and freeform / desktop
+ * windows. 0 (the full-screen answer) on iPhone, on a build without the native half, or if the
+ * call fails. One native call per keyboard change.
+ */
+export async function windowTopOnScreen(): Promise<number> {
+  const module = bars();
+  if (!module || typeof module.windowTopOnScreen !== 'function') return 0;
+  try {
+    const top = await module.windowTopOnScreen();
+    return typeof top === 'number' && Number.isFinite(top) ? top : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Tests only: forget every request and the native lookup. */

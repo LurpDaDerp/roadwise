@@ -3,10 +3,11 @@
 import { render } from '@testing-library/react-native';
 import { Platform } from 'react-native';
 
-import { resetNavigationBarInkForTests, useNavigationBarInk, type BarInk } from '../systemBars';
+import { resetNavigationBarInkForTests, useNavigationBarInk, windowTopOnScreen, type BarInk } from '../systemBars';
 
 const mockSet = jest.fn(async (_ink: string) => {});
-const mockRequire = jest.fn((_name: string): unknown => ({ setNavigationBarInk: mockSet }));
+const mockWindowTop = jest.fn(async (): Promise<unknown> => 0);
+const mockRequire = jest.fn((_name: string): unknown => ({ setNavigationBarInk: mockSet, windowTopOnScreen: mockWindowTop }));
 jest.mock('expo-modules-core', () => ({
   ...jest.requireActual('expo-modules-core'),
   requireOptionalNativeModule: (name: string) => mockRequire(name),
@@ -21,6 +22,7 @@ let restore: (() => void) | null = null;
 beforeEach(() => {
   resetNavigationBarInkForTests();
   mockSet.mockClear();
+  mockWindowTop.mockClear();
   mockRequire.mockClear();
 });
 afterEach(() => {
@@ -79,4 +81,33 @@ test('Android without the native half (an older build): nothing breaks', async (
   mockRequire.mockImplementationOnce(() => null);
   await render(<Bar ink="light" />);
   expect(mockSet).not.toHaveBeenCalled();
+});
+
+describe('windowTopOnScreen, the keyboard lift window offset', () => {
+  test('iPhone: 0, nothing loaded or called', async () => {
+    restore = jest.replaceProperty(Platform, 'OS', 'ios').restore;
+    await expect(windowTopOnScreen()).resolves.toBe(0);
+    expect(mockRequire).not.toHaveBeenCalled();
+  });
+
+  test('Android: the native answer, in points', async () => {
+    restore = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    mockWindowTop.mockResolvedValueOnce(412.5);
+    await expect(windowTopOnScreen()).resolves.toBe(412.5);
+    expect(mockWindowTop).toHaveBeenCalledTimes(1);
+  });
+
+  test('Android: a failed call, a junk answer or no native half reads as full screen (0)', async () => {
+    restore = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    mockWindowTop.mockRejectedValueOnce(new Error('no activity'));
+    await expect(windowTopOnScreen()).resolves.toBe(0);
+    mockWindowTop.mockResolvedValueOnce(Number.NaN);
+    await expect(windowTopOnScreen()).resolves.toBe(0);
+    resetNavigationBarInkForTests();
+    mockRequire.mockImplementationOnce(() => ({ setNavigationBarInk: mockSet }));
+    await expect(windowTopOnScreen()).resolves.toBe(0);
+    resetNavigationBarInkForTests();
+    mockRequire.mockImplementationOnce(() => null);
+    await expect(windowTopOnScreen()).resolves.toBe(0);
+  });
 });

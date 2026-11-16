@@ -28,6 +28,14 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * The last ink asked for is kept and re-applied each time RoadWise comes to the front, so a
  * recreated activity (React Native sets the phone's appearance again in `onCreate`) never shows the
  * stale one. Window calls run on the main thread. Nothing here runs in the background or polls.
+ *
+ * It also answers where RoadWise's window starts on the screen ([windowTopOnScreen]), for the
+ * keyboard lift (`src/ui/keyboard.ts`). React Native reports the keyboard's top from
+ * `getWindowVisibleDisplayFrame`, in screen coordinates, while a view's `measureInWindow` is in the
+ * window's own. Full screen on a phone the two agree; in the bottom pane of split screen, or a
+ * freeform / desktop window (Android 16 desktop windowing, pop-up view, DeX), the window starts
+ * lower and the keyboard top has to be moved into the window by that much. Asked once per keyboard
+ * change, never polled.
  */
 class SystemBarsModule : Module() {
   /** True: light buttons (for a dark page). Null until JS asks: the phone's own appearance stays. */
@@ -40,6 +48,10 @@ class SystemBarsModule : Module() {
     AsyncFunction("setNavigationBarInk") { ink: String ->
       lightInk = NavBarInk.parse(ink)
       apply(appContext.currentActivity)
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("windowTopOnScreen") {
+      windowTopOnScreen(appContext.currentActivity)
     }.runOnQueue(Queues.MAIN)
 
     OnActivityEntersForeground {
@@ -59,6 +71,31 @@ class SystemBarsModule : Module() {
       // A window torn down mid-call (the activity finishing): the next foreground applies it.
     }
   }
+
+  /**
+   * The top of the activity's window on the screen, in dp (React Native's points): the decor view's
+   * screen position less its position in its own window (0 for a decor view). 0 with no activity or
+   * a window torn down mid-call, which is the full-screen answer.
+   */
+  private fun windowTopOnScreen(activity: Activity?): Double {
+    val decor = activity?.window?.peekDecorView() ?: return 0.0
+    return try {
+      val onScreen = IntArray(2)
+      val inWindow = IntArray(2)
+      decor.getLocationOnScreen(onScreen)
+      decor.getLocationInWindow(inWindow)
+      WindowTop.dp(onScreen[1], inWindow[1], decor.resources.displayMetrics.density)
+    } catch (_: RuntimeException) {
+      0.0
+    }
+  }
+}
+
+/** The window-offset arithmetic of [SystemBarsModule], held by JVM tests. */
+object WindowTop {
+  /** The window's top on the screen in dp, from the same view's screen and window y in pixels. */
+  fun dp(screenYPx: Int, windowYPx: Int, density: Float): Double =
+    if (!(density > 0f) || density.isInfinite()) 0.0 else (screenYPx - windowYPx) / density.toDouble()
 }
 
 /** The pure half of [SystemBarsModule], held by JVM tests. */
