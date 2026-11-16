@@ -21,6 +21,7 @@ import type { DriveHost } from '@/drive/host';
 import { QueryClient } from '@tanstack/react-query';
 import { subscribeInvalidation } from '@/data/queries/invalidate';
 import { queryKeys } from '@/data/queries/keys';
+import { asPlatform } from '@/lib/__fixtures__/platform';
 
 jest.mock('expo-notifications', () => ({}));
 const mockEnsureDrivePermissions = jest.fn(async (..._args: unknown[]) => ({ location: 'granted' as const, motion: 'undetermined' as const }));
@@ -1080,4 +1081,33 @@ test('iOS: the default push-to-start asks the server over the launch’s client 
   // The server's own reason, not a bare false: a refused token is not worth a retry.
   expect(errors).toContain('drive pushToStart: push-to-start not sent: apns_error (BadDeviceToken)');
   await rt.stop({ endOpenTrip: false });
+});
+
+test('Android: a detector drive confirmed behind never asks live-activity-start (the drive notification starts on the phone), whatever push-to-start is handed in', async () => {
+  const restore = asPlatform('android');
+  try {
+    const background = deps();
+    background.appState.set('background');
+    const detect = createFakeDriveDetect({ now: () => clock, platform: 'android' });
+    await detect.setArmed(true, 'user-1');
+    detect.wake();
+    const list = rows(30, { t0: clock - 30_000 });
+    detect.confirm({ driveId: uuid(22), startedAt: clock - 30_000, rows: list.map((r) => ({ ...r })) });
+    const supabase = createFakeSupabase({ uid: 'user-1', invoke: () => invokeOk({ sent: true }), rpc: () => ({ data: [], error: null }) });
+    const display = { start: jest.fn(), update: jest.fn(), refresh: jest.fn(), end: jest.fn(), isRunning: async () => false };
+    const pushToStart = jest.fn(async () => true);
+    const source = createFakeDriveSense({ platform: 'android', now: () => clock });
+    source.setState({ location: 'always', motion: 'granted' });
+    const rt = await bootstrapApp({ ...background.deps, supabase: supabase as unknown as BootSupabase, source, detect, display, pushToStart });
+    expect(rt.drive.snapshot()).toMatchObject({ status: 'recording', clientTripId: uuid(22) });
+    await rt.drive.settled();
+    await new Promise((r) => setTimeout(r, 0));
+    await rt.drive.settled();
+    expect(supabase.invokes.filter((c) => c.name === 'live-activity-start')).toEqual([]);
+    expect(pushToStart).not.toHaveBeenCalled();
+    expect(display.start).toHaveBeenCalledTimes(1);
+    await rt.stop({ endOpenTrip: false });
+  } finally {
+    restore();
+  }
 });

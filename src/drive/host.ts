@@ -538,8 +538,19 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   const { db, source, limits, player, now, tz, newId } = deps;
   const persist = (deps.persistence ?? 'full') === 'full';
   const detect = deps.detect && deps.detect.available ? deps.detect : null;
-  const ios = detect !== null;
+  /**
+   * A native drive detector runs the drives (iOS, and an Android build with its DriveDetect): the
+   * journal (replay, seq gaps), the detector's start, "Not driving?", the wait's touch, the signed-out
+   * hold and the automatic end's cut all key off it, never off the platform.
+   */
+  const hasDetector = detect !== null;
   const platform: 'ios' | 'android' = deps.platform ?? (Platform.OS === 'android' ? 'android' : 'ios');
+  /**
+   * A drive that opens behind is push-started by the server (iOS's Live Activity, which the app
+   * cannot start from the background), and only on a detector build, as it always was. Android
+   * starts its drive notification itself from the background, so it never asks `live-activity-start`.
+   */
+  const pushStarts = platform === 'ios' && hasDetector;
   const scheduler = deps.scheduler ?? realScheduler;
   /** An iPhone build with the car link (round 11): the car tally, "Are you driving?" and "Where you parked". */
   const carLink = detect !== null && detect.carLinkAvailable === true;
@@ -694,7 +705,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     if (!persist) return;
     const id = session.clientTripId;
     const closedAt = now();
-    captureEnd = captureEndOf(session, closedAt, true, ios && isAutomaticEnd(session.endCause));
+    captureEnd = captureEndOf(session, closedAt, true, hasDetector && isAutomaticEnd(session.endCause));
     try {
       // The phone catches up to the dashcam (≤ 3 s) before the drive's facts are read.
       try {
@@ -1016,7 +1027,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const localDay = dayKey(new Date(session.startedAt), tz());
     if (persist) await writeCancelMarker(db, { clientTripId: id, driveId, localDay }).catch((e: unknown) => report(e, 'notDriving'));
     // A plain capture (the Start fallback) is no detector drive: it stops after this task, as on Android.
-    if (ios && detect !== null && !plainCapture) {
+    if (hasDetector && detect !== null && !plainCapture) {
       // Native deletes the journal and rests until walking or 5 min still; it is no capture of ours to stop.
       captureOn = false;
       liveDrive = null;
@@ -1409,7 +1420,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     trail.reset();
     parkedWatch?.driveStarted();
     dropParked();
-    if (ios && detect !== null && detect.available) {
+    if (hasDetector && detect !== null && detect.available) {
       const link = await detect.carLinkState().catch(() => null);
       carGoneSince = link?.goneSince ?? null;
       // A drive replayed at a launch (`quiet`) was not seen live: no tally (its car comes from native's own record).
@@ -1448,7 +1459,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     // Nothing from here on is the drive itself: a surface that fails is reported, and the drive records on.
     if (deps.display) {
       try {
-        if (!ios || appActive()) deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
+        if (!pushStarts || appActive()) deps.display.start({ ...displayState(s), stopped: s.lastRowTs === null || s.stopped });
         // iOS cannot start an activity from the background: the server push-starts it, for an
         // automatic drive and a Start-card drive that confirmed behind (navigation open) alike, once
         // the rows that confirmed it are in (`flushPush`).
@@ -1801,13 +1812,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   }
 
   /**
-   * The capture follows the engine: on while a drive records, off after. iOS never starts one
+   * The capture follows the engine: on while a drive records, off after. A detector build never starts one
    * (native owns it); its `stopCapture` tells native the JS end and the cut.
    */
   async function reconcileCapture(status: EngineStatus): Promise<void> {
     const want = status === 'recording';
     if (want === captureOn) return;
-    if (want && ios) return;
+    if (want && hasDetector) return;
     try {
       if (want) {
         captureEnd = null;
@@ -2130,7 +2141,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
   async function onLiveRow(row: SeqRow): Promise<void> {
     const seq = row.seq;
     const live = liveDrive;
-    if (ios && typeof seq === 'number') {
+    if (hasDetector && typeof seq === 'number') {
       if (live === null || engine.snapshot().status !== 'recording') return;
       if (seq <= live.lastSeq) return;
       if (seq > live.lastSeq + 1) {
@@ -2357,7 +2368,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
 
   /** Signed in again (the same driver): the native drives left alone while signed out are taken in, as at a boot. */
   async function takeInOwedJournals(): Promise<void> {
-    if (!ios || !booted || !journalsOwed || engine.snapshot().status !== 'idle') return;
+    if (!hasDetector || !booted || !journalsOwed || engine.snapshot().status !== 'idle') return;
     journalsOwed = false;
     const adopt = deferredAdopt;
     deferredAdopt = null;
@@ -2563,7 +2574,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       report(e, 'startCapture');
       return (e as { code?: unknown } | null)?.code === 'E_PERMISSION' ? 'permission' : 'error';
     }
-    if (ios) {
+    if (hasDetector) {
       let capturing = false;
       try {
         capturing = (await source.getState()).capturing;
@@ -2619,13 +2630,13 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
           report(e, 'getState');
         }
         replayBudget = MAX_JOURNAL_REPLAY_ROWS;
-        if (ios && signedOut) {
+        if (hasDetector && signedOut) {
           // Signed out: native's drives are not taken in (nor stopped); they wait for this
           // driver's next sign-in, or a different driver's wipe.
           captureOn = false;
           journalsOwed = true;
           deferredAdopt = opts.adopt ?? null;
-        } else if (ios) {
+        } else if (hasDetector) {
           await bootIos(opts.adopt ?? null);
           await sweepPassenger();
         } else if (opts.adopt) await adoptTrip(opts.adopt);
@@ -2663,7 +2674,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         }
         // The drive records from the tap, waiting for driving speed: the wait is set before the
         // drive opens, so no state ever shows the drive without it.
-        refused = ios && detect !== null ? await startDetected(detect) : await startPlain();
+        refused = hasDetector && detect !== null ? await startDetected(detect) : await startPlain();
       }, 'start');
       if (refused !== null) return { ok: false, reason: refused };
       // A drive that records is a start, whatever a step beside it did; Home opens the driving screen.
@@ -2677,7 +2688,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
       armWaitingTimer();
       publish();
       // A plain capture (the Start fallback) has no native wait to move on.
-      if (ios && detect !== null && !plainCapture) {
+      if (hasDetector && detect !== null && !plainCapture) {
         detect
           .extendWaiting()
           .then((until) => {

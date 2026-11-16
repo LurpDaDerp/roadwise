@@ -467,7 +467,9 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
     expect(MODULE()).toMatch(/AsyncFunction\("stopCapture"\) \{ kind: String, endedAt: Double, drivingAtEnd: Boolean, promise: Promise ->\s*CaptureService\.stopFromJs\(context, CaptureEnd\.of\(kind, endedAt, drivingAtEnd\)\) \{ promise\.resolve\(null\) \}/);
     const ce = code(kt('CaptureEnd'));
     expect(ce).toMatch(/"dropped" -> CaptureEnd\(null, drivingAtEnd\)/);
-    expect(ce).toMatch(/"at" -> if \(endedAt\.isFinite\(\) && endedAt >= 0\.0\) CaptureEnd\(endedAt\.toLong\(\), drivingAtEnd\) else null/);
+    // "auto" (a JS automatic end, sent once DriveDetect has `carLinkState`) is "at" with its cut, marked automatic, as iOS reads it.
+    expect(ce).toMatch(/data class CaptureEnd\(val drivingEndedAt: Long\?, val drivingAtEnd: Boolean, val automatic: Boolean = false\)/);
+    expect(ce).toMatch(/"at", "auto" -> if \(endedAt\.isFinite\(\) && endedAt >= 0\.0\) CaptureEnd\(endedAt\.toLong\(\), drivingAtEnd, automatic = kind == "auto"\) else null/);
     expect(ce).toMatch(/else -> null/);
     const rem = code(kt('TripReminder'));
     expect(rem).toMatch(/fun onCaptureEnded\(context: Context, end: CaptureEnd\? = null\) \{\s*val now = now\(\)\s*val drivingEndedAt: Long\? = if \(end == null\) now else end\.drivingEndedAt\s*val drivingAtEnd = end\?\.drivingAtEnd == true\s*save\(context, TripReminderPolicy\.captureEnded\(TripReminderPolicy\.settle\(load\(context\), now, true\), now, drivingEndedAt, drivingAtEnd, true\)\)/);

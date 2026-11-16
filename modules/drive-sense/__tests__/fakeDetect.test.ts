@@ -301,3 +301,28 @@ describe('the fake detector', () => {
     expect(d.calls).toEqual(['listDrives', 'getState', 'getState']);
   });
 });
+
+describe('the fake detector as an Android build (WP01: hosts and screens run as Android)', () => {
+  test('labelled by platform; the car link follows `available` unless switched off', () => {
+    expect(createFakeDriveDetect().platform).toBe('ios');
+    const a = createFakeDriveDetect({ platform: 'android' });
+    expect(a.platform).toBe('android');
+    expect(a.available).toBe(true);
+    expect(a.carLinkAvailable).toBe(true);
+    expect(createFakeDriveDetect({ available: false, carLinkAvailable: true }).carLinkAvailable).toBe(false);
+  });
+
+  test('a detector build without the car link: every car method rejects "not in this native build", `carLink` is never heard, the rest works', async () => {
+    const d = createFakeDriveDetect({ platform: 'android', carLinkAvailable: false });
+    expect(d.carLinkAvailable).toBe(false);
+    for (const call of [() => d.carLinkState(), () => d.pairCar('AA:BB'), () => d.forgetCar('AA:BB'), () => d.notMyCar('AA:BB')]) {
+      await expect(call()).rejects.toThrow('not in this native build');
+    }
+    const heard: unknown[] = [];
+    d.addListener('carLink', (p) => void heard.push(p)).remove();
+    d.addListener('carLink', (p) => void heard.push(p));
+    d.setCarRoute([{ uid: 'AA:BB', name: 'Civic', type: 'bluetoothA2DP' }]);
+    expect(heard).toEqual([]);
+    expect(await d.setArmed(true, OWNER)).toMatchObject({ armed: true, status: 'on' });
+  });
+});
