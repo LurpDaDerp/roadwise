@@ -636,7 +636,7 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(s).toMatch(/save\(r\.copy\(rest = step\.standing\)\)\s*checkRest\(\)/);
     expect(s).toMatch(/DetectPolicy\.restDue\(since, until, r\.rest, DriveDetector\.now\(\)\)/);
     expect(s).toMatch(/wakes\.lastKnown \{ spot -> if \(spot != null\) handler\.post \{ park\(spot\) \} \}/);
-    // Seeded from car motion in the live feed's last 2 min or an IN_VEHICLE transition still standing, not the one report at the tap.
+    // Seeded from the motion history's newest transition (in the vehicle holds; anything newer runs the 5 min from the tap); the live feed's last 2 min only with no history.
     expect(det('DriveDetectorDrive')).toMatch(/rest = DetectPolicy\.restSeed\(carFresh\(\), history\)/);
     expect(det('DriveDetectorWatch')).toMatch(/if \(r\.state == "suppressed"\) restOnTransitions\(batch, arrival\)/);
   });

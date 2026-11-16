@@ -192,12 +192,25 @@ class AutoDetectTest {
     assertEquals(until, DetectPolicy.restNextCheck(since, until, seeded), 0.0)
     // Car motion in the live feed's last 2 min holds it too, with no history.
     assertTrue(DetectPolicy.restSeed(carFresh = true, history = emptyList()).carStanding)
-    // Out of the vehicle (an EXIT, or another ENTER since), nothing fresh: 5 min from the tap.
-    for (after in listOf(ActivityHistory.Kind.VEHICLE_EXIT, ActivityHistory.Kind.STILL, ActivityHistory.Kind.WALKING)) {
-      val out = DetectPolicy.restSeed(carFresh = false, history = riding + e(since - 1 * min, after))
-      assertFalse(out.carStanding)
-      assertEquals(SuppressionCause.STILL, DetectPolicy.restDue(since, until, out, since + 5 * min))
+    // Out of the vehicle (an EXIT, or another ENTER since): 5 min from the tap, whether or not the
+    // live feed saw car motion in its last 2 min (Play services sends nothing more from that state,
+    // so holding on the live feed would last the 3 h).
+    for (fresh in listOf(false, true)) {
+      for (after in listOf(ActivityHistory.Kind.VEHICLE_EXIT, ActivityHistory.Kind.STILL, ActivityHistory.Kind.WALKING)) {
+        val out = DetectPolicy.restSeed(carFresh = fresh, history = riding + e(since - 20_000.0, after))
+        assertFalse(out.carStanding)
+        assertNull(DetectPolicy.restDue(since, until, out, since + 5 * min - 1))
+        assertEquals(SuppressionCause.STILL, DetectPolicy.restDue(since, until, out, since + 5 * min))
+        assertEquals(since + 5 * min, DetectPolicy.restNextCheck(since, until, out), 0.0)
+      }
     }
+    // Still in the car after all (Play services lagging, or a queue that moves on): its next
+    // IN_VEHICLE ENTER holds the rest again.
+    val parkedSeed = DetectPolicy.restSeed(carFresh = true, history = riding + e(since - 20_000.0, ActivityHistory.Kind.STILL))
+    val movingOn = DetectPolicy.restOnBatch(since, until, parkedSeed, listOf(tt("automotive", true, since + 2 * min)), since + 3 * min)
+    assertNull(movingOn.due)
+    assertTrue(movingOn.standing.carStanding)
+    assertNull(DetectPolicy.restDue(since, until, movingOn.standing, since + 60 * min))
     assertFalse(DetectPolicy.restSeed(carFresh = false, history = emptyList()).carStanding)
   }
 

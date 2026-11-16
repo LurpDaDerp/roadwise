@@ -28,15 +28,22 @@ data class RestStanding(
 data class TimedTransition(val type: String, val enter: Boolean, val at: Double)
 
 /**
- * The rest's evidence as "Not driving?" begins it: the car stands when the live feed saw confident
- * car motion in the last 2 min ([carFresh]: a passenger who picks the phone up to tap makes the
- * newest live report a tilt, or still at a light), or when the motion history's newest transition
- * is an IN_VEHICLE ENTER (Play services' transition state is still in the vehicle: it sends nothing
- * more while the ride goes on, and its EXIT or another ENTER is what tells the rest the ride is
- * over), as iOS's rest holds on ten-metre GPS while the car moves.
+ * The rest's evidence as "Not driving?" begins it. The motion history's newest transition decides
+ * when there is one: an IN_VEHICLE ENTER still standing holds the rest (Play services' transition
+ * state is in the vehicle: it sends nothing more while the ride goes on, and its EXIT or another
+ * ENTER is what tells the rest the ride is over), as iOS's rest holds on ten-metre GPS while the car
+ * moves; anything newer than the vehicle (an EXIT, still, a walk) starts the 5 min clock at the tap,
+ * whatever the live feed saw in its last 2 min, since from that state Play services sends nothing
+ * until the activity changes and a hold would last the 3 h: if the car is in fact still moving (a
+ * passenger tapping while Play services' state lags, or still in a queue), its next IN_VEHICLE ENTER
+ * holds the rest again, and a car that does not move for 5 min ends it, as on iOS. With no history
+ * (none in the last 3 h), car motion in the live feed's last 2 min holds it ([carFresh]: a passenger
+ * who picks the phone up to tap makes the newest live report a tilt, or still at a light).
  */
-fun DetectPolicy.restSeed(carFresh: Boolean, history: List<ActivityHistory.Entry>): RestStanding =
-  RestStanding(carStanding = carFresh || history.maxByOrNull { it.at }?.kind == ActivityHistory.Kind.VEHICLE)
+fun DetectPolicy.restSeed(carFresh: Boolean, history: List<ActivityHistory.Entry>): RestStanding {
+  val newest = history.maxByOrNull { it.at } ?: return RestStanding(carStanding = carFresh)
+  return RestStanding(carStanding = newest.kind == ActivityHistory.Kind.VEHICLE)
+}
 
 /**
  * One transition into the rest's evidence. [since]: the rest's start; a transition dated before it
