@@ -13,18 +13,18 @@ import expo.modules.drivesense.NotificationFactory
 
 /**
  * The drive detector's permissions on Android (the iOS `DriveDetectAccess.swift`): what is allowed
- * now ([snapshot]) and the "Always" answer ([alwaysAnswer]).
+ * now ([snapshot]) and the "Always" answer ([alwaysAnswer]; the request itself is the module's, as it
+ * needs RoadWise's activity).
  *
- * The Start card needs While Using and Precise (`ACCESS_FINE_LOCATION`), as on iPhone: an
- * approximate grant alone is refused (`permission`). The Android meanings of the iOS-only fields:
- * `backgroundRefresh` is `denied` only while the app's battery use is Restricted
- * (`ActivityManager.isBackgroundRestricted`, ruling 5: Optimized, the default, is fine), and
- * `liveActivities` is whether the drive notification can show (notifications allowed and the
- * `drive_live` channel not blocked).
- *
- * Automatic drives need their wakes and "Allow all the time", which this build does not have yet:
- * `hardware` is false (the status is `unavailable` when armed, so no screen offers the switch),
- * location is never `always`, and the one "Always" request answers the current grant without asking.
+ * Automatic drives need "Allow all the time" location (ACCESS_BACKGROUND_LOCATION on Android 10+;
+ * below 10 any location grant is all the time), Precise (`ACCESS_FINE_LOCATION`), Physical activity
+ * (`ACTIVITY_RECOGNITION` on 10+) and Play services (the transitions and the geofence: `hardware`).
+ * The Start card needs While Using and Precise, as on iPhone: an approximate grant alone is refused
+ * (`permission`). The Android meanings of the iOS-only fields: `backgroundRefresh` is `denied` only
+ * while the app's battery use is Restricted (`ActivityManager.isBackgroundRestricted`, ruling 5:
+ * Optimized, the default, is fine), and `liveActivities` is whether the drive notification can show
+ * (notifications allowed and the `drive_live` channel not blocked). `canAskAlways`: While Using held
+ * on Android 10+ (Android 11+ answers the request with the app's location settings page, every time).
  */
 class DriveDetectAccess(context: Context) {
   private val app = context.applicationContext
@@ -40,18 +40,17 @@ class DriveDetectAccess(context: Context) {
       motion = MotionAccess.of(DriveSensePermissions.motion(app)) ?: MotionAccess.UNAVAILABLE,
       backgroundRefresh = if (backgroundRestricted()) BackgroundRefresh.DENIED else BackgroundRefresh.AVAILABLE,
       liveActivities = driveNotificationAllowed(),
-      canAskAlways = false,
-      hardware = false
+      canAskAlways = location == LocationAccess.WHEN_IN_USE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+      hardware = DriveSensePermissions.playServicesAvailable(app)
     )
   }
 
-  /** `requestAlways`: the current answer (this build never asks for "Allow all the time"). */
+  /** `requestAlways`'s answer: the location grant now. */
   fun alwaysAnswer(): String = when (snapshot().location) {
     LocationAccess.ALWAYS -> "always"
     LocationAccess.WHEN_IN_USE -> "whenInUse"
     LocationAccess.NONE -> "denied"
   }
-
   /** Battery use Restricted for RoadWise (Android 9+): the background work automatic drives need may not run. */
   private fun backgroundRestricted(): Boolean =
     try {

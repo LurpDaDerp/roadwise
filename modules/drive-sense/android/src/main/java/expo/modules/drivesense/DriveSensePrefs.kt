@@ -6,9 +6,9 @@ import android.content.SharedPreferences
 /**
  * The state drive-sense persists across processes: the capture-open flag and the capture's
  * parameters (for the `START_STICKY` restart and `captureWasOpen`), the motion "requested once"
- * flag, the last native exit record ([ExitInfoReader]), the forgot-to-start reminder's state
- * ([TripReminder]), the activity-transition request on file ([ActivityTransitions]) and the step
- * counter's baseline for the open capture ([PedometerSource]). Every entry
+ * flag, the last native exit record ([ExitInfoReader]), the activity-transition request on file
+ * and whether the drive detector wants it ([ActivityTransitions]) and the step counter's baseline
+ * for the open capture ([PedometerSource]). Every entry
  * point — the module, the receivers, both services — calls [init] first, so
  * [captureWasOpenAtProcessStart] is read before anything in this process writes the flag.
  */
@@ -25,7 +25,9 @@ object DriveSensePrefs {
   private const val EXIT_WHILE_CAPTURING = "exitWhileCapturing"
   private const val FALLBACK_COUNT = "timebaseFallbacks"
   private const val UNPAIRED_COUNT = "imuUnpaired"
+  /** The retired forgot-to-start reminder's state, removed by [forgetRetired]. */
   private const val TRIP_REMINDER = "tripReminder"
+  private const val TRANSITIONS_WANTED = "transitionsWanted"
   private const val TRANSITIONS_TIER = "transitionsTier"
   private const val TRANSITIONS_AT_NANOS = "transitionsAtNanos"
   private const val TRANSITIONS_BOOT = "transitionsBoot"
@@ -93,15 +95,20 @@ object DriveSensePrefs {
     get() = p.getBoolean(MOTION_REQUESTED, false)
     set(v) = p.edit().putBoolean(MOTION_REQUESTED, v).apply()
 
-  /** The forgot-to-start reminder's state as JSON ([TripReminderState]); null until it is first written. */
-  var tripReminderJson: String?
-    get() = p.getString(TRIP_REMINDER, null)
-    // commit: the next broadcast may run in a new process.
+  /** What the retired forgot-to-start reminder left on file goes (detector thread, once per process). */
+  fun forgetRetired() {
+    if (p.contains(TRIP_REMINDER)) p.edit().remove(TRIP_REMINDER).apply()
+  }
+
+  /** The drive detector wants the activity transitions now (its wakes run); the receiver drops a batch otherwise. */
+  var transitionsWanted: Boolean
+    get() = p.getBoolean(TRANSITIONS_WANTED, false)
+    // commit: the next batch may arrive in a new process.
     set(v) {
-      p.edit().putString(TRIP_REMINDER, v).commit()
+      p.edit().putBoolean(TRANSITIONS_WANTED, v).commit()
     }
 
-  /** The activity-transition tier last requested from Play services, or null for none on file. */
+  /** The activity-transition set last requested from Play services, or null for none on file. */
   var transitionsTier: String?
     get() = p.getString(TRANSITIONS_TIER, null)
     set(v) {

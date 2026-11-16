@@ -15,6 +15,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.HeadlessJsTaskService
 import expo.modules.drivesense.detect.DriveDetector
+import expo.modules.drivesense.detect.onCaptureGone
 import expo.modules.drivesense.detect.onRow
 
 /**
@@ -38,6 +39,17 @@ import expo.modules.drivesense.detect.onRow
  * from RoadWise in front, a process start or the sticky restart, and a refusal never loses the
  * drive (the detector leaves it for its resume or orphan rule).
  *
+ * The detector's watch ([startWatch]) is the same service in its watch form: GPS, IMU and rows as a
+ * drive's, every row to the detector's candidate buffer and none to JS (no `row`, `speed` or
+ * `activity` event, no step count, no headless JS), under the silent "Checking for a drive"
+ * notification ([WatchNotification]); it starts from a wake's broadcast (an activity-transition
+ * or geofence PendingIntent: Android 12+ lets those start a location service from the background)
+ * or from RoadWise in front. It leaves no capture-open flag, so a process death ends it (a sticky
+ * restart finds nothing to resume). A confirmed watch becomes the drive in place ([promoteWatch]:
+ * no sensor gap, the drive notification under the same id, the headless JS host when no RoadWise
+ * screen is open), and an automatic end becomes the linger's watch in place ([demoteToWatch]).
+ * The live activity reports ([ActivitySource]) run with every capture's sensors.
+ *
  * Threading: all capture state lives on one [HandlerThread]; the companion's `@Volatile` fields are
  * the read-only view the module's `getState` uses.
  */
@@ -46,6 +58,8 @@ class CaptureService : Service() {
     const val ACTION_START_JS = "expo.modules.drivesense.START_JS"
     /** The drive detector's capture (its drive's start or resume). */
     const val ACTION_DETECT = "expo.modules.drivesense.DETECT"
+    /** The drive detector's watch for a drive (a wake). */
+    const val ACTION_WATCH = "expo.modules.drivesense.WATCH"
     private const val EXTRA_STARTED_AT = "startedAt"
     private const val EXTRA_RESTART = "restart"
     const val ACTION_END_DRIVE = "expo.modules.drivesense.END_DRIVE"
@@ -105,8 +119,19 @@ class CaptureService : Service() {
     var detectorCapture = false
       private set
 
+    /** The capture running is the detector's watch (rows to its candidate, nothing to JS). */
+    @Volatile
+    var watching = false
+      private set
+
     /** A plain capture runs (a JS `startCapture`): the detector's Start card answers busy. */
     fun plainCapturing(): Boolean = isCapturing && !detectorCapture
+
+    /** A detector drive is being sensed (not a watch, not a plain capture). */
+    fun detectorRunning(): Boolean = isCapturing && detectorCapture && !watching
+
+    /** A drive records (a detector drive or a plain capture), as JS's `capturing` reads it: never a watch. */
+    fun recording(): Boolean = isCapturing && !watching
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -192,6 +217,59 @@ class CaptureService : Service() {
     }
 
     /**
+     * The detector's watch: [onResult] gets null once the service is in the foreground (under
+     * "Checking for a drive") and sensing, else `E_PERMISSION` or `E_FGS_REFUSED` as for
+     * [startDetector]. Nothing happens when a capture already runs (the wake gate never asks then).
+     */
+    fun startWatch(context: Context, onResult: (String?) -> Unit) {
+      val inst = instance
+      if (inst != null && inst.inForeground) {
+        if (isCapturing) {
+          onResult("E_FGS_REFUSED")
+          return
+        }
+        inst.handler.post { inst.beginWatch() }
+        onResult(null)
+        return
+      }
+      val pending = PendingStart(onResult)
+      synchronized(pendingDetect) { pendingDetect.add(pending) }
+      val intent = Intent(context, CaptureService::class.java).setAction(ACTION_WATCH)
+      try {
+        ContextCompat.startForegroundService(context, intent)
+      } catch (_: SecurityException) {
+        resolveDetectOne(pending, "E_PERMISSION")
+        return
+      } catch (_: Exception) {
+        // ForegroundServiceStartNotAllowedException (API 31+) and any other refusal.
+        resolveDetectOne(pending, "E_FGS_REFUSED")
+        return
+      }
+      main.postDelayed({ resolveDetectOne(pending, "E_FGS_REFUSED") }, START_RESULT_TIMEOUT_MS)
+    }
+
+    /** The watch confirmed a drive that began at [startedAt]: the same service records it, in place. */
+    fun promoteWatch(context: Context, startedAt: Long, mode: String) {
+      val inst = instance ?: return
+      inst.handler.post { inst.promote(startedAt, mode) }
+    }
+
+    /** An automatic end while automatic drives are armed: the drive's service runs on as the linger's watch. */
+    fun demoteToWatch(context: Context) {
+      val inst = instance
+      if (inst == null) {
+        stopDetector(context, 0L)
+        return
+      }
+      inst.handler.post { inst.demote() }
+    }
+
+    /** The watch is over (or a watch row came with no candidate behind it): the service stops. */
+    fun stopWatch(context: Context) {
+      if (watching) stopDetector(context, 0L)
+    }
+
+    /**
      * The detector's drive ended (or was cancelled, or wiped): sensing stops at once and the
      * notification goes, then the service keeps RoadWise running [holdMs] more (its wake lock held)
      * so JS can store the drive and post its recap, as iOS's end task does. With no service running
@@ -249,6 +327,11 @@ class CaptureService : Service() {
      */
     fun startFromJs(context: Context, mode: String, onResult: (String?) -> Unit) {
       val inst = instance
+      // A watch runs: nothing changes (iOS's capture answers the same while the detector senses).
+      if (watching) {
+        onResult(null)
+        return
+      }
       if (inst != null && isCapturing) {
         inst.handler.post { inst.updateModeAndClaim(mode) }
         onResult(null)
@@ -279,8 +362,9 @@ class CaptureService : Service() {
         return
       }
       inst.handler.post {
-        // A detector drive's end holds RoadWise 25 s for JS: JS's own stop afterwards never cuts it short.
-        if (!isCapturing && inst.holding) {
+        // A detector drive's end holds RoadWise 25 s for JS: JS's own stopCapture afterwards never
+        // cuts it short; nor does it stop the detector's watch (only a plain capture is JS's to stop).
+        if ((!isCapturing && inst.holding) || watching) {
           done()
           return@post
         }
@@ -292,7 +376,7 @@ class CaptureService : Service() {
     /** `setCaptureRate(rate)`: ignored while not capturing. */
     fun setRate(rate: String, done: () -> Unit) {
       val inst = instance
-      if (inst == null || !isCapturing) {
+      if (inst == null || !isCapturing || watching) {
         done()
         return
       }
@@ -309,6 +393,7 @@ class CaptureService : Service() {
      */
     fun setDriveDisplay(display: DriveDisplay) {
       val inst = instance ?: return
+      if (watching) return
       inst.handler.post {
         inst.display = display
         inst.refreshNotification()
@@ -420,6 +505,21 @@ class CaptureService : Service() {
         }
         resolveStarts(null)
       }
+      ACTION_WATCH -> {
+        val refused = goForeground(watch = !isCapturing || watching)
+        if (refused != null) {
+          resolveDetect(refused)
+          if (!isCapturing) stopSelf(startId)
+          return if (isCapturing) START_STICKY else START_NOT_STICKY
+        }
+        // A drive (or a plain capture) already runs: no watch beside it.
+        if (isCapturing && !watching) {
+          resolveDetect("E_FGS_REFUSED")
+          return START_STICKY
+        }
+        handler.post { beginWatch() }
+        resolveDetect(null)
+      }
       ACTION_DETECT -> {
         val restart = intent.getBooleanExtra(EXTRA_RESTART, false)
         val refused = goForeground(restart = restart)
@@ -455,13 +555,16 @@ class CaptureService : Service() {
     handler.post { stopSources() }
     main.removeCallbacks(endHold)
     releaseWakeLock()
+    val wasWatching = watching
     isCapturing = false
     detectorCapture = false
+    watching = false
     inForeground = false
     holding = false
-    // C12 round 1 (review-C12 m1): a capture that ends here (the system, a kill, a refused sticky restart)
-    // never ran endCapture: its walking feed goes too.
-    ActivityTransitions.sync(this)
+    // A capture that ends here (the system, a kill, a refused sticky restart) never ran endCapture:
+    // its live activity reports go too, and a watch the system stopped ends its candidate.
+    ActivitySource.stop(this)
+    if (wasWatching) DriveDetector.peek()?.onCaptureGone()
     currentRate = null
     currentMode = null
     captureStartedAt = null
@@ -479,8 +582,8 @@ class CaptureService : Service() {
    * `START_STICKY` one only) the one kept for it; a new capture's starts empty
    * (DriveNotificationController).
    */
-  private fun goForeground(restart: Boolean = false): String? {
-    val notification = DriveNotificationController.foreground(this, display, restart)
+  private fun goForeground(restart: Boolean = false, watch: Boolean = false): String? {
+    val notification = if (watch) WatchNotification.build(this) else DriveNotificationController.foreground(this, display, restart)
     return try {
       val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
       ServiceCompat.startForeground(this, NotificationFactory.NOTIFICATION_ID, notification, type)
@@ -524,6 +627,11 @@ class CaptureService : Service() {
       holding = false
     }
     if (isCapturing && !detectorCapture) return
+    // The Start card while a watch runs: the watch's sensors carry on as the drive's.
+    if (watching) {
+      promote(startedAt, mode)
+      return
+    }
     if (!isCapturing || captureStartedAt != startedAt) {
       if (isCapturing) stopSources()
       isCapturing = true
@@ -534,7 +642,81 @@ class CaptureService : Service() {
     if (restart) main.post { if (!AppVisibility.visible()) startHeadless() }
   }
 
-  private fun beginCapture(mode: String, rate: String, startedAt: Long, nativeStart: Boolean, detector: Boolean = false) {
+  /**
+   * The detector's watch (capture thread): the sensors on, every row to the candidate. A capture
+   * already running is left as it is (the detector never asks then). No capture-open flag, no step
+   * count, no watchdog, no headless JS.
+   */
+  private fun beginWatch() {
+    main.post {
+      main.removeCallbacks(endHold)
+      holding = false
+    }
+    if (isCapturing) return
+    isCapturing = true
+    beginCapture("auto", "full", System.currentTimeMillis(), nativeStart = false, detector = true, watch = true)
+  }
+
+  /**
+   * The watch's capture becomes the drive's (capture thread): the sensors run on with no gap, the
+   * drive's start and mode go on file (the sticky restart then resumes it), the step count starts,
+   * the drive notification replaces "Checking for a drive" under the same id, and with no RoadWise
+   * screen open the headless JS host starts to take the drive in.
+   */
+  private fun promote(startedAt: Long, mode: String) {
+    if (!isCapturing || !watching) return
+    watching = false
+    currentMode = mode
+    captureStartedAt = startedAt
+    display = null
+    prefs.mode = mode
+    prefs.rate = currentRate ?: "full"
+    prefs.captureStartedAt = startedAt
+    prefs.detectorOwned = true
+    prefs.captureOpen = true
+    pedometer = pedometer ?: PedometerSource(this, handler).also { it.start(startedAt) }
+    main.post {
+      cancelHeadlessStop()
+      postNotification(DriveNotificationController.startDrive(this))
+      if (!AppVisibility.visible()) startHeadless()
+    }
+  }
+
+  /**
+   * The detector's drive ended automatically and the linger's watch follows (capture thread): the
+   * sensors run on, the drive's flags and step count go, "Checking for a drive" replaces the drive
+   * notification at once (as the Live Activity ends with the drive), and the headless JS host gets
+   * its grace to store the drive. Nothing to demote: the service stops instead.
+   */
+  private fun demote() {
+    if (!isCapturing || !detectorCapture || watching) {
+      if (!isCapturing) main.post { finishHold() }
+      return
+    }
+    watching = true
+    display = null
+    prefs.detectorOwned = false
+    prefs.captureOpen = false
+    pedometer?.stop()
+    pedometer = null
+    scheduleHeadlessStop(this, HEADLESS_GRACE_MS)
+    main.post {
+      DriveNotificationController.endDrive(this)
+      postNotification(WatchNotification.build(this))
+    }
+  }
+
+  /** The service's notification replaced under its id (main thread); a refusal leaves the old one. */
+  private fun postNotification(n: android.app.Notification) {
+    try {
+      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager?
+      nm?.notify(NotificationFactory.NOTIFICATION_ID, n)
+    } catch (_: Exception) {
+      // notifications blocked: the service runs on
+    }
+  }
+
+  private fun beginCapture(mode: String, rate: String, startedAt: Long, nativeStart: Boolean, detector: Boolean = false, watch: Boolean = false) {
     anchor = ClockAnchor.now()
     extractState = FeatureExtractor.initialState()
     imu.clear()
@@ -548,37 +730,34 @@ class CaptureService : Service() {
 
     isCapturing = true
     detectorCapture = detector
+    watching = watch
     currentMode = mode
     currentRate = rate
     captureStartedAt = startedAt
     display = null
-    prefs.mode = mode
-    prefs.rate = rate
-    prefs.captureStartedAt = startedAt
-    prefs.detectorOwned = detector
-    prefs.captureOpen = true
+    if (!watch) {
+      prefs.mode = mode
+      prefs.rate = rate
+      prefs.captureStartedAt = startedAt
+      prefs.detectorOwned = detector
+      prefs.captureOpen = true
+    }
 
     location = LocationSource(this, thread.looper, { anchor }, ::onFix)
     sensors = SensorSource(this, handler, { anchor }, ::onImu)
     phone.register()
     // The step count for the rows' `steps`, at both rates, from this capture's baseline (a sticky
-    // restart's capture goes on from the one it took before its process died).
-    pedometer = PedometerSource(this, handler).also { it.start(startedAt) }
+    // restart's capture goes on from the one it took before its process died). A watch counts none
+    // (iOS's pedometer runs for drives only): its drive's count starts when it is confirmed.
+    pedometer = if (watch) null else PedometerSource(this, handler).also { it.start(startedAt) }
     startRate(rate)
     // The watchdog guards plain captures only: a detector drive records whether JS listens or not.
     if (!detector) watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
     handler.postDelayed(minute, MINUTE_MS)
-    // The forgot-to-start reminder learns a drive is open (one direction only): this trip is
-    // recorded, and a notification it showed comes down. Best effort: it can never hold a capture.
-    try {
-      TripReminder.onCaptureStarted(this)
-    } catch (_: Exception) {
-      // the reminder's state stays as it was; the capture runs on
-    }
-    // WK-m1: the walking feed during every capture (JS start, sticky restart), best
+    // The live activity reports during every capture (the walking end, the detector's motion), best
     // effort: a failure is logged and swallowed and the capture runs on.
-    ActivityTransitions.sync(this)
+    ActivitySource.start(this)
   }
 
   private fun updateModeAndClaim(mode: String) {
@@ -622,26 +801,20 @@ class CaptureService : Service() {
    * Stop GNSS, IMU, timers and rows; with [clearOpen] (JS stop, watchdog) also the flag and the
    * service. The headless JS task is stopped too — at once when [headlessNow] (the watchdog: JS is
    * not there), else after HEADLESS_GRACE_MS for it to finalize — so its wake lock never outlives
-   * the drive (review N2N3 I4). [end]: what JS said about the drive's end, for the reminder.
+   * the drive (review N2N3 I4). [end]: what JS said about the drive's end (nothing native reads it now).
    */
+  @Suppress("UNUSED_PARAMETER")
   private fun endCapture(clearOpen: Boolean, headlessNow: Boolean = false, end: CaptureEnd? = null) {
     stopSources()
     scheduleHeadlessStop(this, if (headlessNow) 0L else HEADLESS_GRACE_MS)
     isCapturing = false
     detectorCapture = false
+    watching = false
     currentRate = null
     currentMode = null
     captureStartedAt = null
     display = null
     if (clearOpen) prefs.captureOpen = false
-    // The reminder's session takes the drive's end. Best effort: the service still stops below.
-    try {
-      TripReminder.onCaptureEnded(this, end)
-    } catch (_: Exception) {
-      // the reminder's state stays as it was
-    }
-    // The capture's walking feed ends with it (the reminder's takes over when it is on).
-    ActivityTransitions.sync(this)
     main.post {
       try {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -664,18 +837,13 @@ class CaptureService : Service() {
     scheduleHeadlessStop(this, HEADLESS_GRACE_MS)
     isCapturing = false
     detectorCapture = false
+    watching = false
     currentRate = null
     currentMode = null
     captureStartedAt = null
     display = null
     prefs.detectorOwned = false
     prefs.captureOpen = false
-    try {
-      TripReminder.onCaptureEnded(this, null)
-    } catch (_: Exception) {
-      // the reminder's state stays as it was
-    }
-    ActivityTransitions.sync(this)
     // Set here, before JS can hear of the end, so its stopCapture never cuts the hold short.
     holding = holdMs > 0
     main.post {
@@ -727,6 +895,7 @@ class CaptureService : Service() {
     pedometer?.stop()
     pedometer = null
     imuRunning = false
+    ActivitySource.stop(this)
     phone.unregister()
     releaseWakeLock()
     pendingTs.clear()
@@ -824,7 +993,8 @@ class CaptureService : Service() {
         emitRow(out.row, fix.mock)
       }
     } else {
-      emitSpeed(fix)
+      // A watch is no drive JS shows: no speed.
+      if (!watching) emitSpeed(fix)
       fixes.add(fix)
       if (fixes.size > MAX_FIXES_BUFFERED) fixes.removeAt(0)
       if (fix.t > latestFixT) latestFixT = fix.t
@@ -902,9 +1072,10 @@ class CaptureService : Service() {
     body["mock"] = mock
     PhoneStateReceiver.callState(applicationContext)?.let { body["call"] = it }
     pedometer?.steps?.let { body["steps"] = it }
-    // A detector drive's row goes to the detector, which journals it and emits it with its `seq`.
+    // A detector drive's row goes to the detector, which journals it and emits it with its `seq`; a
+    // watch's to its candidate's buffer, never to JS.
     val detector = if (detectorCapture) DriveDetector.peek() else null
-    if (detector != null) detector.onRow(row, body) else EventBus.emit("row", body)
+    if (detector != null) detector.onRow(row, body, watching) else if (!watching) EventBus.emit("row", body)
     // Split screen is a configuration change, not a lifecycle callback: the next row reads a fresh sample.
     main.post { AppVisibility.sample() }
   }

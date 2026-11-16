@@ -34,6 +34,9 @@ import org.json.JSONObject
  *   capture starts empty and forgets it).
  * - **The end.** JS's final `ended` state forgets the drive's state and posts nothing more: the
  *   capture's stop takes the notification down.
+ * - **A watch.** While the capture is the detector's watch it shows "Checking for a drive"
+ *   ([WatchNotification]) and this posts nothing. A confirmed watch's drive starts empty
+ *   ([startDrive]); the linger after an automatic end takes the drive's down at once ([endDrive]).
  *
  * Called from the capture thread (updates), the main thread (the foreground post, the stale timer,
  * RoadWise coming to the front, the dismissal); every entry point holds the object's lock.
@@ -115,6 +118,38 @@ object DriveNotificationController {
     return NotificationFactory.build(ctx, shown, promoted, dismissIntent(ctx))
   }
 
+  /**
+   * A watch became a drive (main thread): its notification, from the empty state as a new
+   * capture's (any kept state forgotten), to replace "Checking for a drive" under the same id.
+   */
+  @Synchronized
+  fun startDrive(context: Context): Notification {
+    val ctx = context.applicationContext
+    app = ctx
+    ensureReceiver(ctx)
+    dismissed = false
+    ended = false
+    latest = null
+    latestAt = SystemClock.elapsedRealtime()
+    stale = false
+    forget(ctx)
+    armStale(DriveNotificationText.STALE_AFTER_MS)
+    val promoted = LiveUpdates.allowed(ctx)
+    val shown = shown()
+    postedKey = DriveNotificationText.key(shown, promoted)
+    return NotificationFactory.build(ctx, shown, promoted, dismissIntent(ctx))
+  }
+
+  /** The drive is over and its service runs on as the linger's watch (main thread): nothing more is posted for it. */
+  @Synchronized
+  fun endDrive(context: Context) {
+    ended = true
+    latest = null
+    postedKey = null
+    main.removeCallbacks(staleTask)
+    forget(context.applicationContext)
+  }
+
   /** `setDriveDisplay` while capturing (the capture thread). */
   @Synchronized
   fun update(context: Context, display: DriveDisplay) {
@@ -147,7 +182,7 @@ object DriveNotificationController {
 
   @Synchronized
   private fun onDismissed() {
-    if (!CaptureService.isCapturing) return
+    if (!CaptureService.recording()) return
     dismissed = true
     postedKey = null
   }
@@ -179,9 +214,9 @@ object DriveNotificationController {
     return if (stale) d.stale() else d
   }
 
-  /** Post what shows now, unless nothing records, the drive ended, the driver swiped it away, or it is posted already. */
+  /** Post what shows now, unless no drive records (a watch's notification is its own), the drive ended, the driver swiped it away, or it is posted already. */
   private fun post(ctx: Context) {
-    if (!CaptureService.isCapturing || ended || dismissed) return
+    if (!CaptureService.recording() || ended || dismissed) return
     val promoted = LiveUpdates.allowed(ctx)
     val shown = shown()
     val key = DriveNotificationText.key(shown, promoted)

@@ -4,8 +4,8 @@ package expo.modules.drivesense
  * What JS says about a drive's end at `stopCapture` (README §2): when its driving ended
  * ([drivingEndedAt]; null when the drive was not kept), whether the car was still at driving speed
  * as it ended ([drivingAtEnd]), and whether a JS automatic end rule ended it ([automatic]: the
- * detector's linger watches on after such an end, as iOS's does; until Android's detector exists
- * nothing reads it, and an automatic end is an "at" end with its cut).
+ * detector's linger watches on after such an end, as iOS's does; otherwise an automatic end is an
+ * "at" end with its cut).
  */
 data class CaptureEnd(val drivingEndedAt: Long?, val drivingAtEnd: Boolean, val automatic: Boolean = false) {
   companion object {

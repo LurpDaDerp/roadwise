@@ -95,9 +95,9 @@ describe('the runtime version (release gate, C0-I1)', () => {
   });
 });
 
-// iOS drives start on their own with "Always" (the drive detector), and Start drive needs "While
-// Using"; a drive records in the background (iOS location mode, Android foreground service); no
-// microphone. Android (frozen) starts drives only from the app and never gets background location.
+// Drives start on their own with "Always" ("Allow all the time" on Android: the drive detector),
+// and Start drive needs "While Using"; a drive records in the background (iOS location mode,
+// Android foreground service); no microphone.
 describe('permissions', () => {
   const plugin = (name: string) => {
     const entry = build().plugins?.find((p) => Array.isArray(p) && p[0] === name);
@@ -111,7 +111,7 @@ describe('permissions', () => {
       locationAlwaysAndWhenInUsePermission: ALWAYS_LOCATION_COPY,
       locationAlwaysPermission: ALWAYS_LOCATION_COPY,
       isIosBackgroundLocationEnabled: true,
-      isAndroidBackgroundLocationEnabled: false,
+      isAndroidBackgroundLocationEnabled: true,
       isAndroidForegroundServiceEnabled: true,
       isAndroidMotionActivityEnabled: true,
       motionUsagePermission: PERMISSION_COPY.motion,
@@ -127,10 +127,12 @@ describe('permissions', () => {
     for (const s of [ALWAYS_LOCATION_COPY, ...Object.values(PERMISSION_COPY)]) expect(s).not.toMatch(/\u2014|!|reminder|forgot/i);
   });
 
-  test('Android never gets background location or audio recording', () => {
-    expect(build().android?.blockedPermissions).toEqual(
-      expect.arrayContaining(['android.permission.ACCESS_BACKGROUND_LOCATION', 'android.permission.RECORD_AUDIO'])
-    );
+  test('Android: background location for automatic drives (not blocked, declared by drive-sense), never audio recording', () => {
+    expect(build().android?.blockedPermissions).toContain('android.permission.RECORD_AUDIO');
+    expect(build().android?.blockedPermissions).not.toContain('android.permission.ACCESS_BACKGROUND_LOCATION');
+    const ROOT_DIR = path.join(__dirname, '..', '..');
+    const manifest = fs.readFileSync(path.join(ROOT_DIR, 'modules/drive-sense/android/src/main/AndroidManifest.xml'), 'utf8');
+    expect(manifest).toContain('<uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />');
   });
 
   test('Android never gets photo access: expo-screen-capture only keeps the aiming picture out of screenshots', () => {
@@ -143,7 +145,7 @@ describe('permissions', () => {
     expect(build().android?.blockedPermissions).not.toContain('android.permission.DETECT_SCREEN_CAPTURE');
   });
 
-  test("the boot permission comes from drive-sense's manifest only (the reminder's boot receiver), not the app config", () => {
+  test("the boot permission comes from drive-sense's manifest only (the drive detector's boot receiver), not the app config", () => {
     expect(build().android?.permissions).not.toContain('android.permission.RECEIVE_BOOT_COMPLETED');
     const ROOT_DIR = path.join(__dirname, '..', '..');
     const manifest = fs.readFileSync(path.join(ROOT_DIR, 'modules/drive-sense/android/src/main/AndroidManifest.xml'), 'utf8');

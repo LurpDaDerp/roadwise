@@ -32,7 +32,18 @@ data class DriveDetectRecord(
   val suppressedSince: Double? = null,
   val suppressedUntil: Double? = null,
   /** Journal files rotated away undrained since the last `getState`. */
-  val journalDropped: Int = 0
+  val journalDropped: Int = 0,
+  /**
+   * Android only, never in the state JS reads: the "Not driving?" rest's evidence from the activity
+   * transitions ([RestStanding]), kept here because the rest outlives RoadWise's process.
+   */
+  val rest: RestStanding = RestStanding(),
+  /**
+   * Android only: where the parked spot's geofence is (the last end's place, a watch that saw no
+   * vehicle and ran out, the end of a rest), so it is set again after a reboot or an update, which
+   * drop it. Null: none.
+   */
+  val parked: LatLng? = null
 ) {
   val recording: Boolean get() = state == "recording" || state == "ending"
 
@@ -56,6 +67,13 @@ data class DriveDetectRecord(
     lastEnd?.let { e ->
       o.put("lastEnd", JSONObject().put("decidedAt", e.decidedAt).put("cut", e.cut).put("lat", e.lat).put("lng", e.lng).put("driveId", e.driveId))
     }
+    if (rest != RestStanding()) {
+      val r = JSONObject().put("carStanding", rest.carStanding)
+      rest.walkSince?.let { r.put("walkSince", it) }
+      rest.carLeftAt?.let { r.put("carLeftAt", it) }
+      o.put("rest", r)
+    }
+    parked?.let { o.put("parked", JSONObject().put("lat", it.lat).put("lng", it.lng)) }
     return o.toString()
   }
 
@@ -95,6 +113,8 @@ data class DriveDetectRecord(
         val o = JSONObject(raw)
         val starts = o.optJSONArray("candidateStarts")
         val e = o.optJSONObject("lastEnd")
+        val rest = o.optJSONObject("rest")
+        val parked = o.optJSONObject("parked")
         DriveDetectRecord(
           armed = o.optBoolean("armed", false),
           ownerId = text(o, "ownerId"),
@@ -117,7 +137,13 @@ data class DriveDetectRecord(
           },
           suppressedSince = num(o, "suppressedSince"),
           suppressedUntil = num(o, "suppressedUntil"),
-          journalDropped = o.optInt("journalDropped", 0).coerceAtLeast(0)
+          journalDropped = o.optInt("journalDropped", 0).coerceAtLeast(0),
+          rest = if (rest == null) RestStanding() else RestStanding(num(rest, "walkSince"), rest.optBoolean("carStanding", false), num(rest, "carLeftAt")),
+          parked = parked?.let {
+            val lat = num(it, "lat")
+            val lng = num(it, "lng")
+            if (lat == null || lng == null) null else LatLng(lat, lng)
+          }
         )
       } catch (_: Exception) {
         null
@@ -141,7 +167,7 @@ data class DriveDetectRecord(
  * is `denied` only while the app's battery use is Restricted (ruling 5: Optimized, the default, is
  * fine), `liveActivities` is whether the drive notification can show (notifications allowed and its
  * channel not blocked: the Live Activity's Android twin, ruling 6), and [hardware] whether the
- * automatic wakes exist on this build and phone (none yet: automatic drives come with their wakes).
+ * automatic wakes exist on this phone (Play services: the activity transitions and the geofence).
  */
 data class DetectAccess(
   val location: LocationAccess,

@@ -6,7 +6,8 @@
 // what can be checked statically: the bridge's surface against `src/detect/types.ts` (without the
 // car link, which JS reads as absent), the journal's place and its sync rules, the one thread, the
 // policy the safety stop and the resume decide with, the capture service's detector mode (no
-// watchdog, a refusal that never loses the drive) and the launch hook.
+// watchdog, a refusal that never loses the drive) and the launch hook. The automatic wakes, the
+// watch, the linger and the rest are held in native-android.test.ts.
 import { DRIVE_DETECT_ERROR_CODES, DRIVE_DETECT_EVENTS, DRIVE_DETECT_METHODS } from '../src/detect/types';
 
 declare const __dirname: string;
@@ -88,11 +89,14 @@ describe('native-android: the drive detector runs on one thread, its journal on 
     expect(d).toMatch(/class DriveDetector private constructor\(context: Context\)/);
     expect(d).toMatch(/fun get\(context: Context\): DriveDetector =\s*shared \?: synchronized\(this\)/);
     expect(d.match(/HandlerThread\(/g)).toHaveLength(1);
-    for (const name of ['setArmed', 'getState', 'requestAlways', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'stopCapture', 'listDrives', 'discardDrive', 'wipe', 'appForeground', 'resumeAtLaunch']) {
+    for (const name of ['setArmed', 'getState', 'permissionsChanged', 'rearm', 'startWaiting', 'extendWaiting', 'cancelWaiting', 'stopCapture', 'listDrives', 'discardDrive', 'wipe', 'appForeground', 'resumeAtLaunch']) {
       expect({ name, posts: /^\s*handler\.post \{/m.test(fn(d, `  fun ${name}(`, 2).split('\n').slice(1, 3).join('\n')) }).toEqual({ name, posts: true });
     }
     expect(fn(det('DriveDetectorDrive'), 'fun DriveDetector.notDriving(')).toMatch(/^\s*handler\.post \{/m);
     expect(fn(det('DriveDetectorDrive'), 'fun DriveDetector.onRow(')).toMatch(/handler\.post \{/);
+    // The wakes and the live feed post too (their broadcasts and Play services answer on main).
+    for (const decl of ['fun DriveDetector.onTransitions(', 'fun DriveDetector.onRegionExit(']) expect(fn(det('DriveDetectorWatch'), decl)).toMatch(/^\s*handler\.post \{/m);
+    expect(fn(det('DriveDetectorSensing'), 'fun DriveDetector.onActivity(')).toMatch(/^\s*handler\.post \{/m);
   });
 
   it('the journal: one executor thread, in noBackupFilesDir/drivesense/journal, never touching android.*', () => {
@@ -150,7 +154,7 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
     const commit = fn(drive(), 'internal fun DriveDetector.commitEnd(');
     expect(commit.indexOf('journal.appendMarker(')).toBeLessThan(commit.indexOf('"driveEnded"'));
     expect(commit).toMatch(/if \(cause != "js"\)/);
-    expect(commit).toMatch(/finishSensing\(holdMs = DetectPolicy\.END_TASK_MAX_MS\.toLong\(\)\)/);
+    expect(commit).toMatch(/finishSensing\(holdMs = DetectPolicy\.END_TASK_MAX_MS\.toLong\(\), demote = lingers\)/);
   });
 
   it('a new process resumes a drive whose last row is 5 min old or less (a gap past resumeSeq), else ends it as an orphan', () => {
@@ -183,10 +187,11 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
     expect(wipe).toMatch(/journal\.wipe \{ done\(\) \}/);
   });
 
-  it('no wakes yet: the status is unavailable when armed, and "Always" is never asked for', () => {
+  it('the wakes exist with Play services; "Allow all the time" is asked for by the module alone; the status the UI reads', () => {
     const access = det('DriveDetectAccess');
-    expect(access).toMatch(/canAskAlways = false,\s*hardware = false/);
+    expect(access).toMatch(/hardware = DriveSensePermissions\.playServicesAvailable\(app\)/);
     expect(access).not.toMatch(/ACCESS_BACKGROUND_LOCATION|requestPermissions/);
+    expect(kt('DriveDetectModule')).toMatch(/Manifest\.permission\.ACCESS_BACKGROUND_LOCATION/);
     // Ruling 5: only battery Restricted is missing; the drive notification is the Live Activity.
     expect(access).toMatch(/backgroundRefresh = if \(backgroundRestricted\(\)\) BackgroundRefresh\.DENIED else BackgroundRefresh\.AVAILABLE/);
     expect(access).toMatch(/isBackgroundRestricted == true/);
@@ -210,7 +215,7 @@ describe('native-android: the capture service’s detector mode', () => {
     const begin = fn(svc(), '  private fun beginCapture(', 2);
     expect(begin).toMatch(/if \(!detector\) watchdog\.start\(nativeStart, EventBus\.rowListenerAttached\)/);
     expect(begin).toMatch(/prefs\.detectorOwned = detector\s*prefs\.captureOpen = true/);
-    expect(svc()).toMatch(/if \(detector != null\) detector\.onRow\(row, body\) else EventBus\.emit\("row", body\)/);
+    expect(svc()).toMatch(/if \(detector != null\) detector\.onRow\(row, body, watching\) else if \(!watching\) EventBus\.emit\("row", body\)/);
   });
 
   it('a detector drive’s end: sensing and the notification stop at once, RoadWise held 25 s under a wake lock, then the service stops', () => {
@@ -227,13 +232,15 @@ describe('native-android: the capture service’s detector mode', () => {
     expect(m).toMatch(/if \(DriveDetector\.get\(ctx\)\.recordingNow\) \{/);
   });
 
-  it('the activity feed reaches the detector’s safety stop during its drive, a batch at a time (a walk turning into a run keeps its clock)', () => {
+  it('the live activity reports reach the detector’s safety stop during its drive (a walk is walking or running, as iOS counts it)', () => {
     const r = kt('ActivityTransitionReceiver');
-    expect(r).toMatch(/forDetector\.add\(FeedTransition\(type, enter\)\)/);
-    expect(r).toMatch(/if \(CaptureService\.detectorCapture\) DriveDetector\.peek\(\)\?\.onTransitions\(forDetector, arrival\.toDouble\(\)\)/);
-    // The detector folds the batch through the pure rule (JVM-tested in DetectPolicyTest), which
-    // counts walking and running alike as the walk, as iOS's MotionReport does.
-    expect(fn(det('DriveDetector'), '  fun onTransitions(', 2)).toMatch(/DetectPolicy\.feedAfter\(FeedStanding\(walkSince, carStanding\), batch, at\)/);
+    expect(r).toMatch(/DriveDetector\.peek\(\)\?\.onActivity\(report\.motion\(arrival\.toDouble\(\)\)\)/);
+    expect(det('LiveActivity')).toMatch(/walking = type == "walking" \|\| type == "running"/);
+    // A confident walk stands from its first report until a report other than a walk replaces it.
+    const on = fn(det('DriveDetectorSensing'), 'fun DriveDetector.onActivity(');
+    expect(on).toMatch(/if \(a\.walking\) \{\s*if \(a\.confident && walkSince == null\) walkSince = a\.at\s*\} else \{\s*walkSince = null\s*\}/);
+    expect(on).toMatch(/carStanding = car/);
+    // The batch rule stays pure and JVM-tested (the rest folds its transitions with restAfter).
     expect(det('DetectEndPolicy')).toMatch(/val onFoot = t\.type == "walking" \|\| t\.type == "running"/);
     expect(read(join(TEST_DIR, 'detect', 'DetectPolicyTest.kt'))).toContain('a walk is walking or running, as iOS counts it');
   });

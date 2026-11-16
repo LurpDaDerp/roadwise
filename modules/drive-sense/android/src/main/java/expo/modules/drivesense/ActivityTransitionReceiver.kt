@@ -10,175 +10,125 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import com.google.android.gms.location.ActivityRecognition
+import com.google.android.gms.location.ActivityRecognitionResult
 import com.google.android.gms.location.ActivityTransition
-import com.google.android.gms.location.ActivityTransitionEvent
 import com.google.android.gms.location.ActivityTransitionRequest
 import com.google.android.gms.location.ActivityTransitionResult
 import com.google.android.gms.location.DetectedActivity
 import expo.modules.drivesense.detect.DriveDetector
-import expo.modules.drivesense.detect.FeedTransition
+import expo.modules.drivesense.detect.onActivity
+import expo.modules.drivesense.detect.onTransitions
+import expo.modules.drivesense.detect.LiveActivity
+import expo.modules.drivesense.detect.TimedTransition
 
 /**
- * The Activity Recognition Transitions feed, delivered by Google Play services at no app cost.
- * Manifest-declared, not exported: Play services reaches it through the explicit [PendingIntent]
- * built in [ActivityTransitions].
+ * Play services' two activity feeds, delivered at no app cost through explicit, mutable
+ * PendingIntents (Play services fills the result in). Manifest-declared, not exported.
  *
- * It never starts a capture (plan §1 decision 4). It serves two readers:
- * - during a capture, the walking auto-end: mapped `activity` events to JS; after those, the same
- *   batch goes to the forgot-to-start reminder as vehicle state only (it never posts then);
- * - with no drive open, the optional forgot-to-start reminder ([TripReminder]), which reads the
- *   batch natively and at most posts one notification. Nothing reaches JS then.
- * A transition that arrives when neither wants the feed is a leftover registration and is removed.
+ * - The transitions ([ActivityTransitions]), while automatic drives are armed: the drive detector's
+ *   motion history, its wake (a confident IN_VEHICLE ENTER; this broadcast lets RoadWise start its
+ *   location service from the background, Android 12+), and the "Not driving?" rest's ends. Each
+ *   batch goes to the detector with the time each transition happened, under goAsync until the
+ *   detector has acted (a watch's service started, or nothing). A batch that arrives when nothing
+ *   wants the feed is a leftover registration (an older build's, a disarm that raced it): it is
+ *   removed and nothing is done.
+ * - The live reports ([ActivitySource]), while RoadWise senses (a watch, a drive): every report to
+ *   the detector, and to JS as `activity` (only a change in type or confidence) while a drive or a
+ *   plain capture records; never during a watch.
  *
- * Capture mapping (README §3): ENTER IN_VEHICLE → `{ automotive, high }`, ENTER WALKING →
- * `{ walking, high }`, ENTER RUNNING → `{ running, high }`, ENTER STILL → `{ stationary, high }`,
- * ENTER ON_BICYCLE → `{ cycling, high }`; EXIT WALKING / EXIT RUNNING → the same type with
- * `exit: true`; EXIT IN_VEHICLE → nothing to JS. STILL and ON_BICYCLE are asked for with ENTER only:
- * a still report is the parked car's evidence for the known-parking-spot end, and a cycling report
- * says the phone is not in the car (as iOS reports both); their EXITs would say nothing more.
+ * Transition mapping (README §3): IN_VEHICLE → `automotive`, WALKING → `walking`, RUNNING →
+ * `running`, STILL → `stationary`, ON_BICYCLE → `cycling`.
  */
 class ActivityTransitionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     DriveSensePrefs.init(context)
-    if (intent.action != ActivityTransitions.ACTION || !ActivityTransitionResult.hasResult(intent)) return
-    // C12 round 1 (review-C12 m1): nothing wants the feed (a capture that ended without endCapture,
-    // the reminder switched off, a late subscribe, or one an older build left behind): remove it,
-    // act on nothing.
-    if (ActivityTransitions.tier(context) == TripReminderPolicy.Tier.NONE) {
+    when (intent.action) {
+      ActivityTransitions.ACTION -> onTransitions(context, intent)
+      ActivitySource.ACTION -> {
+        if (!ActivityRecognitionResult.hasResult(intent)) return
+        val result = ActivityRecognitionResult.extractResult(intent) ?: return
+        ActivitySource.onResult(context, result)
+      }
+    }
+  }
+
+  private fun onTransitions(context: Context, intent: Intent) {
+    if (!ActivityTransitionResult.hasResult(intent)) return
+    // Nothing wants the feed (disarmed, or a registration an older build left behind): remove it, act on nothing.
+    if (!ActivityTransitions.wanted(context)) {
       ActivityTransitions.unsubscribe(context)
       return
     }
     val result = ActivityTransitionResult.extractResult(intent) ?: return
     val anchor = ClockAnchor.now()
     val arrival = System.currentTimeMillis()
+    val batch = result.transitionEvents.mapNotNull { e ->
+      val type = typeOf(e.activityType) ?: return@mapNotNull null
+      TimedTransition(type, e.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER, ActivityTransitions.epochMs(e.elapsedRealTimeNanos, anchor, arrival).toDouble())
+    }
+    if (batch.isEmpty()) return
     // The request's stamp: whatever the request replayed happened before it.
     val subscribedNanos = DriveSensePrefs.init(context).transitionsAtNanos
-    val subscribedAt = if (subscribedNanos > 0L) transitionTs(subscribedNanos, anchor, arrival) else 0L
-    val batch = result.transitionEvents.mapNotNull { e ->
-      reminderKind(e)?.let { Transition(it, transitionTs(e.elapsedRealTimeNanos, anchor, arrival)) }
-    }
-
-    if (CaptureService.isCapturing) {
-      // ENTERs, and the EXITs of the on-foot types, to JS in arrival order.
-      val forDetector = ArrayList<FeedTransition>()
-      for (event in result.transitionEvents) {
-        val ts = transitionTs(event.elapsedRealTimeNanos, anchor, arrival)
-        val enter = event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
-        val type = when (event.activityType) {
-          DetectedActivity.IN_VEHICLE -> "automotive"
-          DetectedActivity.WALKING -> "walking"
-          DetectedActivity.RUNNING -> "running"
-          DetectedActivity.STILL -> "stationary"
-          DetectedActivity.ON_BICYCLE -> "cycling"
-          else -> null
-        } ?: continue
-        if (enter) {
-          EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts))
-        } else if (type == "walking" || type == "running") {
-          EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
-        }
-        forDetector.add(FeedTransition(type, enter))
-      }
-      // A detector drive's safety stop reads the walks and the car motion too (from their arrival),
-      // the batch whole: a walk turning into a run (EXIT WALKING, ENTER RUNNING) keeps its clock.
-      if (CaptureService.detectorCapture) DriveDetector.peek()?.onTransitions(forDetector, arrival.toDouble())
-      // After JS has its events: the reminder keeps the vehicle state (state only, never a post),
-      // so its session is right when the drive ends. Best effort: it can never disturb the capture.
-      try {
-        TripReminder.onCaptureTransitions(context, batch, subscribedAt)
-      } catch (e: Exception) {
-        Log.w("DriveSense", "reminder capture batch not folded: ${e.javaClass.simpleName}")
-      }
-      return
-    }
-
-    // No drive open: the forgot-to-start reminder reads the whole batch, then the feed is re-synced
-    // (a session opening or ending changes what is asked for).
+    val subscribedAt = if (subscribedNanos > 0L) ActivityTransitions.epochMs(subscribedNanos, anchor, arrival).toDouble() else 0.0
     val pending = goAsync()
     try {
-      TripReminder.onTransitions(context, batch, arrival, subscribedAt)
+      DriveDetector.get(context).onTransitions(batch, arrival.toDouble(), subscribedAt) { pending.finish() }
     } catch (e: Exception) {
-      Log.w("DriveSense", "reminder batch not handled: ${e.javaClass.simpleName}")
-    }
-    ActivityTransitions.sync(context) { pending.finish() }
-  }
-
-  /** The transitions the reminder reads: IN_VEHICLE in and out, and the ENTERs of STILL, WALKING and RUNNING. */
-  private fun reminderKind(e: ActivityTransitionEvent): TransitionKind? {
-    val enter = e.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
-    return when (e.activityType) {
-      DetectedActivity.IN_VEHICLE -> if (enter) TransitionKind.VEHICLE_ENTER else TransitionKind.VEHICLE_EXIT
-      DetectedActivity.STILL -> if (enter) TransitionKind.STILL_ENTER else null
-      DetectedActivity.WALKING -> if (enter) TransitionKind.WALKING_ENTER else null
-      DetectedActivity.RUNNING -> if (enter) TransitionKind.RUNNING_ENTER else null
-      else -> null
+      Log.w("DriveSense", "transitions not handled: ${e.javaClass.simpleName}")
+      pending.finish()
     }
   }
 
-  private fun transitionTs(elapsedNanos: Long, anchor: ClockAnchor, arrival: Long): Long {
-    // The anchor is read as the transition is received, so the conversion is exact; a transition is
-    // never in the future (the API delivers them late, not early).
-    val t = anchor.epochMs + (elapsedNanos / 1e6 - anchor.clockMs)
-    return if (t.isFinite() && t <= arrival && t > 0) Math.round(t) else arrival
+  private fun typeOf(activity: Int): String? = when (activity) {
+    DetectedActivity.IN_VEHICLE -> "automotive"
+    DetectedActivity.WALKING -> "walking"
+    DetectedActivity.RUNNING -> "running"
+    DetectedActivity.STILL -> "stationary"
+    DetectedActivity.ON_BICYCLE -> "cycling"
+    else -> null
   }
 }
 
 /**
- * Subscribing to and unsubscribing from the transitions feed. [sync] is the one rule: the request
- * matches [tier] — the capture's walking set while capturing, the reminder's sets while it is on
- * with no drive open, nothing otherwise — with motion granted and Play services present. Every entry
- * point calls it (the module's launch, a capture's begin and end, a motion grant, the reminder's
- * switch and each of its batches, the boot receiver), so no registration outlives its reason.
+ * The activity transitions feed: one rule, [sync], which the drive detector calls with whether its
+ * wakes run (armed for an owner with its permissions, not off). Subscribed then (with Physical
+ * activity and Play services), removed otherwise, so no registration outlives its reason. The
+ * detector's set ([DETECT]): IN_VEHICLE in and out, and the ENTERs of WALKING, RUNNING, ON_BICYCLE
+ * and STILL, all a motion history needs; ON_FOOT is never asked for (the Transitions API supports
+ * IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only, and a request with another type fails
+ * whole). Free while idle: Play services classifies activity whatever the app does.
  *
- * One PendingIntent: each request replaces the last. The tier on file ([DriveSensePrefs]) skips an
- * identical re-request (each request replays the current activity); [sync] with `force` re-requests
- * anyway, for the launch and the boot, when the system may have dropped the registration.
+ * One PendingIntent: each request replaces the last. The request on file ([DriveSensePrefs]) skips
+ * an identical re-request from this boot (each request replays the current activity); `force`
+ * re-requests anyway (a reboot or an update, which drop registrations).
  */
 object ActivityTransitions {
   const val ACTION = "expo.modules.drivesense.ACTIVITY_TRANSITION"
   private const val REQUEST_CODE = 7301
   private const val TAG = "DriveSense"
+  /** The name of the detector's set on file (an older build's names never match it). */
+  private const val SET = "DETECT"
   private val ENTER = ActivityTransition.ACTIVITY_TRANSITION_ENTER
   private val EXIT = ActivityTransition.ACTIVITY_TRANSITION_EXIT
 
-  /**
-   * The capture's activities, each ENTER and EXIT (README §3). ON_FOOT is never requested: the
-   * Transitions API supports IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only (ON_FOOT's
-   * sub-activities are WALKING and RUNNING), and a request with an unsupported type fails whole.
-   */
-  private val CAPTURE_TYPES = listOf(DetectedActivity.IN_VEHICLE, DetectedActivity.WALKING, DetectedActivity.RUNNING)
+  /** What the detector asks for, as (activity, transition). STILL and the on-foot types with ENTER only. */
+  val DETECT: List<Pair<Int, Int>> = listOf(
+    DetectedActivity.IN_VEHICLE to ENTER,
+    DetectedActivity.IN_VEHICLE to EXIT,
+    DetectedActivity.WALKING to ENTER,
+    DetectedActivity.RUNNING to ENTER,
+    DetectedActivity.ON_BICYCLE to ENTER,
+    DetectedActivity.STILL to ENTER
+  )
 
-  /** The capture's activities asked for with ENTER only: the stop (the parking-spot end's evidence) and a bicycle. */
-  private val CAPTURE_ENTERS = listOf(DetectedActivity.STILL, DetectedActivity.ON_BICYCLE)
-
-  /**
-   * What each tier asks for, as (activity, transition). The reminder's idle set wakes the app only
-   * when the phone gets into a vehicle; its session set adds the stop (STILL ENTER), the car leaving
-   * (IN_VEHICLE EXIT, which also starts the session's 30 min) and the driver walking off. STILL is
-   * only ever asked for with ENTER.
-   */
-  fun transitions(tier: TripReminderPolicy.Tier): List<Pair<Int, Int>> = when (tier) {
-    TripReminderPolicy.Tier.NONE -> emptyList()
-    TripReminderPolicy.Tier.CAPTURE ->
-      CAPTURE_TYPES.flatMap { type -> listOf(type to ENTER, type to EXIT) } + CAPTURE_ENTERS.map { type -> type to ENTER }
-    TripReminderPolicy.Tier.IDLE -> listOf(DetectedActivity.IN_VEHICLE to ENTER)
-    TripReminderPolicy.Tier.SESSION -> listOf(
-      DetectedActivity.IN_VEHICLE to ENTER,
-      DetectedActivity.IN_VEHICLE to EXIT,
-      DetectedActivity.STILL to ENTER,
-      DetectedActivity.WALKING to ENTER,
-      DetectedActivity.RUNNING to ENTER
-    )
-  }
-
-  private fun request(tier: TripReminderPolicy.Tier): ActivityTransitionRequest =
+  private fun request(): ActivityTransitionRequest =
     ActivityTransitionRequest(
-      transitions(tier).map { (type, transition) ->
+      DETECT.map { (type, transition) ->
         ActivityTransition.Builder().setActivityType(type).setActivityTransition(transition).build()
       }
     )
 
-  /** Play services fills the transition result into this intent, so it must be mutable on API 31+ (rev1: I15). */
+  /** Play services fills the transition result into this intent, so it must be mutable on API 31+ (and explicit). */
   fun pendingIntent(context: Context): PendingIntent {
     val intent = Intent(context, ActivityTransitionReceiver::class.java).setAction(ACTION)
     var flags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -186,17 +136,21 @@ object ActivityTransitions {
     return PendingIntent.getBroadcast(context.applicationContext, REQUEST_CODE, intent, flags)
   }
 
-  /** What the feed should be now. */
-  fun tier(context: Context): TripReminderPolicy.Tier =
-    TripReminderPolicy.tier(TripReminder.state(context), CaptureService.isCapturing, TripReminder.transitionsOk(context))
+  /** The detector wants the feed now (written by [sync]). */
+  fun wanted(context: Context): Boolean = DriveSensePrefs.init(context).transitionsWanted
+
+  /** A boot-clock time (ns) as epoch ms through [anchor], never after [arrival]: the API delivers late, never early. */
+  fun epochMs(elapsedNanos: Long, anchor: ClockAnchor, arrival: Long): Long {
+    val t = anchor.epochMs + (elapsedNanos / 1e6 - anchor.clockMs)
+    return if (t.isFinite() && t <= arrival && t > 0) Math.round(t) else arrival
+  }
 
   /**
-   * Subscribe, re-subscribe or unsubscribe to match [tier], best effort and never an error: a
-   * failure (a SecurityException, a missing service, anything thrown) is logged and swallowed, so it
-   * can neither reject `startCapture` nor stop a capture. [onDone] runs exactly once, when the
-   * request has settled (a receiver's goAsync waits on it).
+   * Subscribe or unsubscribe to match [want], best effort and never an error: a failure (a
+   * SecurityException, a missing service, anything thrown) is logged and swallowed. [onDone] runs
+   * exactly once, when the request has settled.
    */
-  fun sync(context: Context, force: Boolean = false, onDone: () -> Unit = {}) {
+  fun sync(context: Context, want: Boolean, force: Boolean = false, onDone: () -> Unit = {}) {
     var finished = false
     val done: () -> Unit = {
       if (!finished) {
@@ -206,37 +160,39 @@ object ActivityTransitions {
     }
     try {
       val prefs = DriveSensePrefs.init(context)
-      if (force) prefs.transitionsTier = null
-      val want = tier(context)
-      if (want == TripReminderPolicy.Tier.NONE) {
-        unsubscribe(context)
+      val ok = want && DriveSensePermissions.motionGranted(context) && DriveSensePermissions.playServicesAvailable(context)
+      prefs.transitionsWanted = ok
+      if (!ok) {
+        if (prefs.transitionsTier != null) unsubscribe(context)
         done()
         return
       }
+      if (force) prefs.transitionsTier = null
       val nowNanos = SystemClock.elapsedRealtimeNanos()
       val boot = bootCount(context)
       // The same request is on file and from this boot (a reboot drops every registration): nothing
       // to do. The boot count says which boot; where the phone does not give it, a stamp ahead of
       // the boot clock (which restarts at a reboot) is the only sign.
       val thisBoot = prefs.transitionsAtNanos in 1L..nowNanos && (boot < 0 || prefs.transitionsBoot == boot)
-      if (prefs.transitionsTier == want.name && thisBoot) {
+      if (prefs.transitionsTier == SET && thisBoot) {
         done()
         return
       }
       // Stamped before the request: whatever the request replays happened before this, and the
-      // reminder reads it as the state at the stamp (never a stop, never driving speed).
+      // detector never wakes on a replayed transition much older than it.
       prefs.transitionsTier = null
       prefs.transitionsAtNanos = nowNanos
       prefs.transitionsBoot = boot
-      subscribe(context, want) { e ->
+      subscribe(context) { e ->
         if (e != null) {
           Log.w(TAG, "activity transitions not subscribed: ${e.javaClass.simpleName}")
-          done()
+        } else if (prefs.transitionsWanted) {
+          prefs.transitionsTier = SET
         } else {
-          prefs.transitionsTier = want.name
-          // The reason changed before this request completed: follow it.
-          if (tier(context) != want) sync(context, onDone = done) else done()
+          // Disarmed while the request was in flight: follow it.
+          unsubscribe(context)
         }
+        done()
       }
     } catch (e: Exception) {
       Log.w(TAG, "activity transitions not synced: ${e.javaClass.simpleName}")
@@ -253,10 +209,10 @@ object ActivityTransitions {
 
   /** [onDone] gets null on success, else the failure (SecurityException = no permission). */
   @SuppressLint("MissingPermission")
-  private fun subscribe(context: Context, tier: TripReminderPolicy.Tier, onDone: (Exception?) -> Unit) {
+  private fun subscribe(context: Context, onDone: (Exception?) -> Unit) {
     try {
       ActivityRecognition.getClient(context.applicationContext)
-        .requestActivityTransitionUpdates(request(tier), pendingIntent(context))
+        .requestActivityTransitionUpdates(request(), pendingIntent(context))
         .addOnSuccessListener { onDone(null) }
         .addOnFailureListener { e -> onDone(e) }
     } catch (e: Exception) {
@@ -276,5 +232,73 @@ object ActivityTransitions {
     } catch (_: Exception) {
       // Nothing to remove, or no permission to remove it with: either way we are unsubscribed.
     }
+  }
+}
+
+/**
+ * The live activity reports (the iOS `ActivitySource` live updates): Play services' activity
+ * recognition every [INTERVAL_MS] while RoadWise senses (a watch, a drive, a plain capture; the
+ * capture service starts and stops it with its sensors), never while idle or resting. Every report
+ * goes to the drive detector (the walking end, the on-foot veto, car motion, the slow-traffic start,
+ * the fix-less hold) before the duplicate filter that keeps the JS feed quiet; JS hears it
+ * ([LiveActivity] mapping) only while a drive or a plain capture records, never during a watch.
+ */
+object ActivitySource {
+  const val ACTION = "expo.modules.drivesense.ACTIVITY_UPDATE"
+  const val INTERVAL_MS = 5_000L
+  private const val REQUEST_CODE = 7305
+
+  /** The last report JS heard (type and confidence), for the duplicate filter; reset at each start. */
+  @Volatile
+  private var lastEmitted: LiveActivity.Report? = null
+
+  @Volatile
+  private var live = false
+
+  private fun pendingIntent(context: Context): PendingIntent {
+    val intent = Intent(context, ActivityTransitionReceiver::class.java).setAction(ACTION)
+    var flags = PendingIntent.FLAG_UPDATE_CURRENT
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
+    return PendingIntent.getBroadcast(context.applicationContext, REQUEST_CODE, intent, flags)
+  }
+
+  /** Best effort: no Physical activity or no Play services leaves the feed off, and sensing runs on. */
+  @SuppressLint("MissingPermission")
+  fun start(context: Context) {
+    lastEmitted = null
+    live = true
+    if (!DriveSensePermissions.motionGranted(context) || !DriveSensePermissions.playServicesAvailable(context)) return
+    try {
+      ActivityRecognition.getClient(context.applicationContext).requestActivityUpdates(INTERVAL_MS, pendingIntent(context))
+    } catch (e: Exception) {
+      Log.w("DriveSense", "activity updates not requested: ${e.javaClass.simpleName}")
+    }
+  }
+
+  @SuppressLint("MissingPermission")
+  fun stop(context: Context) {
+    live = false
+    try {
+      ActivityRecognition.getClient(context.applicationContext).removeActivityUpdates(pendingIntent(context))
+    } catch (_: Exception) {
+      // Nothing to remove.
+    }
+  }
+
+  /** One report (the receiver, main thread). A late one after the sensing stopped is dropped, and its registration removed. */
+  fun onResult(context: Context, result: ActivityRecognitionResult) {
+    if (!live || !CaptureService.isCapturing) {
+      stop(context)
+      return
+    }
+    val report = LiveActivity.of(result.probableActivities.map { LiveActivity.Rated(it.type, it.confidence) }) ?: return
+    val anchor = ClockAnchor.now()
+    val arrival = System.currentTimeMillis()
+    DriveDetector.peek()?.onActivity(report.motion(arrival.toDouble()))
+    if (CaptureService.watching) return
+    if (lastEmitted == report) return
+    lastEmitted = report
+    val ts = ActivityTransitions.epochMs(result.elapsedRealtimeMillis * 1_000_000L, anchor, arrival)
+    EventBus.emit("activity", linkedMapOf("type" to report.type, "confidence" to report.confidence, "ts" to ts))
   }
 }

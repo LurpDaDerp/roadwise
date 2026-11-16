@@ -8,7 +8,7 @@ import org.junit.Test
  * The detector's record and the `DetectState` it answers (src/detect.ts holds that to a strict
  * shape): the record round-trips through its JSON, a damaged one reads as none, and the state has
  * exactly the contract's keys, integer times, the drive's fields only while one records and the
- * Android statuses (no wakes yet: armed reads `unavailable`, never `needs`).
+ * Android statuses (no Play services, so no wakes: armed reads `unavailable`, never `needs`).
  */
 class DriveDetectRecordTest {
   private val access = DetectAccess(

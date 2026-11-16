@@ -12,6 +12,7 @@ import expo.modules.drivesense.DriveSensePrefs
 import expo.modules.drivesense.RowJournal
 import expo.modules.drivesense.RowJournalRead
 import expo.modules.drivesense.RowsPage
+import expo.modules.drivesense.WatchNotification
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -21,29 +22,32 @@ import java.util.concurrent.Executors
  * field below runs there, so nothing is shared but the two `@Volatile` views ([recordingNow],
  * [liveDriveId]) other threads read. The row journal writes on its own single thread.
  *
- * What it runs today: the Start card's drive (`startWaiting`), journaled and announced as on iPhone
- * (it opens at the tap and waits for driving speed), its rows with their `seq`, the native safety
- * stop (every row and every 5 s, DetectPolicy's `endDue`: a walk, the still clock, 12 h), JS's own
- * end (`stopCapture`), "Not driving?" (the drive cancelled and its journal deleted, then the rest:
- * its 3 h cap only for now), the wipes, and a drive that outlives its process: the next process
- * resumes it from its journal when its last row is 5 min old or less, else ends it as an orphan for
- * JS to adopt. Automatic detection (the wakes, the candidate watch, the linger) is not here yet: the
- * arming is stored and reported, and the status says `unavailable`, so no screen offers it.
+ * off → armed (JS armed it, "Allow all the time" + Precise + Physical activity, Play services) →
+ * candidate (a wake: an IN_VEHICLE ENTER, the parked geofence's exit, RoadWise coming to the front;
+ * the watch after an automatic end; the Start card) → recording ⇄ ending (a JS end rule is overdue)
+ * → armed; "Not driving?" → suppressed → armed. Every decision is [DetectPolicy]'s, with iOS's
+ * numbers; this class reads the phone and acts. The wakes and the watch are in
+ * DriveDetectorWatch.kt, the drive in DriveDetectorDrive.kt, the live motion feed and the rest in
+ * DriveDetectorSensing.kt.
  *
- * Sensing is the existing location foreground service ([CaptureService]) in its detector mode: it
- * starts only from RoadWise in front (the Start card), or for a resumed drive from a process start,
- * the system's sticky restart, or RoadWise coming to the front. A start Android refuses
- * (ForegroundServiceStartNotAllowedException, or a SecurityException on 14+) never loses the drive:
- * its record and journal stay, and the next process start or foreground resumes it or ends it.
+ * Sensing is the location foreground service ([CaptureService]): a watch runs it in its watch form
+ * (GPS, IMU and rows into the candidate's buffer, the silent "Checking for a drive" notification, no
+ * JS), a drive in its drive form (rows journaled and handed to JS, the drive notification). A watch
+ * starts from a wake's broadcast (Android 12+ lets an activity-transition or geofence broadcast
+ * start a location service from the background, with "Allow all the time") or from RoadWise in
+ * front; a confirmed watch becomes the drive in place (no gap), and an automatic end becomes the
+ * linger's watch in place. A start Android refuses (ForegroundServiceStartNotAllowedException, or a
+ * SecurityException on 14+) never loses a drive: its record and journal stay, and the next process
+ * start or foreground resumes it or ends it. With nothing sensing, RoadWise uses no GPS: the wakes
+ * are Play services' transitions and geofence, delivered to a stopped app.
  *
- * The record ([DriveDetectRecord]) is saved before each transition's side effects. Every decision
- * is [DetectPolicy]'s; this class reads the phone and acts. The drive's own steps are in
- * DriveDetectorDrive.kt.
+ * The record ([DriveDetectRecord]) is saved before each transition's side effects.
  */
 class DriveDetector private constructor(context: Context) {
   companion object {
     private const val PREFS = "expo.modules.drivesense.detect"
     private const val KEY = "record"
+    private const val HISTORY_KEY = "history"
     private val DRIVE_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     @Volatile
@@ -73,6 +77,7 @@ class DriveDetector private constructor(context: Context) {
     )
   }
   internal val access = DriveDetectAccess(app)
+  internal val wakes = WakeSources(app)
   private val store: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   // ——— detector thread only ———
@@ -96,13 +101,37 @@ class DriveDetector private constructor(context: Context) {
   internal var nextSeq = 1L
   internal var lastRowTs: Double? = null
   internal var lastFix: LatLng? = null
-  /** The standing confident walk's arrival (the safety stop's walking end); null: none. */
+  /** The standing confident walk's arrival (the safety stop's walking end, a watch's walking end); null: none. */
   internal var walkSince: Double? = null
-  /** The standing report is car motion (a fix-less row then holds the still clock). */
+  /** The standing live report is confident moving car motion (a fix-less row then holds the still clock). */
   internal var carStanding = false
 
+  // The watch (DriveDetectorWatch.kt). Runtime only: a candidate never survives a process.
+
+  /** This process runs the candidate's watch (its capture's rows come to [buffer]). */
+  internal var watching = false
+  internal val buffer = RowBuffer<Map<String, Any?>>()
+  internal var confirmState = ConfirmState()
+  internal var slowState = SlowTrafficState()
+  /** The candidate is the watch after an automatic end: no hourly cap, rest or parked spot. */
+  internal var lingering = false
+  /** This candidate's last vehicle sign (a trusted row at 10 mph or more, unvetoed, or a confident automotive report). */
+  internal var lastVehicleTs: Double? = null
+  /** The standing live report is a confident automotive one (a car at a light too). */
+  internal var vehicleStanding = false
+  /** When confident moving car motion was last seen (a wake's motion history, the live feed); 0: never. */
+  internal var lastCarMotionAt = 0.0
+  /** The on-foot veto's memory. */
+  internal var vetoState = VetoState()
+
+  /** The motion history ([ActivityHistory]), loaded with the record. */
+  internal var history: List<ActivityHistory.Entry> = emptyList()
+
   private val tickTask = Runnable { tick() }
-  private val restTask = Runnable { checkRest() }
+  internal val restTask = Runnable { checkRest() }
+
+  /** Play services dropped the parked geofence (location off): set again at the next foreground. */
+  private var geofenceLost = false
 
   /** The record says a drive records (recording or ending): read by the capture and the module. */
   @Volatile
@@ -116,9 +145,11 @@ class DriveDetector private constructor(context: Context) {
   init {
     // The disk is read on the detector's thread, never the caller's (Application.onCreate is main).
     handler.post {
-      DriveSensePrefs.init(app)
+      DriveSensePrefs.init(app).forgetRetired()
       rec = DriveDetectRecord.fromJson(store.getString(KEY, null))
+      history = ActivityHistory.decode(store.getString(HISTORY_KEY, null))
       view()
+      WatchNotification.retireReminderChannel(app)
     }
   }
 
@@ -144,6 +175,22 @@ class DriveDetector private constructor(context: Context) {
     view()
   }
 
+  /** The motion history with [added], stored (apply: it is rebuilt from new transitions if a kill loses the last write). */
+  internal fun addHistory(added: List<ActivityHistory.Entry>, now: Double) {
+    if (added.isEmpty()) return
+    history = ActivityHistory.add(history, added, now)
+    store.edit().putString(HISTORY_KEY, ActivityHistory.encode(history)).apply()
+  }
+
+  internal fun clearHistory() {
+    history = emptyList()
+    store.edit().remove(HISTORY_KEY).apply()
+  }
+
+  /** The motion history summarized from [from] to now (the policy's `summarize`). */
+  internal fun motionSince(from: Double, now: Double): MotionSummary =
+    DetectPolicy.summarize(ActivityHistory.samples(history, from), now)
+
   /** Detection may run: JS armed it for an owner, and its permissions and wakes are there. */
   internal fun allowed(r: DriveDetectRecord): Boolean = r.armed && r.ownerId != null && access.snapshot().requiredOk
 
@@ -165,7 +212,8 @@ class DriveDetector private constructor(context: Context) {
       startedAt = null,
       startSource = null,
       suppressedSince = null,
-      suppressedUntil = null
+      suppressedUntil = null,
+      rest = RestStanding()
     )
 
   // ——— JS (each answers on the detector thread or the journal's) ———
@@ -174,14 +222,14 @@ class DriveDetector private constructor(context: Context) {
   fun setArmed(armed: Boolean, ownerId: String, done: (Map<String, Any?>) -> Unit) {
     handler.post {
       var r = rec ?: DriveDetectRecord()
-      if (armed && r.ownerId != null && r.ownerId != ownerId) r = r.copy(lastEnd = null)
+      if (armed && r.ownerId != null && r.ownerId != ownerId) r = r.copy(lastEnd = null, parked = null)
       save(r.copy(armed = armed, ownerId = if (armed) ownerId else null))
       sync(if (armed) "armed" else "disarmed")
       done(stateJson())
     }
   }
 
-  /** `getState`: the state now; the journal-dropped count is reported once. */
+  /** `getState`: the state now (a rest past its end ends first); the journal-dropped count is reported once. */
   fun getState(done: (Map<String, Any?>) -> Unit) {
     handler.post {
       checkRest()
@@ -191,35 +239,84 @@ class DriveDetector private constructor(context: Context) {
     }
   }
 
-  /** `requestAlways`: the current answer (see [DriveDetectAccess.alwaysAnswer]). */
-  fun requestAlways(done: (String) -> Unit) {
-    handler.post { done(access.alwaysAnswer()) }
+  /** The permissions may have changed (the "Always" request answered): the arming follows. */
+  fun permissionsChanged() {
+    handler.post { sync("permissionLost") }
   }
 
-  /** Brings the state in line with the arming and the permissions. A drive in progress finishes first. */
-  @Suppress("UNUSED_PARAMETER")
+  /**
+   * Brings the state in line with the arming and the permissions (Android tells no app when one is
+   * revoked: this runs at every wake, foreground and arming). A drive in progress finishes first.
+   * Armed again, the parked geofence goes back to the last end's place, as iOS's region does.
+   */
   internal fun sync(reason: String) {
     val r = rec ?: return
     val ok = allowed(r)
     val now = now()
     when {
       r.state == "off" && ok -> {
-        save(r.copy(state = "armed", since = now))
+        val spot = r.lastEnd?.let { LatLng(it.lat, it.lng) }
+        save(r.copy(state = "armed", since = now, parked = spot))
+        syncWakes()
+        wakes.setParked(spot)
         emitState("armed")
+        return
       }
       r.state == "armed" && !ok -> {
         save(r.copy(state = "off", since = now))
         emitState(if (r.armed) "permissionLost" else "disarmed")
       }
+      r.state == "candidate" && r.origin != "manual" && !ok -> endCandidate(if (r.armed) "permissionLost" else "disarmed", rest = false)
       r.state == "suppressed" && !ok -> endSuppression()
       else -> Unit
     }
+    syncWakes()
+  }
+
+  /**
+   * The wakes run while detection is allowed and not off (armed, watching, recording, resting): the
+   * transitions, the boot receiver and the parked geofence; otherwise all of them stop and the
+   * parked spot is forgotten, as iOS's region is (arming again places it at the last end).
+   */
+  internal fun syncWakes(force: Boolean = false, onDone: () -> Unit = {}) {
+    val r = rec
+    val run = r != null && allowed(r) && r.state != "off"
+    if (!run && r?.parked != null) save(r.copy(parked = null))
+    wakes.sync(run, force, onDone)
+  }
+
+  /** The parked spot moves to [place]: kept (a reboot sets it again) and the geofence replaced. */
+  internal fun park(place: LatLng) {
+    val r = rec ?: return
+    if (r.state == "off") return
+    save(r.copy(parked = place))
+    wakes.setParked(place)
+  }
+
+  /** A reboot or an app update dropped every registration ([expo.modules.drivesense.DetectBootReceiver]). */
+  fun rearm(done: () -> Unit) {
+    handler.post {
+      if (rec == null) {
+        done()
+        return@post
+      }
+      sync("permissionLost")
+      val r = rec
+      if (r != null && r.state != "off") wakes.setParked(r.parked)
+      syncWakes(force = true, onDone = done)
+    }
+  }
+
+  /** Play services dropped the geofence (location switched off): it is set again when RoadWise next comes to the front. */
+  fun onGeofenceLost() {
+    handler.post { geofenceLost = true }
   }
 
   /**
    * `startWaiting`: the Start card. While Using and Precise are enough (RoadWise is in front, the
    * one moment Android lets a location foreground service start without "Allow all the time"). The
-   * service goes first: the drive opens only once it runs, so a refusal leaves nothing behind.
+   * service goes first: the drive opens only once it runs, so a refusal leaves nothing behind. A
+   * watch running gives way to it (its rows dropped; its service becomes the drive's).
    */
   fun startWaiting(done: (Map<String, Any?>) -> Unit) {
     handler.post {
@@ -295,11 +392,15 @@ class DriveDetector private constructor(context: Context) {
     }
   }
 
-  /** DriveSense `stopCapture` while a drive records: JS's end (its cut, else now). False: no drive here (a plain capture's stop). */
+  /**
+   * DriveSense `stopCapture` while a drive records: JS's end (its cut, else now). An end JS calls
+   * automatic (`end.automatic`: the parking spot's, among others) or that a JS end rule would have
+   * made by now was automatic: the watch lingers. False: no drive here (a plain capture's stop).
+   */
   fun stopCapture(end: CaptureEnd?, done: (Boolean) -> Unit) {
     handler.post {
       if (rec?.recording == true) {
-        commitEnd("js", end?.drivingEndedAt?.toDouble() ?: now(), linger = end?.automatic == true)
+        commitEnd("js", end?.drivingEndedAt?.toDouble() ?: now(), linger = end?.automatic == true || automaticEndDue())
         done(true)
       } else {
         done(false)
@@ -337,14 +438,15 @@ class DriveDetector private constructor(context: Context) {
   }
 
   /**
-   * `wipe` (a sign-out, a device or account switch): nothing of the last owner stays. A drive or a
-   * rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes, and the
-   * record starts again empty: no owner, not armed, no last end, no rest, no drive, off.
+   * `wipe` (a sign-out, a device or account switch): nothing of the last owner stays. A watch, a
+   * drive or a rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes,
+   * the motion history and the parked spot go, the wakes stop, and the record starts again empty: no
+   * owner, not armed, no last end, no rest, no drive, off.
    */
   fun wipe(done: () -> Unit) {
     handler.post {
       val waiting = rec?.state == "candidate" && rec?.origin == "manual"
-      if (sensing || rec?.recording == true) finishSensing(holdMs = 0L)
+      if (sensing || watching || rec?.recording == true) finishSensing(holdMs = 0L)
       stopClock()
       handler.removeCallbacks(restTask)
       starting = false
@@ -354,7 +456,13 @@ class DriveDetector private constructor(context: Context) {
       lastFix = null
       walkSince = null
       carStanding = false
+      clearWatch()
+      lastCarMotionAt = 0.0
+      vetoState = VetoState()
       save(DriveDetectRecord())
+      clearHistory()
+      wakes.setParked(null)
+      syncWakes()
       clearStaleCapture()
       journal.wipe { done() }
       emitState(if (waiting) "cancelled" else "disarmed")
@@ -363,31 +471,22 @@ class DriveDetector private constructor(context: Context) {
 
   /**
    * RoadWise came to the front (an activity started, or JS's `appForeground`): a drive whose resume
-   * Android refused behind is resumed now (or ended, past its 5 min), and a rest past its cap ends.
-   * The automatic `app` wake comes with automatic detection.
+   * Android refused behind is resumed now (or ended, past its 5 min), a rest past its end ends, a
+   * permission change is taken in, a geofence location-off dropped is set again, and then the `app`
+   * wake: a watch opens when the motion history shows the car moving in the last 2 min and the
+   * driver not on foot (the rest after an empty watch is skipped, never the hourly cap).
    */
   fun appForeground() {
     handler.post {
       val r = rec ?: return@post
       if (resumePending && !resuming && !sensing && r.recording) r.driveId?.let { resumeDrive(it) }
       checkRest()
-    }
-  }
-
-  // ——— the activity feed (ActivityTransitionReceiver, while a capture runs) ———
-
-  /**
-   * One delivered batch of transitions, arrived at `at` ([DetectPolicy.feedAfter]): a confident walk
-   * (walking or running, as iOS counts it) stands from its first on-foot arrival until another
-   * activity replaces it; car motion stands from IN_VEHICLE's ENTER until its EXIT or another ENTER
-   * (a fix-less row then holds the still clock).
-   */
-  fun onTransitions(batch: List<FeedTransition>, at: Double) {
-    if (batch.isEmpty()) return
-    handler.post {
-      val s = DetectPolicy.feedAfter(FeedStanding(walkSince, carStanding), batch, at)
-      walkSince = s.walkSince
-      carStanding = s.carStanding
+      sync("permissionLost")
+      if (geofenceLost && rec?.state != "off") {
+        geofenceLost = false
+        wakes.setParked(rec?.parked)
+      }
+      onWake(WakeReason.APP)
     }
   }
 
@@ -402,38 +501,16 @@ class DriveDetector private constructor(context: Context) {
     handler.removeCallbacks(tickTask)
   }
 
-  /** Every 5 s while a drive is sensed: the safety stop when rows stall. */
+  /** Every 5 s while a watch or a drive is sensed: a candidate's deadline, the safety stop when rows stall. */
   private fun tick() {
-    val r = rec
-    if (r == null || !r.recording || !sensing) return
-    evaluateEnd()
-    if (rec?.recording == true && sensing) handler.postDelayed(tickTask, DetectPolicy.TICK_MS.toLong())
-  }
-
-  // ——— the rest after "Not driving?" ———
-
-  /** The rest's cap, timed (and read again at every foreground and state read). */
-  internal fun scheduleRest() {
-    handler.removeCallbacks(restTask)
-    val until = rec?.suppressedUntil ?: return
-    handler.postDelayed(restTask, (until - now()).toLong().coerceAtLeast(0L))
-  }
-
-  private fun checkRest() {
     val r = rec ?: return
-    if (r.state != "suppressed") return
-    // Only the cap ends it here: nothing is sensed during the rest yet, so no walk or still clock.
-    val until = r.suppressedUntil
-    if (r.suppressedSince == null || until == null || now() >= until) endSuppression() else scheduleRest()
-  }
-
-  /** The rest is over: armed again (or off). The last end is untouched. */
-  internal fun endSuppression() {
-    val r = rec ?: return
-    if (r.state != "suppressed") return
-    handler.removeCallbacks(restTask)
-    save(settle(r, now()))
-    emitState("suppressionEnded")
+    when {
+      r.state == "candidate" && watching -> candidateTick(r, now())
+      r.recording && sensing -> evaluateEnd()
+      else -> return
+    }
+    val n = rec ?: return
+    if ((n.state == "candidate" && watching) || (n.recording && sensing)) handler.postDelayed(tickTask, DetectPolicy.TICK_MS.toLong())
   }
 
   // ——— a new process ———
@@ -441,11 +518,13 @@ class DriveDetector private constructor(context: Context) {
   /**
    * Every process start (DriveSensePackage) and the capture service's sticky restart. A candidate
    * never survives a process; a drive open in the last process resumes from its journal or ends as
-   * an orphan; a rest goes on until its 3 h cap. Already sensing in this process: nothing to do.
+   * an orphan; a rest goes on until its end (Android senses it through the transitions Play
+   * services kept delivering, so nothing restarts its clocks). The wakes are synced (registrations
+   * from an earlier boot are made again). Already sensing in this process: nothing to do.
    */
   fun resumeAtLaunch() {
     handler.post {
-      if (sensing || resuming || starting) return@post
+      if (sensing || resuming || starting || watching) return@post
       val r = rec
       if (r == null) {
         clearStaleCapture()
@@ -459,16 +538,18 @@ class DriveDetector private constructor(context: Context) {
           val id = r.driveId
           if (id != null) {
             resumeDrive(id)
+            syncWakes()
             return@post
           }
           save(settle(r, now))
           emitState("ended")
         }
-        "suppressed" -> if (DetectPolicy.suppressionResume(r.suppressedUntil, now) != null) scheduleRest() else save(settle(r, now))
+        "suppressed" -> checkRest()
         else -> Unit
       }
       clearStaleCapture()
       CaptureService.releaseIfIdle()
+      syncWakes()
     }
   }
 

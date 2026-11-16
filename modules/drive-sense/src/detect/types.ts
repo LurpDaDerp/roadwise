@@ -258,7 +258,14 @@ export interface DriveDetectApi {
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
   getState(): Promise<DetectState>;
-  /** The one Always request, only from While Using, once (cleared when the authorisation goes back to not determined); otherwise the current answer. */
+  /**
+   * iOS: the one Always request, only from While Using, once (cleared when the authorisation goes
+   * back to not determined); otherwise the current answer. Android 10+: While Using first when
+   * location is not allowed at all, then "Allow all the time" (Android 10 shows its dialog; 11+ opens
+   * RoadWise's location settings page and answers when the driver returns), every time it is called
+   * from a screen; the answer is the grant then. Never rejects. JS shows Play's prominent disclosure
+   * right before every Android call.
+   */
   requestAlways(): Promise<'always' | 'whenInUse' | 'denied'>;
   /**
    * The Start card: a manual drive opens at once, from the tap, journaled like any drive and announced
@@ -290,9 +297,9 @@ export interface DriveDetectApi {
    * RoadWise came to the front: an `app` wake (the native detector also takes one by itself on
    * `didBecomeActive`). Like a significant-change wake it opens an auto candidate only with car
    * motion in the last 2 min, the driver not on foot, but it ignores the rest after an empty
-   * candidate; nothing while disarmed, watching, recording or resting. On Android (no automatic
-   * wakes yet) it only resumes a drive Android would not let resume behind. With no
-   * native module (or a native build without it), a no-op that resolves.
+   * candidate; nothing while disarmed, watching, recording or resting. On Android it also resumes a
+   * drive Android would not let resume behind, and reads the motion history Play services' activity
+   * transitions built. With no native module (or a native build without it), a no-op that resolves.
    */
   appForeground(): Promise<void>;
   /** The car link now (the route read afresh). Rejects on Android, or in a native build without it. */

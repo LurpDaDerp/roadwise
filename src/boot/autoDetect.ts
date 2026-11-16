@@ -1,5 +1,6 @@
-// Automatic drives on iPhone (modes plan §3.1.4): the native drive detector runs only for a
-// signed-in, onboarded driver who allowed Location Always, Precise Location and Motion & Fitness.
+// Automatic drives (modes plan §3.1.4): the native drive detector runs only for a signed-in,
+// onboarded driver who allowed Location Always ("Allow all the time" on Android), Precise Location
+// and Motion & Fitness (Physical activity on Android).
 // This is the one place that arms or disarms it (`DriveDetect.setArmed`):
 // - `autoDetectSync()` arms it at onboarding's finish, at sign-in and on every return to the front
 //   while that holds (native answers `needs` and stays off while a permission is missing), and
@@ -17,9 +18,9 @@
 //   owed, an account switch, the account's deletion) also wipe native's drive state
 //   (`DriveDetect.wipe()`: every journal, the last end, the parked spot and a rest), so nothing of
 //   one driver's reaches the next.
-// Android's detector has no automatic wakes yet: armed, it reads `unavailable` (no screen offers the
-// switch) and stays off; with no detector (Jest, Expo Go, web) every call is a no-op and
-// `readAutoDetectStatus()` answers null.
+// Android's detector is the same (its wakes are Play services' activity transitions and the parked
+// geofence; without Play services it reads `unavailable` and stays off); with no detector (Jest,
+// Expo Go, web) every call is a no-op and `readAutoDetectStatus()` answers null.
 import type { CarLinkState, DetectMissing, DetectState, DriveDetectApi } from '@drive-sense';
 
 import { createSettingsRepo, type Db } from '@/data/db';

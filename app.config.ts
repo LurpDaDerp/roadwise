@@ -173,16 +173,15 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // the phone plays the dashcam's alerts in the background; the drive's location service does so
       // during a drive.
       permissions: ['android.permission.POST_NOTIFICATIONS', 'android.permission.VIBRATE'],
-      // Every drive starts in the app and the forgot-to-start reminder uses activity recognition
-      // only, so background ("all the time") location is never asked for, whatever a library's
-      // manifest declares. The camera never records sound. expo-screen-capture (the DashPal aiming
+      // Background ("all the time") location is declared by drive-sense's manifest for automatic
+      // drives (asked for only through DriveDetect.requestAlways), so it is not blocked here. The
+      // camera never records sound. expo-screen-capture (the DashPal aiming
       // picture kept out of screenshots, FLAG_SECURE) declares photo access for a screenshot
       // listener RoadWise never adds: blocked. Its DETECT_SCREEN_CAPTURE stays (an install-time
       // permission its Android 14 callback needs). Shared storage (Android 12 and older, declared by
       // expo-file-system, expo-image and expo-screen-capture) is blocked too: the data export goes
       // to the app's cache or a folder the driver picks (the system picker needs no permission).
       blockedPermissions: [
-        'android.permission.ACCESS_BACKGROUND_LOCATION',
         'android.permission.RECORD_AUDIO',
         'android.permission.READ_MEDIA_IMAGES',
         'android.permission.READ_EXTERNAL_STORAGE',
@@ -214,7 +213,9 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
           motionUsagePermission: PERMISSION_COPY.motion,
           // iOS: a drive records in the background (on its own with Always, from Start with While Using).
           isIosBackgroundLocationEnabled: true,
-          isAndroidBackgroundLocationEnabled: false,
+          // Android: automatic drives need "Allow all the time" (the drive detector's wakes start its
+          // location service from the background); the Start card needs While Using.
+          isAndroidBackgroundLocationEnabled: true,
           // Android keeps a started drive running through its location foreground service.
           isAndroidForegroundServiceEnabled: true,
           isAndroidMotionActivityEnabled: true,

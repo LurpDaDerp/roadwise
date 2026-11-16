@@ -11,10 +11,11 @@ import java.util.UUID
 import org.json.JSONObject
 
 // The drive detector's drive (the iOS `DriveDetectorDrive.swift` and the relaunch half of
-// `DriveDetectorSensing.swift`): a drive begins with a start, a journal and `driveStarted`; its rows
-// are journaled with their `seq` and handed to JS; the native safety stop or JS's `stopCapture`
-// commits its end; "Not driving?" cancels it and rests; a new process resumes it or ends it as an
-// orphan. Detector thread only (every function here runs on `DriveDetector.handler`).
+// `DriveDetectorSensing.swift`): a drive begins with a start (the Start card's tap, or a watch's
+// traced start), a journal and `driveStarted`; its rows are journaled with their `seq` and handed to
+// JS; the native safety stop or JS's `stopCapture` commits its end (the parked spot set, and after
+// an automatic end the linger's watch); "Not driving?" cancels it and rests; a new process resumes
+// it or ends it as an orphan. Detector thread only (every function here runs on `DriveDetector.handler`).
 
 private fun ms(d: Double?): Any = DriveDetectRecord.ms(d) ?: JSONObject.NULL
 
@@ -25,7 +26,15 @@ private fun ms(d: Double?): Any = DriveDetectRecord.ms(d) ?: JSONObject.NULL
  * that deadline (`DetectPolicy.endDue`). A rest after "Not driving?" ends here.
  */
 internal fun DriveDetector.beginManualDrive(tap: Double) {
-  val r = rec ?: return
+  var r = rec ?: return
+  // A watch running gives way (its rows dropped, its service now the drive's) and, like a confirmed
+  // one, leaves the hourly cap's record.
+  if (r.state == "candidate" && watching) {
+    r = r.copy(candidateStarts = DetectPolicy.startsAfter(r.candidateStarts, r.since, sawVehicle = true))
+    watching = false
+    clearWatch()
+    stopClock()
+  }
   save(
     r.copy(
       state = "candidate",
@@ -36,9 +45,11 @@ internal fun DriveDetector.beginManualDrive(tap: Double) {
       startSource = null,
       waitUntil = tap + DetectPolicy.WAIT_MAX_MS,
       suppressedSince = null,
-      suppressedUntil = null
+      suppressedUntil = null,
+      rest = RestStanding()
     )
   )
+  handler.removeCallbacks(restTask)
   emitState("waiting")
   beginDrive(tap, StartSource.WAKE.wire, null, null, kind = "manual", waitUntil = tap + DetectPolicy.WAIT_MAX_MS)
 }
@@ -49,6 +60,22 @@ internal fun DriveDetector.endWaitAtDrivingSpeed() {
   if (endClock.lastDroveTs == null || r.waitUntil == null) return
   save(r.copy(waitUntil = null))
   emitState("confirmed")
+}
+
+/**
+ * A watch confirmed: the drive begins at its traced start, its service becomes the drive's in place
+ * (the drive notification replaces "Checking for a drive"; with no RoadWise screen open the
+ * background JS starts to take it in), and the buffered rows from the start on are journaled and
+ * handed to JS (the safety stop waits for the first live row, so an old movement replayed against
+ * the clock now never ends the drive it starts).
+ */
+internal fun DriveDetector.beginAutoDrive(start: TracedStart, firstTs: Double) {
+  val kept = buffer.items.filter { it.row.ts >= firstTs }
+  watching = false
+  clearWatch()
+  beginDrive(start.startedAt, start.startSource.wire, start.startLat, start.startLng, kind = "auto", waitUntil = null)
+  CaptureService.promoteWatch(app, RowJournalRead.jsMs(start.startedAt), "auto")
+  for (item in kept) record(item.row, item.body, evaluate = false)
 }
 
 /** The drive begins: recorded, journaled from its first row (seq 1), announced to JS, its clock on. */
@@ -88,6 +115,8 @@ internal fun DriveDetector.beginDrive(startedAt: Double, startSource: String, st
   lastRowTs = null
   lastFix = null
   walkSince = null
+  lingering = false
+  lastVehicleTs = null
   endClock = DetectPolicy.endClockAt(now)
   sensing = true
   resumePending = false
@@ -109,10 +138,21 @@ internal fun DriveDetector.beginDrive(startedAt: Double, startSource: String, st
   startClock()
 }
 
-/** One capture row (the capture thread hands it over): a sensed drive journals it. */
-fun DriveDetector.onRow(row: FeatureRow, body: Map<String, Any?>) {
+/** One capture row (the capture thread hands it over): a watch buffers it, a sensed drive journals it. */
+fun DriveDetector.onRow(row: FeatureRow, body: Map<String, Any?>, watchRow: Boolean) {
   handler.post {
     val r = rec
+    // A watch's row (or a drive's row while its service turns into the linger's watch): the candidate's.
+    if (r?.state == "candidate" && watching) {
+      candidateRow(DetectRow.of(row), body)
+      return@post
+    }
+    // A watch's row with no candidate behind it (the watch is over) stops its service; one that
+    // arrives as the confirmed watch's service turns into the drive's is the drive's.
+    if (watchRow && !(r?.recording == true && sensing)) {
+      CaptureService.stopWatch(app)
+      return@post
+    }
     when (captureRowFate(sensing, starting, resuming, r?.recording == true)) {
       CaptureRowFate.SENSED -> Unit
       CaptureRowFate.WAIT -> return@post
@@ -135,10 +175,10 @@ fun DriveDetector.onRow(row: FeatureRow, body: Map<String, Any?>) {
 
 /**
  * One row of the drive: journaled and emitted (DriveSense's `row`) with the next `seq`, the
- * safety-stop clock fed (the capture's `steps` included) and checked. A walk the car has driven
- * since is dropped, as JS drops it.
+ * safety-stop clock fed (the capture's `steps` included) and, a live row ([evaluate]), checked. A
+ * walk the car has driven since is dropped, as JS drops it.
  */
-internal fun DriveDetector.record(d: DetectRow, body: Map<String, Any?>) {
+internal fun DriveDetector.record(d: DetectRow, body: Map<String, Any?>, evaluate: Boolean = true) {
   val driveId = rec?.driveId ?: return
   val line = LinkedHashMap(body)
   line["seq"] = nextSeq
@@ -147,10 +187,10 @@ internal fun DriveDetector.record(d: DetectRow, body: Map<String, Any?>) {
   EventBus.emit("row", line)
   lastRowTs = d.ts
   if (DetectPolicy.trusted(d)) lastFix = LatLng(d.lat, d.lng)
-  endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow = carStanding)
+  endClock = DetectPolicy.endOnRow(endClock, d, automotiveNow = automotiveNow())
   (line["steps"] as? Number)?.let { endClock = DetectPolicy.endOnSteps(endClock, d.ts, it.toDouble()) }
   if (walkSince != null && DetectPolicy.walkStanding(endClock, walkSince) == null) walkSince = null
-  evaluateEnd()
+  if (evaluate) evaluateEnd()
 }
 
 /** A row payload as a journal line's object; null when it cannot be one (a NaN). */
@@ -186,18 +226,22 @@ internal fun DriveDetector.evaluateEnd() {
 }
 
 /**
- * Commits the drive's end: journaled (`end`) and closed, sensing off (the service keeps RoadWise
- * running 25 s more so JS can store the drive and post its recap), the last end at the last trusted
- * fix, armed again. A native cause goes to JS as `driveEnded`; JS's own ("js", its cut as `endedAt`)
- * does not. Native never computes a cut: its `endedAt` is when it decided. [linger] (an automatic
- * end) is for the watch that follows an automatic end, which comes with automatic detection.
+ * Commits the drive's end: journaled (`end`) and closed, the last end and the parked spot at the
+ * last trusted fix, armed again. A native cause goes to JS as `driveEnded`; JS's own ("js", its cut
+ * as `endedAt`) does not. Native never computes a cut: its `endedAt` is when it decided. Sensing
+ * then stops (the service keeps RoadWise running 25 s more so JS can store the drive and post its
+ * recap), except after an automatic end ([linger]: 5 min still, or a walk) of a drive no longer
+ * waiting for driving speed while automatic drives are armed: the service runs on as the linger's
+ * watch (3 min, 5 with evidence, outside the hourly cap), so a car that sets off again soon is
+ * confirmed at once as a new drive with its whole route; "Checking for a drive" replaces the drive
+ * notification at once, and RoadWise stays running through it, as long as the 25 s hold and more.
  */
-@Suppress("UNUSED_PARAMETER")
 internal fun DriveDetector.commitEnd(cause: String, endedAt: Double, linger: Boolean = false) {
   val r = rec ?: return
   val driveId = r.driveId
   if (!r.recording || driveId == null) return
   val now = DriveDetector.now()
+  val lingerAfter = linger && r.waitUntil == null && sensing && CaptureService.detectorRunning()
   val lastSeq = nextSeq - 1
   val rowTs = lastRowTs
   journal.appendMarker(
@@ -214,10 +258,14 @@ internal fun DriveDetector.commitEnd(cause: String, endedAt: Double, linger: Boo
   // A drive with no trusted fix (a Start drive cancelled indoors) keeps the last end: the car is
   // still where it last parked.
   var n = r
-  lastFix?.let { f -> n = n.copy(lastEnd = DetectLastEnd(now, if (cause == "js") endedAt else now, f.lat, f.lng, driveId)) }
-  save(settle(n, now))
-  finishSensing(holdMs = DetectPolicy.END_TASK_MAX_MS.toLong())
+  val spot = lastFix
+  spot?.let { f -> n = n.copy(lastEnd = DetectLastEnd(now, if (cause == "js") endedAt else now, f.lat, f.lng, driveId)) }
+  val settled = settle(n, now)
+  save(settled)
+  val lingers = lingerAfter && settled.state == "armed"
+  finishSensing(holdMs = DetectPolicy.END_TASK_MAX_MS.toLong(), demote = lingers)
   lastFix = null
+  if (settled.state == "armed" && spot != null) park(spot)
   if (cause != "js") {
     DetectEventBus.emit(
       "driveEnded",
@@ -225,12 +273,27 @@ internal fun DriveDetector.commitEnd(cause: String, endedAt: Double, linger: Boo
     )
   }
   emitState("ended")
+  syncWakes()
+  if (lingers) beginCandidate("linger")
+}
+
+/**
+ * Whether JS's end was an automatic one (`DetectPolicy.lingerAfterJsEnd`): 5 min still, or a walk
+ * the car has not driven since that has stood JS's 3 s floor less a row, with the last trusted fix
+ * at a walker's pace or under, more than 15 s old, or missing.
+ */
+internal fun DriveDetector.automaticEndDue(): Boolean {
+  val r = rec ?: return false
+  val startedAt = r.startedAt ?: return false
+  if (!r.recording) return false
+  return DetectPolicy.lingerAfterJsEnd(endClock, startedAt, DriveDetector.now(), walkSince, r.waitUntil, null)
 }
 
 /**
  * "Not driving?": the drive is cancelled (its journal deleted, nothing kept) and detection rests
- * until its 3 h cap (Android's rest needs no GPS; its walking and still ends come with the
- * automatic wakes it holds back). The last end stays as it was.
+ * with no GPS until a 20 s walk, 5 min without vehicle motion, or 3 h (ruling 4: the activity
+ * transitions are its eyes; car motion standing as it begins holds its still clock, a passenger
+ * still riding). The last end stays as it was.
  */
 fun DriveDetector.notDriving(done: () -> Unit) {
   handler.post {
@@ -254,12 +317,14 @@ fun DriveDetector.notDriving(done: () -> Unit) {
         startedAt = null,
         startSource = null,
         suppressedSince = now,
-        suppressedUntil = now + DetectPolicy.SUPPRESS_MAX_MS
+        suppressedUntil = now + DetectPolicy.SUPPRESS_MAX_MS,
+        rest = RestStanding(carStanding = carStanding)
       )
     )
     finishSensing(holdMs = DetectPolicy.END_TASK_MAX_MS.toLong())
     lastFix = null
-    scheduleRest()
+    checkRest()
+    syncWakes()
     DetectEventBus.emit(
       "driveEnded",
       linkedMapOf("driveId" to driveId, "endedAt" to DriveDetectRecord.ms(now), "cause" to "cancelled", "decidedAt" to DriveDetectRecord.ms(now), "lastSeq" to lastSeq, "lastRowTs" to DriveDetectRecord.ms(rowTs))
@@ -269,9 +334,13 @@ fun DriveDetector.notDriving(done: () -> Unit) {
   }
 }
 
-/** Sensing ends: the capture stops (its notification goes; RoadWise is held [holdMs] more) and the drive's clocks reset. */
-internal fun DriveDetector.finishSensing(holdMs: Long) {
-  CaptureService.stopDetector(app, holdMs)
+/**
+ * Sensing ends: the capture stops (its notification goes; RoadWise is held [holdMs] more), or with
+ * [demote] runs on as the linger's watch; the drive's clocks reset.
+ */
+internal fun DriveDetector.finishSensing(holdMs: Long, demote: Boolean = false) {
+  if (demote) CaptureService.demoteToWatch(app) else CaptureService.stopDetector(app, holdMs)
+  watching = false
   stopClock()
   sensing = false
   resumePending = false

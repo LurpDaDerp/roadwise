@@ -43,7 +43,6 @@ export type { SelfTestDiff, VectorDiff, Mismatch } from './selfTest';
 export { extractSecond, initialExtractState } from './extract/extract';
 export { gravityFilter, initialGravityState, androidAccelToReference } from './extract/gravityFilter';
 export { runSelfTest, runVector } from './extract/vectors';
-export { REMINDER } from './reminder/policy';
 export { isNavAppPackage, NAV_APP_PACKAGES } from './navPackages';
 // Android only (WP09, WP10): the share sheet with an image, and the geocoder that works behind.
 export { ANDROID_SHARE_METHODS, nativeShareImage, setShareModuleForTests } from './share';
@@ -140,16 +139,6 @@ export {
 export type { DetectActual, DetectWireVector } from './detect/selfTest';
 export { journalLine, parseJournalLine, readJournal } from './detect/journal';
 export type { JournalEnd, JournalGap, JournalLine, JournalRow, JournalStart, ReadJournal } from './detect/journal';
-export {
-  diffReminderSelfTest,
-  matchReminderRow,
-  referenceReminderOutput,
-  reminderRowRunsOn,
-  reminderWireVectors,
-  runReminderRow,
-} from './reminder/selfTest';
-export type { ReminderActual, ReminderWireVector } from './reminder/selfTest';
-export type { ReminderVector } from './reminder/vectors';
 export type {
   ExtractVector,
   GravityVector,

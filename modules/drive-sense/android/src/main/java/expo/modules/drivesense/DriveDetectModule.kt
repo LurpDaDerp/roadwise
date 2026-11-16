@@ -1,8 +1,11 @@
 package expo.modules.drivesense
 
+import android.Manifest
 import android.content.Context
+import android.os.Build
 import expo.modules.drivesense.detect.DriveDetector
 import expo.modules.drivesense.detect.notDriving
+import expo.modules.interfaces.permissions.PermissionsResponseListener
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
@@ -59,9 +62,51 @@ class DriveDetectModule : Module() {
       detector().getState { promise.resolve(it) }
     }
 
-    // "Allow all the time" is not asked for on this build: the current answer.
+    // "Allow all the time" (Android 10+): While Using first when location is not allowed at all,
+    // then the background request (Android 10 shows its dialog; 11+ opens RoadWise's location
+    // settings page, and the answer comes when the driver returns). Answers the grant then, as the
+    // contract's `always` / `whenInUse` / `denied`; with no activity on screen (nothing to ask
+    // from) or nothing left to ask, the current answer. Never rejects.
     AsyncFunction("requestAlways") { promise: Promise ->
-      detector().requestAlways { promise.resolve(it) }
+      val ctx = context
+      val detector = detector()
+      var answered = false
+      val answer = {
+        if (!answered) {
+          answered = true
+          detector.permissionsChanged()
+          promise.resolve(detector.access.alwaysAnswer())
+        }
+      }
+      val permissions = appContext.permissions
+      if (appContext.currentActivity == null || permissions == null || DriveSensePermissions.hasBackgroundLocation(ctx)) {
+        answer()
+        return@AsyncFunction
+      }
+      val askBackground = {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !DriveSensePermissions.hasForegroundLocation(ctx)) {
+          answer()
+        } else {
+          try {
+            permissions.askForPermissions(PermissionsResponseListener { answer() }, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+          } catch (_: Exception) {
+            answer()
+          }
+        }
+      }
+      if (DriveSensePermissions.hasForegroundLocation(ctx)) {
+        askBackground()
+      } else {
+        try {
+          permissions.askForPermissions(
+            PermissionsResponseListener { askBackground() },
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+          )
+        } catch (_: Exception) {
+          answer()
+        }
+      }
     }
 
     AsyncFunction("startWaiting") { promise: Promise ->
