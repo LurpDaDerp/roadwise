@@ -16,6 +16,7 @@ import com.google.android.gms.location.ActivityTransitionRequest
 import com.google.android.gms.location.ActivityTransitionResult
 import com.google.android.gms.location.DetectedActivity
 import expo.modules.drivesense.detect.DriveDetector
+import expo.modules.drivesense.detect.FeedTransition
 
 /**
  * The Activity Recognition Transitions feed, delivered by Google Play services at no app cost.
@@ -59,6 +60,7 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
     if (CaptureService.isCapturing) {
       // ENTERs, and the EXITs of the on-foot types, to JS in arrival order.
+      val forDetector = ArrayList<FeedTransition>()
       for (event in result.transitionEvents) {
         val ts = transitionTs(event.elapsedRealTimeNanos, anchor, arrival)
         val enter = event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
@@ -75,9 +77,11 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         } else if (type == "walking" || type == "running") {
           EventBus.emit("activity", linkedMapOf("type" to type, "confidence" to "high", "ts" to ts, "exit" to true))
         }
-        // A detector drive's safety stop reads the walks and the car motion too (from their arrival).
-        if (CaptureService.detectorCapture) DriveDetector.peek()?.onTransition(type, enter, arrival.toDouble())
+        forDetector.add(FeedTransition(type, enter))
       }
+      // A detector drive's safety stop reads the walks and the car motion too (from their arrival),
+      // the batch whole: a walk turning into a run (EXIT WALKING, ENTER RUNNING) keeps its clock.
+      if (CaptureService.detectorCapture) DriveDetector.peek()?.onTransitions(forDetector, arrival.toDouble())
       // After JS has its events: the reminder keeps the vehicle state (state only, never a post),
       // so its session is right when the drive ends. Best effort: it can never disturb the capture.
       try {

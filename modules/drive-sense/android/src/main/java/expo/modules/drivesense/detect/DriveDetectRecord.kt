@@ -165,3 +165,29 @@ data class DetectAccess(
     "canAskAlways" to canAskAlways
   )
 }
+
+/** What one capture row means to the detector (`DriveDetector.onRow`). */
+enum class CaptureRowFate {
+  /** The sensed drive's row: journaled and emitted. */
+  SENSED,
+  /** Dropped: a start or a resume is under way, or sensing is ending. */
+  WAIT,
+  /** A capture with no drive behind it (a start that answered after its refusal): it stops. */
+  STOP,
+  /**
+   * A capture running for a recording drive that is not sensed: a resume whose start was counted
+   * as refused and then began after all. The drive is taken back (the service is in the foreground
+   * now, so the direct path), or ends as an orphan past its 5 min: never a capture left running
+   * with no safety stop, no 12 h cap and no rows kept.
+   */
+  TAKE_BACK
+}
+
+/** [CaptureRowFate] for a row with the detector as it stands. Pure. */
+fun captureRowFate(sensing: Boolean, starting: Boolean, resuming: Boolean, recording: Boolean): CaptureRowFate =
+  when {
+    sensing && recording -> CaptureRowFate.SENSED
+    sensing || starting || resuming -> CaptureRowFate.WAIT
+    !recording -> CaptureRowFate.STOP
+    else -> CaptureRowFate.TAKE_BACK
+  }

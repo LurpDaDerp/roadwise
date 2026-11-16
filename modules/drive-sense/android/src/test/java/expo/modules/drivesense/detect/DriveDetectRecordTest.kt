@@ -88,4 +88,18 @@ class DriveDetectRecordTest {
     assertEquals(false, restricted.json()["liveActivities"])
     assertEquals(StatusInputs(true, false, LocationAccess.WHEN_IN_USE, true, MotionAccess.GRANTED, BackgroundRefresh.DENIED, false), restricted.inputs(true))
   }
+
+  @Test
+  fun aCaptureRowIsSensedWaitedOnStoppedOrTakesItsDriveBack() {
+    assertEquals(CaptureRowFate.SENSED, captureRowFate(sensing = true, starting = false, resuming = false, recording = true))
+    // A start or a resume under way, or sensing ending: the row is dropped, the capture left alone.
+    assertEquals(CaptureRowFate.WAIT, captureRowFate(sensing = false, starting = true, resuming = false, recording = false))
+    assertEquals(CaptureRowFate.WAIT, captureRowFate(sensing = false, starting = false, resuming = true, recording = true))
+    assertEquals(CaptureRowFate.WAIT, captureRowFate(sensing = true, starting = false, resuming = false, recording = false))
+    // A start that answered after its refusal, with no drive recording: the capture stops.
+    assertEquals(CaptureRowFate.STOP, captureRowFate(sensing = false, starting = false, resuming = false, recording = false))
+    // A resume counted as refused (resumePending) whose capture began after all: the drive is taken
+    // back, never left running unsensed with no safety stop or 12 h cap.
+    assertEquals(CaptureRowFate.TAKE_BACK, captureRowFate(sensing = false, starting = false, resuming = false, recording = true))
+  }
 }

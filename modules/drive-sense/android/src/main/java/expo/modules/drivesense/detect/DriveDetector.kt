@@ -377,19 +377,17 @@ class DriveDetector private constructor(context: Context) {
   // ——— the activity feed (ActivityTransitionReceiver, while a capture runs) ———
 
   /**
-   * One transition (`type` as the `activity` event names it). A confident walk stands from its
-   * arrival until another activity replaces it (its EXIT, or another ENTER); car motion stands from
-   * IN_VEHICLE's ENTER until its EXIT or another ENTER (a fix-less row then holds the still clock).
+   * One delivered batch of transitions, arrived at `at` ([DetectPolicy.feedAfter]): a confident walk
+   * (walking or running, as iOS counts it) stands from its first on-foot arrival until another
+   * activity replaces it; car motion stands from IN_VEHICLE's ENTER until its EXIT or another ENTER
+   * (a fix-less row then holds the still clock).
    */
-  fun onTransition(type: String, enter: Boolean, at: Double) {
+  fun onTransitions(batch: List<FeedTransition>, at: Double) {
+    if (batch.isEmpty()) return
     handler.post {
-      if (!enter) {
-        if (type == "walking") walkSince = null
-        if (type == "automotive") carStanding = false
-        return@post
-      }
-      carStanding = type == "automotive"
-      walkSince = if (type == "walking") walkSince ?: at else null
+      val s = DetectPolicy.feedAfter(FeedStanding(walkSince, carStanding), batch, at)
+      walkSince = s.walkSince
+      carStanding = s.carStanding
     }
   }
 

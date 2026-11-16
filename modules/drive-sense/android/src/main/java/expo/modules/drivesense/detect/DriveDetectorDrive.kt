@@ -113,10 +113,20 @@ internal fun DriveDetector.beginDrive(startedAt: Double, startSource: String, st
 fun DriveDetector.onRow(row: FeatureRow, body: Map<String, Any?>) {
   handler.post {
     val r = rec
-    if (!sensing || r == null || !r.recording) {
+    when (captureRowFate(sensing, starting, resuming, r?.recording == true)) {
+      CaptureRowFate.SENSED -> Unit
+      CaptureRowFate.WAIT -> return@post
       // A capture with no drive behind it (a start that answered too late, after its refusal): it stops.
-      if (!sensing && !starting && !resuming && r?.recording != true) CaptureService.stopDetector(app, 0L)
-      return@post
+      CaptureRowFate.STOP -> {
+        CaptureService.stopDetector(app, 0L)
+        return@post
+      }
+      // A resume counted as refused whose capture began after all: the drive is taken back (or
+      // ends as an orphan), so the capture is sensed or stopped, never left running unbounded.
+      CaptureRowFate.TAKE_BACK -> {
+        r?.driveId?.let { resumeDrive(it) } ?: CaptureService.stopDetector(app, 0L)
+        return@post
+      }
     }
     record(DetectRow.of(row), body)
     if (rec?.waitUntil != null) endWaitAtDrivingSpeed()

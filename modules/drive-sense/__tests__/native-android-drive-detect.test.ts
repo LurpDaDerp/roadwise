@@ -227,7 +227,22 @@ describe('native-android: the capture service’s detector mode', () => {
     expect(m).toMatch(/if \(DriveDetector\.get\(ctx\)\.recordingNow\) \{/);
   });
 
-  it('the activity feed reaches the detector’s safety stop during its drive', () => {
-    expect(kt('ActivityTransitionReceiver')).toMatch(/if \(CaptureService\.detectorCapture\) DriveDetector\.peek\(\)\?\.onTransition\(type, enter, arrival\.toDouble\(\)\)/);
+  it('the activity feed reaches the detector’s safety stop during its drive, a batch at a time (a walk turning into a run keeps its clock)', () => {
+    const r = kt('ActivityTransitionReceiver');
+    expect(r).toMatch(/forDetector\.add\(FeedTransition\(type, enter\)\)/);
+    expect(r).toMatch(/if \(CaptureService\.detectorCapture\) DriveDetector\.peek\(\)\?\.onTransitions\(forDetector, arrival\.toDouble\(\)\)/);
+    // The detector folds the batch through the pure rule (JVM-tested in DetectPolicyTest), which
+    // counts walking and running alike as the walk, as iOS's MotionReport does.
+    expect(fn(det('DriveDetector'), '  fun onTransitions(', 2)).toMatch(/DetectPolicy\.feedAfter\(FeedStanding\(walkSince, carStanding\), batch, at\)/);
+    expect(det('DetectEndPolicy')).toMatch(/val onFoot = t\.type == "walking" \|\| t\.type == "running"/);
+    expect(read(join(TEST_DIR, 'detect', 'DetectPolicyTest.kt'))).toContain('a walk is walking or running, as iOS counts it');
+  });
+
+  it('a capture row with no sensed drive is waited on, stops the capture, or takes its recording drive back (a resume counted as refused that began after all)', () => {
+    const onRow = fn(det('DriveDetectorDrive'), 'fun DriveDetector.onRow(');
+    expect(onRow).toMatch(/when \(captureRowFate\(sensing, starting, resuming, r\?\.recording == true\)\)/);
+    expect(onRow).toMatch(/CaptureRowFate\.STOP -> \{\s*CaptureService\.stopDetector\(app, 0L\)/);
+    expect(onRow).toMatch(/CaptureRowFate\.TAKE_BACK -> \{\s*r\?\.driveId\?\.let \{ resumeDrive\(it\) \} \?: CaptureService\.stopDetector\(app, 0L\)/);
+    expect(read(join(TEST_DIR, 'detect', 'DriveDetectRecordTest.kt'))).toContain('CaptureRowFate.TAKE_BACK, captureRowFate(sensing = false, starting = false, resuming = false, recording = true)');
   });
 });
