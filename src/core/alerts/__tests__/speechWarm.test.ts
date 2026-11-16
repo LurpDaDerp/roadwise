@@ -1,5 +1,6 @@
 // Android speech warm-up (adapters.ts, "Speech on Android"): the engine is bound as each drive
 // opens, and a phone with no voice skips phrases so alerts play their tone alone. iPhone untouched.
+import { setSpeechModuleForTests } from "@drive-sense/speech";
 import { Platform as mockPlatform } from "react-native";
 
 import {
@@ -97,6 +98,79 @@ describe("warmSpeech", () => {
     setOS("android");
     await Promise.all([warmSpeech(), warmSpeech(), warmSpeech()]);
     expect(mockGetVoices).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Android's own engine (drive-sense's AlertSpeech): the process's, so speech survives the activity
+// being destroyed while a drive records behind (expo-speech's engine is shut down for good then).
+describe("Android with drive-sense's speech engine", () => {
+  function fakeNative(o: { count?: number | null | Error; outcome?: string } = {}) {
+    const calls: string[] = [];
+    return {
+      calls,
+      module: {
+        speakAlert: jest.fn(async (text: string, volume: number) => {
+          calls.push(`speak:${text}:${volume}`);
+          return o.outcome ?? "done";
+        }),
+        stopAlertSpeech: jest.fn(async () => {
+          calls.push("stop");
+        }),
+        alertVoiceCount: jest.fn(async () => {
+          calls.push("count");
+          if (o.count instanceof Error) throw o.count;
+          return o.count === undefined ? 2 : o.count;
+        }),
+      },
+    };
+  }
+  afterEach(() => setSpeechModuleForTests(undefined));
+
+  it("phrases, stops and the warm-up go to the native engine; expo-speech is never touched", async () => {
+    setOS("android");
+    const n = fakeNative();
+    setSpeechModuleForTests(n.module);
+    await warmSpeech();
+    expect(speechHasNoVoice()).toBe(false);
+    const { voice } = await createExpoAlertPorts();
+    await voice.speak("Slow down", { volume: 0.8 });
+    await voice.stop();
+    expect(n.calls).toEqual(["count", "speak:Slow down:0.8", "stop"]);
+    expect(mockSpeak).not.toHaveBeenCalled();
+    expect(mockGetVoices).not.toHaveBeenCalled();
+  });
+
+  it("a stopped phrase resolves; one the engine could not say rejects (the player moves on at once)", async () => {
+    setOS("android");
+    setSpeechModuleForTests(fakeNative({ outcome: "stopped" }).module);
+    await expect((await createExpoAlertPorts()).voice.speak("Slow down", { volume: 1 })).resolves.toBeUndefined();
+    setSpeechModuleForTests(fakeNative({ outcome: "error" }).module);
+    await expect((await createExpoAlertPorts()).voice.speak("Slow down", { volume: 1 })).rejects.toThrow("speech failed");
+  });
+
+  it("no voice skips phrases; an unreadable count leaves speech as it was", async () => {
+    setOS("android");
+    const none = fakeNative({ count: 0 });
+    setSpeechModuleForTests(none.module);
+    await warmSpeech();
+    expect(speechHasNoVoice()).toBe(true);
+    await (await createExpoAlertPorts()).voice.speak("Slow down", { volume: 1 });
+    expect(none.calls).toEqual(["count"]);
+    setSpeechModuleForTests(fakeNative({ count: null }).module);
+    await warmSpeech();
+    expect(speechHasNoVoice()).toBe(false);
+    setSpeechModuleForTests(fakeNative({ count: new Error("binder died") }).module);
+    await warmSpeech();
+    expect(speechHasNoVoice()).toBe(false);
+  });
+
+  it("iPhone keeps expo-speech even where the native functions exist", async () => {
+    setOS("ios");
+    const n = fakeNative();
+    setSpeechModuleForTests(n.module);
+    await (await createExpoAlertPorts()).voice.speak("Slow down", { volume: 1 });
+    expect(mockSpeak).toHaveBeenCalledTimes(1);
+    expect(n.calls).toEqual([]);
   });
 });
 

@@ -51,6 +51,9 @@ export { ANDROID_GEOCODE_METHODS, GEOCODE_QUERY_MAX, nativeAddressSchema, native
 export type { NativeAddress, NativeGeocoder, NativePoint } from './geocode';
 // Android only (ruling 15): the "Pause app activity if unused" read and its page.
 export { ANDROID_UNUSED_APP_METHODS } from './unusedApps';
+// Android only: spoken alerts on the process's own text-to-speech engine.
+export { ANDROID_SPEECH_METHODS, nativeSpeech, setSpeechModuleForTests } from './speech';
+export type { NativeSpeech } from './speech';
 // The iOS drive detector (plan §3.1.1): its bridge, fake, rules, decision table, self-test and journal format.
 export {
   carLinkStateSchema,

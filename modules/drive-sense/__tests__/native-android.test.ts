@@ -15,6 +15,7 @@ import { DRIVE_DETECT_ERROR_CODES } from '../src/detect/types';
 import { DANGER_ORDER } from '../../../src/features/weather/danger';
 import { ANDROID_GEOCODE_METHODS } from '../src/geocode';
 import { ANDROID_SHARE_METHODS } from '../src/share';
+import { ANDROID_SPEECH_METHODS } from '../src/speech';
 import { ANDROID_UNUSED_APP_METHODS } from '../src/unusedApps';
 
 // Jest compiles this suite to CommonJS, so `__dirname` and `require` are real at run time. The root
@@ -112,9 +113,11 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(MODULE()).toContain(`AsyncFunction("${name}")`);
   });
 
-  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share, geocoder and unused-app ones, and none twice', () => {
+  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share, geocoder, unused-app and speech ones, and none twice', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
-    expect([...declared].sort()).toEqual([...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS, ...ANDROID_UNUSED_APP_METHODS].sort());
+    expect([...declared].sort()).toEqual(
+      [...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS, ...ANDROID_UNUSED_APP_METHODS, ...ANDROID_SPEECH_METHODS].sort()
+    );
   });
 
   it.each([...DRIVE_SENSE_SYNC_METHODS])('Function("%s") is declared (sync, never an AsyncFunction)', (name) => {
@@ -315,6 +318,40 @@ describe('native-android: the background-safe geocoder (WP10)', () => {
   it("answers in expo-location's address shape", () => {
     const keys = [...geo().matchAll(/"(\w+)" to (?:clean\(|district\(\))/g)].map((x) => x[1]);
     expect(keys).toEqual(['city', 'district', 'streetNumber', 'street', 'region', 'subregion', 'country', 'postalCode', 'name', 'isoCountryCode']);
+  });
+});
+
+describe('native-android: spoken alerts on the process engine (AlertSpeech)', () => {
+  const src = () => code(kt('AlertSpeech'));
+
+  it.each([...ANDROID_SPEECH_METHODS])('%s is an Android-only function', (name) => {
+    expect(MODULE()).toContain(`AsyncFunction("${name}")`);
+    expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain(name);
+  });
+
+  it('speakAlert and alertVoiceCount never reject', () => {
+    for (const name of ['speakAlert', 'alertVoiceCount']) {
+      const start = MODULE().indexOf(`AsyncFunction("${name}")`);
+      const fn = MODULE().slice(start, MODULE().indexOf('\n    }', start));
+      expect(fn).toMatch(/promise\.resolve\(/);
+      expect(fn).not.toMatch(/reject/);
+    }
+  });
+
+  it('binds TextToSpeech on the application context, never the activity, and never shuts it down on an activity event', () => {
+    const s = src();
+    expect(s).toMatch(/import android\.speech\.tts\.TextToSpeech/);
+    expect(s).toMatch(/context\.applicationContext/);
+    expect(s).not.toMatch(/currentActivity|OnActivityDestroys/);
+    expect(code(MODULE())).not.toMatch(/OnActivityDestroys[\s\S]{0,80}AlertSpeech/);
+  });
+
+  it('a dead engine (speak answers ERROR) is let go and bound again; a binding that never answers times out', () => {
+    const s = src();
+    expect(s).toMatch(/if \(code != TextToSpeech\.SUCCESS\) drop\(\)/);
+    expect(s).toMatch(/private fun drop\(\)[\s\S]*?tts = null[\s\S]*?settleAll\(SpeechOutcome\.ERROR\)/);
+    expect(s).toMatch(/postDelayed\(\{ onInit\(created, TextToSpeech\.ERROR\) \}, INIT_TIMEOUT_MS\)/);
+    expect(s).toMatch(/if \(t == null \|\| t !== tts \|\| ready\) return/);
   });
 });
 

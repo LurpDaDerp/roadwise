@@ -372,5 +372,33 @@ class DriveSenseModule : Module() {
         Handler(Looper.getMainLooper()).post { promise.resolve(UnusedAppRestrictions.open(ctx, appContext.currentActivity)) }
       }
     }
+
+    // ---- Spoken alerts (AlertSpeech). Android only: ANDROID_SPEECH_METHODS in src/speech.ts,
+    // outside DRIVE_SENSE_METHODS (iPhone keeps expo-speech, whose engine there lives as long as
+    // the app). The engine is the process's, so speech outlives a destroyed activity. ----
+
+    // `done`, `stopped` or `error` once the phrase is over. Never rejects.
+    AsyncFunction("speakAlert") { text: String, volume: Double, promise: Promise ->
+      val ctx = try {
+        context
+      } catch (_: Exception) {
+        null
+      }
+      if (ctx == null) promise.resolve(SpeechOutcome.ERROR) else AlertSpeech.speak(ctx, text, volume.toFloat()) { promise.resolve(it) }
+    }
+
+    AsyncFunction("stopAlertSpeech") {
+      AlertSpeech.stop()
+    }
+
+    // How many voices the engine has: 0 with none, null when unreadable. Never rejects.
+    AsyncFunction("alertVoiceCount") { promise: Promise ->
+      val ctx = try {
+        context
+      } catch (_: Exception) {
+        null
+      }
+      if (ctx == null) promise.resolve(null) else AlertSpeech.voiceCount(ctx) { promise.resolve(it) }
+    }
   }
 }

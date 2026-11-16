@@ -71,6 +71,12 @@
 // reads whether it has any voice; with none, the voice port resolves at once and alerts play their
 // tone (and pulse) alone. A warm-up that cannot tell leaves speech as it was. iPhone speech is
 // immediate and always has a voice: nothing here runs there.
+//
+// The Android engine is drive-sense's (`nativeSpeech`, AlertSpeech.kt), the process's own: expo-speech
+// shuts its engine down for good when the activity is destroyed, while on Android the drive and JS
+// run on behind the location service, so every later phrase would play no words. expo-speech is
+// kept on iPhone, and on an Android build without the native engine.
+import { nativeSpeech, type NativeSpeech } from "@drive-sense/speech";
 import type { AudioMode, AudioPlayer as ExpoAudioPlayer } from "expo-audio";
 import { Platform, Vibration } from "react-native";
 
@@ -217,6 +223,12 @@ export function warmSpeech(): Promise<void> {
   if (warming) return warming;
   warming = (async () => {
     try {
+      const native = nativeSpeech();
+      if (native) {
+        const count = await native.voiceCount();
+        androidVoice = count === null ? "unknown" : count > 0 ? "ready" : "none";
+        return;
+      }
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module, as below
       const Speech = require("expo-speech") as typeof import("expo-speech");
       const voices = await Speech.getAvailableVoicesAsync();
@@ -426,10 +438,14 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
     },
   };
 
+  /** Android's own engine (drive-sense), when the build has it. */
+  const native: NativeSpeech | null = Platform.OS === "android" ? nativeSpeech() : null;
+
   const voice: VoicePort = {
     speak(text, { volume }) {
       // Android with no voice (the last warm-up said so): the tone already played; nothing to say.
       if (speechHasNoVoice()) return Promise.resolve();
+      if (native) return native.speak(text, volume);
       return new Promise<void>((resolve, reject) => {
         Speech.speak(text, {
           volume,
@@ -442,7 +458,8 @@ export async function createExpoAlertPorts(opts: ExpoAlertPortOptions = {}): Pro
       });
     },
     async stop() {
-      await Speech.stop();
+      if (native) await native.stop();
+      else await Speech.stop();
     },
   };
 
