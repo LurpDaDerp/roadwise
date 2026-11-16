@@ -1,4 +1,5 @@
-import { Share } from 'react-native';
+import { setShareModuleForTests } from '@drive-sense';
+import { Platform, Share } from 'react-native';
 
 import { shareWrapped } from '../share';
 
@@ -28,4 +29,37 @@ test('a link or sheet that fails still deletes the image, and the failure reache
   await expect(shareWrapped(card, core)).rejects.toThrow('offline');
   expect(Share.share).not.toHaveBeenCalled();
   expect(mockRemove).toHaveBeenCalledWith('/tmp/ReactNative/wrapped.png');
+});
+
+describe('Android', () => {
+  const nativeShare = jest.fn(async (..._args: unknown[]) => true as unknown);
+  let restoreOS: () => void;
+  beforeEach(() => {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    nativeShare.mockClear();
+    nativeShare.mockResolvedValue(true);
+    setShareModuleForTests({ shareImage: nativeShare });
+  });
+  afterEach(() => {
+    restoreOS();
+    setShareModuleForTests(undefined);
+  });
+
+  test('the image and the line with its link go to the native chooser together; the image stays for the app picked', async () => {
+    await shareWrapped(card, core);
+    expect(nativeShare).toHaveBeenCalledWith('/tmp/ReactNative/wrapped.png', expect.stringContaining('Ab3dEf7hJk9m'), null);
+    expect(Share.share).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  test('no link or no sheet: the image goes at once and the failure reaches the caller', async () => {
+    mockCreate.mockRejectedValueOnce(new Error('offline'));
+    await expect(shareWrapped(card, core)).rejects.toThrow('offline');
+    expect(nativeShare).not.toHaveBeenCalled();
+    expect(mockRemove).toHaveBeenCalledWith('/tmp/ReactNative/wrapped.png');
+    mockRemove.mockClear();
+    nativeShare.mockResolvedValueOnce(false);
+    await expect(shareWrapped(card, core)).rejects.toThrow('share sheet did not open');
+    expect(mockRemove).toHaveBeenCalledWith('/tmp/ReactNative/wrapped.png');
+  });
 });

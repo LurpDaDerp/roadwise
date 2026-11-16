@@ -6,11 +6,19 @@
  * deleted as soon as it is done with, and a wipe of the phone (Delete account, a sign-out, another
  * driver signing in) sweeps up any a crash left. Every step is best effort: a failure here never
  * stops a share or a wipe. The data export's folder (`export` in the cache) is swept with them.
+ *
+ * Android's share sheet answers as soon as it is up (or a target is picked), while the app picked
+ * may still be reading the file, so there a shared file (a card, a Wrapped, the data export, the
+ * Permit log's PDF) is not deleted when the sheet answers. `sweepStaleShareFiles` deletes each one
+ * once it is `SHARE_FILE_MAX_AGE_MS` old, at launch and on every return to the front.
  */
+import { Platform } from 'react-native';
 
 interface FsEntry {
   name: string;
   exists: boolean;
+  /** When the file was last written, epoch ms (`expo-file-system`); absent or null when unknown. */
+  modificationTime?: number | null;
   delete(): void;
 }
 
@@ -61,28 +69,22 @@ export function removeShareImage(uriOrPath: string | null | undefined): void {
   }
 }
 
-/** The files to sweep in a folder: each one `pick` matches. */
+/** The files to sweep in a folder: each one whose name `pick` matches. */
 function sweep(dir: () => FsDirectory, pick: (name: string) => boolean): void {
-  try {
-    const d = dir();
-    if (!d.exists) return;
-    for (const entry of d.list()) {
-      try {
-        if (pick(entry.name)) entry.delete();
-      } catch {
-        // the next file
-      }
-    }
-  } catch {
-    // no such folder on this platform
-  }
+  sweepWhere(dir, (entry) => pick(entry.name));
 }
 
 const IMAGE = /\.(png|jpe?g)$/i;
 
+/** Android: view-shot's card captures and the map snapshots, both straight in the cache. */
+const androidCapture = (n: string) => (n.startsWith('ReactNative-snapshot-image') || n.startsWith('AirMapSnapshot')) && IMAGE.test(n);
+/** Android: expo-print's PDFs (the Permit log), in `Print` in the cache. */
+const PRINT_DIRECTORY = 'Print';
+const PDF = /\.pdf$/i;
+
 /**
- * Deletes every share image a crash or a closed app left on the phone: card captures, map snapshots
- * and the data export's folder. Never throws.
+ * Deletes every share image a crash or a closed app left on the phone: card captures, map snapshots,
+ * the data export's folder and, on Android, the Permit log's PDFs. Never throws.
  */
 export function sweepShareImages(): void {
   const fs = loadFs();
@@ -92,7 +94,51 @@ export function sweepShareImages(): void {
   sweep(() => new Directory(Paths.document.parentDirectory, 'tmp', 'ReactNative'), (n) => IMAGE.test(n));
   sweep(() => Paths.document, (n) => n.startsWith('snapshot-') && IMAGE.test(n));
   // Android: both land in the cache.
-  sweep(() => Paths.cache, (n) => (n.startsWith('ReactNative-snapshot-image') || n.startsWith('AirMapSnapshot')) && IMAGE.test(n));
-  // The data export deletes its own file; one a crash left goes here.
+  sweep(() => Paths.cache, androidCapture);
+  // The data export deletes its own file (on iPhone; Android's goes with the stale sweep); one a crash left goes here.
   sweep(() => new Directory(Paths.cache, 'export'), () => true);
+  // Android: the Permit log's PDF waits for the stale sweep; a wipe takes it at once.
+  if (Platform.OS === 'android') sweep(() => new Directory(Paths.cache, PRINT_DIRECTORY), (n) => PDF.test(n));
+}
+
+/**
+ * How old an Android share file is before the sweep takes it: the app it went to has long finished
+ * reading it by then (a mail draft or a message keeps its own copy).
+ */
+export const SHARE_FILE_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * Android: deletes every shared file at least `maxAgeMs` old: card and Wrapped captures, map
+ * snapshots, the data export and the Permit log's PDF. A file whose age is unknown is left for the
+ * next wipe. Nothing on iPhone, where each file goes as soon as its sheet closes. Never throws.
+ */
+export function sweepStaleShareFiles(now: number = Date.now(), maxAgeMs: number = SHARE_FILE_MAX_AGE_MS, os: string = Platform.OS): void {
+  if (os !== 'android') return;
+  const fs = loadFs();
+  if (!fs) return;
+  const { Paths, Directory } = fs;
+  const old = (entry: FsEntry): boolean => {
+    const t = entry.modificationTime;
+    return typeof t === 'number' && t > 0 && now - t >= maxAgeMs;
+  };
+  sweepWhere(() => Paths.cache, (e) => androidCapture(e.name) && old(e));
+  sweepWhere(() => new Directory(Paths.cache, 'export'), old);
+  sweepWhere(() => new Directory(Paths.cache, PRINT_DIRECTORY), (e) => PDF.test(e.name) && old(e));
+}
+
+/** The files to sweep in a folder: each entry `pick` takes. */
+function sweepWhere(dir: () => FsDirectory, pick: (entry: FsEntry) => boolean): void {
+  try {
+    const d = dir();
+    if (!d.exists) return;
+    for (const entry of d.list()) {
+      try {
+        if (pick(entry)) entry.delete();
+      } catch {
+        // the next file
+      }
+    }
+  } catch {
+    // no such folder
+  }
 }

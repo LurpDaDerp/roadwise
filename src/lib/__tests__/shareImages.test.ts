@@ -1,8 +1,10 @@
 /** @jest-environment node */
-import { removeShareImage, setShareFsForTests, sweepShareImages, toFileUri, type ShareFsLike } from '@/lib/shareImages';
+import { Platform } from 'react-native';
 
-/** An in-memory file tree keyed by URI ("file:///app/Documents/snapshot-1.png"). */
-function fakeFs(paths: string[], opts: { failDelete?: string } = {}) {
+import { removeShareImage, setShareFsForTests, SHARE_FILE_MAX_AGE_MS, sweepShareImages, sweepStaleShareFiles, toFileUri, type ShareFsLike } from '@/lib/shareImages';
+
+/** An in-memory file tree keyed by URI ("file:///app/Documents/snapshot-1.png"), each with its last write (`mtimes`, epoch ms). */
+function fakeFs(paths: string[], opts: { failDelete?: string; mtimes?: Record<string, number | null> } = {}) {
   const files = new Set(paths);
   const join = (parts: (string | { uri: string })[]) =>
     parts
@@ -16,6 +18,9 @@ function fakeFs(paths: string[], opts: { failDelete?: string } = {}) {
     }
     get exists() {
       return files.has(this.uri);
+    }
+    get modificationTime() {
+      return opts.mtimes?.[this.uri] ?? null;
     }
     delete() {
       if (this.uri === opts.failDelete) throw new Error('busy');
@@ -99,4 +104,75 @@ test('the sweep takes card captures, map snapshots and the export folder, and le
     'file:///app/tmp/ReactNative/other.jpg',
     'file:///app/tmp/keep.txt',
   ]);
+});
+
+describe('Android: the stale share-file sweep (at launch and on each return to the front)', () => {
+  const NOW = 1_800_000_000_000;
+  const C = 'file:///app/Library/Caches';
+  const old = NOW - SHARE_FILE_MAX_AGE_MS;
+  const fresh = NOW - SHARE_FILE_MAX_AGE_MS + 1;
+
+  test('shared files 10 minutes old go; younger ones, unknown ages and everything else stay', () => {
+    const { fs, files } = fakeFs(
+      [
+        `${C}/ReactNative-snapshot-image1.png`,
+        `${C}/ReactNative-snapshot-image2.png`,
+        `${C}/AirMapSnapshot3.png`,
+        `${C}/export/roadwise-data-2026-11-15.json`,
+        `${C}/export/roadwise-data-2026-11-14.json`,
+        `${C}/Print/0b1c.pdf`,
+        `${C}/Print/notes.txt`,
+        `${C}/ReactNative-snapshot-image4.png`,
+        `${C}/fonts/a.ttf`,
+      ],
+      {
+        mtimes: {
+          [`${C}/ReactNative-snapshot-image1.png`]: old,
+          [`${C}/ReactNative-snapshot-image2.png`]: fresh,
+          [`${C}/AirMapSnapshot3.png`]: old - 60_000,
+          [`${C}/export/roadwise-data-2026-11-15.json`]: fresh,
+          [`${C}/export/roadwise-data-2026-11-14.json`]: old,
+          [`${C}/Print/0b1c.pdf`]: old,
+          [`${C}/Print/notes.txt`]: old,
+          [`${C}/fonts/a.ttf`]: old,
+        },
+      }
+    );
+    setShareFsForTests(fs);
+    sweepStaleShareFiles(NOW, SHARE_FILE_MAX_AGE_MS, 'android');
+    expect([...files].sort()).toEqual([
+      `${C}/Print/notes.txt`,
+      `${C}/ReactNative-snapshot-image2.png`,
+      // no age known: left for the next wipe
+      `${C}/ReactNative-snapshot-image4.png`,
+      `${C}/export/roadwise-data-2026-11-15.json`,
+      `${C}/fonts/a.ttf`,
+    ]);
+  });
+
+  test('iPhone sweeps nothing here (each file went when its sheet closed); no file module is a no-op', () => {
+    const { fs, files } = fakeFs([`${C}/ReactNative-snapshot-image1.png`], { mtimes: { [`${C}/ReactNative-snapshot-image1.png`]: old } });
+    setShareFsForTests(fs);
+    sweepStaleShareFiles(NOW, SHARE_FILE_MAX_AGE_MS, 'ios');
+    expect([...files]).toHaveLength(1);
+    setShareFsForTests(null);
+    expect(() => sweepStaleShareFiles(NOW, SHARE_FILE_MAX_AGE_MS, 'android')).not.toThrow();
+  });
+});
+
+test('on Android a wipe also takes the Permit log PDFs waiting for the stale sweep; on iPhone it leaves that folder alone', () => {
+  const paths = ['file:///app/Library/Caches/Print/0b1c.pdf'];
+  let { fs, files } = fakeFs(paths);
+  setShareFsForTests(fs);
+  sweepShareImages();
+  expect([...files]).toEqual(paths);
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    ({ fs, files } = fakeFs(paths));
+    setShareFsForTests(fs);
+    sweepShareImages();
+    expect([...files]).toEqual([]);
+  } finally {
+    os.restore();
+  }
 });

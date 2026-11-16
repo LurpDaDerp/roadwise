@@ -1,8 +1,10 @@
 /**
  * Sharing a Wrapped: the summary card as an image, with a line and the month's link. The link is
- * made (or refreshed) on the server only at share time (`create_wrapped_share`); on iOS the share
- * sheet gets the image and the text with the link together.
+ * made (or refreshed) on the server only at share time (`create_wrapped_share`); the share sheet
+ * gets the image and the text with the link together (React Native's `Share` on iPhone;
+ * drive-sense's chooser on Android, where `Share` would drop the image).
  */
+import { nativeShareImage } from '@drive-sense';
 import type { RefObject } from 'react';
 import { PixelRatio, Platform, Share, type View } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
@@ -32,14 +34,29 @@ export function exportSize(): { width: number; height: number } {
   return { width: CARD_EXPORT.width / r, height: CARD_EXPORT.height / r };
 }
 
-/** Captures the card, makes the month's link, then opens the share sheet. Throws when any step fails. */
+/**
+ * Captures the card, makes the month's link, then opens the share sheet. Throws when any step fails.
+ *
+ * iPhone: the captured image is deleted however the sheet ends (it is done with the file by then).
+ * Android: the chooser answers once it is up, and the app picked may still be reading the image, so
+ * a handed-over image stays for the sweep of share files 10 minutes old (`sweepStaleShareFiles`);
+ * one never handed over (no link, no sheet) goes at once. An Android build without the native
+ * chooser shares the text alone, as React Native's `Share` can.
+ */
 export async function shareWrapped(card: RefObject<View | null>, core: Pick<WrappedCore, 'month' | 'archetype'>): Promise<void> {
   const uri = await captureRef(card, { format: 'png', quality: 1, result: 'tmpfile', ...exportSize() });
-  // The captured image is deleted however the sheet ends.
+  const native = Platform.OS === 'android' ? nativeShareImage() : null;
+  let handed = false;
   try {
     const id = await createWrappedShare(core.month);
-    await Share.share({ url: uri, message: shareMessage(core, wrappedLink(id)) });
+    const message = shareMessage(core, wrappedLink(id));
+    if (native) {
+      handed = await native(uri, { text: message });
+      if (!handed) throw new Error('share sheet did not open');
+    } else {
+      await Share.share({ url: uri, message });
+    }
   } finally {
-    removeShareImage(uri);
+    if (!handed) removeShareImage(uri);
   }
 }
