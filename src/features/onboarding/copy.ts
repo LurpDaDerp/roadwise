@@ -1,16 +1,21 @@
 import type { Ionicons } from '@expo/vector-icons';
-import { IDLE_END_S } from '@scoring';
 
 import { hudCopy } from '@/features/drive/hudCopy';
 
 import type { StepId } from './flow';
 
-/** The automatic end's minutes (product spec v3 "Ending on its own"), so the words follow the rule. */
-const IDLE_MIN = Math.round(IDLE_END_S / 60);
-
 /** How phone pickups are noticed, and what RoadWise never sees: the How it works row and the Motion step. */
 const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps or messages.';
 const PHONE_PRIVACY = 'RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.';
+
+/** How it works: the same five lines on both phones (drives start on their own on each). */
+const HOW_ROWS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[] = [
+  { icon: 'car-sport-outline', title: 'It notices your drives', body: "Once you're on the road, RoadWise starts recording by itself." },
+  { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
+  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
+  { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
+  { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
+];
 
 /**
  * Every string the onboarding stepper prints, in one table. Voice: second person, plain words.
@@ -54,23 +59,11 @@ export const onboardingCopy = {
     title: 'How it works',
     body: {
       ios: 'Drive the way you normally do. RoadWise takes care of the rest.',
-      android: 'Start a drive, then just drive. RoadWise takes care of the rest.',
+      android: 'Drive the way you normally do. RoadWise takes care of the rest.',
     },
     rows: {
-      ios: [
-        { icon: 'car-sport-outline', title: 'It notices your drives', body: "Once you're on the road, RoadWise starts recording by itself." },
-        { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
-        { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
-        { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
-        { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
-      ],
-      android: [
-        { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive on Home before you pull out. RoadWise records until you park.' },
-        { icon: 'person-outline', title: 'Not you driving?', body: `Tap "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
-        { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
-        { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
-        { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
-      ],
+      ios: HOW_ROWS,
+      android: HOW_ROWS,
     } satisfies Record<'ios' | 'android', { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[]>,
     continue: 'Sounds good',
   },
@@ -96,14 +89,18 @@ export const onboardingCopy = {
       failed: "Your phone didn't answer. Try again.",
     },
     android: {
-      title: 'Measure your drives',
-      body: 'RoadWise uses precise location to record the drives you start and to check the local weather.',
-      promise: 'Only for drives you start and local weather. Never sold.',
+      title: 'Let RoadWise notice your drives',
+      body: 'RoadWise uses your location to notice when you start driving and to record the drive, even when the app is closed. It also checks the local weather.',
+      steps: 'Your phone asks twice. Choose "While using the app", then "Allow all the time".',
+      promise: 'Your drives stay in your RoadWise account and are never sold',
       allow: 'Allow location',
       notNow: 'Not now',
       continue: 'Continue',
       openSettings: 'Open Settings',
-      allowed: 'Location is allowed.',
+      /** Kept at While Using: the way to "Allow all the time" (the disclosure first, then the phone). */
+      allowAlways: 'Allow all the time',
+      always: "You're all set. RoadWise will notice your drives.",
+      whileUsing: "Location is on only while RoadWise is in use, so drives won't start on their own. Start them from Home, or allow it all the time.",
       denied: "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
       approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
       failed: "Your phone didn't answer. Try again.",
@@ -113,7 +110,7 @@ export const onboardingCopy = {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
     body: {
       ios: 'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.',
-      android: 'This lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.',
+      android: 'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.',
     },
     /** Under the body: phone pickups are felt, never seen. */
     phone: PHONE_PRIVACY,
@@ -124,7 +121,7 @@ export const onboardingCopy = {
     allowed: 'Motion access is allowed.',
     denied: {
       ios: "Motion & Fitness is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.",
-      android: `Physical activity is off. Drives still record, and one you forget to end stops after ${IDLE_MIN} min parked. You can turn it on in Settings.`,
+      android: "Physical activity is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.",
     },
     unavailable: "Your phone didn't let RoadWise ask here. You can turn it on in Settings.",
     cantCheck: "RoadWise couldn't check motion access on this phone.",
@@ -134,6 +131,8 @@ export const onboardingCopy = {
   notifications: {
     title: 'Notifications',
     body: 'Get a recap after each drive, your Sunday summary and monthly Wrapped, and a heads-up when a friend adds you.',
+    /** Android only: the drive notification (the Live Activity's counterpart) needs this permission there. */
+    android: 'They also show your drive on the lock screen while it records.',
     examples: 'Examples',
     previews: [
       { id: 'drive_recap', title: 'Your drive recap is ready', body: '24 min · 12.0 mi. See how it went.' },

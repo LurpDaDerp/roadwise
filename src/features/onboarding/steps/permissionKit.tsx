@@ -3,8 +3,8 @@
  *
  * Every OS request these steps make is the driver's own tap on the step's primary button, so it
  * goes to the adapter directly, unthrottled, and stamps the 14-day history so the app's own later
- * offers wait. Only the iPhone's location step asks for Always, right after While Using, for
- * automatic drives.
+ * offers wait. Only the location step asks for Always, right after While Using, for automatic
+ * drives (on Android after Google Play's background-location disclosure).
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

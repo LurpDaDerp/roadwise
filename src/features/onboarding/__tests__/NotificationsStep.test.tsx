@@ -134,3 +134,11 @@ test('Not now asks nothing', async () => {
   expect(adapter.requestNotifications).not.toHaveBeenCalled();
   expect(ensureChannels).not.toHaveBeenCalled();
 });
+
+test.each(['ios', 'android'] as const)('%s: the lock-screen drive line shows only on Android (its drive notification needs this permission)', async (platform) => {
+  const adapter = fakeAdapter(snap({ platform, notifications: 'undetermined' }));
+  await renderStep(platform, adapter);
+  await screen.findByTestId('notifications-allow');
+  if (platform === 'android') expect(screen.getByTestId('notifications-android-drive')).toHaveTextContent(copy.android);
+  else expect(screen.queryByTestId('notifications-android-drive')).toBeNull();
+});
