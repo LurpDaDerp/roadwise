@@ -31,6 +31,7 @@ import { readSavedPlaces } from '@/core/places/store';
 import { createSettingsRepo, type Db } from '@/data/db';
 import type { DriveHost, LastFinalized } from '@/drive/host';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
+import { WEATHER_CHANNEL_ID } from '@/features/notifications/channels';
 import { readQuietHours } from '@/features/settings/notifications/quietHours';
 import { deviceZone } from '@/lib/deviceZone';
 
@@ -47,8 +48,8 @@ const DAY_MS = 24 * 60 * MIN_MS;
 
 /** `content.data.kind` of every heads-up, so the lists and cancels find only ours. */
 export const WEATHER_COMMUTE_KIND = 'weatherCommute';
-/** The Android channel (created by `ensureAndroidChannels`). */
-export const HEADS_UP_CHANNEL_ID = 'updates';
+/** The Android channel (created by `ensureAndroidChannels`): its own and silent, as iOS posts the heads-up with no sound (Android ignores `content.sound`). */
+export const HEADS_UP_CHANNEL_ID = WEATHER_CHANNEL_ID;
 /** Where a tap goes. */
 export const HEADS_UP_HREF = '/home';
 /** Coming to the front plans again at most this often… */

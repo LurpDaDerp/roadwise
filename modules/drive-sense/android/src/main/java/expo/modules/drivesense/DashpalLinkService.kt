@@ -40,7 +40,19 @@ import androidx.core.content.ContextCompat
  */
 class DashpalLinkService : Service() {
   companion object {
-    const val CHANNEL_ID = "dashpal_link"
+    /**
+     * The link notification's channel: minimum importance, so it sits collapsed at the bottom of the
+     * shade (the drive notification stays the one prominent surface; iOS shows nothing for the link)
+     * and is hidden on the lock screen. Android fixes a channel's importance at creation, so the
+     * earlier low-importance channel ([RETIRED_CHANNEL_ID]) is deleted.
+     *
+     * Android itself lifts a foreground service's minimum-importance channel to low at its first
+     * post (unless the driver chose the importance in Settings), so on most phones it shows as a
+     * low-importance notification with its small icon; the driver can turn it down to "Minimized"
+     * in the channel's settings and Android keeps that.
+     */
+    const val CHANNEL_ID = "dashpal_link_min"
+    const val RETIRED_CHANNEL_ID = "dashpal_link"
     const val NOTIFICATION_ID = 7310
     private const val REQUEST_OPEN = 7311
     const val TITLE = "DashPal"
@@ -153,14 +165,26 @@ class DashpalLinkService : Service() {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
       try {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager? ?: return
-        if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(CHANNEL_ID, "DashPal link", NotificationManager.IMPORTANCE_LOW).apply {
-          description = "Shown while RoadWise is ready to play your DashPal's alerts"
-          setSound(null, null)
-          enableVibration(false)
-          setShowBadge(false)
+        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+          val channel = NotificationChannel(CHANNEL_ID, "DashPal link", NotificationManager.IMPORTANCE_MIN).apply {
+            description = "Shown while RoadWise is ready to play your DashPal's alerts"
+            setSound(null, null)
+            enableVibration(false)
+            setShowBadge(false)
+            lockscreenVisibility = Notification.VISIBILITY_SECRET
+          }
+          nm.createNotificationChannel(channel)
         }
-        nm.createNotificationChannel(channel)
+        // The old channel goes once the new one exists. Android refuses (SecurityException) while a
+        // foreground service's notification is still on it; an app update ends the process, so the
+        // first post of this build finds none, and a refusal is tried again at the next post.
+        if (nm.getNotificationChannel(RETIRED_CHANNEL_ID) != null) {
+          try {
+            nm.deleteNotificationChannel(RETIRED_CHANNEL_ID)
+          } catch (_: SecurityException) {
+            // still in use: the next post tries again
+          }
+        }
       } catch (_: Exception) {
         // No channel: the notification fails quietly too; the service still runs.
       }
@@ -260,7 +284,8 @@ class DashpalLinkService : Service() {
       .setSilent(true)
       .setShowWhen(false)
       .setCategory(NotificationCompat.CATEGORY_SERVICE)
-      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setPriority(NotificationCompat.PRIORITY_MIN)
+      .setVisibility(NotificationCompat.VISIBILITY_SECRET)
     openApp()?.let { builder.setContentIntent(it) }
     return builder.build()
   }

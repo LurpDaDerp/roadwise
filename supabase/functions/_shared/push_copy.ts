@@ -43,7 +43,13 @@ const MONTH_NAMES = [
 /** 'YYYY-MM' → its English month name ('2026-10' → 'October'). */
 export const monthName = (month: string): string => MONTH_NAMES[Number(month.slice(5, 7)) - 1];
 
-export const ANDROID_CHANNEL = 'updates';
+/**
+ * The Android notification channel every push is posted on: the app's `pushes` channel (DEFAULT
+ * importance, default sound, no launcher badge; `PUSH_CHANNEL_ID` in
+ * src/features/notifications/channels.ts). A phone without it (a build from before it) posts the
+ * push on expo's fallback channel instead, so nothing is lost.
+ */
+export const ANDROID_CHANNEL = 'pushes';
 
 export const PayloadSchemas = {
   weekly_recap: z

@@ -22,6 +22,9 @@ type NotificationsModule = typeof import('expo-notifications');
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
 const notifications = (): NotificationsModule => require('expo-notifications') as NotificationsModule;
+type ChannelsModule = typeof import('@/features/notifications/channels');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: it loads expo-notifications
+const channels = (): ChannelsModule => require('@/features/notifications/channels') as ChannelsModule;
 
 export function createPassengerNotePort(db: Db): PassengerNotePort {
   return {
@@ -36,6 +39,9 @@ export function createPassengerNotePort(db: Db): PassengerNotePort {
       return p.granted || p.ios?.status === n.IosAuthorizationStatus.PROVISIONAL;
     },
     async post(clientTripId) {
+      // Android: on its own silent channel (made first; a no-op on iOS).
+      const { DRIVE_ALERTS_CHANNEL_ID, ensureAndroidChannels } = channels();
+      await ensureAndroidChannels();
       await notifications().scheduleNotificationAsync({
         identifier: passengerCheckId(clientTripId),
         content: {
@@ -44,7 +50,10 @@ export function createPassengerNotePort(db: Db): PassengerNotePort {
           data: { kind: PASSENGER_CHECK_KIND, clientTripId },
           sound: false,
         },
-        trigger: null,
+        // Android reads the channel only from the trigger (with none the note lands on expo's
+        // fallback channel, which sounds); a channel-only trigger still posts at once, and on iOS it
+        // is the same as no trigger.
+        trigger: { channelId: DRIVE_ALERTS_CHANNEL_ID },
       });
     },
     async remove(clientTripId) {

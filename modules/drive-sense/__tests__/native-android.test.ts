@@ -353,7 +353,7 @@ describe('native-android: with no drive open, only the forgot-to-start reminder,
   it("three notification channels: the capture's (NotificationFactory), the reminder's (TripReminderNotifier) and the DashPal link's (DashpalLinkService)", () => {
     const src = code(allKotlin());
     expect(src.match(/\bNotificationChannel\(/g)).toHaveLength(3);
-    expect(code(kt('DashpalLinkService'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "DashPal link", NotificationManager\.IMPORTANCE_LOW\)/);
+    expect(code(kt('DashpalLinkService'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "DashPal link", NotificationManager\.IMPORTANCE_MIN\)/);
     expect(code(kt('NotificationFactory'))).toMatch(/\bNotificationChannel\(/);
     expect(code(kt('TripReminderNotifier'))).toMatch(/\bNotificationChannel\(CHANNEL_ID, "Drive reminder", NotificationManager\.IMPORTANCE_DEFAULT\)/);
     expect(src).not.toMatch(/"reminders"/);
@@ -975,13 +975,21 @@ describe('native-android: DashPal alerts on the phone (README §2: the link serv
     expect(src).toMatch(/START_NOT_STICKY/);
   });
 
-  it('the notification: id 7310, a silent low-importance channel, "DashPal" and its two texts, opens RoadWise', () => {
+  it('the notification: id 7310, a silent minimum-importance channel hidden on the lock screen (a new id; the old one deleted), "DashPal" and its two texts, opens RoadWise', () => {
     const src = SVC();
     expect(src).toMatch(/NOTIFICATION_ID = 7310/);
-    expect(src).toMatch(/CHANNEL_ID = "dashpal_link"/);
-    expect(src).toMatch(/IMPORTANCE_LOW/);
-    expect(src).not.toMatch(/IMPORTANCE_MIN/);
-    expect(src).toMatch(/setSound\(null, null\)\s*enableVibration\(false\)\s*setShowBadge\(false\)/);
+    // Android fixes a channel's importance at creation: the minimum-importance channel has its own id.
+    expect(src).toMatch(/CHANNEL_ID = "dashpal_link_min"/);
+    expect(src).toMatch(/RETIRED_CHANNEL_ID = "dashpal_link"/);
+    expect(src).toMatch(/NotificationChannel\(CHANNEL_ID, "DashPal link", NotificationManager\.IMPORTANCE_MIN\)/);
+    expect(src).not.toMatch(/IMPORTANCE_LOW|PRIORITY_LOW/);
+    expect(src).toMatch(/setSound\(null, null\)\s*enableVibration\(false\)\s*setShowBadge\(false\)\s*lockscreenVisibility = Notification\.VISIBILITY_SECRET/);
+    expect(src).toMatch(/\.setPriority\(NotificationCompat\.PRIORITY_MIN\)\s*\.setVisibility\(NotificationCompat\.VISIBILITY_SECRET\)/);
+    // The old channel goes only after the new one exists, and a refusal (a foreground service still on it) never breaks the post.
+    const ensure = /fun ensureChannel\(context: Context\) \{[\s\S]*?\n {4}\}/.exec(src)?.[0] ?? '';
+    expect(ensure.indexOf('createNotificationChannel(channel)')).toBeGreaterThan(0);
+    expect(ensure.indexOf('createNotificationChannel(channel)')).toBeLessThan(ensure.indexOf('deleteNotificationChannel(RETIRED_CHANNEL_ID)'));
+    expect(ensure).toMatch(/try \{\s*nm\.deleteNotificationChannel\(RETIRED_CHANNEL_ID\)\s*\} catch \(_: SecurityException\) \{/);
     expect(src).toMatch(/TITLE = "DashPal"/);
     expect(src).toMatch(/TEXT_CONNECTED = "Connected\. DashPal alerts play on this phone\."/);
     expect(src).toMatch(/TEXT_WAITING = "Not connected\. DashPal plays its alerts itself\."/);

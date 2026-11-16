@@ -16,7 +16,7 @@ Deno.test('a weekly recap is sent to every token with its words and the home url
   assertEquals(d.message.title, 'Your week on the road');
   assertEquals(d.message.body, '5 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.');
   assertEquals(d.message.data.url, '/home');
-  assertEquals(d.message.channelId, 'updates');
+  assertEquals(d.message.channelId, 'pushes');
 });
 
 Deno.test('a token held by two device rows of one account is sent to once, in the claim order', () => {
