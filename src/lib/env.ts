@@ -10,6 +10,9 @@ const schema = z.object({
   // Set to '1' by eas.json on the development and preview profiles only: it unlocks the drive
   // diagnostics screen in a build that is not __DEV__. Any other value, or none, leaves it off.
   EXPO_PUBLIC_DIAGNOSTICS: z.string().optional(),
+  // '1' shows Sign in with Apple on Android (Apple's web sign-in through Supabase, which needs the
+  // Services ID and its secret set up on the hosted project). Any other value, or none, hides it.
+  EXPO_PUBLIC_APPLE_WEB_SIGNIN: z.string().optional(),
 });
 
 // Expo inlines `process.env.EXPO_PUBLIC_*` at build time only where each name is spelled out
@@ -22,6 +25,7 @@ const parsed = schema.safeParse({
   EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
   EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY,
   EXPO_PUBLIC_DIAGNOSTICS: process.env.EXPO_PUBLIC_DIAGNOSTICS,
+  EXPO_PUBLIC_APPLE_WEB_SIGNIN: process.env.EXPO_PUBLIC_APPLE_WEB_SIGNIN,
 });
 
 if (!parsed.success) {
@@ -41,4 +45,5 @@ export const env = {
   googleAndroidClientId: parsed.data.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
   googleMapsAndroidKey: parsed.data.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY,
   diagnostics: parsed.data.EXPO_PUBLIC_DIAGNOSTICS === '1',
+  appleWebSignIn: parsed.data.EXPO_PUBLIC_APPLE_WEB_SIGNIN === '1',
 };
