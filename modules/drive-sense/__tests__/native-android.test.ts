@@ -355,10 +355,12 @@ describe('native-android: spoken alerts on the process engine (AlertSpeech)', ()
     expect(s).toMatch(/if \(t == null \|\| t !== tts \|\| ready\) return/);
   });
 
-  it('a voice list it cannot read is a dead engine (let go, bound once more, then unknown), never "no voice"; a timeout is unknown', () => {
+  it('a voice list it cannot read is a dead engine (let go, bound once more, then unknown), never "no voice"; a timeout, or a failed binding with an engine installed, is unknown', () => {
     const s = src();
     const count = /private fun countVoices\([\s\S]*?\n {2}\}/.exec(s)?.[0] ?? '';
-    expect(count).toMatch(/done\(if \(timedOut\) null else 0\)/);
+    // A failed binding is "no voice" only when no engine is installed (VoiceCountTest pins the rule).
+    expect(count).toMatch(/done\(VoiceCount\.afterFailedBind\(timedOut, enginesInstalled\(app\)\)\)/);
+    expect(s).toMatch(/queryIntentServices\(Intent\(TextToSpeech\.Engine\.INTENT_ACTION_TTS_SERVICE\), 0\)/);
     expect(count).toMatch(/val n = VoiceCount\.read \{ t\.voices \}/);
     expect(count).toMatch(/drop\(t\)\s*if \(rebind\) countVoices\(app, rebind = false, done\) else done\(null\)/);
     expect(s).toMatch(/main\.post \{ countVoices\(app, rebind = true, done\) \}/);

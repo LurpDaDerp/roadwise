@@ -55,6 +55,11 @@
     <!-- The car link: Android Auto's connection provider (androidx.car.app's CarConnection
          contract), asked whether it projects to a car. -->
     <provider android:authorities="androidx.car.app.connection" />
+    <!-- Spoken alerts (AlertSpeech): the installed text-to-speech engines, to tell a phone with
+         none from an engine that failed to bind. -->
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE" />
+    </intent>
   </queries>
 
   <application>

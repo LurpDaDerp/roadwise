@@ -1,6 +1,7 @@
 package expo.modules.drivesense
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -85,9 +86,10 @@ internal object AlertSpeech {
   }
 
   /**
-   * How many voices the engine has (binding it now): 0 when a live engine has none or none binds at
-   * all; null when it can't be read: a binding that never answered, or an engine whose service died
-   * (its voice list unreadable), let go and bound once more first. JS then keeps trying phrases, and
+   * How many voices the engine has (binding it now): 0 only when a live engine has none or the phone
+   * has no text-to-speech engine installed; null when it can't be read: a binding that never answered
+   * or failed while an engine is installed (being updated, disabled for a moment), or an engine whose
+   * service died (its voice list unreadable), let go and bound once more first. JS then keeps trying phrases, and
    * a phrase the engine refuses lets it go too.
    */
   fun voiceCount(context: Context, done: (Int?) -> Unit) {
@@ -98,7 +100,7 @@ internal object AlertSpeech {
   private fun countVoices(app: Context, rebind: Boolean, done: (Int?) -> Unit) {
     withEngine(app) { t ->
       if (t == null) {
-        done(if (timedOut) null else 0)
+        done(VoiceCount.afterFailedBind(timedOut, enginesInstalled(app)))
         return@withEngine
       }
       val n = VoiceCount.read { t.voices }
@@ -110,6 +112,18 @@ internal object AlertSpeech {
       if (rebind) countVoices(app, rebind = false, done) else done(null)
     }
   }
+
+  /**
+   * Whether any text-to-speech engine is installed (the services answering TTS_SERVICE, as
+   * TextToSpeech.getEngines finds them; the manifest's <queries> makes them visible on Android 11+);
+   * null when the package manager can't be asked.
+   */
+  private fun enginesInstalled(app: Context): Boolean? =
+    try {
+      app.packageManager.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0).isNotEmpty()
+    } catch (_: Exception) {
+      null
+    }
 
   /** [then] gets the bound engine, or null when none could be bound. */
   private fun withEngine(app: Context, then: (TextToSpeech?) -> Unit) {
@@ -210,6 +224,14 @@ internal object VoiceCount {
     } catch (_: Exception) {
       null
     }
+
+  /**
+   * The count when no engine could be bound: 0 ("no voice") only when the phone has no engine
+   * installed; a timeout, or a failed binding while one is installed (or when that can't be told), is
+   * null, so the words stay on and the next phrase tries again.
+   */
+  fun afterFailedBind(timedOut: Boolean, enginesInstalled: Boolean?): Int? =
+    if (!timedOut && enginesInstalled == false) 0 else null
 }
 
 /** What a spoken phrase came to (`speakAlert`'s answer; src/speech.ts reads it). */
