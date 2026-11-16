@@ -24,6 +24,11 @@ import { queryKeys } from '@/data/queries/keys';
 import { asPlatform } from '@/lib/__fixtures__/platform';
 
 jest.mock('expo-notifications', () => ({}));
+const mockSweepStale = jest.fn();
+jest.mock('@/lib/shareImages', () => ({
+  ...jest.requireActual<typeof import('@/lib/shareImages')>('@/lib/shareImages'),
+  sweepStaleShareFiles: (...args: unknown[]) => mockSweepStale(...args),
+}));
 const mockEnsureDrivePermissions = jest.fn(async (..._args: unknown[]) => ({ location: 'granted' as const, motion: 'undetermined' as const }));
 jest.mock('@/features/drive/permissions', () => ({ ensureDrivePermissions: (...args: unknown[]) => mockEnsureDrivePermissions(...args) }));
 
@@ -367,6 +372,32 @@ test("the foreground jobs' 'not now' (a drive under way, a drive recording, a re
   for (let i = 0; i < 20; i++) await new Promise<void>((resolve) => setImmediate(resolve));
   expect(errors).toContain('foreground job config: config fetch failed');
   await jobs.stop();
+  await rt.stop();
+});
+
+test('Android sweeps shared files 10 minutes old at launch and on every return to the front, and stops with the jobs; iPhone never does', async () => {
+  const rt = await bootstrapApp(deps().deps);
+  const { Platform } = jest.requireActual<typeof import('react-native')>('react-native');
+  mockSweepStale.mockClear();
+  const ios = await startForegroundJobs(rt, { appState: createFakeAppState('active') });
+  await ios.stop();
+  expect(mockSweepStale).not.toHaveBeenCalled();
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    const appState = createFakeAppState('background');
+    const jobs = await startForegroundJobs(rt, { appState });
+    expect(mockSweepStale).toHaveBeenCalledTimes(1);
+    expect(mockSweepStale).toHaveBeenCalledWith(rt.now());
+    appState.set('active');
+    expect(mockSweepStale).toHaveBeenCalledTimes(2);
+    appState.set('background');
+    expect(mockSweepStale).toHaveBeenCalledTimes(2);
+    await jobs.stop();
+    appState.set('active');
+    expect(mockSweepStale).toHaveBeenCalledTimes(2);
+  } finally {
+    os.restore();
+  }
   await rt.stop();
 });
 

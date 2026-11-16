@@ -1,19 +1,21 @@
 /**
- * The one place an export leaves the phone (H14). No new native module (`expo-sharing` would be
- * one), so the two platforms differ, like the share card before it:
+ * The one place an export leaves the phone (H14): the JSON is written to `export/<name>` in the
+ * cache directory and handed to the system share sheet as a file (Save to Files or Drive, Mail,
+ * AirDrop or Nearby Share).
  *
- * - **iOS:** the JSON is written to `export/<name>` in the cache directory and handed to the share
- *   sheet as a file (Save to Files, Mail, AirDrop). The file is deleted on every path — shared,
- *   dismissed or failed — so no copy of the data outlives the sheet.
- * - **Android:** React Native's `Share` can't carry a file, and a whole export is too large for a
- *   text share, so the system folder picker is the sheet: the driver chooses a folder and the file
- *   is saved there. Choosing no folder is a dismissal.
+ * - **iOS:** React Native's `Share` with the file. The file is deleted on every path (shared,
+ *   dismissed or failed), so no copy of the data outlives the sheet.
+ * - **Android:** React Native's `Share` can't carry a file, so expo-sharing's sheet takes it. Its
+ *   answer comes as soon as a target is picked, while that app may still be reading the file, so the
+ *   file is deleted only when the share fails; otherwise it goes with the sweep of shared files 10
+ *   minutes old (`sweepStaleShareFiles`, at launch and on each return to the front) or the next
+ *   wipe. Android's sheet says nothing about a dismissal.
  *
  * Nothing is logged: the file is the driver's own data.
  */
 import { Platform, Share } from 'react-native';
 
-export type ExportShareOutcome = 'shared' | 'saved' | 'dismissed' | 'failed';
+export type ExportShareOutcome = 'shared' | 'dismissed' | 'failed';
 
 interface FileLike {
   uri: string;
@@ -23,16 +25,18 @@ interface FileLike {
   delete(): void;
 }
 
-/** `expo-file-system`'s `File`, `Directory` and `Paths`, or a test's stand-in. */
+/** `expo-file-system`'s `File` and `Paths`, or a test's stand-in. */
 export interface ExportFsLike {
   Paths: { cache: unknown };
   File: new (...parts: never[]) => FileLike;
-  Directory: { pickDirectoryAsync(initialUri?: string): Promise<{ createFile(name: string, mimeType: string | null): FileLike }> };
 }
 
 export interface ExportShareDeps {
   platform?: string;
+  /** iOS: React Native's `Share` with the file. */
   share?: (content: { url: string }) => Promise<{ action: string }>;
+  /** Android: expo-sharing's sheet with the file. */
+  shareFile?: (uri: string, options: { mimeType: string; dialogTitle: string }) => Promise<void>;
   loadFs?: () => Promise<ExportFsLike>;
   /** Epoch ms, for the file's date. */
   now?: () => number;
@@ -55,6 +59,13 @@ async function defaultLoadFs(): Promise<ExportFsLike> {
 
 const defaultShare = (content: { url: string }) => Share.share(content as { url: string; message?: string });
 
+const defaultShareFile = (uri: string, options: { mimeType: string; dialogTitle: string }): Promise<void> =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
+  (require('expo-sharing') as typeof import('expo-sharing')).shareAsync(uri, options);
+
+/** The Android sheet's title: the row's own words. */
+const DIALOG_TITLE = 'Export my data';
+
 /** Hands `json` to the platform's sheet. Never throws. */
 export async function shareExport(json: string, deps: ExportShareDeps = {}): Promise<ExportShareOutcome> {
   const platform = deps.platform ?? Platform.OS;
@@ -66,34 +77,26 @@ export async function shareExport(json: string, deps: ExportShareDeps = {}): Pro
     return 'failed';
   }
 
-  if (platform === 'android') {
-    let directory: { createFile(name: string, mimeType: string | null): FileLike };
-    try {
-      directory = await fs.Directory.pickDirectoryAsync();
-    } catch {
-      // The picker closed without a folder.
-      return 'dismissed';
-    }
-    try {
-      directory.createFile(name, 'application/json').write(json);
-      return 'saved';
-    } catch {
-      return 'failed';
-    }
-  }
-
+  const android = platform === 'android';
   let file: FileLike | null = null;
+  /** Android: a sheet that took the file leaves it for the app picked (the stale sweep deletes it). */
+  let keep = false;
   try {
     file = new fs.File(...([fs.Paths.cache, EXPORT_DIRECTORY, name] as never[]));
     file.create({ intermediates: true, overwrite: true });
     file.write(json);
+    if (android) {
+      await (deps.shareFile ?? defaultShareFile)(file.uri, { mimeType: 'application/json', dialogTitle: DIALOG_TITLE });
+      keep = true;
+      return 'shared';
+    }
     const result = await (deps.share ?? defaultShare)({ url: file.uri });
     return result.action === 'dismissedAction' ? 'dismissed' : 'shared';
   } catch {
     return 'failed';
   } finally {
     try {
-      if (file?.exists) file.delete();
+      if (!keep && file?.exists) file.delete();
     } catch {
       // A cache file the system couldn't remove is cleared with the cache.
     }

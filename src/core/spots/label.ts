@@ -6,17 +6,16 @@
 import { labelFor, MAX_LABEL_CHARS, type Geocoder } from '@/core/engine/labels';
 import { zoneAt, type PrivacyZone } from '@/core/engine/privacy';
 import type { LatLng } from '@/lib/geo';
+import { reverseGeocode } from '@/lib/phoneGeocoder';
 
 export type { Geocoder } from '@/core/engine/labels';
 
 const clip = (s: string): string => (s.length > MAX_LABEL_CHARS ? `${s.slice(0, MAX_LABEL_CHARS - 1)}…` : s);
 
-/** expo-location's reverse geocode, street first ("Dexter Ave N"). Never throws: any failure is null. */
+/** The phone's reverse geocode (`@/lib/phoneGeocoder`), street first ("Dexter Ave N"). Never throws: any failure is null. */
 export const streetGeocoder: Geocoder = async (point) => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-    const Location = require('expo-location') as typeof import('expo-location');
-    const results = await Location.reverseGeocodeAsync({ latitude: point.lat, longitude: point.lng });
+    const results = await reverseGeocode(point);
     const first = results[0];
     if (!first) return null;
     const label = first.street ?? first.name ?? first.district ?? first.city ?? null;

@@ -4,6 +4,7 @@
 // locally; never uploaded. Nothing inside a privacy zone is ever geocoded.
 import { matchPlace, type AddressParts, type MatchablePlace } from '@/core/places/match';
 import type { LatLng } from '@/lib/geo';
+import { reverseGeocode } from '@/lib/phoneGeocoder';
 
 import { zoneAt, type PrivacyZone } from './privacy';
 
@@ -24,14 +25,13 @@ const clip = (s: string): string => (s.length > MAX_LABEL_CHARS ? `${s.slice(0, 
 const partOf = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
 /**
- * expo-location's reverse geocode, loaded on first use: the label (`district ?? street ?? subregion
- * ?? city`) and the house number and street. Never throws: any failure is null.
+ * The phone's reverse geocode (`@/lib/phoneGeocoder`: Apple's on iPhone, Android's own geocoder on
+ * Android, which also answers with the app behind): the label (`district ?? street ?? subregion ??
+ * city`) and the house number and street. Never throws: any failure is null.
  */
-export const expoGeocoder: Geocoder = async (point) => {
+export const phoneLabelGeocoder: Geocoder = async (point) => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred native module
-    const Location = require('expo-location') as typeof import('expo-location');
-    const results = await Location.reverseGeocodeAsync({ latitude: point.lat, longitude: point.lng });
+    const results = await reverseGeocode(point);
     const first = results[0];
     if (!first) return null;
     const label = first.district ?? first.street ?? first.subregion ?? first.city ?? null;

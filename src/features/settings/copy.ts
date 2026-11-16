@@ -194,8 +194,6 @@ export const settingsCopy = {
       failed: "Couldn't export your data. Check your connection and try again.",
       offline: "You're offline. Export your data when you're connected.",
       tooMany: "You've exported your data a few times today. Try again tomorrow.",
-      saved: 'Your data file is saved.',
-      androidNote: "You'll choose a folder on your phone to save the file in.",
     },
     delete: {
       title: 'Delete account',

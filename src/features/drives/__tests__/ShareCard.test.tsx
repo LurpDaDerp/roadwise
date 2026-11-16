@@ -1,4 +1,6 @@
+import { setShareModuleForTests } from '@drive-sense';
 import { act, fireEvent, screen, within } from '@testing-library/react-native';
+import * as rn from 'react-native';
 import { Platform, processColor } from 'react-native';
 import { useState } from 'react';
 
@@ -9,7 +11,7 @@ import { draw, press, ROUTE } from '../__fixtures__/drives';
 import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
-import { bandAlpha, leadPath, MAP_TIMEOUT_MS, routePath, shareFrame } from '../ShareMap';
+import { bandAlpha, leadPath, mapCredit, mapsAvailable, MAP_TIMEOUT_MS, routePath, setAndroidShareMapForTests, setMapsKeyForTests, shareFrame } from '../ShareMap';
 import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -24,11 +26,13 @@ const mockTakeSnapshot = jest.fn<Promise<string>, [unknown]>(async () => 'file:/
 jest.mock('react-native-maps', () => {
   const React = jest.requireActual<typeof import('react')>('react');
   const { View } = jest.requireActual<typeof import('react-native')>('react-native');
-  class MapView extends React.Component<{ onMapReady?: () => void; testID?: string }> {
+  class MapView extends React.Component<{ onMapReady?: () => void; onMapLoaded?: () => void; testID?: string }> {
     takeSnapshot = mockTakeSnapshot;
     componentDidMount() {
-      // The native map reports ready after it mounts, never during.
-      void Promise.resolve().then(() => this.props.onMapReady?.());
+      // The native map reports ready after it mounts, never during; Google's tiles load after that.
+      void Promise.resolve()
+        .then(() => this.props.onMapReady?.())
+        .then(() => this.props.onMapLoaded?.());
     }
     render() {
       return <View {...this.props} />;
@@ -130,7 +134,7 @@ test('the captured card image is deleted once the share sheet closes, shared or 
   expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
 });
 
-test('on Android the shared card image stays for the target app to read (the next wipe sweeps it)', async () => {
+test('on Android the shared card image stays for the target app to read (the stale-image sweep takes it)', async () => {
   const os = jest.replaceProperty(Platform, 'OS', 'android');
   try {
     await draw(sheet());
@@ -389,5 +393,137 @@ describe('the card holds only time, distance and score', () => {
   test('the "Show map" switch is still there, off when the sheet opens', async () => {
     await draw(sheet());
     expect(screen.getByTestId('share-map-toggle')).toHaveProp('value', false);
+  });
+});
+
+/** Stands in for the Android build's Google Maps key, or none. */
+const withMapsKey = (key: string | undefined) => {
+  setMapsKeyForTests({ key });
+  return { restore: () => setMapsKeyForTests(undefined) };
+};
+
+describe('Android', () => {
+  let restoreOS: () => void;
+  const nativeShare = jest.fn(async (..._args: unknown[]) => true as unknown);
+  beforeEach(() => {
+    restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+    nativeShare.mockClear();
+    nativeShare.mockResolvedValue(true);
+  });
+  afterEach(() => {
+    restoreOS();
+    setShareModuleForTests(undefined);
+  });
+
+  test('the card goes to the native chooser (Save image there), titled, with no text; the image stays for the target', async () => {
+    setShareModuleForTests({ shareImage: nativeShare });
+    await draw(sheet());
+    await press(screen.getByTestId('share-image'));
+    expect(nativeShare).toHaveBeenCalledWith('file:///card.png', null, 'Share your drive');
+    expect(sharing().shareAsync).not.toHaveBeenCalled();
+    expect(mockRemove).not.toHaveBeenCalledWith('file:///card.png');
+  });
+
+  test('a chooser that never opened deletes the image and says so', async () => {
+    nativeShare.mockResolvedValue(false);
+    setShareModuleForTests({ shareImage: nativeShare });
+    await draw(sheet());
+    await press(screen.getByTestId('share-image'));
+    expect(screen.getByText("Couldn't share the image. Try again.")).toBeOnTheScreen();
+    expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
+  });
+
+  test("Show map is off on Android (Google's snapshot may not leave the app), even with a key; iPhone keeps it", async () => {
+    expect(mapsAvailable('android', 'AIza-key')).toBe(false);
+    expect(mapsAvailable('ios', undefined)).toBe(true);
+    const key = withMapsKey('AIza-key');
+    try {
+      await draw(sheet());
+      expect(screen.queryByTestId('share-map-toggle')).toBeNull();
+      expect(within(screen.getByTestId('share-card')).queryByText('Map data © Google')).toBeNull();
+    } finally {
+      key.restore();
+    }
+  });
+
+  describe('with the map backdrop turned on', () => {
+    beforeEach(() => setAndroidShareMapForTests(true));
+    afterEach(() => setAndroidShareMapForTests(undefined));
+
+    test('Show map needs a Google Maps key in the build; iPhone needs none', () => {
+      expect(mapsAvailable('android', 'AIza-key')).toBe(true);
+      expect(mapsAvailable('android', undefined)).toBe(false);
+      expect(mapsAvailable('android', '  ')).toBe(false);
+      expect(mapsAvailable('ios', undefined)).toBe(true);
+      expect(mapsAvailable('web', 'AIza-key')).toBe(false);
+    });
+
+    test('with a key in a dark phone: the dark, quiet Google map is snapshotted once its tiles load, and credited to Google', async () => {
+      const key = withMapsKey('AIza-key');
+      const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('dark');
+      try {
+        await draw(sheet());
+        await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+        const view = screen.getByTestId('share-map-view', H);
+        expect(view).toHaveProp('userInterfaceStyle', 'dark');
+        expect(view.props.onMapReady).toBeUndefined();
+        expect(typeof view.props.onMapLoaded).toBe('function');
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
+        await mapLoads();
+        expect(mockTakeSnapshot).toHaveBeenCalledTimes(1);
+        expect(within(screen.getByTestId('share-card')).getByText('Map data © Google')).toBeOnTheScreen();
+        expect(within(screen.getByTestId('share-card')).queryByText('Map © Apple')).toBeNull();
+      } finally {
+        scheme.mockRestore();
+        key.restore();
+      }
+    });
+
+    test('in a light phone the shared map is the light, quiet Google map, as the iPhone snapshot follows the phone', async () => {
+      const key = withMapsKey('AIza-key');
+      const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('light');
+      try {
+        await draw(sheet());
+        await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+        const view = screen.getByTestId('share-map-view', H);
+        expect(view).toHaveProp('userInterfaceStyle', 'light');
+        expect(view.props.customMapStyle).toEqual(expect.arrayContaining([{ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] }]));
+        expect(view.props.customMapStyle).not.toEqual(expect.arrayContaining([{ elementType: 'geometry', stylers: [{ color: '#242424' }] }]));
+      } finally {
+        scheme.mockRestore();
+        key.restore();
+      }
+    });
+
+    test("the key comes from the bundle's EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY (Expo strips android.config from the app's config)", async () => {
+      const before = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
+      try {
+        process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = 'AIza-from-env';
+        expect(mapsAvailable('android')).toBe(true);
+        await draw(sheet());
+        expect(screen.getByTestId('share-map-toggle')).toBeOnTheScreen();
+        process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = '';
+        expect(mapsAvailable('android')).toBe(false);
+      } finally {
+        if (before === undefined) delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
+        else process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY = before;
+      }
+    });
+
+    test('without a key there is no Show map', async () => {
+      const key = withMapsKey(undefined);
+      try {
+        await draw(sheet());
+        expect(screen.queryByTestId('share-map-toggle')).toBeNull();
+      } finally {
+        key.restore();
+      }
+    });
+  });
+
+  test('the credit names whose map it is', () => {
+    expect(mapCredit('android')).toBe('Map data © Google');
+    expect(mapCredit('ios')).toBe('Map © Apple');
   });
 });

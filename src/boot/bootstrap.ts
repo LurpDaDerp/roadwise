@@ -47,6 +47,7 @@ import { loadVoicePref, voicePrefEnabled } from '@/features/settings/alerts/voic
 import { nativeDashpal, nativeDriveDetect, nativeDriveSource, type DashpalNative, type DriveSource } from '@/drive/source';
 import { reportError } from '@/lib/crashReport';
 import { deviceZone } from '@/lib/deviceZone';
+import { sweepStaleShareFiles } from '@/lib/shareImages';
 
 import type { DriveDetectApi } from '@drive-sense';
 
@@ -961,8 +962,8 @@ export interface ForegroundJobs {
  * The work that runs only while the driver has the app open, each on a transition to `active`:
  * the restore (once per launch until the owner's has run to the end), the public config (daily), the
  * expired-tile purge and the 7-day prune of DashPal events outside any drive (daily), the archive
- * of drives past 183 days (daily), automatic drives armed or disarmed (every time: iPhone), and the
- * problem spots' recompute.
+ * of drives past 183 days (daily), automatic drives armed or disarmed (every time: iPhone), the
+ * problem spots' recompute, and (Android) the sweep of shared files at least 10 minutes old.
  */
 export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJobsDeps = {}): Promise<ForegroundJobs> {
   const report = deps.onError ?? warn;
@@ -1025,6 +1026,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
     foreground
   );
   const spots = startSpots(runtime, foreground.appState, onError);
+  const stopShareSweep = Platform.OS === 'android' ? startShareFileSweep(runtime.now, foreground.appState) : () => {};
   return {
     async stop() {
       stopRestore();
@@ -1033,6 +1035,7 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
       stopArchive();
       stopAutoDetect();
       spots?.stop();
+      stopShareSweep();
     },
     async runNow() {
       // A sign-in names the driver: automatic drives follow at once.
@@ -1047,6 +1050,20 @@ export async function startForegroundJobs(runtime: AppRuntime, deps: ForegroundJ
       }
     },
   };
+}
+
+/**
+ * Android: the share sheet answers before the app picked has read the file, so shared files (cards,
+ * Wrapped, the data export, the Permit log) stay in the cache until they are 10 minutes old
+ * (`sweepStaleShareFiles`). They are swept now (launch) and on every return to the front: no timer,
+ * and nothing but local file deletes.
+ */
+function startShareFileSweep(now: () => number, appState: ForegroundAppState): () => void {
+  sweepStaleShareFiles(now());
+  const subscription = appState.addEventListener('change', (state) => {
+    if (state === 'active') sweepStaleShareFiles(now());
+  });
+  return () => subscription.remove();
 }
 
 /** The problem spots' recompute (`src/features/spots/recompute.ts`), loaded on first use; null when it cannot start. */

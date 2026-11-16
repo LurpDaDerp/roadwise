@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, Pressable, TextInput, useColorScheme, View } from 'react-native';
 
 import type { PlaceSlot } from '@/core/places/learn';
 import { locateOnce, type LocateResult } from '@/features/settings/PrivacyZonesScreen';
 import { loadMaps } from '@/features/settings/maps';
+import { androidMapLook } from '@/features/settings/mapStyle';
 import { RowIcon, Section } from '@/features/settings/parts';
 import type { LatLng } from '@/lib/geo';
 import { Button, ListRow, Sheet, Text, useFontScale, useTheme } from '@/ui';
@@ -296,6 +297,10 @@ function PlaceEditor({
     ]);
   };
 
+  // Android: Google's map takes the system appearance only when it is made, so it is given it (and
+  // the quiet style Apple's map gets from showsPointsOfInterests) and remade when it changes.
+  const look = androidMapLook(useColorScheme() === 'dark' ? 'dark' : 'light');
+
   const inputStyle = {
     minHeight: 48 * scale,
     borderWidth: 1.5,
@@ -320,9 +325,11 @@ function PlaceEditor({
               style={{ height: 200, borderRadius: th.radius.lg, overflow: 'hidden', borderCurve: 'continuous' }}
             >
               <maps.default
+                key={look?.key}
                 style={{ flex: 1 }}
                 initialRegion={region}
                 region={region}
+                {...(look ? { userInterfaceStyle: look.userInterfaceStyle, customMapStyle: look.customMapStyle } : null)}
                 onPress={(e) => moveTo({ lat: e.nativeEvent.coordinate.latitude, lng: e.nativeEvent.coordinate.longitude })}
                 showsPointsOfInterests={false}
                 toolbarEnabled={false}

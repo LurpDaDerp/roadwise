@@ -1,8 +1,13 @@
 /**
  * The practice log as a PDF: an HTML page (pure, `practiceLogHtml`) printed to a file by
  * `expo-print` and handed to the share sheet (`sharePracticeLog`: Save to Files, Mail, AirDrop,
- * Print). The file lives in the app's cache; it is deleted once the sheet is done with it.
+ * Print). The file lives in the app's cache; on iPhone it is deleted once the sheet is done with it.
+ * Android's sheet answers as soon as a target is picked, while that app may still be reading the
+ * file, so there a shared PDF stays until the sweep of shared files 10 minutes old
+ * (`sweepStaleShareFiles`, at launch and on each return to the front) or the next wipe.
  */
+import { Platform } from 'react-native';
+
 import { formatDuration } from '@/features/drives/format';
 import { distanceIn, type Units } from '@/lib/units';
 
@@ -133,6 +138,8 @@ export interface PdfDeps {
   isAvailable?: () => Promise<boolean>;
   share?: (uri: string, options: { mimeType: string; UTI: string; dialogTitle: string }) => Promise<unknown>;
   remove?: (uri: string) => void;
+  /** The platform whose sheet takes the file (default: this phone's). */
+  platform?: string;
 }
 
 const defaultPrint = async (html: string): Promise<{ uri: string }> => {
@@ -162,15 +169,19 @@ export async function sharePracticeLog(html: string, deps: PdfDeps = {}): Promis
   const isAvailable = deps.isAvailable ?? (() => sharing().isAvailableAsync());
   const share = deps.share ?? ((uri, options) => sharing().shareAsync(uri, options));
   const remove = deps.remove ?? defaultRemove;
+  const android = (deps.platform ?? Platform.OS) === 'android';
   let uri: string | null = null;
+  /** Android: a sheet that took the file leaves it for the app picked (the stale sweep deletes it). */
+  let keep = false;
   try {
     if (!(await isAvailable())) return false;
     uri = (await print(html)).uri;
     await share(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: copy.dialogTitle });
+    keep = android;
     return true;
   } catch {
     return false;
   } finally {
-    if (uri !== null) remove(uri);
+    if (uri !== null && !keep) remove(uri);
   }
 }

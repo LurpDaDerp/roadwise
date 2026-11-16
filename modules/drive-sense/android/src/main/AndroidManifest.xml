@@ -75,6 +75,32 @@
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
       </intent-filter>
     </receiver>
+
+    <!-- Share images (ShareIntent.kt, WP09): a share card goes to the share sheet as a content URI
+         from the cache directory only, with a read grant for the app picked. Never exported. -->
+    <provider
+        android:name=".ShareFileProvider"
+        android:authorities="${applicationId}.drivesense.share"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/drivesense_share_paths" />
+    </provider>
+
+    <!-- The share sheet's Save image (Android 10+, MediaStore, no permission): the chooser action's
+         receiver on 14+, reached only through RoadWise's explicit immutable PendingIntent... -->
+    <receiver
+        android:name=".SaveImageReceiver"
+        android:exported="false" />
+
+    <!-- ...and the sheet's first row on 10 to 13, which the chooser starts as RoadWise. Translucent
+         and finished at once. -->
+    <activity
+        android:name=".SaveImageActivity"
+        android:exported="false"
+        android:noHistory="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
   </application>
 
 </manifest>

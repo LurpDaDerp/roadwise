@@ -4,13 +4,15 @@
  * suggestions' addresses, and the screens: Places, its sheet, Home's card and Privacy zones' switches.
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Component, type ComponentType, type ReactNode } from 'react';
+import { Alert, Platform, View } from 'react-native';
 
 import type { LearnedPlace } from '@/core/places/learn';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { appWorld, clearQueryClients, memoryDb, tap } from '@/features/permissions/__fixtures__/harness';
-import { setMapsForTests } from '@/features/settings/maps';
+import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
+import { mapStyleFor } from '@/features/settings/mapStyle';
 import { PRIVACY_ZONES_KEY, readZones, type PrivacyZone } from '@/features/settings/privacyZones';
 import { PrivacyZonesScreen } from '@/features/settings/PrivacyZonesScreen';
 
@@ -429,5 +431,59 @@ describe('Privacy zones and your places', () => {
     await w.render(<PrivacyZonesScreen />);
     await tap('zones-add-places');
     expect(mockPush).toHaveBeenCalledWith('/settings/places');
+  });
+});
+
+describe('the place and zone maps on Android', () => {
+  const H = { includeHiddenElements: true } as const;
+  const hit: AddressHit = { id: 'h1', title: '500 Pine St', subtitle: 'Seattle, WA 98101', lat: 47.611, lng: -122.336 };
+  /** A maps module whose map is a plain view carrying its props. */
+  function fakeMaps(): MapsModule {
+    class MapView extends Component<{ children?: ReactNode }> {
+      render() {
+        const { children, ...rest } = this.props;
+        return (
+          <View testID="map-view" {...rest}>
+            {children}
+          </View>
+        );
+      }
+    }
+    return { default: MapView as unknown as ComponentType, Marker: View, Circle: View } as unknown as MapsModule;
+  }
+  let restore: (() => void)[] = [];
+  beforeEach(() => {
+    setMapsForTests(fakeMaps());
+    const rn = jest.requireActual<typeof import('react-native')>('react-native');
+    const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('dark');
+    restore = [jest.replaceProperty(Platform, 'OS', 'android').restore, () => scheme.mockRestore()];
+  });
+  afterEach(() => {
+    restore.forEach((r) => r());
+    setMapsForTests(null);
+  });
+
+  it("the saved place's pin map takes the system's scheme, dark and quiet in dark mode", async () => {
+    const w = await appWorld();
+    withTrips(w.db, []);
+    const search = jest.fn(async () => ({ ok: true as const, hits: [hit] }));
+    await w.render(<PlacesScreen deps={{ search, bias: async () => null }} />);
+    await screen.findByTestId('places-home');
+    await tap('places-home');
+    await typeQuery('500 pine');
+    await tap('place-hit-h1');
+    const map = screen.getByTestId('map-view', H);
+    expect(map.props.userInterfaceStyle).toBe('dark');
+    expect(map.props.customMapStyle).toEqual(mapStyleFor('dark'));
+  });
+
+  it("the Privacy zones map takes the system's scheme, dark and quiet in dark mode", async () => {
+    const w = await appWorld();
+    await w.render(<PrivacyZonesScreen deps={{ locate: async () => ({ ok: true as const, lat: 40.75, lng: -73.99 }) }} />);
+    await screen.findByTestId('zones-empty');
+    await tap('zones-add');
+    const map = screen.getByTestId('map-view', H);
+    expect(map.props.userInterfaceStyle).toBe('dark');
+    expect(map.props.customMapStyle).toEqual(mapStyleFor('dark'));
   });
 });

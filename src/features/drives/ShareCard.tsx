@@ -1,3 +1,4 @@
+import { nativeShareImage } from '@drive-sense';
 import type { MeritTier } from '@scoring';
 import * as Sharing from 'expo-sharing';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,7 +15,7 @@ import { MeritFacts } from './MeritFacts';
 import { meritCardStops } from './merit';
 import type { Lead, Runs } from './route';
 import { RouteSketch } from './RouteSketch';
-import { mapOffered, ShareMapBackdrop, type Band, type Box, type MapStatus } from './ShareMap';
+import { mapCredit, mapOffered, ShareMapBackdrop, type Band, type Box, type MapStatus } from './ShareMap';
 
 export type ShareCardData = {
   /** The route's runs, each drawn apart (`decodeRoute`): the whole route on a drive this phone recorded. */
@@ -130,17 +131,33 @@ export const ShareCard = forwardRef<
           testID="share-facts"
         />
         {map ? (
-          <CardText style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12, fontStyle: 'normal', color: tiered ? withAlpha(WHITE, 0.7) : t.onScene.textMuted }}>Map © Apple</CardText>
+          <CardText style={{ position: 'absolute', right: 20, bottom: 4, fontSize: 9, lineHeight: 12, fontStyle: 'normal', color: tiered ? withAlpha(WHITE, 0.7) : t.onScene.textMuted }}>{mapCredit()}</CardText>
         ) : null}
       </View>
     </SceneScope>
   );
 });
 
+/** The share sheet's title over the image. */
+const SHEET_TITLE = 'Share your drive';
+
 /**
- * Preview the card, then hand the image to the system share sheet. On iOS, "Show map" puts the
- * map of the route's area behind the card; it is off each time the sheet opens. With it on, Share
- * waits for the map, and says so if the map can't load rather than share a card without it.
+ * Hands the captured card to the system share sheet. iPhone: expo-sharing's sheet (Save Image is
+ * the system's own there). Android: drive-sense's chooser (`nativeShareImage`), which adds Save
+ * image on Android 10+; expo-sharing's in a build without it. False when the sheet never opened.
+ */
+async function shareCardImage(uri: string): Promise<boolean> {
+  const native = Platform.OS === 'android' ? nativeShareImage() : null;
+  if (native) return native(uri, { title: SHEET_TITLE });
+  await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: SHEET_TITLE, UTI: 'public.png' });
+  return true;
+}
+
+/**
+ * Preview the card, then hand the image to the system share sheet. "Show map" puts the map of the
+ * route's area behind the card (Apple's on iPhone, Google's on Android with a maps key); it is off
+ * each time the sheet opens. With it on, Share waits for the map, and says so if the map can't load
+ * rather than share a card without it.
  */
 export function ShareSheet({ visible, data, onClose }: { visible: boolean; data: ShareCardData; onClose: () => void }) {
   const t = useTheme();
@@ -213,13 +230,19 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
       if (!available) throw new Error('sharing unavailable');
       const uri = await captureRef(card, { format: 'png', quality: 1, result: 'tmpfile' });
       // The image carries the whole route: on iPhone it is deleted however the sheet ends (the sheet
-      // is done with it by then). Android's chooser answers once a target is picked, and the target
-      // may still be reading the file: there it stays in the cache for the next wipe or the system.
+      // is done with it by then). Android's chooser answers as soon as it is up (or a target is
+      // picked), and the target may still be reading the file: there it stays in the cache until
+      // the sweep of share images about 10 minutes old (`sweepStaleShareFiles`, at launch and on
+      // each return to the front), or the next wipe.
       let handed = false;
       try {
         if (stale()) return;
         handed = true;
-        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your drive', UTI: 'public.png' });
+        if (!(await shareCardImage(uri))) {
+          // No sheet, so nobody is reading it: it goes now.
+          handed = false;
+          throw new Error('share sheet did not open');
+        }
       } finally {
         if (Platform.OS === 'ios' || !handed) removeShareImage(uri);
       }
