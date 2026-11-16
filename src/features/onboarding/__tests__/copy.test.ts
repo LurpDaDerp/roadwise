@@ -24,9 +24,10 @@ describe('onboarding copy', () => {
     for (const id of STEP_IDS) expect(onboardingCopy.stepTitles[id].length).toBeGreaterThan(0);
   });
 
-  it('never asks for an age or a birth date, and Android never asks for Always location', () => {
-    for (const s of all) expect(s).not.toMatch(/all the time|birth|\bage\b|guardian|family/i);
-    for (const s of strings(onboardingCopy.location.android)) expect(s).not.toMatch(/\balways\b/i);
+  it("never asks for an age or a birth date; Android names its own Allow all the time, never iPhone's Always", () => {
+    for (const s of all) expect(s).not.toMatch(/birth|\bage\b|guardian|family/i);
+    for (const s of strings(onboardingCopy.location.android)) expect(s).not.toMatch(/\balways\b|iPhone/i);
+    expect(onboardingCopy.location.android.steps).toBe('Your phone asks twice. Choose "While using the app", then "Allow all the time".');
   });
 
   it.each(all.map((s) => [s]))('%p makes no banned promise', (s) => {
@@ -44,15 +45,14 @@ describe('onboarding copy', () => {
     const row = onboardingCopy.how.rows.ios[1]!;
     expect(row.title).toBe('Just riding along?');
     expect(row.body).toBe(`Open RoadWise and tap "Not driving?" on the drive screen so that trip won't count.`);
-    expect(onboardingCopy.how.rows.android[1]!.body).toBe(`Tap "Not driving?" on the drive screen so that trip won't count.`);
+    expect(onboardingCopy.how.rows.android[1]).toEqual(row);
   });
 
-  it('words how drives start for each phone: on their own on an iPhone, from Start drive on Android', () => {
+  it('words how drives start: on their own, on both phones', () => {
     expect(onboardingCopy.how.rows.ios[0]!.title).toBe('It notices your drives');
-    expect(onboardingCopy.how.rows.android[0]!.body).toBe('Swipe Start drive on Home before you pull out. RoadWise records until you park.');
     expect(onboardingCopy.how.rows.ios).toHaveLength(5);
-    expect(onboardingCopy.how.rows.android).toHaveLength(5);
-    for (const s of strings(onboardingCopy.how.rows.android)) expect(s).not.toMatch(/notices|by itself|on its own|automatic/i);
+    expect(onboardingCopy.how.rows.android).toEqual(onboardingCopy.how.rows.ios);
+    expect(onboardingCopy.how.body.android).toBe(onboardingCopy.how.body.ios);
   });
 
   it('says on both phones that a phone pickup counts, felt by motion, and that RoadWise never sees the screen, apps or messages', () => {
@@ -71,17 +71,18 @@ describe('onboarding copy', () => {
       'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.'
     );
     expect(onboardingCopy.motion.body.android).toBe(
-      'This lets RoadWise end a drive once you park and walk away. Speed, braking and phone pickups are measured either way.'
+      'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.'
     );
-    expect(onboardingCopy.motion.denied.android).toBe(
-      'Physical activity is off. Drives still record, and one you forget to end stops after 5 min parked. You can turn it on in Settings.'
-    );
+    expect(onboardingCopy.motion.denied.android).toBe("Physical activity is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.");
     for (const s of strings(onboardingCopy.motion)) expect(s).not.toMatch(/hard braking|detect/i);
   });
 
   it('says why each permission is asked, in one line where it is asked', () => {
     expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
-    expect(onboardingCopy.location.android.body).toBe('RoadWise uses precise location to record the drives you start and to check the local weather.');
+    expect(onboardingCopy.location.android.body).toBe(
+      'RoadWise uses your location to notice when you start driving and to record the drive, even when the app is closed. It also checks the local weather.'
+    );
+    expect(onboardingCopy.notifications.android).toBe('They also show your drive on the lock screen while it records.');
     expect(onboardingCopy.location.ios.approximate).toBe('Location is set to approximate, so drives can\'t record. Turn on Precise Location in Settings.');
     expect(onboardingCopy.notifications.body).toBe('Get a recap after each drive, your Sunday summary and monthly Wrapped, and a heads-up when a friend adds you.');
   });

@@ -1,7 +1,8 @@
 /**
- * Whether drives start on their own on this phone, for the screens to word themselves by (iPhone
- * only; ui.md §4.1): `on`, `off` with what is missing in display order, `disabled` (the Automatic
- * drives switch in Settings is off), `unsupported` (Android, or an iPhone that can't run it) or
+ * Whether drives start on their own on this phone, for the screens to word themselves by (iPhone, and
+ * Android with its drive detector; ui.md §4.1): `on`, `off` with what is missing in display order,
+ * `disabled` (the Automatic drives switch in Settings is off), `unsupported` (a phone without the
+ * detector, or one that can't run it) or
  * `unknown` (not read yet, or the read failed). Read from the native auto-detect status
  * (`readAutoDetectStatus`, the boot package's), again whenever a screen that uses it comes into
  * focus, when RoadWise returns to the front and when the switch changes; never on a timer.
@@ -26,7 +27,11 @@ export type AutoDetectStatus = Awaited<ReturnType<typeof readAutoDetectStatus>>;
 /** The order Home, Settings and Permissions name what is missing in. */
 export const MISSING_ORDER: readonly AutoDrivesMissing[] = ['locationAlways', 'precise', 'motion', 'backgroundRefresh'];
 
-/** The native names of the needs the screens word (Live Activities never stop a drive). */
+/**
+ * The native names of the needs the screens word (Live Activities, or Android's drive notification,
+ * never stop a drive). Android reports the same names: `backgroundRefresh` is its battery usage set to
+ * Restricted.
+ */
 const FROM_NATIVE: Readonly<Record<string, AutoDrivesMissing>> = {
   locationAlways: 'locationAlways',
   locationPrecise: 'precise',
@@ -39,8 +44,8 @@ const FROM_NATIVE: Readonly<Record<string, AutoDrivesMissing>> = {
  * (whatever is missing: nothing needs fixing for drives that are off by choice). `on` when armed and
  * sensing; otherwise what is missing, from the native list and the permissions themselves (so a
  * phone not yet armed still says what it needs); `unknown` when nothing is missing but drives are
- * not on yet (arming follows on the next foreground). Null (Android, Jest, a failed read) and an
- * iPhone that can't run it are `unsupported`.
+ * not on yet (arming follows on the next foreground). Null (no detector, Jest, a failed read) and a
+ * phone that can't run it are `unsupported`.
  */
 export function autoDrivesFrom(status: AutoDetectStatus | undefined): AutoDrives {
   if (status === null || status === undefined) return { state: 'unsupported' };

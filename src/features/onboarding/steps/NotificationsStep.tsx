@@ -33,9 +33,10 @@ const allowed = (a: NotificationAccess | undefined) => a === 'granted' || a === 
 
 /**
  * Notifications: the three pushes v3 sends, shown as the server words them. On Android the
- * channels are created before the prompt, so the system names them from the first moment. One
- * request on the driver's tap; a grant asks the device host to register the push token. A denial
- * still moves on.
+ * channels are created before the prompt, so the system names them from the first moment, and one
+ * more line says the drive notification (the Live Activity's counterpart, which needs this permission
+ * there) shows the drive on the lock screen. One request on the driver's tap; a grant asks the device
+ * host to register the push token. A denial still moves on.
  */
 export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: NotificationsStepDeps }) {
   const th = useTheme();
@@ -148,6 +149,11 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
             </Card>
           ))}
         </View>
+        {ctx.platform === 'android' ? (
+          <Text variant="subhead" tone="muted" testID="notifications-android-drive">
+            {copy.android}
+          </Text>
+        ) : null}
         {line ? <StatusLine tone={line.tone}>{line.text}</StatusLine> : null}
         {failed ? (
           <Text variant="callout" tone="danger" accessibilityRole="alert">

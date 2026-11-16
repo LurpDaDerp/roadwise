@@ -57,9 +57,10 @@ const onPlatform = (platform: PermissionPlatform) => PERMISSIONS.filter((d) => d
 
 const byOrder = (a: BoardRow, b: BoardRow) => a.def.order - b.def.order;
 
-/** Every permission of this platform with its state, in order. */
+/** Every permission this phone lists, with its state, in order. */
 export function boardRows(read: PermissionBoardRead): BoardRow[] {
   return onPlatform(read.snapshot.platform)
+    .filter((def) => def.listed?.(read) ?? true)
     .map((def) => ({ id: def.id, def, state: def.state(read) }))
     .sort(byOrder);
 }
@@ -86,7 +87,7 @@ export interface HomeCard {
  * The permissions only automatic drives use (Motion stays: it also ends a drive when the driver
  * walks away). While the Automatic drives switch is off, nothing asks for them.
  */
-export const AUTO_ONLY: ReadonlySet<PermissionId> = new Set<PermissionId>(['locationAlways', 'backgroundRefresh']);
+export const AUTO_ONLY: ReadonlySet<PermissionId> = new Set<PermissionId>(['locationAlways', 'backgroundRefresh', 'unusedApps']);
 
 /** A missing permission that only automatic drives use, while they are switched off. */
 const autoOff = (r: BoardRow, autoDisabled: boolean) => autoDisabled && AUTO_ONLY.has(r.id) && r.state.kind === 'missing';
@@ -111,14 +112,15 @@ export interface SettingsRow extends BoardRow {
 }
 
 /**
- * Settings › Permissions: every permission of this platform, except Precise Location while location
- * is not allowed, and motion or Background App Refresh on a phone that cannot report it.
+ * Settings › Permissions: every permission this phone lists, except Precise Location while location
+ * is not allowed, and motion, Background App Refresh or "Pause app activity if unused" on a phone
+ * that cannot report it.
  */
 export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs, autoDisabled = false): SettingsRow[] {
   return boardRows(read)
     .filter((r) => {
       if (r.id === 'precise') return r.state.kind !== 'idle';
-      if (r.id === 'motion' || r.id === 'backgroundRefresh') return r.state.kind !== 'unknown';
+      if (r.id === 'motion' || r.id === 'backgroundRefresh' || r.id === 'unusedApps') return r.state.kind !== 'unknown';
       return true;
     })
     .map((r) => {
@@ -129,10 +131,16 @@ export function settingsRows(read: PermissionBoardRead, prefs: HomePrefs, autoDi
 
 export type Overall = 'ok' | 'attention' | 'broken';
 
-/** The summary: broken while a drive cannot record; ok when nothing in use is missing (an `autoOff` row is not in use). */
+/** Rows that are only a tip (Android's "Pause app activity if unused"): never part of the summary. */
+const TIPS: ReadonlySet<PermissionId> = new Set<PermissionId>(['unusedApps']);
+
+/**
+ * The summary: broken while a drive cannot record; ok when nothing in use is missing (an `autoOff`
+ * row is not in use, and a tip never counts).
+ */
 export function overall(rows: readonly (BoardRow & { autoOff?: boolean })[]): Overall {
   if (rows.some((r) => r.def.need === 'required' && r.state.kind === 'missing')) return 'broken';
-  return rows.every((r) => r.state.kind !== 'missing' || r.autoOff === true) ? 'ok' : 'attention';
+  return rows.every((r) => r.state.kind !== 'missing' || r.autoOff === true || TIPS.has(r.id)) ? 'ok' : 'attention';
 }
 
 /** Whether a stored "no effect" signature still applies to this read. */

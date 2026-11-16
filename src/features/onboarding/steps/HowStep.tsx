@@ -10,9 +10,9 @@ import { StepFrame } from '../StepFrame';
 const copy = onboardingCopy.how;
 
 /**
- * How RoadWise works, on one screen: how a drive gets recorded (on its own on an iPhone, from Start
- * drive on Android), what to do when someone else drives, the drive score and friends. Each line
- * leads with its icon on an accent disc, as Home's How it works card does.
+ * How RoadWise works, on one screen: how a drive gets recorded (on its own, on both phones), what to
+ * do when someone else drives, the drive score and friends. Each line leads with its icon on an
+ * accent disc, as Home's How it works card does.
  */
 export function HowStep({ ctx, onNext, onBack }: StepProps) {
   const th = useTheme();

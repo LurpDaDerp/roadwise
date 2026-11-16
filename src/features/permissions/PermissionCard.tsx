@@ -5,7 +5,9 @@
  * the screen reader's "Don't remind me again" action asks to hide that row; confirming hides it
  * until Show on Home in Settings › Permissions, and the next row takes its place. Nothing shows
  * while the board loads, can't be read, or a drive records. With the Automatic drives switch off
- * (`autoDisabled`), it never asks for Location Always or Background App Refresh.
+ * (`autoDisabled`), it never asks for Location Always or Background App Refresh. On Android the
+ * Location Always row (and the Location row on Android 9 and lower with the drive detector) first
+ * shows Google Play's background-location disclosure.
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
@@ -15,6 +17,7 @@ import Animated, { FadeOut, LinearTransition } from 'react-native-reanimated';
 
 import { Card, Divider, Text, useTheme } from '@/ui';
 
+import { useBackgroundDisclosure } from './BackgroundDisclosure';
 import { fixFor, homeCard, type BoardRow } from './board';
 import { homeLine, permissionName, permissionsCopy, type CopyCtx } from './copy';
 import type { PermissionBoardRead } from './registry';
@@ -96,6 +99,7 @@ function PermissionRow({ board, read, row, ctx }: { board: PermissionBoard; read
   // The read a failure happened on: its line stands until the next read or tap.
   const [failedOn, setFailedOn] = useState<PermissionBoardRead | null>(null);
   const confirming = useRef(false);
+  const disclosure = useBackgroundDisclosure();
 
   if (row.state.kind !== 'missing') return null;
   const state = row.state;
@@ -115,7 +119,10 @@ function PermissionRow({ board, read, row, ctx }: { board: PermissionBoard; read
     setBusy(true);
     setFailedOn(null);
     try {
-      await board.fix(row.id);
+      // Location Always and location carry the background-location disclosure; the board shows it
+      // where Android needs it (Location Always, and location on Android 9 and lower with the drive
+      // detector, where allowing location allows it in the background too).
+      await (row.id === 'locationAlways' || row.id === 'location' ? board.fix(row.id, { disclose: disclosure.ask }) : board.fix(row.id));
     } catch {
       fail();
     } finally {
@@ -158,75 +165,78 @@ function PermissionRow({ board, read, row, ctx }: { board: PermissionBoard; read
   };
 
   return (
-    <ReanimatedSwipeable
-      ref={swipe}
-      enabled={!busy}
-      friction={1.5}
-      rightThreshold={SWIPE_THRESHOLD}
-      overshootRight={false}
-      onSwipeableOpen={confirm}
-      renderRightActions={() => (
-        <View
-          importantForAccessibility="no-hide-descendants"
-          accessibilityElementsHidden
-          style={{
-            width: SWIPE_PANEL_W,
-            backgroundColor: t.colors.surfaceRaised,
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 2,
-            paddingHorizontal: t.space.sm,
-          }}
-          testID="home-permission-swipe-panel"
-        >
-          <Ionicons name="eye-off-outline" size={18} color={t.colors.textMuted} />
-          <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
-            {copy.swipe}
-          </Text>
-        </View>
-      )}
-      testID="home-permission-swipe"
-    >
-      <Pressable
-        onPress={() => void onTap()}
-        onLongPress={confirm}
-        delayLongPress={LONG_PRESS_MS}
-        accessibilityRole="button"
-        accessibilityLabel={`${line} ${action}.`}
-        accessibilityState={{ busy }}
-        accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.dismissAction }]}
-        onAccessibilityAction={onAction}
-        testID={`home-permission-${row.id}`}
-        style={({ pressed }) => ({
-          minHeight: 44,
-          paddingVertical: 10,
-          paddingHorizontal: t.space.lg,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: t.space.md,
-          backgroundColor: t.colors.surface,
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
-        <Ionicons
-          name={required ? 'alert-circle' : 'alert-circle-outline'}
-          size={18}
-          color={required ? t.colors.danger : t.colors.warning}
-        />
-        <Text variant="subhead" numberOfLines={2} style={{ flex: 1 }} testID="home-permission-line">
-          {line}
-        </Text>
-        {busy ? (
-          <ActivityIndicator size="small" color={t.colors.accent} testID="home-permission-busy" />
-        ) : (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-            <Text variant="footnote" style={{ color: t.colors.accent, fontWeight: '600' }} testID="home-permission-action">
-              {action}
+    <>
+      <ReanimatedSwipeable
+        ref={swipe}
+        enabled={!busy}
+        friction={1.5}
+        rightThreshold={SWIPE_THRESHOLD}
+        overshootRight={false}
+        onSwipeableOpen={confirm}
+        renderRightActions={() => (
+          <View
+            importantForAccessibility="no-hide-descendants"
+            accessibilityElementsHidden
+            style={{
+              width: SWIPE_PANEL_W,
+              backgroundColor: t.colors.surfaceRaised,
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+              paddingHorizontal: t.space.sm,
+            }}
+            testID="home-permission-swipe-panel"
+          >
+            <Ionicons name="eye-off-outline" size={18} color={t.colors.textMuted} />
+            <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+              {copy.swipe}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={t.colors.accent} />
           </View>
         )}
-      </Pressable>
-    </ReanimatedSwipeable>
+        testID="home-permission-swipe"
+      >
+        <Pressable
+          onPress={() => void onTap()}
+          onLongPress={confirm}
+          delayLongPress={LONG_PRESS_MS}
+          accessibilityRole="button"
+          accessibilityLabel={`${line} ${action}.`}
+          accessibilityState={{ busy }}
+          accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.dismissAction }]}
+          onAccessibilityAction={onAction}
+          testID={`home-permission-${row.id}`}
+          style={({ pressed }) => ({
+            minHeight: 44,
+            paddingVertical: 10,
+            paddingHorizontal: t.space.lg,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: t.space.md,
+            backgroundColor: t.colors.surface,
+            opacity: pressed ? 0.7 : 1,
+          })}
+        >
+          <Ionicons
+            name={required ? 'alert-circle' : 'alert-circle-outline'}
+            size={18}
+            color={required ? t.colors.danger : t.colors.warning}
+          />
+          <Text variant="subhead" numberOfLines={2} style={{ flex: 1 }} testID="home-permission-line">
+            {line}
+          </Text>
+          {busy ? (
+            <ActivityIndicator size="small" color={t.colors.accent} testID="home-permission-busy" />
+          ) : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+              <Text variant="footnote" style={{ color: t.colors.accent, fontWeight: '600' }} testID="home-permission-action">
+                {action}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={t.colors.accent} />
+            </View>
+          )}
+        </Pressable>
+      </ReanimatedSwipeable>
+      {disclosure.sheet}
+    </>
   );
 }

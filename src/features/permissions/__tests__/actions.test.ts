@@ -227,3 +227,69 @@ describe('Settings targets', () => {
     await expect(w.run('motion')).rejects.toThrow('no');
   });
 });
+
+describe("Android Location Always: Google Play's disclosure first", () => {
+  const android = () => snap({ platform: 'android', location: 'foreground', canAskAlways: true, backgroundRefresh: 'available' });
+
+  it('Continue: the disclosure, then one disclosed request, stamped as a location prompt', async () => {
+    const w = world(android());
+    const order: string[] = [];
+    w.deps.discloseBackground = jest.fn(async () => {
+      order.push(`disclose:${w.calls().length}`);
+      return true;
+    });
+    expect(await w.run('locationAlways')).toMatchObject({ kind: 'requested', noEffect: false });
+    expect(order).toEqual(['disclose:0']);
+    expect(w.calls()).toEqual(['requestLocationAlways:disclosed']);
+    expect(w.settings.data.get(PROMPTS_KEY)).toEqual({ location: T0 });
+  });
+
+  it('Not now: nothing asked, nothing opened, nothing stamped', async () => {
+    const w = world(android());
+    w.deps.discloseBackground = async () => false;
+    expect(await w.run('locationAlways')).toEqual({ kind: 'declined' });
+    expect(w.calls()).toEqual([]);
+    expect(w.settings.data.get(PROMPTS_KEY)).toBeUndefined();
+  });
+
+  it('the Settings fix (after a request with no effect) also waits on the disclosure', async () => {
+    const w = world(android(), {}, { always: 'whenInUse' });
+    w.deps.discloseBackground = async () => true;
+    w.adapter.current = { ...w.adapter.current, canAskAlways: false };
+    expect(await w.run('locationAlways')).toMatchObject({ kind: 'requested', noEffect: true });
+    const disclose = jest.fn(async () => false);
+    w.deps.discloseBackground = disclose;
+    expect(await w.run('locationAlways')).toEqual({ kind: 'declined' });
+    expect(disclose).toHaveBeenCalledTimes(1);
+    expect(w.calls()).toEqual(['requestLocationAlways:disclosed']);
+    w.deps.discloseBackground = async () => true;
+    expect(await w.run('locationAlways')).toEqual({ kind: 'opened' });
+    expect(w.calls()).toEqual(['requestLocationAlways:disclosed', 'openAppSettings']);
+  });
+
+  it("the location fix shows it when the caller hands it over (Android 9 and lower), naming the dialog's Allow", async () => {
+    const w = world(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), {}, { foreground: 'always' });
+    const disclose = jest.fn(async () => false);
+    w.deps.discloseBackground = disclose;
+    expect(await w.run('location')).toEqual({ kind: 'declined' });
+    expect(disclose).toHaveBeenCalledWith('allow');
+    expect(w.calls()).toEqual([]);
+    w.deps.discloseBackground = async () => true;
+    expect(await w.run('location')).toMatchObject({ kind: 'requested' });
+    expect(w.calls()).toEqual(['requestLocationForeground']);
+  });
+
+  it('other rows never show it', async () => {
+    const w = world(snap({ platform: 'android', motion: 'undetermined' }));
+    const disclose = jest.fn(async () => true);
+    w.deps.discloseBackground = disclose;
+    await w.run('motion');
+    expect(disclose).not.toHaveBeenCalled();
+  });
+});
+
+test("Battery Saver limiting location: the fix opens Battery Saver's page", async () => {
+  const w = world(snap({ platform: 'android', canAskAlways: false, backgroundRefresh: 'restricted' }));
+  expect(await w.run('backgroundRefresh')).toEqual({ kind: 'opened' });
+  expect(w.calls()).toEqual(['openBatterySaverSettings']);
+});

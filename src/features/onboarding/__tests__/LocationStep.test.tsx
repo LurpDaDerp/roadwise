@@ -37,12 +37,12 @@ afterEach(() => {
   clearQueryClients();
 });
 
-async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter) {
+async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter, api: number | null = platform === 'android' ? 34 : null) {
   const w = await appWorld();
   const onNext = jest.fn();
   const appState = fakeAppState();
   await w.render(
-    <LocationStep ctx={ctx(platform)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} />,
+    <LocationStep ctx={ctx(platform)} onNext={onNext} deps={{ adapter, appState, now: () => T0 }} api={api} />,
     fakeHost().host
   );
   return { ...w, onNext, appState };
@@ -57,12 +57,13 @@ test('iPhone: the primer says why and that the phone asks twice, and nothing is 
   expect(requests(adapter)).toEqual([]);
 });
 
-test('Android: the primer speaks of the drives you start, with no talk of asking twice', async () => {
-  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }));
+test('Android: the primer says why and that the phone asks twice, in its own words, and nothing is asked before the tap', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }));
   await renderStep('android', adapter);
   expect(await screen.findByText(android.body)).toBeOnTheScreen();
-  expect(android.body).toBe('RoadWise uses precise location to record the drives you start and to check the local weather.');
-  expect(screen.queryByTestId('location-twice')).toBeNull();
+  expect(screen.getByText(android.title)).toBeOnTheScreen();
+  expect(screen.getByTestId('location-twice')).toHaveTextContent('Your phone asks twice. Choose "While using the app", then "Allow all the time".');
+  expect(requests(adapter)).toEqual([]);
 });
 
 test('iPhone: one tap asks While Using, then Always, and moves on once Always is held', async () => {
@@ -107,13 +108,53 @@ test('iPhone: Always already held shows the all-set line and asks nothing', asyn
   expect(requests(adapter)).toEqual([]);
 });
 
-test('Android: one While Using request on the tap, then on; never an Always request', async () => {
-  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }), { foreground: 'foreground' });
+test("Android: While Using, then Google Play's disclosure, then Allow all the time on Continue, and on once it is held", async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'foreground' });
+  const { onNext, settings } = await renderStep('android', adapter);
+  await press(await screen.findByTestId('location-allow'));
+  // The disclosure stands between the two requests: nothing more is asked until Continue.
+  expect(await screen.findByTestId('background-disclosure-body')).toHaveTextContent(
+    'RoadWise collects location data to detect and record your drives automatically, even when the app is closed or not in use.'
+  );
+  expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  expect(onNext).not.toHaveBeenCalled();
+  await press(screen.getByTestId('background-disclosure-continue'));
+  await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+  expect(requests(adapter)).toEqual(['requestLocationForeground', 'requestLocationAlways:disclosed']);
+  expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
+});
+
+test('Android: Not now on the disclosure keeps While Using, says what that means, and offers Allow all the time again (the disclosure first)', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'foreground' });
   const { onNext } = await renderStep('android', adapter);
   await press(await screen.findByTestId('location-allow'));
-  await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+  await press(await screen.findByTestId('background-disclosure-not-now'));
+  expect(await screen.findByText(android.whileUsing)).toBeOnTheScreen();
   expect(requests(adapter)).toEqual(['requestLocationForeground']);
-  expect(adapter.log.some((c) => /always|background/i.test(c))).toBe(false);
+  expect(screen.queryByTestId('location-settings')).toBeNull();
+  await press(screen.getByTestId('location-allow-always'));
+  expect(await screen.findByTestId('background-disclosure-body')).toBeOnTheScreen();
+  expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  await press(screen.getByTestId('background-disclosure-continue'));
+  await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+  expect(requests(adapter)).toEqual(['requestLocationForeground', 'requestLocationAlways:disclosed']);
+});
+
+test('Android: kept at While Using after the request (back from its settings page), Continue still moves on', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'foreground', always: 'whenInUse' });
+  const { onNext, appState } = await renderStep('android', adapter);
+  await press(await screen.findByTestId('location-allow'));
+  await press(await screen.findByTestId('background-disclosure-continue'));
+  expect(await screen.findByText(android.whileUsing)).toBeOnTheScreen();
+  expect(onNext).not.toHaveBeenCalled();
+  // Allow all the time chosen on the settings page later: read again on the way back.
+  adapter.current = { ...adapter.current, location: 'always' };
+  await act(async () => {
+    appState.foreground();
+  });
+  expect(await screen.findByText(android.always)).toBeOnTheScreen();
+  await press(screen.getByTestId('location-continue'));
+  expect(onNext).toHaveBeenCalledTimes(1);
 });
 
 test('a denial says so, asks no Always, and Continue still moves on (D12)', async () => {
@@ -142,13 +183,27 @@ test('Not now asks nothing', async () => {
   expect(requests(adapter)).toEqual([]);
 });
 
-test('already allowed on Android: no further request; Continue moves on', async () => {
-  const adapter = fakeAdapter(snap({ platform: 'android', location: 'foreground', precise: true }));
+test('Android: already allowed all the time shows the all-set line and asks nothing', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'always', precise: true, canAskAlways: false }));
   const { onNext } = await renderStep('android', adapter);
-  expect(await screen.findByText(android.allowed)).toBeOnTheScreen();
+  expect(await screen.findByText(android.always)).toBeOnTheScreen();
   await press(screen.getByTestId('location-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(requests(adapter)).toEqual([]);
+});
+
+test('Android: approximate location is never asked for Allow all the time and shows no disclosure', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }));
+  adapter.requestLocationForeground = jest.fn(async () => {
+    adapter.log.push('requestLocationForeground');
+    adapter.current = { ...adapter.current, location: 'foreground', precise: false };
+    return 'foreground' as const;
+  });
+  await renderStep('android', adapter);
+  await press(await screen.findByTestId('location-allow'));
+  expect(await screen.findByText(android.approximate)).toBeOnTheScreen();
+  expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+  expect(requests(adapter)).toEqual(['requestLocationForeground']);
 });
 
 test('approximate location: said plainly, never asked for Always, with Settings, and Continue moves on', async () => {
@@ -192,4 +247,67 @@ test('a read failure says so with a retry, and the step is still passable', asyn
   await press(screen.getByTestId('location-continue'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(requests(adapter)).toEqual([]);
+});
+
+describe('Android without the drive detector (no automatic drives): While Using is all the step asks', () => {
+  it('one tap asks While Using only, shows no disclosure, and moves on', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: null }), { foreground: 'foreground' });
+    const { onNext } = await renderStep('android', adapter);
+    expect(await screen.findByTestId('location-allow')).toBeOnTheScreen();
+    // "Your phone asks twice" is not true here.
+    expect(screen.queryByTestId('location-twice')).toBeNull();
+    await press(screen.getByTestId('location-allow'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  });
+
+  it('already While Using: says location is allowed, with no Allow all the time button', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'foreground', precise: true, canAskAlways: null }));
+    const { onNext } = await renderStep('android', adapter);
+    expect(await screen.findByText(android.allowed)).toBeOnTheScreen();
+    expect(screen.queryByTestId('location-allow-always')).toBeNull();
+    expect(screen.queryByText(android.whileUsing)).toBeNull();
+    await press(screen.getByTestId('location-continue'));
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(requests(adapter)).toEqual([]);
+  });
+});
+
+describe('Android 9 and lower: allowing location allows it in the background too', () => {
+  it("with the drive detector, Google Play's disclosure comes before the one request, naming the dialog's Allow", async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'always' });
+    const { onNext, settings } = await renderStep('android', adapter, 28);
+    await screen.findByTestId('location-allow');
+    expect(screen.queryByTestId('location-twice')).toBeNull();
+    await press(screen.getByTestId('location-allow'));
+    expect(await screen.findByTestId('background-disclosure-body')).toBeOnTheScreen();
+    expect(screen.getByTestId('background-disclosure-next')).toHaveTextContent('Next, choose "Allow".');
+    // Nothing is asked before Continue.
+    expect(requests(adapter)).toEqual([]);
+    await press(screen.getByTestId('background-disclosure-continue'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+    expect(await settings.get(PROMPTS_KEY)).toEqual({ location: T0 });
+  });
+
+  it('Not now on the disclosure asks nothing and stays on the step', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }), { foreground: 'always' });
+    const { onNext, settings } = await renderStep('android', adapter, 28);
+    await press(await screen.findByTestId('location-allow'));
+    await press(await screen.findByTestId('background-disclosure-not-now'));
+    expect(requests(adapter)).toEqual([]);
+    expect(onNext).not.toHaveBeenCalled();
+    expect(await settings.get(PROMPTS_KEY)).toBeNull();
+    expect(screen.getByTestId('location-allow')).toBeOnTheScreen();
+  });
+
+  it('without the drive detector nothing runs in the background, so no disclosure', async () => {
+    const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: null }), { foreground: 'always' });
+    const { onNext } = await renderStep('android', adapter, 28);
+    await press(await screen.findByTestId('location-allow'));
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('background-disclosure-body')).toBeNull();
+    expect(requests(adapter)).toEqual(['requestLocationForeground']);
+  });
 });

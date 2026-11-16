@@ -249,6 +249,25 @@ describe('the drive detector and the opportunities (tuning)', () => {
     expect(detect.calls).toEqual(['getState', 'listDrives']);
   });
 
+  test("Android: the same detector lines, its permissions in Android's names", async () => {
+    const detect = createFakeDriveDetect({ platform: 'android', now: () => T, permissions: { backgroundRefresh: 'denied', liveActivities: false } });
+    await detect.setArmed(true, 'user-1');
+    detect.calls.length = 0;
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense({ platform: 'android' })} detect={detect} />));
+    await waitFor(() => expect(screen.getByTestId('diag-detect-status')).toBeTruthy());
+    expect(screen.getByText('Battery (available unless Restricted)')).toBeTruthy();
+    expect(screen.getByText('Drive notification')).toBeTruthy();
+    expect(screen.getByText('All the time can be asked')).toBeTruthy();
+    expect(screen.queryByText('Background App Refresh')).toBeNull();
+    expect(screen.queryByText('Live Activities')).toBeNull();
+    expect(detect.calls).toEqual(['getState', 'listDrives']);
+  });
+
+  test('Android without a detector says so, with no talk of the Start card', async () => {
+    await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense({ platform: 'android' })} detect={null} />));
+    expect(await screen.findByText('No drive detector on this phone.')).toBeTruthy();
+  });
+
   test('no detector (Android) says so', async () => {
     await render(wrap(<DriveDiagnosticsScreen Hud={Hud} source={createFakeDriveSense()} detect={null} />));
     expect(await screen.findByText(/No drive detector on this phone/)).toBeTruthy();

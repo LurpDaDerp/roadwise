@@ -1,6 +1,8 @@
 import { act, render, screen } from '@testing-library/react-native';
 import { AppState, Text, type AppStateStatus } from 'react-native';
 
+import { createFakeDriveDetect } from '@drive-sense';
+
 import { autoDrivesFrom, autoDrivesOn, readAutoDrives, resetAutoDrivesForTests, setAutoDrivesEnabled, useAutoDrives, type AutoDetectStatus } from '../useAutoDrives';
 
 const mockRead = jest.fn();
@@ -153,5 +155,26 @@ describe('the Automatic drives switch', () => {
     }
     await render(<Probe />);
     expect(screen.getByTestId('auto')).toHaveTextContent('disabled');
+  });
+});
+
+describe("Android's drive detector", () => {
+  const fromAndroid = async (permissions: NonNullable<Parameters<typeof createFakeDriveDetect>[0]>['permissions']) => {
+    const detect = createFakeDriveDetect({ platform: 'android', permissions });
+    const s = await detect.setArmed(true, 'user-1');
+    return autoDrivesFrom({ enabled: true, armed: s.armed, status: s.status, missing: s.missing, permissions: s.permissions });
+  };
+
+  it('reads as on an iPhone: on with everything held', async () => {
+    expect(await fromAndroid({})).toEqual({ state: 'on' });
+  });
+
+  it('names what is missing in the same order (battery set to Restricted is backgroundRefresh)', async () => {
+    expect(await fromAndroid({ location: 'whenInUse', backgroundRefresh: 'denied' })).toEqual({ state: 'off', missing: ['locationAlways', 'backgroundRefresh'] });
+    expect(await fromAndroid({ motion: 'denied' })).toEqual({ state: 'off', missing: ['motion'] });
+  });
+
+  it('the drive notification switched off alone never stops automatic drives', async () => {
+    expect(await fromAndroid({ liveActivities: false })).toEqual({ state: 'on' });
   });
 });

@@ -23,8 +23,9 @@ import { useSession } from '@/data/supabase/session';
 
 import { runFix, type FixOutcome } from './actions';
 import { fixFor, readPermissionBoard, toSettingsApplies } from './board';
+import type { DisclosureNext } from './copy';
 import { EMPTY_HOME_PREFS, hideOnHome, pruneToSettings, readHomePrefs, showOnHome, type HomePrefs } from './homePrefs';
-import { permissionDef, signature, type PermissionBoardRead, type PermissionId } from './registry';
+import { disclosesBackground, permissionDef, signature, type PermissionBoardRead, type PermissionId } from './registry';
 import { defaultPermissionsAdapter, permissionHealthKey, readPermissionHealth, SHARED_READ_MS } from './usePermissionHealth';
 
 export const permissionBoardKey = (uid: string | null) => ['permissions', 'board', uid ?? ''] as const;
@@ -113,8 +114,13 @@ export interface PermissionBoard {
   read: PermissionBoardRead | null;
   prefs: HomePrefs;
   refresh(mode?: RefreshMode): Promise<void>;
-  /** The tap on a missing row (no-op for one that is not missing). Rejects when the phone call failed. */
-  fix(id: PermissionId, opts?: { markReturn?: boolean }): Promise<FixOutcome | null>;
+  /**
+   * The tap on a missing row (no-op for one that is not missing). Rejects when the phone call failed.
+   * `disclose`: the screen's background-location disclosure (`useBackgroundDisclosure().ask`), which
+   * Android needs for Location Always (and for location on Android 9 and lower with the drive
+   * detector, `disclosesBackground`): without it that fix rejects and asks nothing.
+   */
+  fix(id: PermissionId, opts?: { markReturn?: boolean; disclose?: (next: DisclosureNext) => Promise<boolean> }): Promise<FixOutcome | null>;
   /** "Don't remind me again". Rejects when it could not be stored. */
   hide(id: PermissionId): Promise<void>;
   /** Show on Home. Rejects when it could not be stored. */
@@ -218,19 +224,24 @@ export function usePermissionBoard(deps: PermissionBoardDeps = {}): PermissionBo
   }, [read, prefsQuery.data, settings, commitPrefs]);
 
   const fix = useCallback(
-    async (id: PermissionId, opts: { markReturn?: boolean } = {}): Promise<FixOutcome | null> => {
+    async (id: PermissionId, opts: { markReturn?: boolean; disclose?: (next: DisclosureNext) => Promise<boolean> } = {}): Promise<FixOutcome | null> => {
       // The read and prefs the tap was made on.
       const r = read;
       if (r === null || !prefsSettled) return null;
       const state = permissionDef(id).state(r);
       const which = fixFor(id, state, prefs);
       if (which === null || state.kind !== 'missing') return null;
+      const android = r.snapshot.platform === 'android';
+      // Google Play: no background-location path on Android without the prominent disclosure.
+      const discloses = disclosesBackground(id, state, r);
+      if (discloses && !opts.disclose) throw new Error(`${id} on this phone needs the background-location disclosure`);
       const outcome = await runFix(id, state, which, {
         adapter,
         settings,
         now,
         markReturn: opts.markReturn,
-        ensureChannels: r.snapshot.platform === 'android' ? (deps.ensureChannels ?? defaultEnsureChannels) : undefined,
+        discloseBackground: discloses ? opts.disclose : undefined,
+        ensureChannels: android ? (deps.ensureChannels ?? defaultEnsureChannels) : undefined,
         requestDeviceSync: deps.requestDeviceSync ?? requestDeviceSync,
         reread: async () => {
           await refresh('fresh');

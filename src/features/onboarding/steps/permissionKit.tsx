@@ -3,12 +3,12 @@
  *
  * Every OS request these steps make is the driver's own tap on the step's primary button, so it
  * goes to the adapter directly, unthrottled, and stamps the 14-day history so the app's own later
- * offers wait. Only the iPhone's location step asks for Always, right after While Using, for
- * automatic drives.
+ * offers wait. Only the location step asks for Always, right after While Using, for automatic
+ * drives (on Android after Google Play's background-location disclosure).
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, useWindowDimensions, View } from 'react-native';
+import { AppState, Platform, useWindowDimensions, View } from 'react-native';
 
 import type { PermissionSnapshot, PermissionsAdapter } from '@/core/permissions';
 import { createSettingsRepo } from '@/data/db/settings';
@@ -16,6 +16,13 @@ import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { Text, useTheme } from '@/ui';
+
+/** `Platform.Version` on Android; null on iOS (or unreadable). */
+export const deviceAndroidApi = (): number | null => {
+  if (Platform.OS !== 'android') return null;
+  const v = typeof Platform.Version === 'number' ? Platform.Version : Number(Platform.Version);
+  return Number.isFinite(v) ? v : null;
+};
 
 /** What a test can hand a step in place of the phone. */
 export interface PermissionStepDeps {

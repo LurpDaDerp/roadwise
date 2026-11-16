@@ -82,10 +82,11 @@ export function fakeAdapter(
       a.log.push('bluetooth');
       return a.bt;
     }),
-    requestLocationAlways: jest.fn(async () => {
-      a.log.push('requestLocationAlways');
+    requestLocationAlways: jest.fn(async (opts?: { disclosed?: boolean }) => {
+      a.log.push(opts?.disclosed === true ? 'requestLocationAlways:disclosed' : 'requestLocationAlways');
       const asIs = a.current.location === 'always' ? 'always' : a.current.location === 'foreground' ? 'whenInUse' : 'denied';
-      if (a.current.platform === 'android' || a.current.location !== 'foreground') return asIs;
+      // Android asks only right after the background-location disclosure (as the real adapter).
+      if ((a.current.platform === 'android' && opts?.disclosed !== true) || a.current.location !== 'foreground') return asIs;
       const next = answers.always ?? 'always';
       // iOS asks once; after that only Settings changes it.
       a.current = { ...a.current, location: next === 'always' ? 'always' : a.current.location, canAskAlways: false };
@@ -130,6 +131,9 @@ export function fakeAdapter(
     }),
     openLocationServicesSettings: jest.fn(async () => {
       a.log.push('openLocationServicesSettings');
+    }),
+    openBatterySaverSettings: jest.fn(async () => {
+      a.log.push('openBatterySaverSettings');
     }),
     openNotificationChannelSettings: jest.fn(async (channelId: string) => {
       a.log.push(`openNotificationChannelSettings:${channelId}`);

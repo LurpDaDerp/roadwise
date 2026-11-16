@@ -30,17 +30,17 @@ import { useProfileEdit, type ProfileFields } from './useProfileEdit';
 const copy = settingsCopy.root;
 
 /**
- * The Automatic drives switch's line: on, switched off, or on with the first thing it still needs.
- * Null: no line (not read yet, Android).
+ * The Automatic drives switch's line: on, switched off, or on with the first thing it still needs,
+ * in this phone's names (`platform`, default this phone's). Null: no line (not read yet).
  */
-export function autoDrivesLine(a: AutoDrives): string | null {
+export function autoDrivesLine(a: AutoDrives, platform: 'ios' | 'android' = Platform.OS === 'android' ? 'android' : 'ios'): string | null {
   if (a.state === 'on') return copy.autoDrives.on;
   if (a.state === 'disabled') return copy.autoDrives.disabled;
-  if (a.state === 'off' && a.missing[0]) return copy.autoDrives.needs(copy.autoDrives.what[a.missing[0]]);
+  if (a.state === 'off' && a.missing[0]) return copy.autoDrives.needs((platform === 'android' ? copy.autoDrives.whatAndroid : copy.autoDrives.what)[a.missing[0]]);
   return null;
 }
 
-/** Whether the switch shows: a reading of an iPhone that runs automatic drives (never Android). */
+/** Whether the switch shows: a reading of a phone that runs automatic drives (its drive detector answered). */
 const autoDrivesKnown = (a: AutoDrives): boolean => a.state === 'on' || a.state === 'off' || a.state === 'disabled';
 
 /**
@@ -66,7 +66,7 @@ function useAutoDrivesSwitch() {
     });
   }, []);
   return {
-    visible: Platform.OS === 'ios' && (known || (seen && auto.state === 'unknown')),
+    visible: known || (seen && auto.state === 'unknown'),
     value: wanted ?? auto.state !== 'disabled',
     line: autoDrivesLine(shown),
     // While switched on and something is missing: the way to allow it.
@@ -154,9 +154,10 @@ function RadioRow({ label, detail, chosen, onPress }: { label: string; detail?: 
  * `/settings`: everything a driver tunes, grouped by what it touches: the drive, privacy and what
  * friends see, you, notifications. Every control saves as it changes; there is no Save button.
  * Appearance is this phone's own (`src/ui/appearance.ts`): it lands at once and is never uploaded.
- * On an iPhone, Automatic drives is a switch (this phone's own, on until switched off): it says
- * whether drives start on their own, and while it is on but the phone still has to allow
- * something, a row under it opens Settings › Permissions. Switching it off mid-drive lets that
+ * Where the phone runs automatic drives (an iPhone, or an Android phone with its drive detector),
+ * Automatic drives is a switch (this phone's own, on until switched off): it says whether drives
+ * start on their own, and while it is on but the phone still has to allow something, a row under it
+ * opens Settings › Permissions. Switching it off mid-drive lets that
  * drive finish; the Start drive swipe works either way.
  */
 export function SettingsScreen({ deps = {} }: { deps?: { appearance?: AppearanceStore } }) {

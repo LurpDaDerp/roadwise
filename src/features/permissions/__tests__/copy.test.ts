@@ -1,7 +1,18 @@
 /** The permission words: exact lines, and the length limits (Home ≤ 60, Settings details ≤ 100). */
-import { IDLE_END_S } from '@scoring';
-
-import { DETAIL_MAX, HOME_LINE_MAX, homeLine, permissionName, permissionsCopy, requestLabel, rowDetail, rowTitle, statusWord, type CopyCtx } from '../copy';
+import {
+  backgroundDisclosureCopy,
+  DETAIL_MAX,
+  HOME_LINE_MAX,
+  homeLine,
+  permissionName,
+  permissionsCopy,
+  requestLabel,
+  rowDetail,
+  rowStatus,
+  rowTitle,
+  statusWord,
+  type CopyCtx,
+} from '../copy';
 import { PERMISSION_IDS, type MissingReason, type MissingState, type PermState, type SettingsTarget } from '../registry';
 
 const IOS: CopyCtx = { platform: 'ios', androidApi: null };
@@ -12,7 +23,15 @@ const IOS_BOTH: CopyCtx = { platform: 'ios', androidApi: null, car: true, dashpa
 const CTXS = [IOS, ANDROID, ANDROID_11, IOS_CAR, IOS_BOTH];
 
 const m = (reason: MissingReason, canAsk = false, target: SettingsTarget = 'app'): MissingState => ({ kind: 'missing', reason, canAsk, target });
-const ALL_STATES: PermState[] = [{ kind: 'granted' }, { kind: 'idle' }, { kind: 'unknown' }, m('notYet', true), m('denied'), m('servicesOff', true, 'locationServices')];
+const ALL_STATES: PermState[] = [
+  { kind: 'granted' },
+  { kind: 'idle' },
+  { kind: 'unknown' },
+  m('notYet', true),
+  m('denied'),
+  m('servicesOff', true, 'locationServices'),
+  m('denied', false, 'batterySaver'),
+];
 
 test('every Home line fits in 60 characters, every Settings detail in 100, on every platform', () => {
   for (const c of CTXS) {
@@ -35,8 +54,11 @@ test('Home lines', () => {
   expect(homeLine('backgroundRefresh', m('denied'), IOS)).toBe('Turn on Background App Refresh to catch every drive.');
   expect(homeLine('motion', m('denied'), IOS)).toBe('Motion & Fitness is off. Drives won\'t start on their own.');
   expect(homeLine('motion', m('notYet', true), IOS)).toBe('Allow Motion & Fitness so RoadWise can spot drives.');
-  expect(homeLine('motion', m('denied', true), ANDROID)).toBe("Physical activity is off. Walking away won't end a drive.");
-  expect(homeLine('motion', m('notYet', true), ANDROID)).toBe('Allow Physical activity so walking away ends a drive.');
+  expect(homeLine('motion', m('denied', true), ANDROID)).toBe("Physical activity is off. Drives won't start on their own.");
+  expect(homeLine('motion', m('notYet', true), ANDROID)).toBe('Allow Physical activity so RoadWise can spot drives.');
+  expect(homeLine('locationAlways', m('notYet', true), ANDROID)).toBe('Allow Location all the time so drives start on their own.');
+  expect(homeLine('backgroundRefresh', m('denied'), ANDROID)).toBe('Battery use is set to Restricted. Drives may be missed.');
+  expect(homeLine('unusedApps', m('denied'), ANDROID)).toBe('Turn off Pause app activity so drives keep starting.');
   expect(homeLine('notifications', m('denied'), ANDROID)).toBe('Notifications are off. You\'ll miss your drive recaps.');
   expect(homeLine('notifications', m('notYet', true), IOS)).toBe('Allow Notifications to get your drive recaps.');
   expect(homeLine('bluetooth', m('denied'), IOS)).toBe("Bluetooth isn't allowed. DashPal can't connect.");
@@ -49,8 +71,10 @@ test('the motion lines say what motion access does on each phone', () => {
   expect(rowDetail('motion', { kind: 'granted' }, IOS)).toBe('RoadWise can tell driving from walking, so drives start and end on time.');
   expect(rowDetail('motion', m('notYet', true), IOS)).toBe('Without it, drives won\'t start on their own.');
   expect(rowDetail('motion', m('denied'), IOS)).toBe('Drives won\'t start on their own. Also check Privacy & Security › Motion & Fitness.');
-  expect(rowDetail('motion', { kind: 'granted' }, ANDROID)).toBe('If you forget to end a drive, it ends when you walk away.');
-  expect(rowDetail('motion', m('denied', true), ANDROID)).toBe(`Without it, a drive you forget to end stops after ${IDLE_END_S / 60} min.`);
+  // Android: the same meaning (drives start on their own there too), in its own permission's name.
+  expect(rowDetail('motion', { kind: 'granted' }, ANDROID)).toBe('RoadWise can tell driving from walking, so drives start and end on time.');
+  expect(rowDetail('motion', m('denied', true), ANDROID)).toBe("Without it, drives won't start on their own.");
+  expect(rowDetail('motion', m('notYet', true), ANDROID)).toBe("Without it, drives won't start on their own.");
 });
 
 test('the automatic-drive rows and notifications say what they do', () => {
@@ -62,12 +86,46 @@ test('the automatic-drive rows and notifications say what they do', () => {
   expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, your weekly and monthly recaps and friend requests can reach you.');
   expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won\'t get drive recaps, your weekly and monthly recaps or friend requests.');
   expect(requestLabel('locationAlways', m('notYet', true))).toBe('Allow Always');
+  expect(requestLabel('locationAlways', m('notYet', true), IOS)).toBe('Allow Always');
   expect(requestLabel('backgroundRefresh', m('denied'))).toBe('Open Settings');
+});
+
+test('Android words the automatic-drive rows in its own names', () => {
+  expect(rowTitle('locationAlways', ANDROID)).toBe('Location all the time');
+  expect(rowTitle('backgroundRefresh', ANDROID)).toBe('App battery usage');
+  expect(rowTitle('unusedApps', ANDROID)).toBe('Pause app activity if unused');
+  expect(rowTitle('unusedApps', ANDROID_11)).toBe("Remove permissions if app isn't used");
+  expect(rowDetail('locationAlways', { kind: 'granted' }, ANDROID)).toBe('RoadWise can notice your drives and record them with the app closed.');
+  expect(rowDetail('locationAlways', m('notYet', true), ANDROID)).toBe("Drives won't start on their own. You can still start them from Home.");
+  expect(rowDetail('locationAlways', { kind: 'idle' }, ANDROID)).toBe('Allow Location first.');
+  expect(rowDetail('backgroundRefresh', { kind: 'granted' }, ANDROID)).toBe('Android can wake RoadWise when a drive starts.');
+  expect(rowDetail('backgroundRefresh', m('denied'), ANDROID)).toBe("Battery use is set to Restricted, so drives won't start on their own.");
+  expect(rowDetail('unusedApps', { kind: 'granted' }, ANDROID)).toBe("RoadWise keeps working even if you don't open it for months.");
+  expect(rowDetail('unusedApps', m('denied'), ANDROID)).toBe("If RoadWise goes unopened for a few months, Android may pause it and drives won't start.");
+  expect(requestLabel('locationAlways', m('notYet', true), ANDROID)).toBe('Allow all the time');
+  expect(permissionName('locationAlways', ANDROID)).toBe('Location all the time');
+  // No Android line names an iPhone-only setting.
+  for (const id of PERMISSION_IDS) {
+    for (const st of ALL_STATES) {
+      const lines = [rowTitle(id, ANDROID), rowDetail(id, st, ANDROID), ...(st.kind === 'missing' ? [homeLine(id, st, ANDROID)] : [])];
+      for (const line of lines) expect(line).not.toMatch(/Always\b|Background App Refresh|Motion & Fitness|iOS|iPhone|Privacy & Security/);
+    }
+  }
+});
+
+test("Google Play's background-location disclosure names the data, the background use and the purpose", () => {
+  expect(backgroundDisclosureCopy.body).toBe(
+    'RoadWise collects location data to detect and record your drives automatically, even when the app is closed or not in use.'
+  );
+  expect(backgroundDisclosureCopy.title).toBe('Allow location in the background');
+  expect(backgroundDisclosureCopy.next).toEqual({ allTheTime: 'Next, choose "Allow all the time".', allow: 'Next, choose "Allow".' });
+  expect(backgroundDisclosureCopy.continue).toBe('Continue');
+  expect(backgroundDisclosureCopy.notNow).toBe('Not now');
 });
 
 test('the note under the list follows the phone, and no line mentions a reminder or points', () => {
   expect(permissionsCopy.about.ios).toBe('With Location set to Always, RoadWise notices drives and records them even when it\'s closed. Your location is never sold.');
-  expect(permissionsCopy.about.android).toBe('A drive uses location only while it records. Start each drive from Home.');
+  expect(permissionsCopy.about.android).toBe("With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.");
   // Phone pickups need no permission: a note of their own says they are felt, never seen.
   expect(permissionsCopy.phone).toBe('On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.');
   for (const c of CTXS) {
@@ -129,4 +187,22 @@ test('status words', () => {
   expect(statusWord({ kind: 'idle' })).toBe('idle');
   expect(statusWord({ kind: 'unknown' })).toBe('unknown');
   expect(permissionsCopy.status).toEqual({ on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" });
+});
+
+test("Pause app activity if unused prints Android's own switch: Off when RoadWise is kept (fine), On when Android may pause it (needs a look)", () => {
+  expect(rowStatus('unusedApps', { kind: 'granted' })).toEqual({ word: 'on', label: 'Off' });
+  expect(rowStatus('unusedApps', m('denied'))).toEqual({ word: 'notYet', label: 'On' });
+  expect(rowStatus('unusedApps', { kind: 'unknown' })).toEqual({ word: 'unknown', label: "Can't check" });
+  // Every other row prints its own word.
+  expect(rowStatus('backgroundRefresh', m('denied'))).toEqual({ word: 'off', label: 'Off' });
+  expect(rowStatus('locationAlways', { kind: 'granted' })).toEqual({ word: 'on', label: 'On' });
+  expect(rowDetail('unusedApps', m('denied'), ANDROID_11)).toBe("If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.");
+});
+
+test('Android Battery Saver limiting location: needs a look, in its own words', () => {
+  const saver = m('denied', false, 'batterySaver');
+  expect(rowStatus('backgroundRefresh', saver)).toEqual({ word: 'notYet', label: 'Needs a look' });
+  expect(homeLine('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location. Drives may be missed.');
+  expect(rowDetail('backgroundRefresh', saver, ANDROID)).toBe('Battery Saver is limiting location, so drives may be missed or cut short.');
+  expect(requestLabel('backgroundRefresh', saver, ANDROID)).toBe('Open Settings');
 });

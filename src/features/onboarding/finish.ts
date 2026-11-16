@@ -21,7 +21,7 @@ export interface FinishDeps {
   refreshProfile(): Promise<void>;
   /** Default: the `complete_onboarding` RPC. */
   complete?: (termsVersion: string) => Promise<unknown>;
-  /** Default: arms automatic drives for this onboarded driver (iPhone; a no-op on Android). Never rejects. */
+  /** Default: arms automatic drives for this onboarded driver (a no-op on a phone without the drive detector). Never rejects. */
   armAutoDrives?: () => Promise<unknown>;
 }
 
@@ -46,7 +46,7 @@ async function completeOnboardingRpc(termsVersion: string): Promise<unknown> {
  * 2. the held deep link is read (allowlisted and held for this account), else Home is the target;
  * 3. the profile is refreshed, and the navigation is made in the same turn as the refresh settling,
  *    so the gate sees the ready profile and the target together and moves no one;
- * 4. automatic drives are armed for this driver (iPhone, with the permissions they need);
+ * 4. automatic drives are armed for this driver (where the phone has the drive detector, with the permissions they need);
  * 5. the onboarding state (step, plan, held link) is cleared.
  *
  * Rejects when there is no session, the call fails or the refresh fails; nothing is navigated or
