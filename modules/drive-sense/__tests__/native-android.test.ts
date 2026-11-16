@@ -194,11 +194,13 @@ describe('native-android: share images (WP09, ruling 10)', () => {
   const share = () => code(kt('ShareIntent'));
   const saver = () => code(kt('ImageSaver'));
 
-  it('shareImage is an Android-only function on the main queue that never rejects', () => {
-    const fn = /AsyncFunction\("shareImage"\)[\s\S]*?\.runOnQueue\(Queues\.MAIN\)/.exec(MODULE())?.[0] ?? '';
-    expect(fn).toMatch(/ShareIntent\.shareImage\(activity, uri, text, title\)/);
+  it('shareImage is an Android-only function that never rejects: the file into the cache off the main thread, the chooser on it', () => {
+    const fn = /AsyncFunction\("shareImage"\)[\s\S]*?\n {4}\}\n/.exec(MODULE())?.[0] ?? '';
+    expect(fn).toMatch(/ShareIntent\.intoCache\(context\.cacheDir, context\.externalCacheDir, uri\)/);
+    expect(fn.indexOf('intoCache')).toBeLessThan(fn.indexOf('Looper.getMainLooper()'));
+    expect(fn).toMatch(/Handler\(Looper\.getMainLooper\(\)\)\.post \{[\s\S]*ShareIntent\.shareImage\(activity, file\.absolutePath, text, title\)/);
     expect(fn).toMatch(/catch \(_: Exception\)/);
-    expect(fn).not.toMatch(/reject/);
+    expect(fn).not.toMatch(/reject|runOnQueue/);
     expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain('shareImage');
   });
 
@@ -223,8 +225,10 @@ describe('native-android: share images (WP09, ruling 10)', () => {
     expect([...paths.matchAll(/<([a-z-]+-path)\b/g)].map((x) => x[1])).toEqual(['cache-path']);
   });
 
-  it('only an image inside the cache is ever shared or saved', () => {
+  it('only an image inside the cache is ever shared or saved; a view-shot capture in the external cache is moved in first', () => {
     expect(share()).toMatch(/fun shareableImage\(cacheDir: File, uriOrPath: String\): File\?/);
+    expect(share()).toMatch(/fun intoCache\(cacheDir: File, externalCacheDir: File\?, uriOrPath: String\): File\?/);
+    expect(share()).toMatch(/CAPTURE_PREFIX = "ReactNative-snapshot-image"/);
     expect(share()).toMatch(/canonicalFile/);
     expect(saver()).toMatch(/ShareIntent\.shareableImage\(ctx\.cacheDir, path\)/);
   });
@@ -270,12 +274,17 @@ describe('native-android: the background-safe geocoder (WP10)', () => {
     expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain(name);
   });
 
-  it('uses android.location.Geocoder: the listener form on 33+, a background thread below, no activity', () => {
+  it('uses android.location.Geocoder: the listener form on 33+, a small pool below (start and end side by side, stale jobs skipped), no activity', () => {
     const src = geo();
     expect(src).toMatch(/import android\.location\.Geocoder/);
     expect(src).toMatch(/SDK_INT >= Build\.VERSION_CODES\.TIRAMISU/);
     expect(src).toMatch(/Geocoder\.GeocodeListener/);
-    expect(src).toMatch(/Executors\.newSingleThreadExecutor/);
+    expect(src).toMatch(/const val WORKERS = 2/);
+    expect(src).toMatch(/ThreadPoolExecutor\(WORKERS, WORKERS, IDLE_S, TimeUnit\.SECONDS, LinkedBlockingQueue\(MAX_WAITING\)\)/);
+    expect(src).toMatch(/allowCoreThreadTimeOut\(true\)/);
+    expect(src).toMatch(/worker\.execute \{ runQueued\(once, work\) \}/);
+    expect(src).toMatch(/fun runQueued\(once: Once, work: [^\n]*\) \{\s*if \(once\.settled\) return/);
+    expect(src).not.toMatch(/newSingleThreadExecutor/);
     expect(src).not.toMatch(/currentActivity|\bActivity\b/);
   });
 

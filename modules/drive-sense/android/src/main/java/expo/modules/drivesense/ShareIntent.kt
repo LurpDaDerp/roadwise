@@ -31,7 +31,10 @@ import java.net.URI
  *   for, so the action is left out there.
  * - Only an image file inside RoadWise's own cache directory is ever shared or saved
  *   ([shareableImage]): the path comes from JS (and back from the PendingIntent's fixed extras), so
- *   it is checked every time.
+ *   it is checked every time. react-native-view-shot writes a capture to the external cache
+ *   instead whenever that reports more free space (its createTempFile), so a capture there is first
+ *   moved into the cache ([intoCache]), off the main thread: the provider, the save and the JS
+ *   sweeps then deal with one folder, and nothing of RoadWise's is ever served from external storage.
  *
  * The chooser answers nothing about what was picked, and the app picked may still be reading the
  * file after RoadWise is back in front, so the file is not deleted here: JS sweeps share images
@@ -115,6 +118,37 @@ internal object ShareIntent {
   } catch (_: Exception) {
     null
   }
+
+  /**
+   * The share image at `uriOrPath` inside `cacheDir`: the file itself when it is already there, or,
+   * when it is an image in `externalCacheDir` (where react-native-view-shot puts a capture when the
+   * external cache reports more free space), a copy moved into `cacheDir` under the same name (a
+   * fresh `ReactNative-snapshot-image` name if that one is taken, so the JS sweeps still find it),
+   * the external one deleted. Null for anything else, or when the copy fails. Disk I/O: never on the
+   * main thread. Pure (ShareIntentTest).
+   */
+  fun intoCache(cacheDir: File, externalCacheDir: File?, uriOrPath: String): File? {
+    shareableImage(cacheDir, uriOrPath)?.let { return it }
+    val external = externalCacheDir?.let { shareableImage(it, uriOrPath) } ?: return null
+    return try {
+      cacheDir.mkdirs()
+      val named = File(cacheDir, external.name)
+      val target = if (named.exists()) File.createTempFile(CAPTURE_PREFIX, "." + external.extension, cacheDir) else named
+      try {
+        external.copyTo(target, overwrite = true)
+      } catch (e: Exception) {
+        target.delete()
+        throw e
+      }
+      external.delete()
+      target.canonicalFile
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /** react-native-view-shot's capture name prefix, which the JS sweeps match (`androidCapture`). */
+  private const val CAPTURE_PREFIX = "ReactNative-snapshot-image"
 
   /** The image type a share image's name says; null for anything that is not one. */
   fun mimeOf(file: File): String? = when (file.extension.lowercase()) {

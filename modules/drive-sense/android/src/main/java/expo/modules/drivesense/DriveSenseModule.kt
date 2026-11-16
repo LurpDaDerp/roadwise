@@ -5,6 +5,8 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.ActivityCompat
 import expo.modules.interfaces.permissions.PermissionsResponseListener
@@ -12,7 +14,6 @@ import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
-import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -330,19 +331,29 @@ class DriveSenseModule : Module() {
 
     // The share sheet with a share image from RoadWise's cache, `text` beside it and Save image on
     // Android 10+ (ShareIntent). True once the sheet is up; false with no activity on screen or a
-    // file that is not a share image. Never rejects. Main thread: it starts the chooser.
-    AsyncFunction("shareImage") { uri: String, text: String?, title: String? ->
-      val activity = appContext.currentActivity
-      if (activity == null) {
-        false
+    // file that is not a share image. Never rejects. On the module's own queue first, where a
+    // capture view-shot put in the external cache is moved into the cache (ShareIntent.intoCache,
+    // disk I/O); then the main thread, which starts the chooser.
+    AsyncFunction("shareImage") { uri: String, text: String?, title: String?, promise: Promise ->
+      val file = try {
+        ShareIntent.intoCache(context.cacheDir, context.externalCacheDir, uri)
+      } catch (_: Exception) {
+        null
+      }
+      if (file == null) {
+        promise.resolve(false)
       } else {
-        try {
-          ShareIntent.shareImage(activity, uri, text, title)
-        } catch (_: Exception) {
-          false
+        Handler(Looper.getMainLooper()).post {
+          val activity = appContext.currentActivity
+          val shown = activity != null && try {
+            ShareIntent.shareImage(activity, file.absolutePath, text, title)
+          } catch (_: Exception) {
+            false
+          }
+          promise.resolve(shown)
         }
       }
-    }.runOnQueue(Queues.MAIN)
+    }
 
     // ---- The background-safe geocoder (WP10). Android only: ANDROID_GEOCODE_METHODS in
     // src/geocode.ts, outside DRIVE_SENSE_METHODS (iPhone keeps expo-location's). ----

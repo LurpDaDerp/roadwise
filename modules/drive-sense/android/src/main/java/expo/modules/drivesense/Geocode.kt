@@ -6,9 +6,10 @@ import android.location.Geocoder
 import android.os.Build
 import androidx.annotation.RequiresApi
 import java.util.Locale
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -20,7 +21,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * activity and no permission, so this one answers the same in front, behind and headless.
  *
  * - API 33+: the asynchronous [Geocoder.GeocodeListener] form (no thread of ours blocks on the
- *   network). Below 33: the old blocking call, on one background thread of this object.
+ *   network). Below 33: the old blocking call, on a small pool of this object ([WORKERS] threads,
+ *   so a drive's start and end labels, asked together, are looked up side by side as on 33+; idle
+ *   threads end after [IDLE_S] s). A queued lookup that has already answered (its timeout passed
+ *   while it waited) is skipped, never sent: a stuck backend cannot pile stale calls up behind it.
  * - Every lookup answers once, within [TIMEOUT_MS]: a late answer is dropped. JS gives up on a drive
  *   label at 4 s ([labels.ts] GEOCODE_TIMEOUT_MS); this cap only keeps a stuck backend from holding
  *   a promise open for good.
@@ -44,8 +48,19 @@ internal object Geocode {
   /** The longest typed address forwarded (the Look up field's text). */
   const val MAX_QUERY_CHARS = 200
 
-  private val worker: ExecutorService by lazy {
-    Executors.newSingleThreadExecutor { r -> Thread(r, "DriveSenseGeocode").apply { isDaemon = true } }
+  /** Below API 33: how many blocking lookups run at once (a drive's start and end labels together). */
+  const val WORKERS = 2
+
+  /** Below API 33: how long an idle lookup thread waits for more work before it ends. */
+  private const val IDLE_S = 30L
+
+  /** Below API 33: how many lookups may wait for a thread; one past that answers null at once. */
+  private const val MAX_WAITING = 16
+
+  private val worker: ThreadPoolExecutor by lazy {
+    ThreadPoolExecutor(WORKERS, WORKERS, IDLE_S, TimeUnit.SECONDS, LinkedBlockingQueue(MAX_WAITING)) { r ->
+      Thread(r, "DriveSenseGeocode").apply { isDaemon = true }
+    }.apply { allowCoreThreadTimeOut(true) }
   }
   private val timeouts: ScheduledExecutorService by lazy {
     Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "DriveSenseGeocodeTimeout").apply { isDaemon = true } }
@@ -152,18 +167,26 @@ internal object Geocode {
 
   private fun blocking(once: Once, work: () -> List<Map<String, Any?>>) {
     try {
-      worker.execute {
-        once.answer(
-          try {
-            work()
-          } catch (_: Exception) {
-            null // IOException: no network, the backend busy or refusing
-          }
-        )
-      }
+      worker.execute { runQueued(once, work) }
     } catch (_: Exception) {
-      once.answer(null)
+      once.answer(null) // RejectedExecutionException: more than MAX_WAITING already waiting
     }
+  }
+
+  /**
+   * One queued blocking lookup, on a pool thread: skipped (no call to the geocoder) when it already
+   * answered, its timeout having passed while it waited for a thread, since that answer would be
+   * dropped; else the call, any failure answering null. Pure (GeocodeFieldsTest).
+   */
+  internal fun runQueued(once: Once, work: () -> List<Map<String, Any?>>) {
+    if (once.settled) return
+    once.answer(
+      try {
+        work()
+      } catch (_: Exception) {
+        null // IOException: no network, the backend busy or refusing
+      }
+    )
   }
 
   private fun schedule(once: Once) {
@@ -175,11 +198,15 @@ internal object Geocode {
   }
 
   /** Answers its callback at most once: the geocoder's answer or the timeout, whichever is first. */
-  private class Once(private val done: (List<Map<String, Any?>>?) -> Unit) {
-    private val settled = AtomicBoolean(false)
+  internal class Once(private val done: (List<Map<String, Any?>>?) -> Unit) {
+    private val answered = AtomicBoolean(false)
+
+    /** Whether it has answered already (a queued lookup checks this before it calls the geocoder). */
+    val settled: Boolean
+      get() = answered.get()
 
     fun answer(value: List<Map<String, Any?>>?) {
-      if (settled.compareAndSet(false, true)) done(value)
+      if (answered.compareAndSet(false, true)) done(value)
     }
   }
 }

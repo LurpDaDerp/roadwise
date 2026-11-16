@@ -1,7 +1,9 @@
 package expo.modules.drivesense
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -68,5 +70,38 @@ class GeocodeFieldsTest {
   @Test
   fun `nothing to go on is no district`() {
     assertNull(fields().district())
+  }
+
+  @Test
+  fun `a lookup answers once, the first of the geocoder and the timeout wins`() {
+    val answers = mutableListOf<List<Map<String, Any?>>?>()
+    val once = Geocode.Once { answers.add(it) }
+    assertFalse(once.settled)
+    once.answer(null)
+    once.answer(listOf(mapOf("city" to "Seattle")))
+    assertTrue(once.settled)
+    assertEquals(listOf<List<Map<String, Any?>>?>(null), answers)
+  }
+
+  @Test
+  fun `a queued lookup whose timeout passed while it waited never calls the geocoder`() {
+    val answers = mutableListOf<List<Map<String, Any?>>?>()
+    val once = Geocode.Once { answers.add(it) }
+    once.answer(null) // the timeout
+    var called = false
+    Geocode.runQueued(once) {
+      called = true
+      listOf(mapOf("city" to "Seattle"))
+    }
+    assertFalse(called)
+    assertEquals(1, answers.size)
+  }
+
+  @Test
+  fun `a queued lookup still waiting runs, and a failure answers null`() {
+    val got = mutableListOf<List<Map<String, Any?>>?>()
+    Geocode.runQueued(Geocode.Once { got.add(it) }) { listOf(mapOf("city" to "Seattle")) }
+    Geocode.runQueued(Geocode.Once { got.add(it) }) { throw java.io.IOException("backend busy") }
+    assertEquals(listOf(listOf(mapOf("city" to "Seattle")), null), got)
   }
 }

@@ -1,7 +1,10 @@
 package expo.modules.drivesense
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -42,6 +45,56 @@ class ShareIntentTest {
     assertNull(ShareIntent.shareableImage(dir, "content://elsewhere/x.png"))
     assertNull(ShareIntent.shareableImage(dir, "relative/x.png"))
     assertNull(ShareIntent.shareableImage(dir, ""))
+  }
+
+  @Test
+  fun `a capture already in the cache stays where it is`() {
+    val dir = cache()
+    val ext = tmp.newFolder("external")
+    val png = File(dir, "ReactNative-snapshot-image1.png").apply { writeText("card") }
+    assertEquals(png.canonicalFile, ShareIntent.intoCache(dir, ext, png.toURI().toString()))
+    assertTrue(png.exists())
+  }
+
+  @Test
+  fun `a capture view-shot put in the external cache moves into the cache under its name`() {
+    val dir = cache()
+    val ext = tmp.newFolder("external")
+    val png = File(ext, "ReactNative-snapshot-image2.png").apply { writeText("card") }
+    val moved = ShareIntent.intoCache(dir, ext, png.toURI().toString())
+    assertEquals(File(dir, "ReactNative-snapshot-image2.png").canonicalFile, moved)
+    assertEquals("card", moved!!.readText())
+    assertFalse(png.exists())
+  }
+
+  @Test
+  fun `a name already taken in the cache gets a fresh capture name, and the other file is left alone`() {
+    val dir = cache()
+    val ext = tmp.newFolder("external")
+    val taken = File(dir, "ReactNative-snapshot-image3.png").apply { writeText("older") }
+    val png = File(ext, "ReactNative-snapshot-image3.png").apply { writeText("card") }
+    val moved = ShareIntent.intoCache(dir, ext, png.absolutePath)!!
+    assertNotEquals(taken.canonicalFile, moved)
+    assertEquals(dir.canonicalFile, moved.parentFile)
+    assertTrue(moved.name.startsWith("ReactNative-snapshot-image") && moved.name.endsWith(".png"))
+    assertEquals("card", moved.readText())
+    assertEquals("older", taken.readText())
+    assertFalse(png.exists())
+  }
+
+  @Test
+  fun `nothing outside both caches, no external cache, or not an image is moved`() {
+    val dir = cache()
+    val ext = tmp.newFolder("external")
+    val outside = tmp.newFile("outside.png").apply { writeText("x") }
+    assertNull(ShareIntent.intoCache(dir, ext, outside.absolutePath))
+    assertTrue(outside.exists())
+    val inExt = File(ext, "ReactNative-snapshot-image4.png").apply { writeText("x") }
+    assertNull(ShareIntent.intoCache(dir, null, inExt.absolutePath))
+    assertTrue(inExt.exists())
+    val db = File(ext, "data.db").apply { writeText("x") }
+    assertNull(ShareIntent.intoCache(dir, ext, db.absolutePath))
+    assertTrue(db.exists())
   }
 
   @Test
