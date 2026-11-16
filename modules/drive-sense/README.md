@@ -96,7 +96,7 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 | `setDriveDisplay(state)` | The background surface (spec "Driving screen · Background"; plan §6). `state` = `{ speed, limit, unit, points, pointsDelta, stopped, ended?, sky…?, speedTint?, speeding?, notDrivingAvailable?, weatherKind?, weatherText? }` (`DriveDisplayState`; the last five are the iOS Live Activity's and Android ignores them). **Android:** updates the capture's foreground notification — title **"Driving"**, text **"34 mph · limit 35"** (`—` for a null speed or limit, the unit from `state`), a sub-line **"1,240 pts (+18)"** only when `points` is non-null (the delta only when non-null and non-zero), the **End drive** action (→ `notificationAction`) only while `stopped` and not `ended`; tapping opens the app. Ignored while not capturing; the display resets with each capture. **iOS:** forwarded to the Live Activity (`modules/live-drive`) through the process-local `roadwise.driveDisplay` notification (every key, the tint, the hint and the weather line included); a no-op when none is running. Callers throttle to ≤ 1 update per 3 s on Android and about one a second (900 ms) on iOS, send the drive's first known speed and limit at once, send on change, and re-send an unchanged state every 60 s (keeps the Live Activity's 2-min stale date from lapsing at a long stop). Never rejects. |
 | `getLastExitInfo()` | Android: the most recent of `ActivityManager.getHistoricalProcessExitReasons(pkg, 0, 1)` and the persisted watchdog record, as `ExitInfo` (mapping: `REASON_USER_REQUESTED`/`USER_STOPPED` → `user_stopped`, `LOW_MEMORY` → `low_memory`, `CRASH`/`CRASH_NATIVE` → `crash`, `ANR` → `anr`, watchdog stop → `watchdog`, a refused FGS start → `other`, anything else → `other`, unknown → `unknown`); `whileCapturing` from the persisted capture-open flag at that time. iOS: `null`. |
 | `isIgnoringBatteryOptimizations()` | Android: `PowerManager.isIgnoringBatteryOptimizations(packageName)` — whether the app is exempt from battery optimisation (permission health). **iOS: always `true`** — iOS has no equivalent per-app restriction, so there is nothing for the user to fix. |
-| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors, (iOS) the drive detector's policy over `detect` rows and (Android) the reminder's over `reminder` rows; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
+| `selfTest(vectorsJson)` | Runs the native extractor and (Android) gravity filter over golden vectors, the drive detector's policy over `detect` rows (both platforms) and (Android) the reminder's over `reminder` rows; resolves a JSON string (§8). Rejects `E_INVALID_INPUT` only if the vectors JSON cannot be parsed at all. |
 | `setTripReminder(enabled)` | Android: the forgot-to-start reminder's switch (§10); resolves its `TripReminderStatus`. On: saved on even when something is missing (the status says what), the session kept, the channel created. Off: everything it kept is forgotten, its feed stopped, its boot receiver disabled, any notification taken down. Never starts a capture. **iOS** (no reminder): resolves `{ enabled: false, state: 'off', missing: [] }`. |
 | `getTripReminderStatus()` | Android: the reminder's `TripReminderStatus` (§10), brought up to now first. iOS: `{ enabled: false, state: 'off', missing: [] }`. |
 | `requestReminderLocation()` | iOS: the current location answer (`always`/`whenInUse`/`denied`) without prompting; the one "Always" request is `DriveDetect.requestAlways` (§11). Android: `notNeeded`. |
@@ -661,10 +661,17 @@ diagnostics screen (U5) — never by a production code path.
    it fails.
 6. A second call sends the drive detector's decision table as `detect` vectors
    (`{ "name", "kind": "detect", "inputs": row }`, `src/detect/vectors.ts` without each row's
-   `expected`); iOS runs each through the production `DetectPolicy` (`DetectSelfTest.swift`) and
-   answers `{ "name", "kind": "detect", "actual": {…} }`; Android has no detector and answers
-   `skipped`. JS diffs with `diffDetectSelfTest` (`src/detect/selfTest.ts`), which accepts a skip
-   only from Android.
+   `expected`). Both platforms run every row through their production policy, never a copy kept
+   for testing: iOS the Swift `DetectPolicy` (`DetectSelfTest.swift`), Android the Kotlin
+   `expo.modules.drivesense.detect.DetectPolicy` (`DetectSelfTest.kt`, routed from `SelfTest.kt`).
+   Each answers `{ "name", "kind": "detect", "actual": {…} }` (or the `error` form for a row that
+   throws). JS diffs with `diffDetectSelfTest` (`src/detect/selfTest.ts`), which fails a `skipped`
+   row from either platform. The Android JVM unit tests (`DetectPolicyVectorsTest.kt`) run the
+   same table from `android/src/test/resources/detect-vectors.json`, a generated copy of
+   `src/detect/vectors.ts` with the reference's answers; `__tests__/detectFixture.test.ts` fails
+   when the file drifts from the table, and
+   `UPDATE_DETECT_FIXTURE=1 npx jest modules/drive-sense/__tests__/detectFixture.test.ts`
+   rewrites it after a change to the table.
 7. A third call sends the forgot-to-start reminder's decision table as `reminder` vectors; Android
    answers `{ "name", "kind": "reminder", "actual": {…} }` (or `skipped` for a row it does not run),
    iOS (no reminder) `skipped` for every row, and JS diffs with `diffReminderSelfTest` (§10).
@@ -995,5 +1002,5 @@ the motion gate); a drive costs what a manual drive did.
 `detect` vectors (§8): every row of `src/detect/vectors.ts` (confirmation, trace-back, start and
 fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
 rest's end, a rest resumed at a relaunch, a relaunch's decision and seq, the status) runs through the production `DetectPolicy` on the
-phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
+phone (`DetectSelfTest.swift`; on Android the Kotlin port, `DetectSelfTest.kt`) and is diffed by `diffDetectSelfTest`.
 

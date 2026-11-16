@@ -2,10 +2,10 @@
 //
 // `ios/DetectPolicy.swift`, `ios/DetectStartPolicy.swift` and `ios/DetectEndPolicy.swift` mirror
 // every constant below under the same name (the native text test compares them) and every function
-// under the same rule; `vectors.ts` is the shared
-// decision table that Jest runs here and the phone runs through the
-// Swift policy (`DetectSelfTest.swift`). Android has no native detector and uses none of this (its
-// Start-card wait is the engine's own).
+// under the same rule, and so does the Android port (`android/.../detect/DetectPolicy.kt`,
+// `DetectStartPolicy.kt`, `DetectEndPolicy.kt`, ported from this file, not the Swift); `vectors.ts`
+// is the shared decision table that Jest runs here and the phone runs through the native policy
+// (`DetectSelfTest.swift`, `DetectSelfTest.kt`), as do Android's JVM unit tests.
 //
 // Pure: no platform, no clock. Every time is epoch ms; every speed m/s; every distance metres.
 

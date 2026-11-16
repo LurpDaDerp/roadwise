@@ -1,10 +1,10 @@
 // The drive detector's half of the self-test (plan §3.3). Each row of the decision table
-// (`vectors.ts`) goes to native as one `detect` vector with its `expected` left out; iOS runs it
-// through its PRODUCTION policy (`DetectPolicy.swift`, via `DetectSelfTest.swift`), never a copy,
-// and answers the row's `actual`. JS matches `actual` against the row's `expected` with the same
-// matcher Jest runs over this reference (`__tests__/detectSelfTest.test.ts`), so a Swift rule that
-// drifts from the table fails on the phone. Android has no detector: it answers every row `skipped`,
-// and a skip is accepted only from Android.
+// (`vectors.ts`) goes to native as one `detect` vector with its `expected` left out; each platform
+// runs it through its PRODUCTION policy, never a copy (iOS: `DetectPolicy.swift` via
+// `DetectSelfTest.swift`; Android: `DetectPolicy.kt` via `DetectSelfTest.kt`), and answers the row's
+// `actual`. JS matches `actual` against the row's `expected` with the same matcher Jest runs over
+// this reference (`__tests__/detectSelfTest.test.ts`), so a native rule that drifts from the table
+// fails on the phone. Both platforms have the detector's policy, so a skipped row fails everywhere.
 import { z } from 'zod';
 
 import { MISMATCH_CAP, type Mismatch, type SelfTestDiff, type VectorDiff } from '../selfTest';
@@ -288,11 +288,7 @@ export function diffDetectSelfTest(rows: readonly DetectVector[], outputJson: st
     const r = byName.get(v.name);
     if (!r) return failed('missing from the native output');
     if (typeof r.error === 'string') return failed(r.error);
-    if (typeof r.skipped === 'string') {
-      return platform === 'android'
-        ? { name: v.name, ok: true, skipped: r.skipped, mismatches: [], mismatchCount: 0 }
-        : failed(`skipped (${r.skipped}), but ${platform} has the drive detector`);
-    }
+    if (typeof r.skipped === 'string') return failed(`skipped (${r.skipped}), but ${platform} has the drive detector`);
     if (r.kind !== 'detect') return failed(`kind ${String(r.kind)} returned, detect expected`);
     const actual = r.actual;
     if (actual === null || typeof actual !== 'object' || Array.isArray(actual)) return failed('no actual in the native answer');

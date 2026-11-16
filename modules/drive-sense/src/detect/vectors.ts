@@ -1,7 +1,9 @@
 // The drive detector's decision table (plan §3.3). Jest runs every row through the TypeScript
 // reference (`policy.ts`, `__tests__/detectPolicy.test.ts`); the phone runs the same rows through
-// the Swift policy (`DetectSelfTest.swift`) and the diagnostics screen diffs the answers
-// (`selfTest.ts`). Each row names the rule it pins.
+// the native policy (`DetectSelfTest.swift`, `DetectSelfTest.kt`) and the diagnostics screen diffs
+// the answers (`selfTest.ts`); Android's JVM unit tests run them from a generated copy
+// (`android/src/test/resources/detect-vectors.json`, kept fresh by `__tests__/detectFixture.test.ts`:
+// regenerate it after changing a row). Each row names the rule it pins.
 import {
   DETECT,
   MPS_PER_MPH,

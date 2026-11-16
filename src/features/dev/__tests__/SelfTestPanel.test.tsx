@@ -22,11 +22,9 @@ function referenceOutput(platform: Platform): Output {
   return { version: 1, platform, results };
 }
 
-/** What a correct native detector answers: iOS the reference; Android (no detector) every row skipped. */
+/** What a correct native detector policy answers, on either platform: the reference. */
 function detectOutput(platform: Platform): Output {
-  const out = referenceDetectOutput(detectWireVectors(loadDetectVectors()));
-  const results = platform === 'ios' ? out.results : out.results.map((r) => ({ name: r.name, kind: 'detect', skipped: 'no drive detector on Android' }));
-  return { version: 1, platform, results };
+  return { version: 1, platform, results: referenceDetectOutput(detectWireVectors(loadDetectVectors())).results };
 }
 
 /** Answers the golden call with `golden` and the detector call with `detect`. */
@@ -69,11 +67,21 @@ test('sends native the golden vectors, then the detector rows without their answ
   expect(detect.every((v) => v.kind === 'detect' && !('expected' in v.inputs))).toBe(true);
 });
 
-test('Android skipping every detector row (it has none) still passes, and says so', async () => {
+test('Android answering every detector row through its policy passes, with nothing skipped', async () => {
   await renderPanel(sourceAnswering(referenceOutput('android'), detectOutput('android')));
   await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
   expect(await screen.findByText(`All ${N} vectors match the reference`)).toBeTruthy();
-  expect(screen.getAllByText(/^Skipped: /)).toHaveLength(ROWS.length);
+  expect(screen.queryAllByText(/^Skipped: /)).toHaveLength(0);
+});
+
+test('an Android phone that skips a detector row fails', async () => {
+  const detect = detectOutput('android');
+  const skippedName = String(detect.results[0]!.name);
+  detect.results[0] = { name: skippedName, kind: 'detect', skipped: 'no' };
+  await renderPanel(sourceAnswering(referenceOutput('android'), detect));
+  await fireEvent.press(screen.getByRole('button', { name: 'Run self-test' }));
+  expect(await screen.findByText(`1 of ${N} vectors differ from the reference`)).toBeTruthy();
+  expect(screen.getByText('skipped (no), but android has the drive detector')).toBeTruthy();
 });
 
 test('a perturbed native field is named by its path, with both values', async () => {
