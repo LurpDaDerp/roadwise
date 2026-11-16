@@ -1,11 +1,10 @@
-import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Platform, StyleSheet, View } from 'react-native';
+import { Image, Platform, StyleSheet, useColorScheme, View } from 'react-native';
 import type MapViewType from 'react-native-maps';
 import Svg, { Circle, Path } from 'react-native-svg';
 
-import { mapStyleFor } from '@/features/settings/mapStyle';
+import { androidMapLook } from '@/features/settings/mapStyle';
 import { removeShareImage } from '@/lib/shareImages';
 import { withAlpha } from '@/ui';
 
@@ -137,10 +136,18 @@ export function setMapsKeyForTests(k: { key: string | undefined } | undefined): 
   keyForTests = k;
 }
 
-/** The Google Maps key this Android build was made with (app.config.ts `android.config.googleMaps`); undefined when none. */
+/**
+ * The Google Maps key this Android build was made with, undefined when none. Read from the
+ * bundle's own inlined `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY` (the same variable app.config.ts puts
+ * in the manifest), never from `Constants.expoConfig.android.config.googleMaps`: Expo strips
+ * `android.config` from the public config it embeds in the app and in OTA manifests, so that path
+ * is always empty at runtime. Read here by name rather than through `@/lib/env`, which throws when
+ * the Supabase variables are missing (the share card has no need of them); Expo inlines the name
+ * only where it is spelled out literally, as it is here.
+ */
 function androidMapsKey(): string | undefined {
   if (keyForTests) return keyForTests.key;
-  const key: unknown = (Constants.expoConfig?.android as { config?: { googleMaps?: { apiKey?: unknown } } } | undefined)?.config?.googleMaps?.apiKey;
+  const key: unknown = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
   return typeof key === 'string' ? key : undefined;
 }
 
@@ -162,12 +169,6 @@ export function mapOffered(runs: Runs, w: number, h: number, box: Box): boolean 
 
 /** The map's credit on the card: whose map it is (Apple's on iPhone, Google's on Android). */
 export const mapCredit = (os: string = Platform.OS): string => (os === 'android' ? 'Map data © Google' : 'Map © Apple');
-
-/**
- * The dark, quiet Google map behind an Android card (no points of interest, as Apple's map with
- * `showsPointsOfInterests` off): Android ignores that prop, so the style hides them.
- */
-const ANDROID_SHARE_STYLE = mapStyleFor('dark');
 
 /**
  * The share card's map backdrop: the map of the route's area, a light wash of the card's sky over
@@ -279,16 +280,21 @@ export function ShareMapBackdrop({
   const bottomFade = useMemo(() => easedFade(low, 0, 1), [low]);
   const MapView = maps?.default;
   // iPhone snapshots as soon as the map is ready (MKMapSnapshotter loads its own tiles); Android's
-  // snapshot is of the live map, so it waits for the tiles.
-  const android = Platform.OS === 'android';
+  // snapshot is of the live map, so it waits for the tiles. The iPhone preview is the dark map, and
+  // its snapshot follows the phone's own appearance (MKMapSnapshotter draws in the system's light or
+  // dark); Android's snapshot is the live map itself, so the live map takes the phone's appearance
+  // (`androidMapLook`: the quiet Google map, dark when the phone is, remounted if it flips while
+  // loading) and the image shared matches the iPhone's.
+  const look = androidMapLook(useColorScheme() === 'dark' ? 'dark' : 'light');
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID="share-map">
       {MapView && region && status === 'loading' ? (
         <MapView
+          key={look?.key}
           ref={mapRef}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
-          {...(android ? { onMapLoaded: onMapReady, customMapStyle: ANDROID_SHARE_STYLE } : { onMapReady })}
+          {...(look ? { onMapLoaded: onMapReady, customMapStyle: look.customMapStyle } : { onMapReady })}
           scrollEnabled={false}
           zoomEnabled={false}
           zoomTapEnabled={false}
@@ -299,7 +305,7 @@ export function ShareMapBackdrop({
           showsCompass={false}
           showsScale={false}
           toolbarEnabled={false}
-          userInterfaceStyle="dark"
+          userInterfaceStyle={look?.userInterfaceStyle ?? 'dark'}
           testID="share-map-view"
         />
       ) : null}
