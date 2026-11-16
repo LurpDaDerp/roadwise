@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.PowerManager
@@ -18,6 +19,15 @@ import androidx.core.content.ContextCompat
  * `screen`, the thermal listener (API 29+) emits `thermal`, both live only ([EventBus.emitLive]):
  * never buffered, so unheard events cannot fill the buffer and push buffered rows out. Android's
  * lock signal is `reliable`.
+ *
+ * It also emits `call` `{ active, ts }` (README §3, as iOS's CallObserver): `active` is a call
+ * ringing, dialling or connected ([callState] not null). Once at [register] if a call is already up
+ * (a capture that starts mid-call would otherwise not learn of it until the call ends), on every
+ * change after, and `active: false` at [unregister] for a call still up (nothing tells JS once the
+ * watch stops). Changes come from the audio mode listener (API 31+) and the recording callback (a
+ * VoIP call opening or closing its microphone), both events; below API 31 the capture's row tick
+ * re-reads the mode ([checkCall]). No permission. Buffered like a row, so a drive host that is still
+ * booting learns of the call.
  */
 class PhoneStateReceiver(private val context: Context, private val handler: Handler) : BroadcastReceiver() {
   companion object {
@@ -73,6 +83,9 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
   private var registered = false
   private var thermalListener: Any? = null
   private var lastThermal: String? = null
+  private var callActive = false
+  private var modeListener: Any? = null
+  private var recordingCallback: AudioManager.AudioRecordingCallback? = null
 
   fun snapshot(): PhoneSample = PhoneSample(locked(context), screenOn(context), appForeground())
 
@@ -105,6 +118,76 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
         }
       }
     }
+    startCallWatch()
+  }
+
+  /** A call in progress as the watch starts says so once; then the audio events report each change. */
+  private fun startCallWatch() {
+    callActive = callState(context) != null
+    if (callActive) emitCall(true)
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager? ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val listener = AudioManager.OnModeChangedListener { checkCall() }
+      try {
+        am.addOnModeChangedListener({ r -> handler.post(r) }, listener)
+        modeListener = listener
+      } catch (_: Exception) {
+        // no audio service: the rows' call key still reads the mode each second
+      }
+    }
+    val callback = object : AudioManager.AudioRecordingCallback() {
+      override fun onRecordingConfigChanged(configs: MutableList<AudioRecordingConfiguration>?) {
+        checkCall()
+      }
+    }
+    try {
+      am.registerAudioRecordingCallback(callback, handler)
+      recordingCallback = callback
+    } catch (_: Exception) {
+      // as above
+    }
+  }
+
+  /**
+   * Re-read the call state and emit `call` on a change. Capture thread: the audio events post here,
+   * and below API 31 (no mode listener) the capture calls it at each row.
+   */
+  fun checkCall() {
+    if (!registered) return
+    val now = callState(context) != null
+    if (now == callActive) return
+    callActive = now
+    emitCall(now)
+  }
+
+  private fun stopCallWatch() {
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager?
+    if (am != null) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (modeListener as? AudioManager.OnModeChangedListener)?.let {
+          try {
+            am.removeOnModeChangedListener(it)
+          } catch (_: Exception) {
+            // already removed
+          }
+        }
+      }
+      recordingCallback?.let {
+        try {
+          am.unregisterAudioRecordingCallback(it)
+        } catch (_: Exception) {
+          // already removed
+        }
+      }
+    }
+    modeListener = null
+    recordingCallback = null
+    if (callActive) emitCall(false)
+    callActive = false
+  }
+
+  private fun emitCall(active: Boolean) {
+    EventBus.emit("call", linkedMapOf("active" to active, "ts" to System.currentTimeMillis()))
   }
 
   fun unregister() {
@@ -126,6 +209,7 @@ class PhoneStateReceiver(private val context: Context, private val handler: Hand
       }
     }
     thermalListener = null
+    stopCallWatch()
   }
 
   override fun onReceive(ctx: Context, intent: Intent) {

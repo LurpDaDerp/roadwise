@@ -206,6 +206,7 @@ class CaptureService : Service() {
   private lateinit var phone: PhoneStateReceiver
   private var location: LocationSource? = null
   private var sensors: SensorSource? = null
+  private var pedometer: PedometerSource? = null
   private var wakeLock: PowerManager.WakeLock? = null
 
   // ——— capture state (capture thread only) ———
@@ -379,6 +380,9 @@ class CaptureService : Service() {
     location = LocationSource(this, thread.looper, { anchor }, ::onFix)
     sensors = SensorSource(this, handler, { anchor }, ::onImu)
     phone.register()
+    // The step count for the rows' `steps`, at both rates, from this capture's baseline (a sticky
+    // restart's capture goes on from the one it took before its process died).
+    pedometer = PedometerSource(this, handler).also { it.start(startedAt) }
     startRate(rate)
     watchdog.start(nativeStart, EventBus.rowListenerAttached)
     handler.removeCallbacks(minute)
@@ -476,6 +480,8 @@ class CaptureService : Service() {
     sensors?.stop()
     location = null
     sensors = null
+    pedometer?.stop()
+    pedometer = null
     imuRunning = false
     phone.unregister()
     releaseWakeLock()
@@ -639,14 +645,19 @@ class CaptureService : Service() {
 
   /**
    * The `row` payload: the FeatureRow keys plus the bridge-only `mock` (v3, plan §6: the window's
-   * fix was mocked) and `call` (`ring` | `live`, absent with no call: README §1).
+   * fix was mocked), `call` (`ring` | `live`, absent with no call: README §1) and `steps` (the
+   * pedometer's count since the drive's baseline, absent before its first count or without one).
+   * Below API 31 (no audio-mode listener) the row tick is also when a call starting or ending is
+   * noticed, so its `call` event goes out before the row.
    */
   private fun emitRow(row: FeatureRow, mock: Boolean) {
     if (!row.isFinite()) return // never hand JS a NaN (README §1); parseRow would drop it anyway
     lastRowTs = row.ts
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) phone.checkCall()
     val body = LinkedHashMap<String, Any?>(row.toMap())
     body["mock"] = mock
     PhoneStateReceiver.callState(applicationContext)?.let { body["call"] = it }
+    pedometer?.steps?.let { body["steps"] = it }
     EventBus.emit("row", body)
     // Split screen is a configuration change, not a lifecycle callback: the next row reads a fresh sample.
     main.post { AppVisibility.sample() }

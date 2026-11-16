@@ -110,10 +110,11 @@ const CALL_VALUES: ReadonlySet<unknown> = new Set(['ring', 'live']);
 export const SEQ_ROW_KEY = 'seq';
 
 /**
- * The fourth bridge-only key (iOS): `steps`, the pedometer's count since it started for this drive
- * (a whole number, 0 and up; `FeatureRow.steps`). Split off and re-attached like `mock`; anything
- * but a non-negative safe integer rejects the row. Android rows, rows before the first count and
- * older rows have none.
+ * The fourth bridge-only key: `steps`, the pedometer's count since it started for this drive (a
+ * whole number, 0 and up; `FeatureRow.steps`; iOS CMPedometer, Android the step counter from the
+ * drive's baseline). Split off and re-attached like `mock`; anything but a non-negative safe integer
+ * rejects the row. Rows without Motion & Fitness (Android: Physical activity) or a step sensor, rows
+ * before the first count and older rows have none.
  */
 export const STEPS_ROW_KEY = 'steps';
 

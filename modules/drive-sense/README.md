@@ -49,8 +49,8 @@ service. The one thing that runs with no drive open is the optional **forgot-to-
 - **Event names.** Declare exactly
   `Events("activity", "row", "speed", "screen", "thermal", "notificationAction", "call", "reminderTap", "dashpalLinkTick")` —
   keep this list **byte-identical** to `DRIVE_SENSE_EVENTS` in `src/types.ts` and to the other
-  platform's list (the native text tests compare them). `call` is emitted on iOS only,
-  `reminderTap` and `dashpalLinkTick` on Android only, but both platforms declare every one.
+  platform's list (the native text tests compare them). `reminderTap` and `dashpalLinkTick` are
+  emitted on Android only, but both platforms declare every one.
 - **Methods.** Every name in `DRIVE_SENSE_METHODS` is an `AsyncFunction("<name>")` on both
   platforms, even where it is a no-op. `addListener` is the Expo event emitter's, not a
   function you declare.
@@ -161,7 +161,7 @@ Every other method never rejects: `stopCapture`, `setCaptureRate`, `getState`,
 | `screen` | `{ locked, on, ts }` | Android only: lock/screen change while capturing (`SCREEN_ON`/`SCREEN_OFF`/`USER_PRESENT`). Declared on iOS, never emitted |
 | `thermal` | `{ level, ts }` | a thermal-state change while capturing |
 | `notificationAction` | `{ action: 'endDrive', ts }` | Android: the notification's End drive action (offered only while `setDriveDisplay` says `stopped`) |
-| `call` | `{ active, ts }` | iOS only: `CXCallObserver` — a call started or ended |
+| `call` | `{ active, ts }` | a call started or ended **while capturing**: once at the start for a call already up, on each change, and `active: false` at the stop for a call still up. `active` is a call ringing, dialling or connected. iOS: `CXCallObserver`. Android: the call state the rows' `call` key reads (`PhoneStateReceiver.callState`), re-read on the audio-mode listener (API 31+), the recording callback (a VoIP call opening or closing its microphone) and, below API 31, at each row; no permission. Buffered like a row |
 | `reminderTap` | `{}` | Android only: a tap on the forgot-to-start reminder's note was handed over (§10); read it with `takeReminderTap` |
 | `dashpalLinkTick` | `{}` | Android only: every 30 s while the DashPal link service runs `waiting`; JS pumps its timers with it (a reconnect back-off fires with JS timers paused). Sent only while a JS listener is attached, **never buffered** (with `speed`, the exceptions to Buffering below) |
 
@@ -177,7 +177,9 @@ these mappings decide whether walking can end a drive.
   or no flag at all). So `automotive && stationary` (a red light) is `automotive`. An update equal
   in type and confidence to the previous one is not re-emitted.
 - **Android** (Activity Recognition Transitions API, which carries no confidence): during every
-  capture the module subscribes to IN_VEHICLE, WALKING and RUNNING, ENTER and EXIT. ON_FOOT is never
+  capture the module subscribes to IN_VEHICLE, WALKING and RUNNING, ENTER and EXIT, and to STILL and
+  ON_BICYCLE, ENTER only (a still report is the known-parking-spot end's evidence, a cycling one says
+  the phone is out of the car; their EXITs would say nothing more). ON_FOOT is never
   subscribed: the Transitions API supports IN_VEHICLE, ON_BICYCLE, RUNNING, STILL and WALKING only
   (WALKING and RUNNING are ON_FOOT's sub-activities), and a request naming an unsupported type
   fails whole.
@@ -187,6 +189,8 @@ these mappings decide whether walking can end a drive.
   | ENTER IN_VEHICLE | `{ type: 'automotive', confidence: 'high' }` |
   | ENTER WALKING | `{ type: 'walking', confidence: 'high' }` |
   | ENTER RUNNING | `{ type: 'running', confidence: 'high' }` |
+  | ENTER STILL | `{ type: 'stationary', confidence: 'high' }` |
+  | ENTER ON_BICYCLE | `{ type: 'cycling', confidence: 'high' }` |
   | EXIT IN_VEHICLE | nothing to JS |
   | EXIT WALKING | `{ type: 'walking', confidence: 'high', exit: true }` |
   | EXIT RUNNING | `{ type: 'running', confidence: 'high', exit: true }` |
@@ -235,7 +239,7 @@ dropped from the buffer is still in its drive's journal, where the host's `seq` 
 
 `row` payloads must pass `parseRow` (`src/rowSchema.ts`): exactly M1's `FeatureRow` keys
 (`src/core/engine/types.ts`), finite numbers, booleans for the three phone flags, and `ts` a
-non-negative integer epoch ms — **plus the bridge-only `mock`, `call` and (iOS) `seq`** (below). Native emits exactly those keys (pinned by
+non-negative integer epoch ms — **plus the bridge-only `mock`, `call`, `steps` and (iOS) `seq`** (below). Native emits exactly those keys (pinned by
 the native text tests and the golden vectors). On the JS side an **unknown key fails soft** (C0
 round 1): it is stripped and counted (`unknownRowKeys()`), and the row is kept, so a future native
 field can never cost an older bundle a drive's rows; a known key with a wrong type still rejects
@@ -255,6 +259,7 @@ the row. The encodings:
 | **`mock`** (v3, plan §6; spec "Integrity · GPS spoofing") | a boolean beside the `FeatureRow` keys: the window's fix came from a mock location provider — Android `Location.isMock()` (API 31+) / `isFromMockProvider()` (before); iOS 15+ `sourceInformation?.isSimulatedBySoftware` (false below 15). `false` when the window has no fix. It is **not** a `FeatureRow` field: native adds it at the emit site, never in the row struct's own map, so the self-test rows (§8) keep exactly the contract's keys; `parseRow` splits it off, validates it as a boolean (a wrong type rejects the row), and returns it on `DriveSenseRow.mock`. Optional on the wire: rows from older builds parse without it, and a consumer reads absent as "not known to be mocked". |
 | **`call`** (screen switches; spec "Event detection") | `"ring"` while a call rings or dials, `"live"` while one is connected, **absent** with no call, read at the emit site. **Android:** `PhoneStateReceiver.callState` from `AudioManager.getMode()`: `MODE_RINGTONE` → `ring`, `MODE_IN_CALL` → `live`, `MODE_IN_COMMUNICATION` → `live` only while `activeRecordingConfigurations` is non-empty (a VoIP call with the microphone open), no permission; the one Kotlin reading of the call state. **iOS:** `CallObserver.state()` from the capture's `CXCallObserver`: a call `hasConnected && !hasEnded` → `live`, else any `!hasEnded` → `ring`. Not a `FeatureRow` extraction field (the self-test rows and golden vectors never carry it); `parseRow` splits it off, accepts only `"ring"` / `"live"` (any other value rejects the row) and returns it on `row.call`. A call's own screen is not a screen switch (§5). |
 | **`seq`** (iOS, §11) | the row's place in its drive's journal: an integer, 1 for the drive's first row (its traced start) and up by one. Not a `FeatureRow` field; `parseRow` splits it off, accepts only a positive safe integer (anything else rejects the row) and returns it on `row.seq`. The host checks each live row is the last plus one and fetches a gap from the journal (`DriveDetect.readRows`). Android rows, plain-capture rows and stored traces have none. |
+| **`steps`** (spec "How a drive ends": the step walk) | the pedometer's count since it started for this drive, a whole number from 0, **absent** before its first count, without Motion & Fitness (Android: Physical activity) or without a step sensor. **iOS:** CMPedometer from the drive's start. **Android:** `PedometerSource`: `TYPE_STEP_COUNTER` (the hardware count since boot, batched in the hub for up to 1 s) less the drive's baseline (its first count after the capture began; a capture the `START_STICKY` restart resumes goes on from the baseline it took, same capture and same boot); a count under the baseline takes a new one (0). A phone with no step counter but a `TYPE_STEP_DETECTOR` counts its steps from the capture's start. Registered from the capture's begin to its end, at both rates. Not a `FeatureRow` extraction field; `parseRow` splits it off, accepts only a non-negative safe integer (anything else rejects the row) and returns it on `row.steps`. |
 | `exempt` | **never sent by native.** The drive host stamps `nav` / `restart` on a parsed row (the navigation button's and a restart's exemption, §5); a native `exempt` is stripped and counted as an unknown key. |
 
 Units: g for accelerations, g/s for jerk, rad/s for yaw rate, rad for `orientationDelta`,
@@ -996,4 +1001,3 @@ the motion gate); a drive costs what a manual drive did.
 fallbacks, the motion summary and gate, the wake gate, a candidate's clock, the safety stop, the
 rest's end, a rest resumed at a relaunch, a relaunch's decision and seq, the status) runs through the production `DetectPolicy` on the
 phone (`DetectSelfTest.swift`) and is diffed by `diffDetectSelfTest`.
-

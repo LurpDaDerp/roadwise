@@ -70,6 +70,7 @@ describe('native-android: files the contract names exist, and no trip-detection 
     'DashpalLinkService',
     'AlertWakeLock',
     'AudioOutput',
+    'PedometerSource',
   ];
   it.each(files)('%s.kt', (name) => {
     expect(existsSync(join(KT_DIR, `${name}.kt`))).toBe(true);
@@ -235,12 +236,14 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/requestActivityTransitionUpdates\(/);
   });
 
-  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT); the reminder IN_VEHICLE ENTER when idle, and in a session IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
+  it('the tiers: the capture asks for IN_VEHICLE, WALKING and RUNNING (ENTER and EXIT) with the ENTERs of STILL and ON_BICYCLE; the reminder IN_VEHICLE ENTER when idle, and in a session IN_VEHICLE ENTER and EXIT with the ENTERs of STILL, WALKING and RUNNING; never ON_FOOT', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/CAPTURE_TYPES\s*=\s*listOf\(DetectedActivity\.IN_VEHICLE,\s*DetectedActivity\.WALKING,\s*DetectedActivity\.RUNNING\)/);
+    // The stop (the known-parking-spot end's evidence) and a bicycle, as iOS reports both; ENTER only.
+    expect(src).toMatch(/CAPTURE_ENTERS\s*=\s*listOf\(DetectedActivity\.STILL,\s*DetectedActivity\.ON_BICYCLE\)/);
     const tiers = /fun transitions\(tier: TripReminderPolicy\.Tier\)[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
     expect(tiers).toMatch(/Tier\.NONE -> emptyList\(\)/);
-    expect(tiers).toMatch(/Tier\.CAPTURE -> CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \}/);
+    expect(tiers).toMatch(/Tier\.CAPTURE ->\s*CAPTURE_TYPES\.flatMap \{ type -> listOf\(type to ENTER, type to EXIT\) \} \+ CAPTURE_ENTERS\.map \{ type -> type to ENTER \}/);
     expect(tiers).toMatch(/Tier\.IDLE -> listOf\(DetectedActivity\.IN_VEHICLE to ENTER\)\n/);
     const trip = /Tier\.SESSION -> listOf\(([\s\S]*?)\)\n/.exec(tiers)?.[1] ?? '';
     expect(trip.split(',').map((x) => x.trim())).toEqual([
@@ -256,14 +259,16 @@ describe('native-android: the activity feed (walking auto-end) and its one rule'
     expect(src).toMatch(/EXIT = ActivityTransition\.ACTIVITY_TRANSITION_EXIT/);
   });
 
-  it('maps ENTERs to automotive/walking/running at high, EXITs of the on-foot types to exit: true, an IN_VEHICLE EXIT to nothing', () => {
+  it('maps ENTERs to automotive/walking/running/stationary/cycling at high, EXITs of the on-foot types alone to exit: true, an IN_VEHICLE EXIT to nothing', () => {
     const src = code(kt('ActivityTransitionReceiver'));
     expect(src).toMatch(/DetectedActivity\.IN_VEHICLE\s*->\s*"automotive"/);
     expect(src).toMatch(/DetectedActivity\.WALKING\s*->\s*"walking"/);
     expect(src).toMatch(/DetectedActivity\.RUNNING\s*->\s*"running"/);
+    expect(src).toMatch(/DetectedActivity\.STILL\s*->\s*"stationary"/);
+    expect(src).toMatch(/DetectedActivity\.ON_BICYCLE\s*->\s*"cycling"/);
     expect(src).toMatch(/"exit" to true/);
     expect(src).not.toMatch(/"(low|medium)"/);
-    expect(src).toMatch(/else if \(type != "automotive"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
+    expect(src).toMatch(/else if \(type == "walking" \|\| type == "running"\) \{\s*EventBus\.emit\("activity", linkedMapOf\("type" to type, "confidence" to "high", "ts" to ts, "exit" to true\)\)/);
   });
 
   it('activity reaches JS only while capturing; with no drive open the batch goes to the reminder, natively; the receiver writes no store or prefs itself', () => {
@@ -724,7 +729,7 @@ describe('native-android: sensors and location (README §7, rev1: O8, I5)', () =
     expect(fn).toMatch(/else -> null/);
     expect(fn).toMatch(/catch \(_: Exception\) \{\s*null\s*\}/);
     const svc = code(kt('CaptureService'));
-    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*EventBus\.emit\("row", body\)/);
+    expect(svc).toMatch(/body\["mock"\] = mock\s*PhoneStateReceiver\.callState\(applicationContext\)\?\.let \{ body\["call"\] = it \}\s*pedometer\?\.steps\?\.let \{ body\["steps"\] = it \}\s*EventBus\.emit\("row", body\)/);
     expect(code(kt('Types'))).not.toMatch(/"call"/);
     // One Kotlin reading of the call state: the audio-mode rules live in PhoneStateReceiver alone.
     for (const f of readdirSync(KT_DIR).filter((x) => x.endsWith('.kt') && x !== 'PhoneStateReceiver.kt')) {
@@ -1029,5 +1034,49 @@ describe('native-android: DashPal alerts on the phone (README §2: the link serv
     expect(src).toMatch(/Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S && d\.type == AudioDeviceInfo\.TYPE_BLE_HEADSET/);
     expect(src).not.toMatch(/TYPE_BLUETOOTH_A2DP|TYPE_HEARING_AID/);
     expect(src).not.toMatch(/MODE_IN_CALL|MODE_RINGTONE|activeRecordingConfigurations/);
+  });
+});
+
+describe('native-android: the capture feed iOS has (steps, the call event; WP04)', () => {
+  it('rows carry the step count: TYPE_STEP_COUNTER from the drive baseline (TYPE_STEP_DETECTOR without one), batched, behind Physical activity', () => {
+    const src = code(kt('PedometerSource'));
+    expect(src).toMatch(/MAX_REPORT_LATENCY_US = 1_000_000/);
+    expect(src).toMatch(/val counter = sm\.getDefaultSensor\(Sensor\.TYPE_STEP_COUNTER\)/);
+    expect(src).toMatch(/val s = counter \?: sm\.getDefaultSensor\(Sensor\.TYPE_STEP_DETECTOR\) \?: return/);
+    expect(src).toMatch(/if \(!DriveSensePermissions\.motionGranted\(app\)\) return/);
+    expect(src).toMatch(/sm\.registerListener\(this, s, SensorManager\.SENSOR_DELAY_NORMAL, MAX_REPORT_LATENCY_US, handler\)/);
+    // Pure arithmetic, JVM-tested: the first total is the baseline, a lower one a new baseline.
+    expect(src).toMatch(/if \(b == null \|\| total < b\) \{\s*baseline = total\s*return 0\s*\}/);
+    expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'StepCountTest.kt'))).toBe(true);
+    // A capture the system restarts goes on from its own baseline, only in the same boot.
+    expect(src).toMatch(/saved\.captureStartedAt != startedAt/);
+    expect(src).toMatch(/val thisBoot = saved\.atClockMs in 1L\.\.nowClockMs && \(boot < 0 \|\| saved\.boot == boot\)/);
+    // Registered at the capture's begin (both rates), unregistered with the capture's sources.
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/pedometer = PedometerSource\(this, handler\)\.also \{ it\.start\(startedAt\) \}/);
+    const stop = /private fun stopSources\(\) \{[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(stop).toMatch(/pedometer\?\.stop\(\)\s*pedometer = null/);
+    expect(code(kt('Types'))).not.toMatch(/"steps"/);
+  });
+
+  it('the call event: once at the start for a call up, on each change (the mode listener on 31+, the recording callback, the row tick below 31), active: false at the stop', () => {
+    const src = code(kt('PhoneStateReceiver'));
+    const start = /private fun startCallWatch\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(start).toMatch(/callActive = callState\(context\) != null\s*if \(callActive\) emitCall\(true\)/);
+    expect(start).toMatch(/if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.S\) \{\s*val listener = AudioManager\.OnModeChangedListener \{ checkCall\(\) \}/);
+    expect(start).toMatch(/am\.addOnModeChangedListener\(\{ r -> handler\.post\(r\) \}, listener\)/);
+    expect(start).toMatch(/am\.registerAudioRecordingCallback\(callback, handler\)/);
+    const check = /fun checkCall\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(check).toMatch(/if \(!registered\) return\s*val now = callState\(context\) != null\s*if \(now == callActive\) return\s*callActive = now\s*emitCall\(now\)/);
+    const stop = /private fun stopCallWatch\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '';
+    expect(stop).toMatch(/removeOnModeChangedListener\(it\)/);
+    expect(stop).toMatch(/unregisterAudioRecordingCallback\(it\)/);
+    expect(stop).toMatch(/if \(callActive\) emitCall\(false\)\s*callActive = false/);
+    expect(src).toMatch(/EventBus\.emit\("call", linkedMapOf\("active" to active, "ts" to System\.currentTimeMillis\(\)\)\)/);
+    expect(/fun register\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '').toMatch(/startCallWatch\(\)\n {2}\}$/);
+    expect(/fun unregister\(\) \{[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? '').toMatch(/stopCallWatch\(\)\n {2}\}$/);
+    // Below API 31 the row tick re-reads the mode, before the row goes out.
+    const svc = code(kt('CaptureService'));
+    expect(svc).toMatch(/if \(Build\.VERSION\.SDK_INT < Build\.VERSION_CODES\.S\) phone\.checkCall\(\)\s*val body = LinkedHashMap/);
   });
 });

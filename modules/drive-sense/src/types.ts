@@ -118,7 +118,8 @@ export interface MotionActivity {
   /** epoch ms, integer */
   ts: number;
   /**
-   * README §3: Android only, the END of a walking or running transition (EXIT). Live
+   * README §3: Android only, the END of a walking or running transition (EXIT; never on another
+   * type). Live
    * `activity` events only. An exit is never a walk: it clears the walk its ENTER began (the
    * engine's walking end, `src/core/engine/motion.ts`), so an ENTER followed by its EXIT before the
    * walking end fires (`WALK_END_S`) ends nothing.
@@ -218,7 +219,11 @@ export type DriveSenseEvents = {
   screen: { locked: boolean; on: boolean; ts: number };
   thermal: { level: ThermalLevel; ts: number };
   notificationAction: { action: 'endDrive'; ts: number };
-  /** iOS only */
+  /**
+   * A call started or ended while capturing (both platforms; iOS `CXCallObserver`, Android the audio
+   * mode as the rows' `call` key reads it): once at the start for a call already up, on each change,
+   * and `active: false` at the stop for a call still up.
+   */
   call: { active: boolean; ts: number };
   /** Android only: a tap on the reminder's note was handed over; read it with `takeReminderTap`. */
   reminderTap: Record<string, never>;

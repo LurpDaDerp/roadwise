@@ -63,10 +63,11 @@ export interface FeatureRow {
    */
   call?: 'ring' | 'live';
   /**
-   * The steps the phone's pedometer has counted since it started for this drive (iOS, bridge-only
-   * like `mock`): a whole number that only grows, and starts again from 0 when the pedometer
-   * restarts (a relaunch). Absent on Android, without Motion & Fitness, before the first count and
-   * in older rows. The step walk end reads it (`motion.ts`).
+   * The steps the phone's pedometer has counted since it started for this drive (bridge-only like
+   * `mock`; iOS CMPedometer, Android the step counter): a whole number that only grows, and starts
+   * again from 0 when the pedometer restarts (a relaunch on iOS, a reboot on Android). Absent without
+   * Motion & Fitness (Android: Physical activity) or a step sensor, before the first count and in
+   * older rows. The step walk end reads it (`motion.ts`).
    */
   steps?: number;
   /**
