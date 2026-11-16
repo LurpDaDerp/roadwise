@@ -30,8 +30,8 @@ class HeadingMathTest {
     )
   }
 
-  private fun headingOf(q: DoubleArray, withW: Boolean = true): Double? =
-    HeadingMath.heading(HeadingMath.rotationMatrix(q[0], q[1], q[2], if (withW) q[3] else null))
+  private fun headingOf(q: DoubleArray, withW: Boolean = true, rotation: Int = 0): Double? =
+    HeadingMath.heading(HeadingMath.rotationMatrix(q[0], q[1], q[2], if (withW) q[3] else null), rotation)
 
   /**
    * A phone facing [facing] degrees (clockwise from north), tilted back from upright by [tiltBack]
@@ -66,6 +66,42 @@ class HeadingMathTest {
       assertEquals(270.0, headingOf(pose(270.0, tilt))!!, 1e-6)
       assertEquals(45.0, headingOf(pose(45.0, tilt))!!, 1e-6)
     }
+  }
+
+  /** Headings equal within 1e-6 degrees, across north (359.9999999 is 0). */
+  private fun assertHeading(expected: Double, actual: Double?) {
+    assertNotNull(actual)
+    assertEquals(0.0, ((actual!! - expected + 540.0) % 360.0) - 180.0, 1e-6)
+  }
+
+  /**
+   * [pose] for the screen, on a device whose own axes sit a quarter turn [rotation] times from the
+   * screen's: at `Surface.ROTATION_90` the device's +X is the top of the screen (its +Y points to the
+   * screen's left), as for a landscape-natural tablet standing in portrait.
+   */
+  private fun devicePose(facing: Double, tiltBack: Double, rotation: Int): DoubleArray =
+    then(quat(0.0, 0.0, 1.0, 90.0 * rotation), pose(facing, tiltBack))
+
+  @Test
+  fun `at every display rotation the heading is where the top of the screen and the back point`() {
+    for (rotation in 0..3) {
+      for (tilt in listOf(0.0, 30.0, 90.0)) {
+        assertHeading(0.0, headingOf(devicePose(0.0, tilt, rotation), rotation = rotation))
+        assertHeading(135.0, headingOf(devicePose(135.0, tilt, rotation), rotation = rotation))
+        assertHeading(290.0, headingOf(devicePose(290.0, tilt, rotation), rotation = rotation))
+      }
+    }
+  }
+
+  @Test
+  fun `a landscape-natural tablet in portrait at rotation 90 would read off if its own top were taken`() {
+    // Lying flat facing north: the device's +Y points west, so its own top reads 270.
+    assertHeading(270.0, headingOf(devicePose(0.0, 90.0, 1)))
+    assertHeading(0.0, headingOf(devicePose(0.0, 90.0, 1), rotation = 1))
+    // Upright in a mount facing north: 45 degrees off by the device's own top, right by the screen's.
+    assertHeading(315.0, headingOf(devicePose(0.0, 0.0, 1)))
+    assertHeading(0.0, headingOf(devicePose(0.0, 0.0, 1), rotation = 1))
+    assertHeading(90.0, headingOf(devicePose(90.0, 0.0, 3), rotation = 3))
   }
 
   @Test

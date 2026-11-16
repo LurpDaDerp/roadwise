@@ -3,6 +3,7 @@ package expo.modules.drivesense
 import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.GeomagneticField
+import android.hardware.display.DisplayManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -13,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import android.view.Display
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.sqrt
@@ -33,6 +35,12 @@ import kotlin.math.sqrt
  * (`GeomagneticField`'s declination at the last known fix, read from the location service's cache:
  * no fix is asked for). A reading the sensor rates unreliable, or more than 50° out, is sent with
  * accuracy 0 (JS ignores it), as iOS's uncalibrated compass is.
+ *
+ * "The top" is the top of the screen, not of the device: the display's rotation (read at start and
+ * again whenever the display changes, through a `DisplayManager.DisplayListener` on the heading
+ * thread, so a turn of 180° with no configuration change is seen too) is handed to the arithmetic.
+ * A phone in portrait is at rotation 0 and reads as before; a tablet whose natural orientation is
+ * landscape stands in portrait at rotation 90 or 270, where the device's own +Y lies sideways.
  */
 class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> Unit) : SensorEventListener {
   companion object {
@@ -52,6 +60,7 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
 
   private val app = context.applicationContext
   private val sensorManager = app.getSystemService(Context.SENSOR_SERVICE) as SensorManager?
+  private val displayManager = app.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager?
   private var thread: HandlerThread? = null
   private var running: Sensor? = null
 
@@ -59,6 +68,19 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
   private var lastEmitAt = 0L
   private var declination: Double? = null
   private var declinationTriedAt = 0L
+
+  /** The default display's `Surface.ROTATION_*` (0-3), set at start and by [displayListener]. */
+  @Volatile private var rotation = 0
+
+  private val displayListener = object : DisplayManager.DisplayListener {
+    override fun onDisplayAdded(displayId: Int) {}
+
+    override fun onDisplayRemoved(displayId: Int) {}
+
+    override fun onDisplayChanged(displayId: Int) {
+      if (displayId == Display.DEFAULT_DISPLAY) rotation = readRotation()
+    }
+  }
 
   /** @return false when the phone has no rotation-vector sensor (or it could not be registered). */
   @Synchronized
@@ -69,6 +91,7 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     lastEmitAt = 0L
     declination = null
     declinationTriedAt = 0L
+    rotation = readRotation()
     val t = HandlerThread("drive-sense-heading").also { it.start() }
     val handler = Handler(t.looper)
     val ok = try {
@@ -79,6 +102,11 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     if (!ok) {
       t.quitSafely()
       return false
+    }
+    try {
+      displayManager?.registerDisplayListener(displayListener, handler)
+    } catch (_: Exception) {
+      // No display updates: the rotation read above stands.
     }
     thread = t
     running = s
@@ -93,6 +121,11 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     } catch (_: Exception) {
       // already unregistered
     }
+    try {
+      displayManager?.unregisterDisplayListener(displayListener)
+    } catch (_: Exception) {
+      // never registered
+    }
     running = null
     thread?.quitSafely()
     thread = null
@@ -104,7 +137,7 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
     if (lastEmitAt != 0L && now - lastEmitAt < EMIT_MIN_INTERVAL_MS) return
     val v = event.values
     if (v.size < 3) return
-    val mag = HeadingMath.heading(HeadingMath.rotationMatrix(v[0].toDouble(), v[1].toDouble(), v[2].toDouble(), v.getOrNull(3)?.toDouble())) ?: return
+    val mag = HeadingMath.heading(HeadingMath.rotationMatrix(v[0].toDouble(), v[1].toDouble(), v[2].toDouble(), v.getOrNull(3)?.toDouble()), rotation) ?: return
     lastEmitAt = now
     if (declination == null && (declinationTriedAt == 0L || now - declinationTriedAt >= DECLINATION_RETRY_MS)) {
       declinationTriedAt = now
@@ -121,6 +154,14 @@ class HeadingSource(context: Context, private val emit: (Map<String, Any?>) -> U
   }
 
   override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+  /** The default display's rotation from its natural orientation (`Surface.ROTATION_*`), 0 if unknown. */
+  private fun readRotation(): Int =
+    try {
+      displayManager?.getDisplay(Display.DEFAULT_DISPLAY)?.rotation ?: 0
+    } catch (_: Exception) {
+      0
+    }
 
   /** The declination (degrees east) at the newest location the location service has cached, or null. */
   @SuppressLint("MissingPermission")
@@ -190,16 +231,27 @@ object HeadingMath {
 
   /**
    * The heading of the phone's forward direction, degrees clockwise from north in [0, 360), or null
-   * when it points straight up or down. Forward is the top of the phone (+Y) and out of its back
+   * when it points straight up or down. Forward is the top of the screen and out of the phone's back
    * (−Z) together: lying flat, where the top points; upright in a mount, where the back faces (the
    * road ahead); tilted between, the two agree. So a portrait phone reads as iOS's compass does,
    * with no switch of axes as the mount's tilt changes. Only a phone tipped about 45° face down
    * has no forward direction.
+   *
+   * [rotation] is the display's `Surface.ROTATION_*` (0-3): the top of the screen is the device's +Y
+   * at 0, +X at 90 (the device turned a quarter counter-clockwise), −Y at 180 and −X at 270, the
+   * remap `SensorManager.remapCoordinateSystem` makes for a compass at each rotation. A phone in
+   * portrait is at 0; a landscape-natural tablet in portrait at 90 or 270.
    */
-  fun heading(r: DoubleArray): Double? {
-    // Column 1 is the phone's +Y in the world, column 2 its +Z.
-    val east = r[1] - r[2]
-    val north = r[4] - r[5]
+  fun heading(r: DoubleArray, rotation: Int = 0): Double? {
+    // Column 0 is the device's +X in the world, column 1 its +Y, column 2 its +Z.
+    val (topEast, topNorth) = when (rotation and 3) {
+      1 -> r[0] to r[3]
+      2 -> -r[1] to -r[4]
+      3 -> -r[0] to -r[3]
+      else -> r[1] to r[4]
+    }
+    val east = topEast - r[2]
+    val north = topNorth - r[5]
     if (!east.isFinite() || !north.isFinite() || hypot(east, north) < MIN_HORIZONTAL) return null
     return norm(Math.toDegrees(atan2(east, north)))
   }

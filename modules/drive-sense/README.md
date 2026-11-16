@@ -1024,10 +1024,12 @@ DriveSense events and methods stay the same on both platforms; on iOS it does no
 | `heading` | `{ trueHeading, magHeading, accuracy }` (expo-location's heading shape) | while started, at most 5 a second, live only (never buffered) |
 
 `HeadingSource.kt`: `TYPE_ROTATION_VECTOR` at 100 000 µs (10 Hz), no batching, on its own thread.
-The heading is the phone's forward direction (`HeadingMath.heading`): its top (+Y) and out of
-its back (−Z) together, so lying flat it is where the top points, upright in a mount where the back
-faces (the road ahead, as iOS's compass reads a portrait phone), and tilted between the two agree;
-only a phone tipped about 45° face down has none (no reading). `magHeading` is magnetic;
+The heading is the phone's forward direction (`HeadingMath.heading`): the top of the screen and
+out of its back (−Z) together, so lying flat it is where the top points, upright in a mount where the
+back faces (the road ahead, as iOS's compass reads a portrait phone), and tilted between the two
+agree; only a phone tipped about 45° face down has none (no reading). The top of the screen is the
+device's +Y, +X, −Y or −X at display rotation 0, 90, 180 or 270 (read at start and on every
+`DisplayManager` display change), so a landscape-natural tablet standing in portrait reads right. `magHeading` is magnetic;
 `trueHeading` adds `GeomagneticField`'s declination at the newest location the location service
 has cached (fused, GPS, network or passive; with location permission; read again every 10 s until
 one is known; no fix is ever asked for), else `-1`. `accuracy` is expo-location's 0-3 scale: 0 when

@@ -1134,4 +1134,15 @@ describe('native-android: the phone heading for the driving-screen compass (Phon
     expect(src).toMatch(/if \(status <= SENSOR_STATUS_UNRELIABLE\) return 0/);
     expect(existsSync(join(ANDROID, 'src', 'test', 'java', 'expo', 'modules', 'drivesense', 'HeadingMathTest.kt'))).toBe(true);
   });
+
+  it('the top is the top of the screen: the display rotation, read at start and on every display change, is handed to the arithmetic', () => {
+    const src = HEADING();
+    expect(src).toMatch(/rotation = readRotation\(\)\s*val t = HandlerThread/);
+    expect(src).toMatch(/displayManager\?\.registerDisplayListener\(displayListener, handler\)/);
+    expect(src).toMatch(/fun stop\(\) \{[\s\S]*?displayManager\?\.unregisterDisplayListener\(displayListener\)/);
+    expect(src).toMatch(/if \(displayId == Display\.DEFAULT_DISPLAY\) rotation = readRotation\(\)/);
+    expect(src).toMatch(/getDisplay\(Display\.DEFAULT_DISPLAY\)\?\.rotation/);
+    expect(src).toMatch(/HeadingMath\.heading\(HeadingMath\.rotationMatrix\([^\n]*\), rotation\)/);
+    expect(src).not.toMatch(/defaultDisplay/);
+  });
 });
