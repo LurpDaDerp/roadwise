@@ -179,14 +179,18 @@ export interface ExitInfo {
  * the frozen Android notification (the host sends null points); the iOS Live Activity ignores them.
  */
 export interface DriveDisplayState {
+  /** Current speed in `unit`; null shows "-". */
   speed: number | null;
+  /** Posted limit in `unit`; null shows "-". */
   limit: number | null;
+  /** Also the sign's style: "mph" the US SPEED LIMIT plate, "km/h" the round red-ringed sign. */
   unit: 'mph' | 'km/h';
+  /** Shown nowhere (the host sends null); kept for the contract. */
   points: number | null;
   pointsDelta: number | null;
-  /** ≤ 5 mph: the Android notification offers its End drive action only while stopped. */
+  /** ≤ 5 mph. Shown nowhere (neither surface has a button); not a change for either. */
   stopped: boolean;
-  /** The drive is over: Android shows the final notification state; the iOS Live Activity ends at once. */
+  /** The drive is over: Android posts nothing more and the capture's stop takes the notification down; the iOS Live Activity ends at once. */
   ended?: boolean;
   /**
    * The app's sky ("#RRGGBB"), so the background surfaces wear the hour's theme: the driving
@@ -197,10 +201,11 @@ export interface DriveDisplayState {
   skyLow?: string | null;
   accent?: string | null;
   /**
-   * iOS Live Activity only (Android ignores these): the speed's colour ("#RRGGBB", the driving
-   * screen's numeral at its speeding tint; null or absent = white), over the limit now (for
-   * VoiceOver), whether the "Not driving?" hint shows, and the dangerous-weather line (a `DangerKind`
-   * id and its title, e.g. "heavy_rain" / "Heavy rain"; null or absent = none).
+   * The iOS Live Activity and Android's drive notification alike: the speed's colour ("#RRGGBB", the
+   * driving screen's numeral at its speeding tint; null or absent = white on iOS, the plain text
+   * colour on Android), over the limit now (for VoiceOver and TalkBack), whether the "Not driving?"
+   * hint shows, and the dangerous-weather line (a `DangerKind` id and its title, e.g. "heavy_rain" /
+   * "Heavy rain"; null or absent = none; Android shows it only with both, as the widget does).
    */
   speedTint?: string | null;
   speeding?: boolean;
@@ -217,6 +222,7 @@ export type DriveSenseEvents = {
   speed: unknown;
   screen: { locked: boolean; on: boolean; ts: number };
   thermal: { level: ThermalLevel; ts: number };
+  /** Declared for the contract; no surface sends it (neither the Live Activity nor Android's drive notification has a button). */
   notificationAction: { action: 'endDrive'; ts: number };
   /** iOS only */
   call: { active: boolean; ts: number };
@@ -352,11 +358,13 @@ export interface DriveSenseApi {
   /** iOS: sets isExcludedFromBackup on the file or directory; Android: resolves (rev1: R4). */
   excludeFromBackup(uri: string): Promise<void>;
   /**
-   * The background surface (plan §6). Android: updates the capture's foreground notification
-   * (title "Driving"; "34 mph · limit 35"; a points line only when `points` is non-null; the End
-   * drive action only while `stopped`); ignored while not capturing. iOS: forwarded to the Live
-   * Activity when one is running (with `speedTint`, `speeding`, `notDrivingAvailable`,
-   * `weatherKind` and `weatherText`), else a no-op. Never rejects.
+   * The background surface (plan §6). Android: the capture's drive notification, its Live
+   * Activity (title "34 mph" with the number in `speedTint`; the limit sign as its large icon and
+   * "Limit 35"; the weather line and "Not driving?" while they show; a Live Update on Android 16
+   * QPR1+), posted only when what it shows changed, stale ("-", no tint, hint or weather) after 2 min
+   * without a call; ignored while not capturing (README §2). iOS: forwarded to the Live Activity when
+   * one is running (with `speedTint`, `speeding`, `notDrivingAvailable`, `weatherKind` and
+   * `weatherText`), else a no-op. Never rejects.
    */
   setDriveDisplay(state: DriveDisplayState): Promise<void>;
   /** Android ApplicationExitInfo (+ 'watchdog' from the persisted record); iOS null. */

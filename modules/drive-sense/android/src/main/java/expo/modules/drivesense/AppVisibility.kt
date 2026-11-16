@@ -89,6 +89,7 @@ object AppVisibility : Application.ActivityLifecycleCallbacks {
   }
 
   override fun onActivityStarted(activity: Activity) {
+    val wasBehind = started == 0
     if (recreating != null) {
       // The new instance of an activity recreated for a configuration change: it never left.
       recreating = null
@@ -97,6 +98,15 @@ object AppVisibility : Application.ActivityLifecycleCallbacks {
     }
     last = WeakReference(activity)
     sample()
+    // RoadWise came to the front: a drive notification the driver swiped away comes back, as a
+    // dismissed Live Activity does when RoadWise is opened during the drive.
+    if (wasBehind && started > 0) {
+      try {
+        DriveNotificationController.onAppFront()
+      } catch (_: Exception) {
+        // the notification comes back with the next capture instead
+      }
+    }
   }
 
   override fun onActivityStopped(activity: Activity) {

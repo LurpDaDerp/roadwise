@@ -1,6 +1,5 @@
 package expo.modules.drivesense
 
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -189,7 +188,11 @@ class CaptureService : Service() {
       }
     }
 
-    /** `setDriveDisplay(...)` (plan §6): what the capture's notification shows. Ignored while not capturing. */
+    /**
+     * `setDriveDisplay(...)` (plan §6): what the capture's notification shows, posted by
+     * [DriveNotificationController] (only when it changed; each update re-arms the 2-min stale timer).
+     * Ignored while not capturing.
+     */
     fun setDriveDisplay(display: DriveDisplay) {
       val inst = instance ?: return
       inst.handler.post {
@@ -316,9 +319,13 @@ class CaptureService : Service() {
 
   // ——— foreground ———
 
-  /** @return null when the service is in the foreground, else the contract code for the refusal. */
+  /**
+   * @return null when the service is in the foreground, else the contract code for the refusal. The
+   * drive notification it posts shows the capture's newest display, or after a restart the one kept
+   * for it (DriveNotificationController).
+   */
   private fun goForeground(): String? {
-    val notification = NotificationFactory.build(this, display)
+    val notification = DriveNotificationController.foreground(this, display)
     return try {
       val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
       ServiceCompat.startForeground(this, NotificationFactory.NOTIFICATION_ID, notification, type)
@@ -333,12 +340,8 @@ class CaptureService : Service() {
 
   private fun refreshNotification() {
     if (!isCapturing) return
-    try {
-      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager?
-      nm?.notify(NotificationFactory.NOTIFICATION_ID, NotificationFactory.build(this, display))
-    } catch (_: Exception) {
-      // Notifications blocked: the service keeps running (SR9).
-    }
+    // Notifications blocked: the controller swallows it and the service keeps running (SR9).
+    display?.let { DriveNotificationController.update(this, it) }
   }
 
   /** The headless JS task that runs the drive host while the app is not open (rev1: I15). */
