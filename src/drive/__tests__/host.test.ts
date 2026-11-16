@@ -618,11 +618,16 @@ describe('a drive', () => {
 
 // iOS: the native detector as a fake beside the fake capture. `platform: 'android'`: the same pair
 // on an Android detector build (the host told it runs on Android).
-function buildIos(over: Over = {}, opts: { appState?: string; platform?: 'ios' | 'android' } = {}) {
+function buildIos(over: Over = {}, opts: { appState?: string; platform?: 'ios' | 'android'; carLinkAvailable?: boolean } = {}) {
   const source = createFakeDriveSense({ platform: opts.platform ?? 'ios', now: () => clock });
   // Native journals every row and emits it live; `lossy` drops the live copy (a row JS missed).
   const link = { lossy: false };
-  const detect = createFakeDriveDetect({ now: () => clock, platform: opts.platform ?? 'ios', sense: { emit: (e, p) => (link.lossy ? undefined : source.emit(e, p as never)) } });
+  const detect = createFakeDriveDetect({
+    now: () => clock,
+    platform: opts.platform ?? 'ios',
+    ...(opts.carLinkAvailable !== undefined ? { carLinkAvailable: opts.carLinkAvailable } : {}),
+    sense: { emit: (e, p) => (link.lossy ? undefined : source.emit(e, p as never)) },
+  });
   // A JS end reaches native through stopCapture (two fakes, one phone).
   const stop = source.stopCapture.bind(source);
   source.stopCapture = async (end) => {
@@ -2436,6 +2441,68 @@ describe('Android with a drive detector: its paths by capability, the push-to-st
     await feedIos(h, parked.slice(5, 20));
     expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { clientTripId: NATIVE, endCause: 'stopped' } });
     expect(h.source.captureEnds.at(-1)).toMatchObject({ automatic: true });
+    await h.host.stop({ endOpenTrip: false });
+  });
+
+  // WP03a: the Android DriveDetect build has no car link yet (no `carLinkState`, so `carLinkAvailable` is false).
+  test('the Start card on Android: a journaled drive at the tap, a touch moves native’s wait, rows live with their seq (a missed one read from the journal, a repeat dropped); Cancel ends it unsaved and its journal goes', async () => {
+    const h = buildIos({}, { platform: 'android', carLinkAvailable: false });
+    await h.host.boot();
+    expect(h.detect.carLinkAvailable).toBe(false);
+    expect(await h.host.start()).toEqual({ ok: true, waiting: true });
+    const id = h.host.snapshot().clientTripId!;
+    expect(h.detect.snapshot).toMatchObject({ state: 'recording', origin: 'manual', driveId: id, waitUntil: T0 + WAIT_TOTAL_MS });
+    expect(h.source.calls).not.toContain('startCapture:mounted');
+    expect(h.display.log[0]).toMatch(/^start /);
+    clock = T0 + 60_000;
+    h.host.touchWaiting();
+    await h.host.settled();
+    expect(h.detect.snapshot.waitUntil).toBe(T0 + 60_000 + WAIT_TOTAL_MS);
+    const parked = rows(5, { t0: T0 + 61_000, speedMps: 0 });
+    await feedIos(h, parked.slice(0, 2));
+    h.link.lossy = true;
+    h.detect.emitRows(journalRows(parked.slice(2, 4)));
+    h.link.lossy = false;
+    clock = T0 + 66_000;
+    h.detect.emitRows(journalRows(parked.slice(4)));
+    await h.host.settled();
+    expect(h.detect.calls.some((c) => c.startsWith(`readRows:${id}:2:`))).toBe(true);
+    expect(h.host.snapshot().lastRowTs).toBe(T0 + 65_000);
+    h.source.emit('row', { ...parked[0]!, seq: 1, ts: T0 + 70_000 } as never);
+    await h.host.settled();
+    expect(h.host.snapshot().lastRowTs).toBe(T0 + 65_000);
+    await h.host.cancelWaiting();
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', waiting: null, lastFinalized: { clientTripId: id, ok: true, dropped: 'no_movement' } });
+    expect(h.source.calls).toContain('stopCapture');
+    expect(h.detect.journal.has(id)).toBe(false);
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('Android: a drive the last process left open is taken in by the next boot (the headless one) from its journal, its rows going on past the resume’s gap; native’s safety stop ends it', async () => {
+    const pre = buildIos({}, { platform: 'android', carLinkAvailable: false });
+    await pre.host.boot();
+    await pre.host.start();
+    const id = pre.host.snapshot().clientTripId!;
+    const all = rows(130, { t0: T0 + 1_000, speedMps: 15 });
+    await feedIos(pre, all.slice(0, 120));
+    expect(pre.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: id, waiting: null, lastRowTs: T0 + 120_000 });
+    // The process dies (JS with it); native resumes the drive from its journal in the next one.
+    await pre.host.stop({ endOpenTrip: false });
+    clock = T0 + 122_000;
+    // The gap reserves the seqs 1,000 past the journal's highest (resumeSeq).
+    expect(pre.detect.relaunch()).toBe(1_120);
+    const h = buildIos({ detect: pre.detect as DriveDetectApi, source: pre.source, platform: 'android' });
+    await h.host.boot();
+    await h.host.settled();
+    expect(h.host.snapshot()).toMatchObject({ status: 'recording', clientTripId: id, origin: 'manual' });
+    await feedIos({ ...h, detect: pre.detect }, all.slice(120));
+    expect(h.host.snapshot().lastRowTs).toBe(T0 + 130_000);
+    clock = T0 + 200_000;
+    pre.detect.endFor('walking', clock);
+    await new Promise((r) => setTimeout(r, 0));
+    await h.host.untilIdle();
+    expect(h.host.snapshot()).toMatchObject({ status: 'idle', lastFinalized: { clientTripId: id, ok: true, dropped: null } });
+    expect(await createTripsRepo(db).get(id)).toMatchObject({ origin: 'manual' });
     await h.host.stop({ endOpenTrip: false });
   });
 });

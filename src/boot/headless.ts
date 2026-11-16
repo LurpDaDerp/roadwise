@@ -2,15 +2,19 @@
  * The Android headless task (drive-sense README §6).
  *
  * The native `CaptureService` starts a headless JS service under `DriveSenseTask` when it restarts
- * a capture with no app in front (a sticky restart after the process died mid-drive). The task body
- * boots the runtime as a background launch — whose recovery continues the drive the user started,
- * or finalizes it as an orphan — lets the host run it to its end, uploads once from the service,
- * and settles. It never starts a drive: with nothing to continue, the capture is stopped.
+ * a capture with no app in front: a plain capture's sticky restart after the process died
+ * mid-drive, or a drive detector drive resumed from its journal in a new process. The task body
+ * boots the runtime as a background launch (whose recovery continues the drive the user started,
+ * takes the detector's drive in from its journal, or finalizes it as an orphan), lets the host run
+ * it to its end, uploads once from the service, and settles. It never starts a drive: with nothing
+ * to continue, a plain capture is stopped. A detector drive is never stopped from here: native owns
+ * it (its safety stop and 12 h cap end it), as on iPhone, and the boot has already taken it in
+ * unless the driver is signed out (then it waits for the same driver's next sign-in).
  *
  * iOS has no headless JS: a mid-drive relaunch boots the whole app, and `index.ts`'s eager
  * `ensureRuntime()` covers it.
  */
-import DriveSense from '@drive-sense';
+import DriveSense, { DriveDetect } from '@drive-sense';
 import { AppRegistry, Platform } from 'react-native';
 
 import { reportError } from '@/lib/crashReport';
@@ -29,6 +33,19 @@ export interface DriveHeadlessTaskDeps {
   ensureRuntime: (profile: LaunchProfile) => Promise<AppRuntime>;
   stopCapture: () => Promise<void>;
   report: (error: unknown) => void;
+  /** Whether the drive detector records a drive (native's own, never stopped from here); default: none. */
+  detectorRecording?: () => Promise<boolean>;
+}
+
+/** The detector records a drive (recording or ending); false with no detector or an unreadable state. */
+export async function detectorRecording(): Promise<boolean> {
+  if (!DriveDetect.available) return false;
+  try {
+    const s = await DriveDetect.getState();
+    return s.state === 'recording' || s.state === 'ending';
+  } catch {
+    return false;
+  }
 }
 
 /** The default error hook: the dev console, and the crash sink (release builds only, rate-limited). */
@@ -66,8 +83,9 @@ export function createDriveHeadlessTask(deps: DriveHeadlessTaskDeps): (data: unk
         throw error;
       }
       // Nothing to continue (the drive was finalized as an orphan, or there was none): the capture
-      // native restarted must not run on with no drive behind it.
-      if (!rt.drive.isBusy()) await deps.stopCapture().catch(() => {});
+      // native restarted must not run on with no drive behind it. Read only now, after the boot has
+      // taken any detector drive in; a detector drive the host does not hold is native's own.
+      if (!rt.drive.isBusy() && !(await (deps.detectorRecording ?? (async () => false))())) await deps.stopCapture().catch(() => {});
       await rt.drive.untilIdle();
       await bounded(
         (async () => {
@@ -100,6 +118,7 @@ export function registerDriveHeadlessTask(deps: RegisterDeps = {}): boolean {
       ensureRuntime,
       stopCapture: () => DriveSense.stopCapture(),
       report: warn,
+      detectorRecording,
     }
   );
   (deps.registry ?? AppRegistry).registerHeadlessTask(DRIVE_HEADLESS_TASK, () => task);

@@ -10,7 +10,7 @@ export type DriveSource = Pick<DriveSenseApi, 'startCapture' | 'stopCapture' | '
 /** The native module (every method rejects where it is absent: Jest, Expo Go, web). */
 export const nativeDriveSource: DriveSource = DriveSense;
 
-/** The iOS drive detector, or null where it does not exist (Android, Jest, Expo Go, web). */
+/** The native drive detector (iOS, Android), or null where it does not exist (Jest, Expo Go, web). */
 export const nativeDriveDetect = (): DriveDetectApi | null => (DriveDetect.available ? DriveDetect : null);
 
 /**

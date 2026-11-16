@@ -1,6 +1,7 @@
-// The `DriveDetect` contract (plan §3.1.1): the iOS drive detector's bridge, a second Expo module in
-// the drive-sense pod (`ios/DriveDetectModule.swift`). Android, Jest, Expo Go and web have no such
-// module: `DriveDetect.available` is false there and every method but `wipe` and `appForeground` rejects
+// The `DriveDetect` contract (plan §3.1.1): the native drive detector's bridge, a second Expo module
+// in drive-sense (`ios/DriveDetectModule.swift`, and on Android `DriveDetectModule.kt`, which has no
+// car link yet: no car methods and no `carLink` event). Jest, Expo Go and web have no such module:
+// `DriveDetect.available` is false there and every method but `wipe` and `appForeground` rejects
 // (they resolve). The shared `DriveSense` contract (`../types.ts`) is unchanged by it apart from the
 // bridge-only `seq` on rows.
 import type { DetectMissing, DetectPhase, DetectStatus, StartSource } from './policy';
@@ -250,9 +251,9 @@ export interface DetectSubscription {
 }
 
 export interface DriveDetectApi {
-  /** False on Android, Jest, Expo Go and web: every method but `wipe` and `appForeground` then rejects and every listener is inert. */
+  /** False in Jest, Expo Go and web: every method but `wipe` and `appForeground` then rejects and every listener is inert. */
   readonly available: boolean;
-  /** The native build has the car link (`carLinkState`); false on Android, Jest, web and older iOS builds. */
+  /** The native build has the car link (`carLinkState`); false on Android (not yet there), Jest, web and older iOS builds. */
   readonly carLinkAvailable?: boolean;
   /** Arms (needs Always + Precise + Motion, else resolves status 'needs' and stays off) or disarms. Never rejects. */
   setArmed(armed: boolean, ownerId: string): Promise<DetectState>;
@@ -282,14 +283,15 @@ export interface DriveDetectApi {
    * or "Not driving?" rest stops (no `driveEnded`: JS ends its own drive first), EVERY journal file is
    * deleted, the last end, the parked region, the rest and the drive are forgotten, and the detector
    * is left off with no owner (a later `setArmed(true, owner)` arms it again). Resolves once the
-   * files are gone. On Android, or with no native module, a no-op that resolves.
+   * files are gone. With no native module, a no-op that resolves.
    */
   wipe(): Promise<void>;
   /**
    * RoadWise came to the front: an `app` wake (the native detector also takes one by itself on
    * `didBecomeActive`). Like a significant-change wake it opens an auto candidate only with car
    * motion in the last 2 min, the driver not on foot, but it ignores the rest after an empty
-   * candidate; nothing while disarmed, watching, recording or resting. On Android, or with no
+   * candidate; nothing while disarmed, watching, recording or resting. On Android (no automatic
+   * wakes yet) it only resumes a drive Android would not let resume behind. With no
    * native module (or a native build without it), a no-op that resolves.
    */
   appForeground(): Promise<void>;
