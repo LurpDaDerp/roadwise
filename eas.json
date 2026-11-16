@@ -9,9 +9,22 @@
     },
     "preview": {
       "distribution": "internal",
-      "channel": "preview"
+      "channel": "preview",
+      "android": { "buildType": "apk" }
     },
-    "production": { "autoIncrement": true, "channel": "production" }
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "android": { "buildType": "app-bundle" }
+    }
   },
-  "submit": { "production": {} }
+  "submit": {
+    "production": {
+      "android": {
+        "track": "internal",
+        "releaseStatus": "draft",
+        "serviceAccountKeyPath": "$GOOGLE_PLAY_SERVICE_ACCOUNT_KEY_PATH"
+      }
+    }
+  }
 }
