@@ -12,7 +12,7 @@ import { Section, TopBar } from '@/features/settings/parts';
 import { Banner, Button, ListRow, Screen, Skeleton, Text, useTheme } from '@/ui';
 
 import { carCopy } from './copy';
-import { canPair, CARS_MAX, isPaired, outputName, preselect } from './model';
+import { canPair, CARS_MAX, isPaired, outputKind, outputName, preselect } from './model';
 import { useCarLink } from './useCarLink';
 
 const copy = carCopy.screen;
@@ -21,7 +21,7 @@ const copy = carCopy.screen;
 function OutputChoice({ output, paired, chosen, onPress, testID }: { output: CarOutput; paired: boolean; chosen: boolean; onPress: () => void; testID: string }) {
   const th = useTheme();
   const name = outputName(output);
-  const detail = paired ? `${carCopy.kind(output.type)} · ${copy.paired}` : carCopy.kind(output.type);
+  const detail = paired ? `${outputKind(output)} · ${copy.paired}` : outputKind(output);
   return (
     <Pressable
       accessibilityRole="radio"
@@ -94,7 +94,7 @@ function CarLinkBody({ state, failed, onPair, onForget }: { state: CarLinkState;
               <ListRow
                 key={c.uid}
                 title={name}
-                subtitle={now ? copy.connected : carCopy.kind(c.type)}
+                subtitle={now ? copy.connected : outputKind(c)}
                 trailing={<Button label={copy.forget} size="sm" variant="secondary" onPress={() => run(onForget(c.uid))} accessibilityHint={copy.forgetLabel(name)} testID={`car-forget-${i}`} />}
                 accessibilityLabel={name}
                 testID={`car-paired-${i}`}

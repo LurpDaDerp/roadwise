@@ -13,6 +13,7 @@ import { useSyncExternalStore } from 'react';
 import { AppState, Platform } from 'react-native';
 
 import type { LocalDrive } from '@/data/queries/rows';
+import { sameCarUid } from '@/lib/carUid';
 
 import { outputName } from './model';
 import { onCarLink, readCarLink } from './port';
@@ -47,13 +48,14 @@ export function pairedCarLabels(cars: readonly Pick<PairedCar, 'uid' | 'name' | 
 
 /**
  * The car a drive row names: none with fewer than 2 cars paired (`labels` empty) or on a drive with
- * no car; the car's name now while it is paired, else the name it had on that drive.
+ * no car; the car's name now while it is paired (Android's hidden form of its address included),
+ * else the name it had on that drive.
  */
 export function driveCarLabel(drive: Pick<LocalDrive, 'carUid' | 'carName'>, labels: readonly CarLabel[]): string | null {
   if (labels.length < CAR_LIST_MIN) return null;
   const uid = typeof drive.carUid === 'string' ? drive.carUid : '';
   if (uid === '') return null;
-  const now = labels.find((l) => l.uid === uid);
+  const now = labels.find((l) => sameCarUid(l.uid, uid));
   if (now) return now.label;
   const then = typeof drive.carName === 'string' ? drive.carName.trim() : '';
   return then === '' ? null : then;

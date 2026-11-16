@@ -51,12 +51,18 @@ test("a car's history holds the listed drives made in it, newest first, whatever
   expect((await readDriveHistory(db, 'passenger')).map((d) => d.clientTripId)).toEqual([uuid(3)]);
 });
 
-test('the car match is exact: no prefix, no case folding, no empty uid', () => {
+test('the car match is exact: no prefix, no case folding, no empty uid (Android’s hidden address aside)', () => {
   const d = { status: 'scored' as const, clean: true, carUid: HONDA };
   expect(matchesHistoryFilter(d, carHistoryFilter(HONDA))).toBe(true);
   expect(matchesHistoryFilter(d, carHistoryFilter(HONDA.toLowerCase()))).toBe(false);
   expect(matchesHistoryFilter(d, carHistoryFilter(HONDA.slice(0, 8)))).toBe(false);
   expect(matchesHistoryFilter({ ...d, carUid: '' }, 'car:')).toBe(false);
+  // Android: a drive stored under the hidden form of a car's address (Android 14+ before Nearby
+  // devices) is in that car's list once the car is paired under its full address, and only that car's.
+  const full = '00:11:22:33:AB:CD';
+  expect(matchesHistoryFilter({ ...d, carUid: 'XX:XX:XX:XX:AB:CD' }, carHistoryFilter(full))).toBe(true);
+  expect(matchesHistoryFilter({ ...d, carUid: full }, carHistoryFilter('XX:XX:XX:XX:AB:CD'))).toBe(true);
+  expect(matchesHistoryFilter({ ...d, carUid: 'XX:XX:XX:XX:AB:CE' }, carHistoryFilter(full))).toBe(false);
   expect(matchesHistoryFilter({ ...d, carUid: null }, carHistoryFilter(HONDA))).toBe(false);
   expect(matchesHistoryFilter({ status: 'scored', clean: true }, carHistoryFilter(HONDA))).toBe(false);
   // Listed only: a recording or an archived drive is in no car's list.

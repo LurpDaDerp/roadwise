@@ -13,13 +13,31 @@ export const CARS_MAX = 3;
 /** An output current for most of this many of the last 3 drives is suggested (CarPlay after one). */
 export const SUGGEST_DRIVES = 2;
 
+/**
+ * Android only: Android Auto listed alone, as native lists it when the car it shows on could not be
+ * told by the car's Bluetooth (CarLinkRecord.kt's `CarOutputs.listed`); otherwise Android Auto is
+ * the car's own Bluetooth output, under its name, as CarPlay is on iPhone. iPhone never has this uid.
+ */
+export const ANDROID_AUTO_UID = 'android-auto';
+
 /** The name the screens show: the phone's own name for it, or its kind. */
 export const outputName = (o: Pick<CarOutput, 'name' | 'type'>): string => (o.name.trim() !== '' ? o.name.trim() : carCopy.unnamed(o.type));
 
-const HEADPHONES =
-  /\b(air ?pods|pods|beats|powerbeats|(ear)?buds|galaxy buds|pixel buds|ear ?phones|head ?phones|headset|wh-?1000|wf-?1000|sony wh|sony wf|quietcomfort|bose|jabra|jbl|sennheiser|nothing ear|soundcore|shokz|hearing|phonak|oticon|resound|signia|starkey)/i;
+/** The kind line under a name: Bluetooth, CarPlay or Android Auto; "Any car with Android Auto" for Android Auto listed alone (its name already says Android Auto). */
+export const outputKind = (o: Pick<CarOutput, 'uid' | 'type'>): string => (o.uid === ANDROID_AUTO_UID ? carCopy.anyCar : carCopy.kind(o.type));
 
-/** A name that reads like headphones, earbuds or a hearing aid, not a car. */
+/** Home's card title: "Is <name> your car?", or "Do you drive with Android Auto?" for Android Auto listed alone. */
+export const suggestionTitle = (o: Pick<CarOutput, 'uid' | 'name' | 'type'>): string =>
+  o.uid === ANDROID_AUTO_UID ? carCopy.card.askAnyCar : carCopy.card.askTitle(outputName(o));
+
+const HEADPHONES =
+  /\b(air ?pods|pods|beats|powerbeats|(ear)?buds|galaxy buds|pixel buds|ear ?phones|head ?phones|headset|wh-?1000|wf-?1000|sony wh|sony wf|quietcomfort|bose|jabra|jbl|sennheiser|nothing ear|soundcore|shokz|hearing|phonak|oticon|resound|signia|starkey|watch)/i;
+
+/**
+ * A name that reads like headphones, earbuds, a hearing aid or a watch, not a car. A watch is for
+ * Android, where one can hold the phone's hands-free link (native leaves it out by its Bluetooth
+ * class when Nearby devices allows reading it); iPhone never lists a watch as audio.
+ */
 export const looksLikeHeadphones = (name: string): boolean => HEADPHONES.test(name);
 
 /** Whether an output can be paired: CarPlay always, a Bluetooth output only when its name doesn't read like headphones or a hearing aid. */

@@ -15,6 +15,8 @@ export const carCopy = {
   kind: (type: CarPortType): string => (type === 'carAudio' ? carScreen() : 'Bluetooth'),
   /** An output with no name of its own. */
   unnamed: (type: CarPortType): string => (type === 'carAudio' ? carScreen() : 'Bluetooth audio'),
+  /** Android only: Android Auto listed alone, when the car it shows on could not be told (`ANDROID_AUTO_UID`). */
+  anyCar: 'Any car with Android Auto',
   row: {
     title: 'Your car',
     none: 'Not paired',
@@ -50,6 +52,8 @@ export const carCopy = {
   card: {
     dismiss: 'Close',
     askTitle: (name: string) => `Is ${name} your car?`,
+    /** Android only: the suggestion is Android Auto listed alone (`ANDROID_AUTO_UID`). */
+    askAnyCar: 'Do you drive with Android Auto?',
     askBody: 'It was connected during your recent drives. Pair it to start drives sooner.',
     use: 'Use it',
     notMine: 'Not my car',

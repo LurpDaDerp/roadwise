@@ -92,6 +92,15 @@ describe('readProvenCars', () => {
     expect([...(await readProvenCars(db, [], T))]).toEqual([]);
   });
 
+  test('Android: a kept drive stored under the hidden form of the car’s address proves the car paired under its full one', async () => {
+    const db = await createSqlJsDb();
+    await migrate(db);
+    const trips = createTripsRepo(db);
+    await trips.insert({ client_trip_id: 'a', started_at: T - 600_000, tz: 'UTC', status: 'scored' }, T);
+    await db.execute('UPDATE trips SET car_uid = ?, ended_at = ? WHERE client_trip_id = ?', ['XX:XX:XX:XX:AB:CD', T - 1000, 'a']);
+    expect([...(await readProvenCars(db, ['00:11:22:33:AB:CD', '00:11:22:33:AB:CE'], T))]).toEqual(['00:11:22:33:AB:CD']);
+  });
+
   test('a read that fails proves nothing', async () => {
     const db = { execute: async () => Promise.reject(new Error('no such column: car_uid')), transaction: async () => Promise.reject(new Error('x')) };
     expect([...(await readProvenCars(db as never, ['civic'], T))]).toEqual([]);

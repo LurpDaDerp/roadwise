@@ -15,7 +15,7 @@ import { autoDrivesOn, useAutoDrives } from '@/features/autoDrives/useAutoDrives
 import { Button, Card, IconButton, Text, useTheme } from '@/ui';
 
 import { carCopy } from './copy';
-import { CAR_CARD_DISMISSED_KEY, carSuggestion, outputName } from './model';
+import { CAR_CARD_DISMISSED_KEY, carSuggestion, suggestionTitle } from './model';
 import { useCarLink } from './useCarLink';
 
 const copy = carCopy.card;
@@ -44,14 +44,13 @@ export function PairCarCardView({
   onDismiss: () => void;
 }) {
   const t = useTheme();
-  const name = outputName(suggestion);
   return (
     <Card testID="home-car-ask">
       <View style={{ gap: t.space.md }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
           <CarDisc />
           <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="headline">{copy.askTitle(name)}</Text>
+            <Text variant="headline">{suggestionTitle(suggestion)}</Text>
             <Text variant="subhead" tone="muted">
               {copy.askBody}
             </Text>

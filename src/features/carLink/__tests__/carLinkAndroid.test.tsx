@@ -97,6 +97,27 @@ describe('on Android (the same screens; Android Auto in CarPlay’s place, Nearb
     expect(carCopy.kind('bluetoothHFP')).toBe('Bluetooth');
   });
 
+  it('Android Auto on the car’s own Bluetooth reads as CarPlay does: the car’s name, then Android Auto', async () => {
+    const civicAuto: CarOutput = { ...civicAndroid, type: 'carAudio' };
+    mockDetect.setCarRoute([civicAuto]);
+    const w = await appWorld();
+    await w.render(<CarScreen />);
+    await waitFor(() => expect(screen.getByTestId('car-output-0')).toHaveTextContent(/Civic\s*Android Auto/));
+    expect(screen.getByTestId('car-output-0').props.accessibilityLabel).toBe('Civic, Android Auto');
+  });
+
+  it('Android Auto listed alone never reads "Android Auto, Android Auto": its line says it is any car with Android Auto', async () => {
+    mockDetect.setCarRoute([auto]);
+    const w = await appWorld();
+    await w.render(<CarScreen />);
+    await waitFor(() => expect(screen.getByTestId('car-output-0')).toHaveTextContent(/Android Auto\s*Any car with Android Auto/));
+    expect(screen.getByTestId('car-output-0').props.accessibilityLabel).toBe('Android Auto, Any car with Android Auto');
+    await tap('car-use');
+    await waitFor(() => expect(screen.getByTestId('car-output-0').props.accessibilityLabel).toBe('Android Auto, Any car with Android Auto · Paired'));
+    await act(async () => mockDetect.setCarRoute([]));
+    await waitFor(() => expect(screen.getByTestId('car-paired-0')).toHaveTextContent(/Android Auto\s*Any car with Android Auto/));
+  });
+
   it("Settings › Your car's row shows and never asks by itself; Home suggests Android Auto after one drive", async () => {
     mockDetect.setCarRoute([civicAndroid]);
     await mockDetect.pairCar(civicAndroid.uid);
@@ -109,7 +130,8 @@ describe('on Android (the same screens; Android Auto in CarPlay’s place, Nearb
     await mockDetect.forgetCar(civicAndroid.uid);
     mockDetect.seeCarDrive([auto]);
     await w.render(<HomeCarCard hidden={false} />);
-    await waitFor(() => expect(screen.getByTestId('home-car-ask')).toHaveTextContent(/Is Android Auto your car\?/));
+    await waitFor(() => expect(screen.getByTestId('home-car-ask')).toHaveTextContent(/Do you drive with Android Auto\?/));
+    expect(screen.getByTestId('home-car-ask')).not.toHaveTextContent(/Is Android Auto your car/);
     await tap('home-car-use');
     await waitFor(() => expect(mockDetect.carLink.cars.map((c) => c.uid)).toEqual([auto.uid]));
     expect(mockAskNearby).toHaveBeenCalledTimes(1);

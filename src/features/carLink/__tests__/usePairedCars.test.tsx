@@ -112,6 +112,14 @@ describe('the car a row names', () => {
     expect(driveCarLabel({ carUid: volvo.uid, carName: null }, labels)).toBe('Volvo XC60');
   });
 
+  test('Android: a drive stored under the hidden form of a paired car’s address names that car', () => {
+    const a = { uid: '00:11:22:33:AB:CD', name: 'Civic', type: 'bluetoothA2DP' as const };
+    const b = { uid: '66:77:88:99:AA:BB', name: 'Volvo', type: 'bluetoothHFP' as const };
+    const l = pairedCarLabels([paired(a), paired(b)]);
+    expect(driveCarLabel({ carUid: 'XX:XX:XX:XX:AB:CD', carName: 'Old name' }, l)).toBe('Civic');
+    expect(driveCarLabel({ carUid: 'XX:XX:XX:XX:00:00', carName: 'Gone' }, l)).toBe('Gone');
+  });
+
   test('a car no longer paired: the name it had on that drive, else nothing', () => {
     expect(driveCarLabel({ carUid: 'gone', carName: ' Mom’s Jeep ' }, labels)).toBe('Mom’s Jeep');
     expect(driveCarLabel({ carUid: 'gone', carName: '  ' }, labels)).toBeNull();

@@ -12,7 +12,7 @@ import { asPlatform } from '@/lib/__fixtures__/platform';
 import { carCopy } from '../copy';
 import { CarScreen } from '../CarScreen';
 import { CarSettingRow } from '../CarSettingRow';
-import { CAR_CARD_DISMISSED_KEY, carRowLine, carSuggestion, looksLikeHeadphones, preselect } from '../model';
+import { CAR_CARD_DISMISSED_KEY, carRowLine, carSuggestion, looksLikeHeadphones, outputKind, preselect, suggestionTitle } from '../model';
 import { HomeCarCard } from '../PairCarCard';
 
 let mockDetect = createFakeDriveDetect();
@@ -80,6 +80,9 @@ describe('the rules', () => {
       'Signia Pure',
       'Starkey Genesis',
       'My hearing aids',
+      // Android: a watch can hold the phone's hands-free link.
+      'Galaxy Watch6 (A1B2)',
+      'Pixel Watch 2',
     ])
       expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: true });
     for (const n of ['Civic', 'Toyota RAV4', 'CarPlay', 'MY VW', 'Uconnect']) expect({ n, h: looksLikeHeadphones(n) }).toEqual({ n, h: false });
@@ -106,6 +109,13 @@ describe('the rules', () => {
     expect(carSuggestion({ ...base, cars: three, drives: [drive([civic], 1), drive([civic], 2)] })).toBeNull();
     expect(carRowLine({ ...base, cars: three.slice(0, 2) })).toBe('Car 1, Car 2');
     expect(carRowLine(base)).toBe(carCopy.row.none);
+  });
+
+  it('names the kind and asks about a car as before on iPhone (CarPlay with no name of its own included)', () => {
+    expect(outputKind(carplay)).toBe('CarPlay');
+    expect(outputKind(civic)).toBe('Bluetooth');
+    expect(suggestionTitle(civic)).toBe('Is Civic your car?');
+    expect(suggestionTitle({ ...carplay, name: '' })).toBe('Is CarPlay your car?');
   });
 });
 
