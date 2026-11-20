@@ -161,11 +161,32 @@ ${body.trimEnd()}
 
 function heroHeader(config) {
   return `      <div class="hero">
-        <h1>RoadWise</h1>
-        <p class="lede">Drive coaching for new drivers that notices your drives on its own.</p>
-        <div class="stores">
-        ${storesHtml(config)}
+        <div class="hero-text">
+          <h1>RoadWise</h1>
+          <p class="lede">A free driving coach for new drivers. It records your drives on its own and shows you how to drive safer.</p>
+          <div class="stores">
+          ${storesHtml(config)}
+          </div>
         </div>
+        <figure class="shot hero-shot">
+          <div class="phone hud" role="img" aria-label="The RoadWise driving screen: 33 miles per hour in a speed limit 35 zone">
+            <div class="island" aria-hidden="true"></div>
+            <div class="screen" aria-hidden="true">
+              <div class="hud-top">
+                <div class="plate"><span>SPEED</span><span>LIMIT</span><b>35</b></div>
+                <div class="sos"><svg viewBox="0 0 24 24"><path d="M6.6 3.5h2.6l1.4 4.1-2 1.5a12 12 0 006.3 6.3l1.5-2 4.1 1.4v2.6c0 1-.8 1.8-1.8 1.8A16.2 16.2 0 014.8 5.3c0-1 .8-1.8 1.8-1.8z"/></svg></div>
+                <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l7 18-7-4-7 4z"/></svg></div>
+              </div>
+              <div class="halo">
+                <div class="ring"></div>
+                <span class="cn">N</span><span class="ce">E</span><span class="cs">S</span><span class="cw">W</span>
+                <div class="speed"><b>33</b><span>mph</span></div>
+              </div>
+              <div class="not-driving">Not driving?</div>
+              <div class="end"><i></i><span>End drive</span></div>
+            </div>
+          </div>
+        </figure>
       </div>`;
 }
 
@@ -216,6 +237,10 @@ function buildShareLinks(config) {
   const page = path.join(OUT, 'w', 'index.html');
   const appStore = config.appStoreId ? `https://apps.apple.com/app/id${config.appStoreId}` : `${ORIGIN}/`;
   fs.writeFileSync(page, fs.readFileSync(page, 'utf8').replace('https://apps.apple.com/app/idAPP_STORE_ID', appStore), 'utf8');
+  // Android: Google Play once the listing is public, home until then (open.js reads it from here).
+  const openJs = path.join(OUT, 'w', 'open.js');
+  const play = config.playStoreLive ? PLAY_URL : `${ORIGIN}/`;
+  fs.writeFileSync(openJs, fs.readFileSync(openJs, 'utf8').replace(`'${PLAY_URL}'`, `'${play}'`), 'utf8');
 
   const wellKnown = path.join(OUT, '.well-known');
   fs.mkdirSync(wellKnown, { recursive: true });

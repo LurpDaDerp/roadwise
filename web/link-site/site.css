@@ -1,7 +1,7 @@
 /*
  * getroadwise.app: paper and ink, lit by the sky (the app's own look, DESIGN.md).
  * Barlow Semi Condensed was drawn from California highway-sign lettering; it carries the wordmark,
- * the headings, the log's numbers and the signs. Reading text stays on the phone's own face.
+ * the headings, feature names and the numbers on the drawn phones. Reading text stays on the phone UI face.
  * The sky bands take the visitor's hour (sky.js sets data-sky on <html>; "day" without script).
  */
 
@@ -289,282 +289,746 @@ a:hover {
   font-size: 1.1rem;
 }
 
-/* ------------------------------------------------------------------ the log */
 
-.log {
-  padding-block: 2.25rem 1rem;
-}
-.log-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.25rem 2rem;
-  margin-bottom: 1.25rem;
-}
-.log-head h2,
-.rating h2,
-.close h2 {
-  margin: 0;
-  font: italic 800 clamp(2rem, 5vw, 2.75rem) / 1 var(--road);
-}
-.log-head p {
-  margin: 0;
-  color: var(--muted);
-}
-
-/* The log's columns: day, drive, time, distance, score, and the toggle. */
-.log-cols,
-.entry summary {
+/* The landing hero: the offer beside the driving screen. */
+.hero {
   display: grid;
-  grid-template-columns: 7.5rem minmax(0, 1fr) 5rem 5.5rem 3.5rem 1.5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 1rem;
+  gap: 2rem 3rem;
 }
-.log-cols {
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--rule-strong);
-  font: 700 0.95rem/1 var(--road);
-  color: var(--muted);
-}
-.n {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.hero-shot {
+  margin: 0;
+  justify-self: end;
 }
 
-.entry {
+/* ------------------------------------------------------------------ feature groups */
+
+.group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2.5rem 4rem;
+  padding-block: 4rem;
   border-bottom: 1px solid var(--rule);
 }
-.entry summary {
-  list-style: none;
-  cursor: pointer;
-  padding-block: 1rem;
-  font: 700 1.3rem/1.2 var(--road);
+.group.flip .group-text {
+  order: 2;
 }
-.entry summary::-webkit-details-marker {
-  display: none;
+.group h2,
+.more h2,
+.close h2 {
+  margin: 0 0 1.25rem;
+  font: italic 800 clamp(2rem, 5vw, 2.75rem) / 1 var(--road);
 }
-.entry summary:hover .trip {
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 0.18em;
-}
-.when small {
-  display: block;
-  font: 400 0.85rem/1.3 var(--ui);
-  color: var(--muted);
-}
-.trip {
-  overflow-wrap: anywhere;
-}
-.score {
-  font: italic 800 1.75rem/1 var(--road);
-}
-/* After the font shorthands above, which reset it. */
-.entry summary .n,
-.events time {
-  font-variant-numeric: tabular-nums;
-}
-.off {
-  color: var(--muted);
-}
-.chev {
-  width: 1.5rem;
-  height: 1.5rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 260ms var(--ease);
-}
-.entry[open] .chev {
-  transform: rotate(180deg);
-}
-
-.entry-body {
-  display: grid;
-  grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
-  gap: 1.5rem 2.5rem;
-  padding: 0.25rem 0 2rem 8.5rem;
-}
-.did h3 {
-  margin: 0.25rem 0 0.4rem;
-  font: 700 1.45rem/1.15 var(--road);
-}
-.did p {
-  margin: 0 0 1rem;
-  max-width: 34rem;
-  text-wrap: pretty;
-}
-.events {
+.features {
   margin: 0;
   padding: 0;
   list-style: none;
+  max-width: 38rem;
 }
-.events li {
-  display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
-  gap: 0.6rem;
-  align-items: start;
-  padding-block: 0.75rem;
-  border-top: 1px solid var(--rule);
-  font-weight: 600;
-}
-.events li small {
-  display: block;
-  font-weight: 400;
-  color: var(--muted);
-}
-.events time {
-  font-variant-numeric: tabular-nums;
-  font-weight: 400;
-  color: var(--muted);
-}
-.events svg {
-  width: 1.5rem;
-  height: 1.5rem;
-  fill: none;
-  stroke: var(--moderate-text);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.events .minor svg {
-  stroke: var(--minor-text);
-}
-
-/* The route maps: a plain street grid, the route in green, events as orange discs. */
-.map {
-  display: block;
-  width: 100%;
-  height: auto;
-  border-radius: 1.25rem;
-  background: var(--map);
-}
-.streets path {
-  fill: none;
-  stroke: var(--street);
-  stroke-width: 6;
-}
-.streets .park {
-  fill: var(--park);
-  stroke: none;
-}
-.route {
-  fill: none;
-  stroke: var(--route);
-  stroke-width: 5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.trim {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 3;
-  stroke-dasharray: 4 6;
-  stroke-linecap: round;
-  opacity: 0.7;
-}
-.pin {
-  stroke: var(--paper);
-  stroke-width: 3;
-}
-.pin.start {
-  fill: var(--paper);
-  stroke: var(--ink);
-}
-.pin.end {
-  fill: var(--ink);
-}
-.flag circle {
-  fill: var(--moderate-fill);
-  stroke: var(--paper);
-  stroke-width: 3;
-}
-.flag.minor circle {
-  fill: var(--minor-fill);
-}
-.flag path,
-.flag rect {
-  fill: none;
-  stroke: #111113;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.map-note {
-  font: italic 800 26px var(--road);
-  fill: var(--muted);
-  text-anchor: middle;
-}
-.defs {
-  position: absolute;
-}
-
-/* ------------------------------------------------------------------ the rating */
-
-.rating {
-  display: grid;
-  grid-template-columns: auto minmax(0, 38rem);
-  justify-content: start;
-  gap: 3rem;
-  align-items: center;
-  padding-block: 4rem 5rem;
-}
-.rating p {
-  margin: 0.75rem 0 0;
+.features li {
+  padding: 0.7rem 0 0.7rem 1.4rem;
+  position: relative;
   color: var(--muted);
   text-wrap: pretty;
 }
+/* A small road stripe marks each feature. */
+.features li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 1.15rem;
+  width: 0.55rem;
+  height: 0.2rem;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.features strong {
+  display: block;
+  color: var(--ink);
+  font: 700 1.3rem/1.2 var(--road);
+  margin-bottom: 0.1rem;
+}
+.more {
+  padding-block: 4rem 2.5rem;
+}
+.more h2 + .features {
+  margin-bottom: 3rem;
+}
+.features.cols {
+  max-width: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  column-gap: 3rem;
+}
+.note {
+  margin: 0;
+  max-width: 40rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
 
-/* A regulatory sign, as on the driving screen: black on white, a black border inset from the edge. */
-.sign {
-  width: 10rem;
-  padding: 0.5rem;
-  border-radius: 1rem;
-  background: #ffffff;
-  color: #111113;
+/* ------------------------------------------------------------------ the phones */
+
+.shot {
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0.9rem;
+}
+.shot figcaption {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.sky .shot figcaption {
+  color: #ffffff;
+}
+
+/* A phone drawn in code: 9 by 19.5, a thin bezel, the Dynamic Island. Sized in px so every screen
+   keeps the app's proportions. */
+.phone {
+  position: relative;
+  width: 272px;
+  height: 589px;
+  border-radius: 46px;
+  padding: 11px;
+  background: #1b1c20;
   box-shadow:
-    0 0 0 1px rgba(17, 17, 19, 0.12),
-    0 0.75rem 1.75rem rgba(17, 17, 19, 0.18);
-  transform: rotate(-2deg);
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+    0 1.5rem 3rem rgba(4, 10, 28, 0.32);
+  font-family: var(--ui);
+  -webkit-user-select: none;
+  user-select: none;
 }
-.sign-face {
-  border: 0.3rem solid #111113;
-  border-radius: 0.65rem;
-  padding: 0.65rem 0.4rem 0.35rem;
-  text-align: center;
+.phone > .screen,
+.phone.lock::before {
+  position: absolute;
+  inset: 11px;
+  border-radius: 36px;
+  overflow: hidden;
 }
-.sign-face .words {
-  display: block;
-  font: 700 1.3rem/1 var(--road);
-  letter-spacing: 0.03em;
+.island {
+  position: absolute;
+  z-index: 3;
+  top: 21px;
+  left: 50%;
+  width: 86px;
+  height: 25px;
+  margin-left: -43px;
+  border-radius: 13px;
+  background: #000000;
 }
-.sign-face .number {
-  display: block;
-  font: italic 800 5rem/0.95 var(--road);
+
+/* The driving screen: the hour's sky deepened, the limit sign, the halo, End. */
+.phone.hud > .screen {
+  background: linear-gradient(180deg, #031a33, #062a4f 55%, #0a3a66);
+  color: #f3f6fb;
+}
+.hud-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 58px 18px 0;
+}
+.plate {
+  display: grid;
+  justify-items: center;
+  width: 54px;
+  padding: 5px 3px 3px;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #000000;
+  box-shadow: inset 0 0 0 2px #ffffff, inset 0 0 0 3.5px #000000;
+  font: 700 9px/1 var(--road);
+  letter-spacing: 0.04em;
+}
+.plate span {
+  line-height: 1.05;
+}
+.plate b {
+  font: 700 27px/1 var(--road);
+  margin-top: 1px;
   font-variant-numeric: tabular-nums;
 }
+.sos,
+.nav {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+}
+.sos {
+  margin-top: 6px;
+  width: 50px;
+  height: 50px;
+  background: #d9e6f2;
+}
+.sos svg {
+  width: 23px;
+  height: 23px;
+  fill: #a51d2e;
+}
+.nav {
+  width: 58px;
+  height: 58px;
+  background: #d9e6f2;
+}
+.nav svg {
+  width: 24px;
+  height: 24px;
+  fill: #111113;
+  transform: rotate(45deg);
+}
+.halo {
+  position: relative;
+  width: 210px;
+  height: 210px;
+  margin: 34px auto 0;
+}
+.ring {
+  position: absolute;
+  inset: 26px;
+  border-radius: 50%;
+  border: 9px solid #cfe6ff;
+  box-shadow:
+    0 0 26px 4px rgba(207, 230, 255, 0.45),
+    inset 0 0 20px 2px rgba(207, 230, 255, 0.35);
+}
+.halo > span {
+  position: absolute;
+  font: italic 800 15px/1 var(--road);
+  color: #a9bad6;
+}
+.halo .cn {
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #f3f6fb;
+}
+.halo .cs {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.halo .ce {
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.halo .cw {
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.speed {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+.speed b {
+  font: italic 800 74px/0.9 var(--road);
+  font-variant-numeric: tabular-nums;
+}
+.speed span {
+  font: 700 15px/1 var(--road);
+  color: #a9bad6;
+}
+.not-driving {
+  margin-top: 42px;
+  text-align: center;
+  font-size: 13px;
+  color: #a9bad6;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.end {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 22px;
+  height: 56px;
+  border-radius: 28px;
+  background: #e6eef6;
+  display: flex;
+  align-items: center;
+  color: #111113;
+  font-weight: 600;
+  font-size: 15px;
+}
+.end i {
+  width: 46px;
+  height: 46px;
+  margin: 0 5px;
+  border-radius: 50%;
+  background: #111113;
+}
+.end span {
+  flex: 1;
+  text-align: center;
+  margin-right: 56px;
+}
 
-.sign.tiny {
-  float: right;
-  width: 4.75rem;
-  padding: 0.3rem;
-  border-radius: 0.6rem;
-  margin: 0 0 0.75rem 1.25rem;
-  transform: rotate(2deg);
+/* The lock screen with the drive's Live Activity. */
+.phone.lock::before {
+  content: '';
+  background:
+    radial-gradient(circle at 70% 30%, rgba(255, 196, 150, 0.35), transparent 45%),
+    linear-gradient(170deg, #1d2b5a, #3b3f86 50%, #8a4a72);
 }
-.sign.tiny .sign-face {
-  border-width: 0.18rem;
-  border-radius: 0.4rem;
-  padding: 0.3rem 0.2rem 0.15rem;
+.lock-time,
+.lock-date,
+.la {
+  position: relative;
+  z-index: 1;
 }
-.sign.tiny .words {
-  font-size: 0.8rem;
+.lock-time {
+  margin-top: 70px;
+  text-align: center;
+  color: #ffffff;
+  font: 600 76px/1 var(--ui);
+  letter-spacing: -0.02em;
 }
-.sign.tiny .number {
-  font-size: 2.4rem;
+.lock-date {
+  margin-top: 4px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 15px;
+  font-weight: 600;
+}
+.la {
+  margin: 250px 8px 0;
+  padding: 14px 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #062a4f, #0a3a66);
+  color: #ffffff;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  row-gap: 4px;
+}
+.la-speed b {
+  display: block;
+  font: 800 46px/1 var(--ui);
+  font-variant-numeric: tabular-nums;
+}
+.la-speed span {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+.la-hint {
+  grid-column: 1 / -1;
+  justify-self: end;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* App screens on paper: the drive recap. */
+.phone.paper > .screen {
+  background: #f4f4f2;
+  color: #111113;
+  padding: 54px 16px 0;
+}
+.back {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.back svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: #111113;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.recap-title {
+  margin-top: 12px;
+  font: 700 23px/1.1 var(--road);
+}
+.recap-sub {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.recap-when {
+  font-size: 11.5px;
+  color: #4a4a4f;
+}
+.mini-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 12px;
+  border-radius: 18px;
+  background: #e9eff3;
+}
+.mm-street {
+  fill: none;
+  stroke: #d3dce3;
+  stroke-width: 5;
+}
+.mm-route {
+  fill: none;
+  stroke: #1f9d55;
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mm-flag {
+  fill: #f07400;
+  stroke: #ffffff;
+  stroke-width: 2.5;
+}
+.mm-start {
+  fill: #ffffff;
+  stroke: #111113;
+  stroke-width: 2.5;
+}
+.mm-end {
+  fill: #111113;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+.scorecard {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: rgba(155, 109, 255, 0.12);
+  display: grid;
+  grid-template-columns: auto 1fr 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  color: #5b34c9;
+}
+.scorecard .merit {
+  width: 26px;
+  height: 26px;
+  fill: #6b44d9;
+}
+.scorecard div {
+  display: grid;
+}
+.scorecard b {
+  font: italic 800 17px/1.1 var(--road);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.scorecard div:first-of-type b {
+  font-size: 26px;
+}
+.scorecard span {
+  font-size: 10.5px;
+  color: #4a4a4f;
+}
+.events-title {
+  margin-top: 14px;
+  font: 700 15px/1 var(--road);
+}
+.event {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.event em {
+  font-style: normal;
+  font-weight: 400;
+  color: #4a4a4f;
+}
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.dot.moderate {
+  background: #f07400;
+}
+.report {
+  margin: 4px 0 0 22px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3a3fc8;
+}
+
+/* App screens on the sky: Analytics and Friends. */
+.phone.sky-screen > .screen {
+  background: linear-gradient(180deg, #0b3f73, #155a97 40%, #f4f4f2 40%);
+  padding: 58px 14px 0;
+  color: #111113;
+}
+.tab-title {
+  color: #ffffff;
+  font: 700 27px/1 var(--road);
+  margin: 0 4px 14px;
+}
+.card {
+  background: #ffffff;
+  border-radius: 24px;
+  box-shadow: 0 2px 10px rgba(4, 10, 28, 0.1);
+}
+.radar-card {
+  padding: 8px;
+}
+.radar {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.radar-grid polygon {
+  fill: none;
+  stroke: #dfe2ea;
+  stroke-width: 1;
+}
+.radar-shape {
+  fill: rgba(17, 17, 19, 0.12);
+  stroke: #111113;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.radar-num {
+  font: italic 800 34px var(--road);
+  text-anchor: middle;
+  fill: #111113;
+}
+.radar-cap {
+  font: 600 9.5px var(--ui);
+  text-anchor: middle;
+  fill: #4a4a4f;
+}
+.radar-axis {
+  font: 700 10.5px var(--road);
+  text-anchor: middle;
+  fill: #4a4a4f;
+}
+.card.mini {
+  margin-top: 10px;
+  padding: 4px 14px;
+}
+.mini-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mini-row + .mini-row {
+  border-top: 1px solid #ececf0;
+}
+.mini-row em {
+  font: italic 800 17px/1 var(--road);
+}
+.board {
+  padding: 4px 12px;
+}
+.board .row {
+  display: grid;
+  grid-template-columns: 16px 32px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.board .row + .row {
+  border-top: 1px solid #ececf0;
+}
+.board em {
+  font: italic 800 15px/1 var(--road);
+  color: #4a4a4f;
+}
+.board i {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--av);
+  display: grid;
+  place-items: center;
+  font: 700 11px/1 var(--road);
+  font-style: normal;
+  color: #111113;
+}
+.board b {
+  font: italic 800 20px/1 var(--road);
+  font-variant-numeric: tabular-nums;
+}
+.board .me {
+  background: #eef2ff;
+  margin: 0 -12px;
+  padding-inline: 12px;
+}
+
+.tab-title.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.add {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #111113;
+  font: 600 12px/1 var(--ui);
+}
+/* The floating pill tab bar: ink, the current tab on a paper disc. */
+.tabbar {
+  position: absolute;
+  left: 34px;
+  right: 34px;
+  bottom: 20px;
+  height: 58px;
+  border-radius: 29px;
+  background: #111113;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 6px;
+}
+.tabbar span {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.tabbar span.on {
+  background: #ffffff;
+}
+.tabbar svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: #f4f4f2;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tabbar .on svg {
+  stroke: #111113;
+}
+
+.setting {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.setting em {
+  font-style: normal;
+  font-weight: 400;
+  color: #4a4a4f;
+}
+.switch {
+  width: 38px;
+  height: 23px;
+  border-radius: 12px;
+  background: #3a3fc8;
+  position: relative;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+.list-head {
+  margin: 16px 2px 6px;
+  font: 700 15px/1 var(--road);
+}
+.hours {
+  padding: 4px 14px;
+}
+.hrow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 6px;
+  padding: 10px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.hrow + .hrow {
+  border-top: 1px solid #ececf0;
+}
+.hrow em {
+  font-style: normal;
+  font-weight: 400;
+  color: #4a4a4f;
+  font-variant-numeric: tabular-nums;
+}
+.hrow i {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #3a3fc8 var(--p), #e7e8f8 var(--p));
+}
+.pdf {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 999px;
+  background: #111113;
+  color: #ffffff;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.drivingcard {
+  margin-top: 10px;
+  padding: 10px 12px 12px;
+}
+.seg {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 3px;
+  border-radius: 999px;
+  background: #ececf0;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+.seg span {
+  padding: 5px 0;
+  border-radius: 999px;
+}
+.seg .on {
+  background: #111113;
+  color: #ffffff;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 10px;
+  text-align: center;
+}
+.stats b {
+  display: block;
+  font: italic 800 22px/1 var(--road);
+  font-variant-numeric: tabular-nums;
+}
+.stats span {
+  font-size: 10.5px;
+  color: #4a4a4f;
 }
 
 /* ------------------------------------------------------------------ the close */
@@ -573,7 +1037,7 @@ a:hover {
   padding-block: 4rem 4.5rem;
 }
 .close h2 {
-  max-width: 20ch;
+  max-width: 22ch;
   margin-bottom: 1.5rem;
   text-wrap: balance;
 }
@@ -649,7 +1113,24 @@ footer p {
   margin: 0;
 }
 
+
 /* ------------------------------------------------------------------ small screens */
+
+@media (max-width: 860px) {
+  .hero,
+  .group {
+    grid-template-columns: 1fr;
+  }
+  .hero-shot {
+    justify-self: center;
+  }
+  .group.flip .group-text {
+    order: 0;
+  }
+  .group {
+    padding-block: 3rem;
+  }
+}
 
 @media (max-width: 760px) {
   .topbar nav {
@@ -664,131 +1145,44 @@ footer p {
     height: 1.9rem;
   }
   .hero {
-    padding-block: 1.25rem 1.75rem;
+    padding-block: 1.25rem 2.5rem;
   }
   .hero h1 {
     font-size: 3.75rem;
-  }
-  .sky .disc {
-    top: 4.75rem;
-    right: 7%;
-    width: 2.5rem;
-    height: 2.5rem;
-  }
-  :root[data-sky='night'] .sky .disc {
-    width: 2rem;
-    height: 2rem;
-  }
-  .log {
-    padding-top: 1.25rem;
-  }
-  /* The map keeps its own shape, smaller, with the score sign beside it. */
-  .entry-body {
-    position: relative;
-  }
-  .map {
-    width: 13rem;
-    max-width: calc(100% - 6rem);
-  }
-  .did .sign.tiny {
-    position: absolute;
-    top: 0;
-    right: 0;
-    float: none;
-    margin: 0;
   }
   .lede {
     font-size: 1.12rem;
     margin-bottom: 0.9rem;
   }
-  .log-head p {
-    font-size: 0.95rem;
-  }
-  .log-cols {
+  /* No room beside a phone-width title: the sun or moon would sit behind it. */
+  .sky .disc {
     display: none;
   }
-  .log-head {
-    margin-bottom: 0.5rem;
-  }
-  /* A row becomes two lines: the drive and its score, then the day, time and distance. */
-  .entry summary {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    grid-template-areas:
-      'trip score chev'
-      'meta meta meta';
-    column-gap: 0.75rem;
-    row-gap: 0.15rem;
-    font-size: 1.2rem;
-  }
-  .entry summary .trip {
-    grid-area: trip;
-  }
-  .entry summary .score {
-    grid-area: score;
-  }
-  .entry summary .chev {
-    grid-area: chev;
-  }
-  .entry summary .when,
-  .entry summary .n:not(.score) {
-    display: none;
-  }
-  .entry summary::after {
-    content: attr(data-meta);
-    grid-area: meta;
-    font: 400 0.9rem/1.3 var(--ui);
-    color: var(--muted);
-  }
-  .entry-body {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-    padding: 0 0 1rem;
-  }
-  .entry summary {
-    padding-block: 0.8rem;
-  }
-  .rating {
-    grid-template-columns: 1fr;
-    gap: 1.5rem;
-    padding-block: 3rem 3.5rem;
-  }
-  .sign {
-    width: 8.5rem;
-  }
-  .sign-face .words {
-    font-size: 1.1rem;
-  }
-  .sign-face .number {
-    font-size: 4rem;
-  }
+}
+
+/* The landing's sky holds the phone; the sun or moon would sit behind it. */
+.sky:has(.hero-shot) .disc {
+  display: none;
 }
 
 /* ------------------------------------------------------------------ the one moment */
 
 @media (prefers-reduced-motion: no-preference) {
-  /* An opened drive draws its route in, start to end, as the recap's map does once. */
-  .entry[open] .route {
-    stroke-dasharray: 1;
-    animation: drive 1.1s var(--ease) both;
+  /* The driving screen's halo: light moves slowly around it when driving is calm, as in the app. */
+  .ring {
+    animation: calm 4.5s ease-in-out infinite;
   }
-  .entry[open] .flag,
-  .entry[open] .pin.end {
-    animation: arrive 300ms var(--ease) 0.75s both;
-  }
-  @keyframes drive {
-    from {
-      stroke-dashoffset: 1;
+  @keyframes calm {
+    0%,
+    100% {
+      box-shadow:
+        0 0 22px 3px rgba(207, 230, 255, 0.38),
+        inset 0 0 16px 2px rgba(207, 230, 255, 0.28);
     }
-    to {
-      stroke-dashoffset: 0;
-    }
-  }
-  @keyframes arrive {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
+    50% {
+      box-shadow:
+        0 0 34px 7px rgba(207, 230, 255, 0.55),
+        inset 0 0 26px 4px rgba(207, 230, 255, 0.42);
     }
   }
 }
