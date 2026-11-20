@@ -12,6 +12,14 @@
   font-display: swap;
   src: url('/fonts/barlow-800-italic-v2.woff') format('woff');
 }
+/* Upright ExtraBold: the driving screen's numerals and compass, as in the app. */
+@font-face {
+  font-family: 'Barlow Semi Condensed Upright';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/barlow-800-v2.woff') format('woff');
+}
 @font-face {
   font-family: 'Barlow Semi Condensed';
   font-style: normal;
@@ -27,6 +35,7 @@
   --rule: #dcdce2;
   --accent: #3a3fc8;
   --road: 'Barlow Semi Condensed', 'Arial Narrow', sans-serif;
+  --road-upright: 'Barlow Semi Condensed Upright', 'Arial Narrow', sans-serif;
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   /* The sky: three stops top to bottom, each dark enough for white text (4.6:1 or more). */
   --sky-1: #0b3f73;
@@ -401,16 +410,109 @@ a:hover {
   background: #000000;
 }
 
-/* The driving screen: the hour's sky deepened, the limit sign, the halo, End. */
+/* The driving screen: one SVG in the app's own points (hudLayout for a 393 x 852 iPhone), on the
+   hour's sky deepened for the road. */
 .phone.hud > .screen {
-  background: linear-gradient(180deg, #031a33, #062a4f 55%, #0a3a66);
-  color: #f3f6fb;
+  background: linear-gradient(180deg, #0a3765, #114879 55%, #164e7b);
 }
-.hud-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 58px 18px 0;
+.hud-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hud-clock {
+  font: 600 17px var(--ui);
+  fill: #ffffff;
+  text-anchor: middle;
+}
+.hud-plate {
+  fill: #ffffff;
+}
+.hud-plate-edge {
+  fill: none;
+  stroke: #000000;
+  stroke-width: 2.4;
+}
+.hud-legend {
+  font: 700 18px var(--road);
+  fill: #000000;
+  text-anchor: middle;
+  letter-spacing: 0.02em;
+}
+.hud-limit {
+  font: 800 52px var(--road-upright);
+  fill: #000000;
+  text-anchor: middle;
+}
+.hud-face {
+  fill: #cfd5dc;
+}
+.hud-call {
+  fill: #a51d2e;
+}
+.hud-nav {
+  fill: #111113;
+}
+.hud-caption {
+  font: 600 13px var(--ui);
+  fill: #a9bad6;
+  text-anchor: middle;
+}
+.hud-glow {
+  fill: none;
+  stroke: #cfe6ff;
+  stroke-width: 34;
+  opacity: 0.45;
+}
+.hud-ring {
+  fill: none;
+  stroke: #cfe6ff;
+}
+.hud-ticks line {
+  stroke: #a9bad6;
+  stroke-linecap: round;
+}
+.hud-n,
+.hud-cl {
+  font: 800 19px var(--road-upright);
+  text-anchor: middle;
+}
+.hud-n {
+  fill: #f3f6fb;
+}
+.hud-cl {
+  fill: #a9bad6;
+}
+.hud-mark {
+  fill: #f3f6fb;
+}
+.hud-speed {
+  font: 800 154px var(--road-upright);
+  fill: #f3f6fb;
+  text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+}
+.hud-unit {
+  font: 700 20px var(--road);
+  fill: #a9bad6;
+  text-anchor: middle;
+}
+.hud-not {
+  font: 500 17px var(--ui);
+  fill: #a9bad6;
+  text-anchor: middle;
+  text-decoration: underline;
+}
+.hud-knob {
+  fill: #111113;
+}
+.hud-stop {
+  fill: #f4f4f2;
+}
+.hud-end {
+  font: 600 19px var(--ui);
+  fill: #111113;
+  text-anchor: middle;
 }
 .plate {
   display: grid;
@@ -432,127 +534,6 @@ a:hover {
   margin-top: 1px;
   font-variant-numeric: tabular-nums;
 }
-.sos,
-.nav {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-}
-.sos {
-  margin-top: 6px;
-  width: 50px;
-  height: 50px;
-  background: #d9e6f2;
-}
-.sos svg {
-  width: 23px;
-  height: 23px;
-  fill: #a51d2e;
-}
-.nav {
-  width: 58px;
-  height: 58px;
-  background: #d9e6f2;
-}
-.nav svg {
-  width: 24px;
-  height: 24px;
-  fill: #111113;
-  transform: rotate(45deg);
-}
-.halo {
-  position: relative;
-  width: 210px;
-  height: 210px;
-  margin: 34px auto 0;
-}
-.ring {
-  position: absolute;
-  inset: 26px;
-  border-radius: 50%;
-  border: 9px solid #cfe6ff;
-  box-shadow:
-    0 0 26px 4px rgba(207, 230, 255, 0.45),
-    inset 0 0 20px 2px rgba(207, 230, 255, 0.35);
-}
-.halo > span {
-  position: absolute;
-  font: italic 800 15px/1 var(--road);
-  color: #a9bad6;
-}
-.halo .cn {
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  color: #f3f6fb;
-}
-.halo .cs {
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-.halo .ce {
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-.halo .cw {
-  left: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-.speed {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-content: center;
-  text-align: center;
-}
-.speed b {
-  font: italic 800 74px/0.9 var(--road);
-  font-variant-numeric: tabular-nums;
-}
-.speed span {
-  font: 700 15px/1 var(--road);
-  color: #a9bad6;
-}
-.not-driving {
-  margin-top: 42px;
-  text-align: center;
-  font-size: 13px;
-  color: #a9bad6;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.end {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 22px;
-  height: 56px;
-  border-radius: 28px;
-  background: #e6eef6;
-  display: flex;
-  align-items: center;
-  color: #111113;
-  font-weight: 600;
-  font-size: 15px;
-}
-.end i {
-  width: 46px;
-  height: 46px;
-  margin: 0 5px;
-  border-radius: 50%;
-  background: #111113;
-}
-.end span {
-  flex: 1;
-  text-align: center;
-  margin-right: 56px;
-}
-
 /* The lock screen with the drive's Live Activity. */
 .phone.lock::before {
   content: '';
@@ -1154,20 +1135,16 @@ footer p {
 
 @media (prefers-reduced-motion: no-preference) {
   /* The driving screen's halo: light moves slowly around it when driving is calm, as in the app. */
-  .ring {
+  .hud-glow {
     animation: calm 4.5s ease-in-out infinite;
   }
   @keyframes calm {
     0%,
     100% {
-      box-shadow:
-        0 0 22px 3px rgba(207, 230, 255, 0.38),
-        inset 0 0 16px 2px rgba(207, 230, 255, 0.28);
+      opacity: 0.32;
     }
     50% {
-      box-shadow:
-        0 0 34px 7px rgba(207, 230, 255, 0.55),
-        inset 0 0 26px 4px rgba(207, 230, 255, 0.42);
+      opacity: 0.55;
     }
   }
 }

@@ -172,18 +172,34 @@ function heroHeader(config) {
           <div class="phone hud" role="img" aria-label="The RoadWise driving screen: 33 miles per hour in a speed limit 35 zone">
             <div class="island" aria-hidden="true"></div>
             <div class="screen" aria-hidden="true">
-              <div class="hud-top">
-                <div class="plate"><span>SPEED</span><span>LIMIT</span><b>35</b></div>
-                <div class="sos"><svg viewBox="0 0 24 24"><path d="M6.6 3.5h2.6l1.4 4.1-2 1.5a12 12 0 006.3 6.3l1.5-2 4.1 1.4v2.6c0 1-.8 1.8-1.8 1.8A16.2 16.2 0 014.8 5.3c0-1 .8-1.8 1.8-1.8z"/></svg></div>
-                <div class="nav"><svg viewBox="0 0 24 24"><path d="M12 3l7 18-7-4-7 4z"/></svg></div>
-              </div>
-              <div class="halo">
-                <div class="ring"></div>
-                <span class="cn">N</span><span class="ce">E</span><span class="cs">S</span><span class="cw">W</span>
-                <div class="speed"><b>33</b><span>mph</span></div>
-              </div>
-              <div class="not-driving">Not driving?</div>
-              <div class="end"><i></i><span>End drive</span></div>
+              <svg class="hud-svg" viewBox="0 0 393 852" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                  <filter id="hud-glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+                </defs>
+                <text class="hud-clock" x="58" y="40">7:42</text>
+                <rect class="hud-plate" x="16" y="71" width="90" height="112" rx="5.4"/>
+                <rect class="hud-plate-edge" x="19" y="74" width="84" height="106" rx="4"/>
+                <text class="hud-legend" x="61" y="100">SPEED</text>
+                <text class="hud-legend" x="61" y="120">LIMIT</text>
+                <text class="hud-limit" x="61" y="170">35</text>
+                <circle class="hud-face" cx="61" cy="236" r="28"/>
+                <path class="hud-call" transform="translate(48 223) scale(1.08)" d="M6.6 3.5h2.6l1.4 4.1-2 1.5a12 12 0 006.3 6.3l1.5-2 4.1 1.4v2.6c0 1-.8 1.8-1.8 1.8A16.2 16.2 0 014.8 5.3c0-1 .8-1.8 1.8-1.8z"/>
+                <circle class="hud-face" cx="329" cy="115" r="40"/>
+                <path class="hud-nav" transform="translate(329 115) rotate(45) translate(-14 -16)" d="M14 0 L28 32 L14 24 L0 32Z"/>
+                <text class="hud-caption" x="329" y="173">Navigate</text>
+                <circle class="hud-glow" cx="196.5" cy="430.5" r="123.02" filter="url(#hud-glow)"/>
+                <circle class="hud-ring" cx="196.5" cy="430.5" r="123.02" stroke-width="20"/>
+                <g class="hud-ticks"><line x1="236.5" y1="281.2" x2="238.0" y2="275.7" stroke-width="1.5"/><line x1="273.8" y1="296.6" x2="276.6" y2="291.7" stroke-width="1.5"/><line x1="304.4" y1="322.6" x2="311.2" y2="315.8" stroke-width="2.5"/><line x1="330.4" y1="353.2" x2="335.3" y2="350.4" stroke-width="1.5"/><line x1="345.8" y1="390.5" x2="351.3" y2="389.0" stroke-width="1.5"/><line x1="345.8" y1="470.5" x2="351.3" y2="472.0" stroke-width="1.5"/><line x1="330.4" y1="507.8" x2="335.3" y2="510.6" stroke-width="1.5"/><line x1="304.4" y1="538.4" x2="311.2" y2="545.2" stroke-width="2.5"/><line x1="273.8" y1="564.4" x2="276.6" y2="569.3" stroke-width="1.5"/><line x1="236.5" y1="579.8" x2="238.0" y2="585.3" stroke-width="1.5"/><line x1="156.5" y1="579.8" x2="155.0" y2="585.3" stroke-width="1.5"/><line x1="119.2" y1="564.4" x2="116.4" y2="569.3" stroke-width="1.5"/><line x1="88.6" y1="538.4" x2="81.8" y2="545.2" stroke-width="2.5"/><line x1="62.6" y1="507.8" x2="57.7" y2="510.6" stroke-width="1.5"/><line x1="47.2" y1="470.5" x2="41.7" y2="472.0" stroke-width="1.5"/><line x1="47.2" y1="390.5" x2="41.7" y2="389.0" stroke-width="1.5"/><line x1="62.6" y1="353.2" x2="57.7" y2="350.4" stroke-width="1.5"/><line x1="88.6" y1="322.6" x2="81.8" y2="315.8" stroke-width="2.5"/><line x1="119.2" y1="296.6" x2="116.4" y2="291.7" stroke-width="1.5"/><line x1="156.5" y1="281.2" x2="155.0" y2="275.7" stroke-width="1.5"/></g>
+                <text class="hud-n" x="196.5" y="279.9">N</text><text class="hud-cl" x="353.9" y="437.3">E</text><text class="hud-cl" x="196.5" y="594.7">S</text><text class="hud-cl" x="39.1" y="437.3">W</text>
+                <path class="hud-mark" d="M196.5 281.9 L203.5 290.9 L189.5 290.9Z"/>
+                <text class="hud-speed" x="196.5" y="485">33</text>
+                <text class="hud-unit" x="196.5" y="514">mph</text>
+                <text class="hud-not" x="196.5" y="698">Not driving?</text>
+                <rect class="hud-face" x="16" y="726" width="361" height="76" rx="38"/>
+                <circle class="hud-knob" cx="54" cy="764" r="31"/>
+                <rect class="hud-stop" x="45" y="755" width="18" height="18" rx="3"/>
+                <text class="hud-end" x="220" y="771">End drive</text>
+              </svg>
             </div>
           </div>
         </figure>
