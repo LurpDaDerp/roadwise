@@ -206,10 +206,35 @@ Deno.test('with the IP Auth reports, the inbox from that IP and the IP are cappe
   }
 });
 
-Deno.test('the IP key: "ip:" and a lower-cased address; nothing for anything else', () => {
+Deno.test('the IP key: an IPv4 address, or an IPv6 address\'s /64 network; nothing for anything else', () => {
   assertEquals(ipKey('203.0.113.7'), 'ip:203.0.113.7');
-  assertEquals(ipKey(' 2001:DB8::1 '), 'ip:2001:db8::1');
-  for (const bad of [undefined, '', '   ', 'not an ip', '203.0.113.7; drop', 'x'.repeat(65)]) assertEquals(ipKey(bad), null, String(bad));
+  assertEquals(ipKey(' 203.0.113.7 '), 'ip:203.0.113.7');
+  // Every address in one /64 is one key: rotating through a line's /64 caps nothing extra.
+  for (const v6 of ['2001:db8:1:2::1', '2001:DB8:0001:0002:aaaa:bbbb:cccc:dddd', '2001:db8:1:2:ffff::', ' 2001:db8:1:2::9%eth0 ']) {
+    assertEquals(ipKey(v6), 'ip:2001:db8:1:2::/64', v6);
+  }
+  assertEquals(ipKey('2001:db8:1:3::1'), 'ip:2001:db8:1:3::/64');
+  assertEquals(ipKey('::1'), 'ip:0:0:0:0::/64');
+  assertEquals(ipKey('fe80::1:2:3:4'), 'ip:fe80:0:0:0::/64');
+  // An IPv4 address written as IPv6 is that IPv4 address.
+  assertEquals(ipKey('::ffff:203.0.113.7'), 'ip:203.0.113.7');
+  assertEquals(ipKey('::FFFF:cb00:7107'), 'ip:203.0.113.7');
+  for (const bad of [
+    undefined,
+    '',
+    '   ',
+    'not an ip',
+    '203.0.113.7; drop',
+    '256.1.1.1',
+    '1.2.3',
+    '2001:db8::1::2',
+    '2001:db8:1:2:3:4:5:6:7',
+    '2001:db8:1:2:3:4:5',
+    '12345::1',
+    'x'.repeat(65),
+  ]) {
+    assertEquals(ipKey(bad), null, String(bad));
+  }
 });
 
 Deno.test('which accounts may get a reset code, and what the reminder names', () => {

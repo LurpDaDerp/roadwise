@@ -123,13 +123,64 @@ export function capKey(address: string): string {
   return `${name}@${domain}`;
 }
 
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/** A dotted IPv4 address as its canonical text, or null. */
+function ipv4(text: string): string | null {
+  const m = IPV4.exec(text);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  return parts.every((n) => n <= 255) ? parts.join('.') : null;
+}
+
+/** An IPv6 address as its 8 hextets (an embedded IPv4 tail as the last two), or null. */
+function ipv6Hextets(text: string): number[] | null {
+  let head = text;
+  let tail: number[] = [];
+  const lastColon = text.lastIndexOf(':');
+  if (text.includes('.')) {
+    const v4 = ipv4(text.slice(lastColon + 1));
+    if (v4 === null) return null;
+    const [a, b, c, d] = v4.split('.').map(Number);
+    tail = [(a << 8) | b, (c << 8) | d];
+    head = text.slice(0, lastColon + 1);
+    if (head.endsWith(':') && !head.endsWith('::')) head = head.slice(0, -1);
+  }
+  const halves = head.split('::');
+  if (halves.length > 2) return null;
+  const parse = (part: string): number[] | null => {
+    if (part === '') return [];
+    const groups = part.split(':');
+    if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+    return groups.map((g) => parseInt(g, 16));
+  };
+  const left = parse(halves[0]);
+  const right = halves.length === 2 ? parse(halves[1]) : [];
+  if (left === null || right === null) return null;
+  const given = left.length + right.length + tail.length;
+  if (halves.length === 1) return given === 8 ? [...left, ...tail] : null;
+  if (given > 7) return null;
+  return [...left, ...new Array<number>(8 - given).fill(0), ...right, ...tail];
+}
+
 /**
- * The IP cap's key: "ip:" and the address Auth reports for the request, lower-cased; null when it
- * reports none (an older Auth) or something that can't be an IP address.
+ * The IP caps' key, from the address Auth reports for the request: "ip:" and an IPv4 address, or
+ * "ip:" and an IPv6 address's /64 network (one subscriber's line or phone holds a whole /64, so
+ * counting single IPv6 addresses would cap nothing); an IPv4 address written as IPv6
+ * (::ffff:a.b.c.d) counts as that IPv4 address. Null when Auth reports none (an older Auth) or
+ * something that is not an IP address.
  */
 export function ipKey(ip: string | undefined): string | null {
-  const value = ip?.trim().toLowerCase() ?? '';
-  return value.length > 0 && value.length <= 64 && /^[0-9a-f.:]+$/.test(value) ? `ip:${value}` : null;
+  const value = (ip ?? '').trim().toLowerCase().replace(/%.*$/, '');
+  if (value.length === 0 || value.length > 64) return null;
+  const v4 = ipv4(value);
+  if (v4 !== null) return `ip:${v4}`;
+  const h = ipv6Hextets(value);
+  if (h === null) return null;
+  if (h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) {
+    return `ip:${h[6] >> 8}.${h[6] & 255}.${h[7] >> 8}.${h[7] & 255}`;
+  }
+  return `ip:${h.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64`;
 }
 
 /**

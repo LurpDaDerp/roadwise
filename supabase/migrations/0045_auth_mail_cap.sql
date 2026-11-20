@@ -5,8 +5,8 @@
 --   * private.auth_mail_sends: one row per key the hook has mailed for, keyed by SHA-256, with two
 --     fixed windows (an hour and a day). Three kinds of key: an inbox (the address as send-email
 --     normalises it: lower case, no "+tag", a Gmail name without dots on gmail.com, so spellings
---     of one inbox share a row), the IP address the request came from ("ip:" + the address Auth
---     reports), and the two together ("pair:" + inbox + "|" + IP key). Neither the address nor the
+--     of one inbox share a row), the IP address the request came from ("ip:" + the IPv4 address
+--     Auth reports, or its IPv6 address's /64 network, send-email's ipKey), and the two together ("pair:" + inbox + "|" + IP key). Neither the address nor the
 --     IP is ever stored, only the hash. A row whose day ended more than a day ago is dropped the
 --     next time anything is mailed.
 --   * private.take_auth_mail(address hash, pair hash, ip hash): takes one mail for every key at

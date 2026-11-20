@@ -524,9 +524,10 @@ otp_expiry = 600
 # RESEND_FROM, SEND_EMAIL_HOOK_SECRET) and refuses every other kind (magic link, invite, email change,
 # reauthentication), so Auth's public endpoints can't mint those codes for any address. Forgot
 # password for an account that signs in with Apple or Google mails no code, only a reminder of how it
-# signs in. Its caps (0045), with the IP address Auth reports: 5 mails an hour and 10 a day to an
-# inbox from one IP, 20 and 30 to an inbox from all IPs, and 20 and 50 from one IP to all inboxes, so
-# no one requester can use up an inbox's mails and lock its owner out (with no IP: 5 and 10 an inbox). `secrets` is the same "v1,whsec_<base64>" value
+# signs in. Its caps (0045), with the IP address Auth reports (an IPv6 address by its /64): 5 mails an
+# hour and 10 a day to an inbox from one IP, 20 and 30 to an inbox from all IPs, and 20 and 50 from
+# one IP to all inboxes, so no one requester can use up an inbox's mails and lock its owner out (with
+# no IP: 5 and 10 an inbox). `secrets` is the same "v1,whsec_<base64>" value
 # as the function's SEND_EMAIL_HOOK_SECRET, read from the root .env (never committed) when
 # `supabase config push` runs: unset, the push sends no secret and every code mail fails.
 [remotes.production.auth.hook.send_email]
