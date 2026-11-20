@@ -74,3 +74,6 @@ google-play-service-account*.json
 # Privacy Policy, Terms and the data audit: local drafts, never committed (the app carries its
 # own copy in src/features/legal/documents.ts, written by `npm run legal:sync`)
 /legal/
+
+# getroadwise.app build output (npm run site:build); .vercel/ inside it links the Vercel project
+/web/site-dist/

@@ -1,0 +1,170 @@
+<!--
+title: RoadWise: drive coaching for new drivers
+description: RoadWise notices your drives on its own, scores each one and shows you where to get better. Free.
+hero: true
+-->
+<main>
+  <section class="log wrap" aria-labelledby="week">
+    <div class="log-head">
+      <h2 id="week">A sample week</h2>
+      <p>Five drives from an example driver. Open one to see what RoadWise did.</p>
+    </div>
+
+    <div class="log-cols" aria-hidden="true">
+      <span>Day</span><span>Drive</span><span class="n">Time</span><span class="n">Distance</span><span class="n">Score</span>
+    </div>
+
+    <details class="entry" open>
+      <summary data-meta="Mon 7:42 AM · 18 min · 6.4 mi">
+        <span class="when">Mon <small>7:42 AM</small></span>
+        <span class="trip">Home → School</span>
+        <span class="n">18 min</span>
+        <span class="n">6.4 mi</span>
+        <span class="n score">96</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="entry-body">
+        <svg class="map" viewBox="0 0 320 200" role="img" aria-label="Route map from Home to School">
+          <use href="#streets"/>
+          <path class="route" pathLength="1" d="M40 160 L40 120 Q40 104 56 104 L150 104 Q166 104 170 88 L186 40 Q190 28 204 28 L282 28"/>
+          <circle class="pin start" cx="40" cy="160" r="6"/><circle class="pin end" cx="282" cy="28" r="6"/>
+        </svg>
+        <div class="did">
+          <div class="sign tiny" role="img" aria-label="Drive score 96"><div class="sign-face" aria-hidden="true"><span class="words">SCORE</span><span class="number">96</span></div></div>
+          <h3>Started on its own</h3>
+          <p>RoadWise noticed this drive by itself and recorded it with the app closed. No events, so the drive list marks it Clean.</p>
+        </div>
+      </div>
+    </details>
+
+    <details class="entry">
+      <summary data-meta="Tue 3:18 PM · 24 min · 12.0 mi">
+        <span class="when">Tue <small>3:18 PM</small></span>
+        <span class="trip">School → Work</span>
+        <span class="n">24 min</span>
+        <span class="n">12.0 mi</span>
+        <span class="n score">88</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="entry-body">
+        <svg class="map" viewBox="0 0 320 200" role="img" aria-label="Route map from School to Work with one hard brake pinned on it">
+          <use href="#streets"/>
+          <path class="route" pathLength="1" d="M282 28 L204 28 Q190 28 190 44 L190 140 Q190 156 174 156 L60 156 Q44 156 44 172 L44 188"/>
+          <circle class="pin start" cx="282" cy="28" r="6"/><circle class="pin end" cx="44" cy="188" r="6"/>
+          <g class="flag moderate" transform="translate(190 96)"><circle r="9"/><path d="M-4 0h8"/></g>
+        </svg>
+        <div class="did">
+          <div class="sign tiny" role="img" aria-label="Drive score 88"><div class="sign-face" aria-hidden="true"><span class="words">SCORE</span><span class="number">88</span></div></div>
+          <h3>Every event explained</h3>
+          <p>The hard brake is listed on the recap and pinned on the map where it happened. Think RoadWise got it wrong? Tap Report under it, up to 7 days after the drive.</p>
+          <ul class="events">
+            <li class="moderate"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg><span>Hard brake · Moderate</span><time>3:31 PM</time></li>
+          </ul>
+        </div>
+      </div>
+    </details>
+
+    <details class="entry">
+      <summary data-meta="Wed 9:40 PM · 22 min · 11.1 mi">
+        <span class="when">Wed <small>9:40 PM</small></span>
+        <span class="trip">Work → Home</span>
+        <span class="n">22 min</span>
+        <span class="n">11.1 mi</span>
+        <span class="n score">74</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="entry-body">
+        <svg class="map" viewBox="0 0 320 200" role="img" aria-label="Route map from Work to Home with a speeding event and a phone pickup pinned on it">
+          <use href="#streets"/>
+          <path class="route" pathLength="1" d="M44 188 L44 172 Q44 156 60 156 L232 156 Q248 156 248 140 L248 84 Q248 68 264 68 L296 68"/>
+          <circle class="pin start" cx="44" cy="188" r="6"/><circle class="pin end" cx="296" cy="68" r="6"/>
+          <g class="flag minor" transform="translate(130 156)"><circle r="9"/><path d="M-4 3l4-6 4 6"/></g>
+          <g class="flag moderate" transform="translate(248 110)"><circle r="9"/><rect x="-3" y="-5" width="6" height="10" rx="1.5"/></g>
+        </svg>
+        <div class="did">
+          <div class="sign tiny" role="img" aria-label="Drive score 74"><div class="sign-face" aria-hidden="true"><span class="words">SCORE</span><span class="number">74</span></div></div>
+          <h3>Quiet in the car</h3>
+          <p>With RoadWise on screen, a sound warned about the speed. The phone pickup came with another app in front, so RoadWise stayed silent and only recorded it.</p>
+          <ul class="events">
+            <li class="minor"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14l4-5 4 5"/></svg><span>Speeding · Minor</span><time>9:47 PM</time></li>
+            <li class="moderate"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="4" width="8" height="16" rx="2"/><path d="M11 17h2"/></svg><span>Phone pickup <small>in hand 24 s · 38 mph</small></span><time>9:52 PM</time></li>
+          </ul>
+        </div>
+      </div>
+    </details>
+
+    <details class="entry">
+      <summary data-meta="Thu · not scored">
+        <span class="when">Thu</span>
+        <span class="trip">Passenger ride</span>
+        <span class="n">–</span>
+        <span class="n">–</span>
+        <span class="n off">–</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="entry-body">
+        <svg class="map" viewBox="0 0 320 200" role="img" aria-label="An empty map: the passenger ride was discarded">
+          <use href="#streets"/>
+          <text class="map-note" x="160" y="106">Discarded</text>
+        </svg>
+        <div class="did">
+          <h3>Not driving? One tap</h3>
+          <p>Riding with a friend, the driver tapped Not driving? on the driving screen. The drive was thrown away without a score; RoadWise keeps only a note that it was a passenger ride that day.</p>
+        </div>
+      </div>
+    </details>
+
+    <details class="entry">
+      <summary data-meta="Sat 11:15 AM · 34 min · 18.3 mi">
+        <span class="when">Sat <small>11:15 AM</small></span>
+        <span class="trip">Home → Park</span>
+        <span class="n">34 min</span>
+        <span class="n">18.3 mi</span>
+        <span class="n score">93</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="entry-body">
+        <svg class="map" viewBox="0 0 320 200" role="img" aria-label="Route map from Home to the park with both ends of the route trimmed">
+          <use href="#streets"/>
+          <path class="trim" d="M40 160 L40 120 Q40 104 56 104 L84 104"/>
+          <path class="route" pathLength="1" d="M84 104 L150 104 Q166 104 166 120 L166 140 Q166 156 182 156 L232 156 Q248 156 248 140 L248 120"/>
+          <path class="trim" d="M248 120 L248 84 Q248 68 264 68 L296 68"/>
+        </svg>
+        <div class="did">
+          <div class="sign tiny" role="img" aria-label="Drive score 93"><div class="sign-face" aria-hidden="true"><span class="words">SCORE</span><span class="number">93</span></div></div>
+          <h3>Private by default</h3>
+          <p>Before the route left the phone, at least a quarter mile was cut from each end, along with any privacy zones. The exact start and end of a drive are never uploaded.</p>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="rating wrap" aria-labelledby="rating">
+    <div class="sign small" role="img" aria-label="Safety Rating 88">
+      <div class="sign-face" aria-hidden="true"><span class="words">SAFETY</span><span class="words">RATING</span><span class="number">88</span></div>
+    </div>
+    <div>
+      <h2 id="rating">One fair number</h2>
+      <p>The week feeds the Safety Rating: 0 to 100 over the last 90 days, judged per chance to slip, for every slowdown, turn and minute under a speed limit. Driving more doesn't raise it. Driving well does.</p>
+      <p>Add friends by username or QR code and choose what they see. Nothing is sold, and nothing goes to insurers.</p>
+    </div>
+  </section>
+
+  <section class="close sky" aria-labelledby="get">
+    <div class="wrap">
+      <h2 id="get">Your first week starts with one drive.</h2>
+      <div class="stores">
+        {{stores}}
+      </div>
+    </div>
+  </section>
+
+  <svg width="0" height="0" class="defs" aria-hidden="true" focusable="false">
+    <defs>
+      <g id="streets" class="streets">
+        <path d="M0 28H320M0 68H320M0 104H320M0 156H320M40 0V200M86 0V200M130 0V200M190 0V200M248 0V200M296 0V200"/>
+        <path class="park" d="M196 112h46v38h-46z"/>
+      </g>
+    </defs>
+  </svg>
+</main>

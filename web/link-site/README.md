@@ -1,52 +1,60 @@
-# RoadWise link site
+# getroadwise.app
 
-The static files behind RoadWise's share links (a shared monthly Wrapped: `https://<domain>/w/<id>`).
-Nothing here is deployed yet. Until it is, the app shares `roadwise://w/<id>` links instead.
+RoadWise's website, hosted on Vercel (project `getroadwise`), DNS at Cloudflare: the landing page,
+Support, Delete your account, the Privacy Policy, the Terms of Service, and the share-link files
+for a shared monthly Wrapped (`https://getroadwise.app/w/<id>`).
 
-- `.well-known/apple-app-site-association`: tells iOS to open `/w/*` links in RoadWise (universal links).
-- `.well-known/assetlinks.json`: tells Android to open the same `/w/` links in RoadWise (a verified
-  App Link). It ships with two placeholders, never a real or made-up fingerprint (step 3).
-- `w/index.html`: the page for anyone without the app. "Open in RoadWise" opens `roadwise://w/<id>`
-  for the same id, and "Get RoadWise" goes to the App Store. On Android (by user agent) "Get
-  RoadWise" goes to Google Play, and "Open in RoadWise" is an `intent://` link to the same
-  `roadwise://w/<id>`, with Google Play as its fallback when RoadWise isn't installed.
+```
+npm run site:build    # builds web/site-dist/ (git-ignored)
+npm run site:deploy   # builds, then `vercel deploy --prod` from web/site-dist/
+```
 
-## Deploy
+`scripts/build-site.js` assembles it:
 
-1. Choose the domain (for example `roadwise.app`).
-2. In `.well-known/apple-app-site-association`, replace `TEAMID` with the Apple Developer team ID
-   (Xcode or developer.apple.com › Membership). In `w/index.html`, replace `APP_STORE_ID` with the
-   app's App Store id.
-3. In `.well-known/assetlinks.json`, replace the two placeholders with the SHA-256 fingerprints of the
-   certificates the Android app is signed with, as colon-separated upper-case hex
-   (`AB:CD:...`, 32 pairs):
-   - `PLAY_APP_SIGNING_SHA256`: Google Play's app signing key, which signs every copy Play installs.
-     Play Console › RoadWise › Test and release › Setup › App signing › "App signing key
-     certificate" › SHA-256 certificate fingerprint. It exists once the first app bundle has been
-     uploaded (Play App Signing is on by default).
-   - `UPLOAD_KEY_SHA256`: the upload key, which signs the builds EAS makes (the preview APKs testers
-     install directly). The same App signing page shows it under "Upload key certificate", or run
-     `eas credentials -p android` and read the keystore's SHA-256. With the keystore file itself:
-     `keytool -list -v -keystore <file>.jks -alias <alias>` and copy the `SHA256:` line.
-   Copy the fingerprints exactly; one wrong character and Android quietly treats the links as plain
-   web links. Play Console › Grow users › Deep links shows a ready-made `assetlinks.json` to compare.
-4. Host this folder at the domain's root, over https:
-   - Serve `/.well-known/apple-app-site-association` with `Content-Type: application/json`, with no
-     redirect (Apple's CDN fetches it directly and rejects redirects) and no `.json` extension.
-   - Serve `/.well-known/assetlinks.json` with `Content-Type: application/json`, over https, with no
-     redirect (Android's verifier does not follow them).
-   - Serve `w/index.html` for every `/w/<id>` path (a rewrite of `/w/*` to `/w/index.html`).
-5. Set `ROADWISE_LINK_DOMAIN=<domain>` for EAS builds (an EAS environment variable) and locally.
-   `app.config.ts` then adds `applinks:<domain>` to the iOS associated domains, a verified App Link
-   (`https://<domain>/w/...`, `autoVerify`) to the Android app, and `extra.linkDomain`, which the app
-   uses to build and accept `https://<domain>/w/<id>` links.
-6. Make a new iOS and Android build: associated domains and App Links change the native project, so
-   this can't ship as an over-the-air update. Set `EXPO_APPLE_TEAM_ID` too if it isn't already.
-7. Check it: on an iPhone with the new build, open `https://<domain>/w/<id>` from Notes or Messages;
-   it should open the Wrapped in RoadWise. Apple's CDN can take up to a day to pick up a changed
-   association file. On an Android phone with the new build, `adb shell pm get-app-links
-   com.lurp.safedrive` should show the domain as `verified` (`adb shell pm verify-app-links
-   --re-verify com.lurp.safedrive` asks again after a change), and the same link opened from
-   Messages or Gmail should open the Wrapped in RoadWise. Google's
-   [Statement List tester](https://developers.google.com/digital-asset-links/tools/generator) checks
-   the file from the web.
+- Everything in this folder is copied as it is, except `_pages/`, `site.json`, this README and the
+  two association files.
+- `_pages/*.html` are page bodies with a comment header (`title`, `description`, and `hero: true`
+  or `heading` / `intro`); each becomes `<name>/index.html` in the shared layout (sky header, footer).
+  `{{stores}}` becomes the store buttons, or "Coming soon" until there is a store id.
+- `/privacy` and `/terms` come from the local legal drafts in `legal/` (git-ignored), through the
+  app's own Markdown parser, so the site says what the app says. Run `npm run legal:sync` and
+  `npm run site:deploy` together after any legal change.
+- `vercel.json` (written by the build): clean URLs, `/w/<id>` answered by `w/index.html`,
+  `www.getroadwise.app` redirected to the apex, the association files served as
+  `application/json`, and a strict Content-Security-Policy (nothing loads from another host: the
+  fonts are self-hosted, `fonts/OFL.txt`).
+
+## site.json (nothing in it is secret)
+
+| Key | What it turns on |
+|---|---|
+| `appleTeamId` | The 10-character Apple Developer team ID: writes `/.well-known/apple-app-site-association`, so iOS opens `/w/*` links in RoadWise |
+| `appStoreId` | The numeric App Store id: the App Store button and the share page's "Get RoadWise" |
+| `playStoreLive` | `true` once the Google Play listing is public: the Google Play button |
+| `androidCertSha256` | The Play app signing key's and the upload key's SHA-256 (`AB:CD:...`, 32 pairs): writes `/.well-known/assetlinks.json`, so Android opens `/w/*` links in RoadWise |
+
+An association file is left out until its value exists: one with a placeholder would point the
+links at no app. Until then a share link opens the web page, whose "Open in RoadWise" button opens
+`roadwise://w/<id>`.
+
+Where the values are: team ID at developer.apple.com › Membership details; App Store id in App
+Store Connect › the app › App Information › Apple ID; the Android fingerprints in Play Console ›
+Test and release › Setup › App signing (both "App signing key certificate" and "Upload key
+certificate"; the upload key also shows in `eas credentials -p android`).
+
+## Checking the links
+
+- iPhone, with a build made after `appleTeamId` was deployed: open `https://getroadwise.app/w/<id>`
+  from Notes or Messages; it opens the Wrapped in RoadWise. Apple's CDN can take up to a day to
+  pick up a changed association file.
+- Android: `adb shell pm get-app-links com.lurp.safedrive` shows the domain as `verified`
+  (`adb shell pm verify-app-links --re-verify com.lurp.safedrive` asks again).
+
+## DNS (Cloudflare, DNS only, never proxied)
+
+| Type | Name | Target |
+|---|---|---|
+| CNAME | `@` | `6a1c84a26decd35d.vercel-dns-017.com` |
+| CNAME | `www` | `6a1c84a26decd35d.vercel-dns-017.com` |
+
+`vercel domains verify getroadwise.app` checks them.

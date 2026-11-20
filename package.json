@@ -17,6 +17,8 @@
     "tones:make": "node scripts/make-tones.js",
     "traces:make": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/make-traces.js",
     "legal:sync": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/sync-legal.js",
+    "site:build": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/build-site.js",
+    "site:deploy": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/build-site.js --deploy",
     "db:start": "supabase start",
     "db:test": "supabase db reset && supabase test db",
     "db:types": "supabase gen types typescript --local > src/data/supabase/types.ts",

@@ -1,0 +1,796 @@
+/*
+ * getroadwise.app: paper and ink, lit by the sky (the app's own look, DESIGN.md).
+ * Barlow Semi Condensed was drawn from California highway-sign lettering; it carries the wordmark,
+ * the headings, the log's numbers and the signs. Reading text stays on the phone's own face.
+ * The sky bands take the visitor's hour (sky.js sets data-sky on <html>; "day" without script).
+ */
+
+@font-face {
+  font-family: 'Barlow Semi Condensed';
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/barlow-800-italic-v2.woff') format('woff');
+}
+@font-face {
+  font-family: 'Barlow Semi Condensed';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/barlow-700-v2.woff') format('woff');
+}
+
+:root {
+  --paper: #ffffff;
+  --ink: #111113;
+  --muted: #55565e;
+  --rule: #dcdce2;
+  --rule-strong: #111113;
+  --accent: #3a3fc8;
+  --route: #1f9d55;
+  --map: #eef3f6;
+  --street: #d5dee5;
+  --park: #d6ecd9;
+  /* Event tiers: DESIGN.md signals (fill for map discs, text for small marks). */
+  --minor-fill: #f5cf00;
+  --minor-text: #735d00;
+  --moderate-fill: #f07400;
+  --moderate-text: #ad4800;
+  --road: 'Barlow Semi Condensed', 'Arial Narrow', sans-serif;
+  --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* The sky: three stops top to bottom, each dark enough for white text (4.6:1 or more). */
+  --sky-1: #0b3f73;
+  --sky-2: #155a97;
+  --sky-3: #1f6fb0;
+  --horizon: #6fb3e6;
+  --glow: rgba(255, 244, 214, 0.22);
+  --glow-x: 86%;
+  --glow-y: 30%;
+  --disc: #fff4d6;
+  --disc-glow: rgba(255, 236, 190, 0.55);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  color-scheme: light dark;
+}
+:root[data-sky='dawn'] {
+  --sky-1: #2b2f6b;
+  --sky-2: #5a3d78;
+  --sky-3: #8a4a72;
+  --horizon: #f0a27a;
+  --glow: rgba(255, 196, 150, 0.22);
+  --glow-x: 86%;
+  --glow-y: 30%;
+  --disc: #ffd9b0;
+  --disc-glow: rgba(255, 190, 140, 0.55);
+}
+:root[data-sky='dusk'] {
+  --sky-1: #1f1c4a;
+  --sky-2: #4a2a5c;
+  --sky-3: #7a3352;
+  --horizon: #e0795a;
+  --glow: rgba(255, 170, 120, 0.22);
+  --glow-x: 86%;
+  --glow-y: 30%;
+  --disc: #ffc89a;
+  --disc-glow: rgba(255, 160, 110, 0.55);
+}
+:root[data-sky='night'] {
+  --sky-1: #040a1c;
+  --sky-2: #0a1734;
+  --sky-3: #13244a;
+  --horizon: #2b4170;
+  --glow: rgba(214, 226, 255, 0.16);
+  --glow-x: 86%;
+  --glow-y: 30%;
+  --disc: #e6ebf5;
+  --disc-glow: rgba(200, 214, 255, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0b0b0d;
+    --ink: #f4f4f2;
+    --muted: #b4b4ba;
+    --rule: #2a2a2f;
+    --rule-strong: #f4f4f2;
+    --accent: #8fb6ff;
+    --route: #3ccf7e;
+    --map: #161618;
+    --street: #26292f;
+    --park: #1b3022;
+    --minor-fill: #ffe14a;
+    --minor-text: #ffe14a;
+    --moderate-fill: #ff8c2e;
+    --moderate-text: #ff9a45;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-color: var(--muted) var(--paper);
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 17px/1.55 var(--ui);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+a:hover {
+  text-decoration-thickness: 2px;
+}
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.sky :focus-visible {
+  outline-color: #ffffff;
+}
+
+.wrap {
+  width: min(100% - 2.5rem, 64rem);
+  margin-inline: auto;
+}
+
+/* ------------------------------------------------------------------ the sky */
+
+.sky {
+  position: relative;
+  overflow: hidden;
+  color: #ffffff;
+  background:
+    radial-gradient(circle at var(--glow-x) var(--glow-y), var(--glow), transparent 34%),
+    linear-gradient(180deg, var(--sky-1), var(--sky-2) 55%, var(--sky-3));
+}
+/* The bright band low in the sky, where no text sits. */
+.sky::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3rem;
+  background: linear-gradient(180deg, transparent, var(--horizon));
+  opacity: 0.35;
+  pointer-events: none;
+}
+.sky > * {
+  position: relative;
+  z-index: 1;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1.25rem;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: inherit;
+  text-decoration: none;
+  font: italic 800 1.55rem/1 var(--road);
+}
+.brand img {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 0.6rem;
+}
+.topbar nav {
+  display: flex;
+  gap: 1.4rem;
+  font-size: 0.95rem;
+}
+.topbar nav a,
+.sky .soon a {
+  color: #ffffff;
+  text-decoration: none;
+}
+.topbar nav a:hover {
+  text-decoration: underline;
+}
+
+.hero {
+  padding-block: 2.25rem 3rem;
+}
+/* The sun or the moon, at the glow, on the header's sky only (never behind text). */
+.sky .disc {
+  position: absolute;
+  z-index: 0;
+  right: 9%;
+  top: 6.5rem;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  background: var(--disc);
+  box-shadow:
+    0 0 1.5rem 0.5rem var(--disc-glow),
+    0 0 5rem 2rem var(--glow);
+}
+:root[data-sky='night'] .sky .disc {
+  width: 2.75rem;
+  height: 2.75rem;
+  box-shadow:
+    inset -0.7rem -0.3rem 0 0 rgba(160, 175, 210, 0.45),
+    0 0 1.5rem 0.25rem var(--disc-glow);
+}
+.hero h1 {
+  margin: 0;
+  font: italic 800 clamp(4rem, 14vw, 6rem) / 0.9 var(--road);
+  letter-spacing: -0.01em;
+}
+.lede {
+  max-width: 40rem;
+  margin: 1.1rem 0 1.75rem;
+  font-size: 1.25rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.stores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+}
+.button {
+  display: inline-block;
+  padding: 0.85rem 1.4rem;
+  border-radius: 999px;
+  font-weight: 600;
+  text-decoration: none;
+  background: #ffffff;
+  color: #111113;
+  transition: transform 160ms var(--ease);
+}
+.button:hover {
+  transform: translateY(-1px);
+}
+.button.ghost {
+  background: transparent;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 2px #ffffff;
+}
+.soon {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Inner pages: a short sky over the title. */
+.page-title {
+  padding-block: 1.75rem 3.25rem;
+}
+.page-title h1 {
+  margin: 0;
+  font: italic 800 clamp(2.75rem, 8vw, 4.5rem) / 0.95 var(--road);
+}
+.page-title p {
+  max-width: 36rem;
+  margin: 0.9rem 0 0;
+  font-size: 1.1rem;
+}
+
+/* ------------------------------------------------------------------ the log */
+
+.log {
+  padding-block: 2.25rem 1rem;
+}
+.log-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 2rem;
+  margin-bottom: 1.25rem;
+}
+.log-head h2,
+.rating h2,
+.close h2 {
+  margin: 0;
+  font: italic 800 clamp(2rem, 5vw, 2.75rem) / 1 var(--road);
+}
+.log-head p {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* The log's columns: day, drive, time, distance, score, and the toggle. */
+.log-cols,
+.entry summary {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr) 5rem 5.5rem 3.5rem 1.5rem;
+  align-items: center;
+  column-gap: 1rem;
+}
+.log-cols {
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--rule-strong);
+  font: 700 0.95rem/1 var(--road);
+  color: var(--muted);
+}
+.n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry {
+  border-bottom: 1px solid var(--rule);
+}
+.entry summary {
+  list-style: none;
+  cursor: pointer;
+  padding-block: 1rem;
+  font: 700 1.3rem/1.2 var(--road);
+}
+.entry summary::-webkit-details-marker {
+  display: none;
+}
+.entry summary:hover .trip {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+}
+.when small {
+  display: block;
+  font: 400 0.85rem/1.3 var(--ui);
+  color: var(--muted);
+}
+.trip {
+  overflow-wrap: anywhere;
+}
+.score {
+  font: italic 800 1.75rem/1 var(--road);
+}
+/* After the font shorthands above, which reset it. */
+.entry summary .n,
+.events time {
+  font-variant-numeric: tabular-nums;
+}
+.off {
+  color: var(--muted);
+}
+.chev {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 260ms var(--ease);
+}
+.entry[open] .chev {
+  transform: rotate(180deg);
+}
+
+.entry-body {
+  display: grid;
+  grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
+  gap: 1.5rem 2.5rem;
+  padding: 0.25rem 0 2rem 8.5rem;
+}
+.did h3 {
+  margin: 0.25rem 0 0.4rem;
+  font: 700 1.45rem/1.15 var(--road);
+}
+.did p {
+  margin: 0 0 1rem;
+  max-width: 34rem;
+  text-wrap: pretty;
+}
+.events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.events li {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: start;
+  padding-block: 0.75rem;
+  border-top: 1px solid var(--rule);
+  font-weight: 600;
+}
+.events li small {
+  display: block;
+  font-weight: 400;
+  color: var(--muted);
+}
+.events time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--muted);
+}
+.events svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: none;
+  stroke: var(--moderate-text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.events .minor svg {
+  stroke: var(--minor-text);
+}
+
+/* The route maps: a plain street grid, the route in green, events as orange discs. */
+.map {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 1.25rem;
+  background: var(--map);
+}
+.streets path {
+  fill: none;
+  stroke: var(--street);
+  stroke-width: 6;
+}
+.streets .park {
+  fill: var(--park);
+  stroke: none;
+}
+.route {
+  fill: none;
+  stroke: var(--route);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.trim {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 3;
+  stroke-dasharray: 4 6;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+.pin {
+  stroke: var(--paper);
+  stroke-width: 3;
+}
+.pin.start {
+  fill: var(--paper);
+  stroke: var(--ink);
+}
+.pin.end {
+  fill: var(--ink);
+}
+.flag circle {
+  fill: var(--moderate-fill);
+  stroke: var(--paper);
+  stroke-width: 3;
+}
+.flag.minor circle {
+  fill: var(--minor-fill);
+}
+.flag path,
+.flag rect {
+  fill: none;
+  stroke: #111113;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-note {
+  font: italic 800 26px var(--road);
+  fill: var(--muted);
+  text-anchor: middle;
+}
+.defs {
+  position: absolute;
+}
+
+/* ------------------------------------------------------------------ the rating */
+
+.rating {
+  display: grid;
+  grid-template-columns: auto minmax(0, 38rem);
+  justify-content: start;
+  gap: 3rem;
+  align-items: center;
+  padding-block: 4rem 5rem;
+}
+.rating p {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+
+/* A regulatory sign, as on the driving screen: black on white, a black border inset from the edge. */
+.sign {
+  width: 10rem;
+  padding: 0.5rem;
+  border-radius: 1rem;
+  background: #ffffff;
+  color: #111113;
+  box-shadow:
+    0 0 0 1px rgba(17, 17, 19, 0.12),
+    0 0.75rem 1.75rem rgba(17, 17, 19, 0.18);
+  transform: rotate(-2deg);
+}
+.sign-face {
+  border: 0.3rem solid #111113;
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.4rem 0.35rem;
+  text-align: center;
+}
+.sign-face .words {
+  display: block;
+  font: 700 1.3rem/1 var(--road);
+  letter-spacing: 0.03em;
+}
+.sign-face .number {
+  display: block;
+  font: italic 800 5rem/0.95 var(--road);
+  font-variant-numeric: tabular-nums;
+}
+
+.sign.tiny {
+  float: right;
+  width: 4.75rem;
+  padding: 0.3rem;
+  border-radius: 0.6rem;
+  margin: 0 0 0.75rem 1.25rem;
+  transform: rotate(2deg);
+}
+.sign.tiny .sign-face {
+  border-width: 0.18rem;
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.2rem 0.15rem;
+}
+.sign.tiny .words {
+  font-size: 0.8rem;
+}
+.sign.tiny .number {
+  font-size: 2.4rem;
+}
+
+/* ------------------------------------------------------------------ the close */
+
+.close {
+  padding-block: 4rem 4.5rem;
+}
+.close h2 {
+  max-width: 20ch;
+  margin-bottom: 1.5rem;
+  text-wrap: balance;
+}
+
+/* ------------------------------------------------------------------ reading pages */
+
+.prose {
+  max-width: 42rem;
+  padding-block: 3rem 4rem;
+}
+.prose h2 {
+  margin: 2.5rem 0 0.5rem;
+  font: 700 1.65rem/1.15 var(--road);
+}
+.prose h2:first-child {
+  margin-top: 0;
+}
+.prose h3 {
+  margin: 1.75rem 0 0.35rem;
+  font-size: 1.05rem;
+}
+.prose p,
+.prose li {
+  margin: 0.5rem 0;
+}
+.prose ul,
+.prose ol {
+  padding-left: 1.4rem;
+}
+.prose li.sub {
+  margin-left: 1.4rem;
+  list-style-type: circle;
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2rem 0;
+}
+.contact {
+  margin: 0 0 2.5rem;
+  padding: 1.25rem 1.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 1rem;
+}
+.contact p {
+  margin: 0.25rem 0;
+}
+.contact a {
+  font-weight: 600;
+}
+
+footer {
+  border-top: 1px solid var(--rule);
+  padding-block: 2rem 3rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+footer .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+}
+footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+footer a {
+  color: inherit;
+}
+footer p {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------ small screens */
+
+@media (max-width: 760px) {
+  .topbar nav {
+    gap: 0.9rem;
+    font-size: 0.9rem;
+  }
+  .brand {
+    font-size: 1.3rem;
+  }
+  .brand img {
+    width: 1.9rem;
+    height: 1.9rem;
+  }
+  .hero {
+    padding-block: 1.25rem 1.75rem;
+  }
+  .hero h1 {
+    font-size: 3.75rem;
+  }
+  .sky .disc {
+    top: 4.75rem;
+    right: 7%;
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+  :root[data-sky='night'] .sky .disc {
+    width: 2rem;
+    height: 2rem;
+  }
+  .log {
+    padding-top: 1.25rem;
+  }
+  /* The map keeps its own shape, smaller, with the score sign beside it. */
+  .entry-body {
+    position: relative;
+  }
+  .map {
+    width: 13rem;
+    max-width: calc(100% - 6rem);
+  }
+  .did .sign.tiny {
+    position: absolute;
+    top: 0;
+    right: 0;
+    float: none;
+    margin: 0;
+  }
+  .lede {
+    margin-bottom: 0.9rem;
+  }
+  .log-head p {
+    font-size: 0.95rem;
+  }
+  .lede {
+    font-size: 1.12rem;
+  }
+  .log-cols {
+    display: none;
+  }
+  .log-head {
+    margin-bottom: 0.5rem;
+  }
+  /* A row becomes two lines: the drive and its score, then the day, time and distance. */
+  .entry summary {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'trip score chev'
+      'meta meta meta';
+    column-gap: 0.75rem;
+    row-gap: 0.15rem;
+    font-size: 1.2rem;
+  }
+  .entry summary .trip {
+    grid-area: trip;
+  }
+  .entry summary .score {
+    grid-area: score;
+  }
+  .entry summary .chev {
+    grid-area: chev;
+  }
+  .entry summary .when,
+  .entry summary .n:not(.score) {
+    display: none;
+  }
+  .entry summary::after {
+    content: attr(data-meta);
+    grid-area: meta;
+    font: 400 0.9rem/1.3 var(--ui);
+    color: var(--muted);
+  }
+  .entry-body {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding: 0 0 1rem;
+  }
+  .entry summary {
+    padding-block: 0.8rem;
+  }
+  .rating {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+    padding-block: 3rem 3.5rem;
+  }
+  .sign {
+    width: 8.5rem;
+  }
+  .sign-face .words {
+    font-size: 1.1rem;
+  }
+  .sign-face .number {
+    font-size: 4rem;
+  }
+}
+
+/* ------------------------------------------------------------------ the one moment */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* An opened drive draws its route in, start to end, as the recap's map does once. */
+  .entry[open] .route {
+    stroke-dasharray: 1;
+    animation: drive 1.1s var(--ease) both;
+  }
+  .entry[open] .flag,
+  .entry[open] .pin.end {
+    animation: arrive 300ms var(--ease) 0.75s both;
+  }
+  @keyframes drive {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes arrive {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

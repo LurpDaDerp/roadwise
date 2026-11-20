@@ -5,23 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <title>RoadWise</title>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(160deg, #00639A, #0A466E 55%, #04233A); color: #FFFFFF;
-    }
-    main { max-width: 22rem; padding: 2rem 1.5rem; text-align: center; }
-    h1 { font-style: italic; font-size: 2.25rem; margin: 0 0 0.5rem; }
-    p { margin: 0 0 2rem; line-height: 1.45; color: rgba(255, 255, 255, 0.85); }
-    a.button {
-      display: block; margin: 0 0 0.875rem; padding: 0.95rem 1rem; border-radius: 999px;
-      font-weight: 600; text-decoration: none; border: 2px solid #FFFFFF;
-    }
-    a.primary { background: #FFFFFF; color: #111113; }
-    a.secondary { color: #FFFFFF; }
-  </style>
+  <link rel="stylesheet" href="/w/share.css">
+  <link rel="icon" type="image/png" href="/favicon.png">
 </head>
 <body>
   <main>
@@ -30,22 +15,6 @@
     <a class="button primary" id="open" href="roadwise://">Open in RoadWise</a>
     <a class="button secondary" id="get" href="https://apps.apple.com/app/idAPP_STORE_ID">Get RoadWise</a>
   </main>
-  <script>
-    // The page answers every /w/<id> path: the button opens the same Wrapped in the app.
-    // Android: "Get RoadWise" goes to Google Play, and "Open in RoadWise" is an intent:// link to the
-    // same roadwise:// address, which Chrome sends to Google Play when RoadWise isn't installed
-    // (a bare roadwise:// link does nothing there). Every other phone keeps the links above.
-    (function () {
-      var m = /^\/w\/([A-Za-z0-9]{12})\/?$/.exec(window.location.pathname);
-      var path = m ? 'w/' + m[1] : '';
-      var open = document.getElementById('open');
-      open.setAttribute('href', 'roadwise://' + path);
-      if (/Android/i.test(navigator.userAgent)) {
-        var play = 'https://play.google.com/store/apps/details?id=com.lurp.safedrive';
-        document.getElementById('get').setAttribute('href', play);
-        open.setAttribute('href', 'intent://' + path + '#Intent;scheme=roadwise;package=com.lurp.safedrive;S.browser_fallback_url=' + encodeURIComponent(play) + ';end');
-      }
-    })();
-  </script>
+  <script src="/w/open.js"></script>
 </body>
 </html>
