@@ -13,6 +13,22 @@ const mockAppleSignIn = jest.fn(async () => {});
 const mockGoogleSignIn = jest.fn(async () => {});
 const mockWorld = { googleReady: true };
 const mockMarkTermsAccepted = jest.fn(async (..._args: unknown[]) => {});
+const mockRegister = jest.fn(
+  async (_email: string, _password: string) =>
+    'ok' as 'ok' | 'confirm_email' | 'exists' | 'weak_password' | 'invalid_email' | 'rate_limited' | 'offline' | 'error'
+);
+const mockSignInPassword = jest.fn(
+  async (_email: string, _password: string) =>
+    'ok' as 'ok' | 'invalid' | 'unconfirmed' | 'rate_limited' | 'offline' | 'error'
+);
+type Verified = 'ok' | 'wrong_code' | 'rate_limited' | 'offline' | 'unfinished' | 'error';
+// One address's confirmation (startEmailConfirmation): what it was started with, and its three calls.
+const mockStartConfirmation = jest.fn((_email: string, _password: string | null, _kind?: string) => {});
+const mockVerify = jest.fn(async (_code: string) => 'ok' as Verified);
+const mockFinish = jest.fn(async () => 'ok' as Verified);
+const mockAbandon = jest.fn(async () => {});
+const mockResend = jest.fn(async (_email: string) => 'sent' as 'sent' | 'too_soon' | 'rate_limited' | 'offline' | 'error');
+const mockRequestReset = jest.fn(async (_email: string) => 'sent' as 'sent' | 'too_soon' | 'rate_limited' | 'offline' | 'error');
 
 jest.mock('@/features/auth/useAppleSignIn', () => ({
   useAppleSignIn: () => ({ signIn: mockAppleSignIn, available: true }),
@@ -23,8 +39,20 @@ jest.mock('@/features/auth/useGoogleSignIn', () => ({
     ready: mockWorld.googleReady,
   }),
 }));
+jest.mock('@/features/auth/emailPassword', () => ({
+  ...jest.requireActual('@/features/auth/emailPassword'),
+  registerWithPassword: (email: string, password: string) => mockRegister(email, password),
+  signInWithPassword: (email: string, password: string) => mockSignInPassword(email, password),
+  resendEmailCode: (email: string) => mockResend(email),
+  requestPasswordReset: (email: string) => mockRequestReset(email),
+  startEmailConfirmation: (email: string, password: string | null, kind?: string) => {
+    mockStartConfirmation(email, password, kind);
+    return { verify: mockVerify, finish: mockFinish, abandon: mockAbandon };
+  },
+}));
 // The consent helpers import the app client; nothing here reaches the network.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/features/auth/asideAuth', () => ({ createAsideAuth: jest.fn() }));
 jest.mock('@/features/auth/pendingConsent', () => ({
   ...jest.requireActual('@/features/auth/pendingConsent'),
   markTermsAccepted: (...args: unknown[]) => mockMarkTermsAccepted(...args),
@@ -44,6 +72,14 @@ beforeEach(() => {
   mockAppleSignIn.mockReset().mockResolvedValue(undefined);
   mockGoogleSignIn.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
+  mockRegister.mockReset().mockResolvedValue('ok');
+  mockSignInPassword.mockReset().mockResolvedValue('ok');
+  mockStartConfirmation.mockReset();
+  mockVerify.mockReset().mockResolvedValue('ok');
+  mockFinish.mockReset().mockResolvedValue('ok');
+  mockAbandon.mockReset().mockResolvedValue(undefined);
+  mockResend.mockReset().mockResolvedValue('sent');
+  mockRequestReset.mockReset().mockResolvedValue('sent');
   executed.length = 0;
 });
 
@@ -56,6 +92,14 @@ const tree = () => (
 );
 const mount = () => render(tree());
 
+/** Fills the Create account form (the default), with good values unless told otherwise. */
+const fill = async (over: Partial<Record<'email' | 'password' | 'confirm', string>> = {}) => {
+  const v = { email: 'ava@example.com', password: PASSWORD, confirm: PASSWORD, ...over };
+  await fireEvent.changeText(screen.getByLabelText('Email'), v.email);
+  await fireEvent.changeText(screen.getByLabelText('Password'), v.password);
+  await fireEvent.changeText(screen.getByLabelText('Confirm password'), v.confirm);
+};
+
 const tick = async () => {
   await fireEvent.press(screen.getByRole('checkbox'));
   await waitFor(() => expect(screen.getByRole('checkbox')).toBeChecked());
@@ -63,14 +107,18 @@ const tick = async () => {
 
 const APPLE = { name: 'Continue with Apple' };
 const GOOGLE = { name: 'Continue with Google' };
+const REGISTER = { name: 'Create account' };
+const SIGN_IN = { name: 'Sign in with email' };
+const FORGOT = { name: 'Forgot password?' };
+const PASSWORD = 'correct horse 1';
 
-test('shows Apple and Google only, in every build: no email or password field', async () => {
+test('shows Apple, Google and email registration, in every build', async () => {
   await mount();
   expect(screen.getByRole('button', APPLE)).toBeTruthy();
   expect(screen.getByRole('button', GOOGLE)).toBeTruthy();
-  expect(screen.queryByLabelText('Email')).toBeNull();
-  expect(screen.queryByLabelText('Password')).toBeNull();
-  expect(JSON.stringify(screen.toJSON())).not.toMatch(/email|password|create account/i);
+  expect(screen.getByLabelText('Email')).toBeTruthy();
+  expect(screen.getByLabelText('Password')).toBeTruthy();
+  expect(screen.getByRole('button', REGISTER)).toBeTruthy();
 });
 
 // Apple's HIG: a custom Sign in with Apple button shows the Apple logo (App Review 4.0).
@@ -100,6 +148,10 @@ test('the 13+ checkbox: its words, a 44 pt target, and links to both documents',
 test('starts unticked, and every way in is disabled until it is ticked', async () => {
   await mount();
   expect(screen.getByRole('checkbox')).not.toBeChecked();
+  await fill();
+  expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+  await fireEvent.press(screen.getByRole('button', REGISTER));
+  expect(mockRegister).not.toHaveBeenCalled();
   for (const name of [APPLE, GOOGLE]) {
     expect(screen.getByRole('button', name)).toBeDisabled();
     await fireEvent.press(screen.getByRole('button', name));
@@ -108,8 +160,18 @@ test('starts unticked, and every way in is disabled until it is ticked', async (
   expect(mockGoogleSignIn).not.toHaveBeenCalled();
 
   await tick();
-  for (const name of [APPLE, GOOGLE]) expect(screen.getByRole('button', name)).toBeEnabled();
+  for (const name of [APPLE, GOOGLE, REGISTER]) expect(screen.getByRole('button', name)).toBeEnabled();
   expect(mockMarkTermsAccepted).toHaveBeenCalledTimes(1);
+});
+
+test('unticked, Forgot password is off too', async () => {
+  await mount();
+  await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+  expect(screen.getByRole('button', FORGOT)).toBeDisabled();
+  await fireEvent.press(screen.getByRole('button', FORGOT));
+  expect(screen.queryByText('Reset your password')).toBeNull();
+  await tick();
+  expect(screen.getByRole('button', FORGOT)).toBeEnabled();
 });
 
 test('ticked, Apple and Google sign in', async () => {
@@ -161,4 +223,274 @@ test('leaves Google unarmed until its client id is configured', async () => {
   await mount();
   await tick();
   expect(screen.getByRole('button', GOOGLE)).toBeDisabled();
+});
+
+describe('creating an account with an email and password', () => {
+  test('registration is the first thing shown: email, password and the password again, no username', async () => {
+    await mount();
+    for (const label of ['Email', 'Password', 'Confirm password']) expect(screen.getByLabelText(label)).toBeTruthy();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+    expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(true);
+    expect(screen.getByLabelText('Confirm password').props.secureTextEntry).toBe(true);
+    expect(screen.getByLabelText('Password').props.textContentType).toBe('newPassword');
+    expect(screen.getByLabelText('Password').props.autoComplete).toBe('new-password');
+    expect(screen.getByLabelText('Email').props.keyboardType).toBe('email-address');
+    expect(screen.getByText('At least 8 characters, with a letter and a number.')).toBeOnTheScreen();
+    expect(screen.queryByRole('button', FORGOT)).toBeNull();
+  });
+
+  test('Create account stays off until the address looks right, the password meets the rules and the two match', async () => {
+    await mount();
+    await tick();
+    expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+    await fill();
+    expect(screen.getByRole('button', REGISTER)).toBeEnabled();
+
+    for (const bad of [
+      { email: 'ava@example' },
+      { email: '' },
+      { password: 'short1', confirm: 'short1' },
+      { password: 'nodigitshere', confirm: 'nodigitshere' },
+      { password: '123456789', confirm: '123456789' },
+      { confirm: 'correct horse 2' },
+      { confirm: '' },
+    ]) {
+      await fill(bad);
+      expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+    }
+  });
+
+  test('a password too easy to guess, or holding the email\'s name, keeps Create account off and says why', async () => {
+    await mount();
+    await tick();
+    await fill({ password: 'Password123', confirm: 'Password123' });
+    expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+    expect(screen.getByText("That password is too easy to guess. Avoid common words, keyboard runs and your email's name.")).toBeOnTheScreen();
+    await fill({ email: 'zelda.quinn@example.com', password: 'zeldaquinn7', confirm: 'zeldaquinn7' });
+    expect(screen.getByRole('button', REGISTER)).toBeDisabled();
+  });
+
+  test('says when the two passwords differ, and when the password breaks the rules', async () => {
+    await mount();
+    await fill({ confirm: 'correct horse 2' });
+    expect(screen.getByText("The passwords don't match.")).toBeOnTheScreen();
+    await fill({ password: 'abcdefgh', confirm: 'abcdefgh' });
+    expect(screen.getByText('At least 8 characters, with a letter and a number.')).toBeOnTheScreen();
+    await fill({ password: 'a1' + 'x'.repeat(71), confirm: 'a1' + 'x'.repeat(71) });
+    expect(screen.getByText('That password is too long. Use 72 characters or fewer.')).toBeOnTheScreen();
+  });
+
+  test('registers with the address and password as typed, and an answer with a session needs nothing more', async () => {
+    await mount();
+    await tick();
+    await fill({ email: ' Ava@Example.com ' });
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    await waitFor(() => expect(mockRegister).toHaveBeenCalledWith(' Ava@Example.com ', PASSWORD));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mockStartConfirmation).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['exists', 'That email already has an account. Sign in instead, or use Apple or Google if you signed up with one.'],
+    ['weak_password', 'That password is too weak. Use at least 8 characters, with a letter and a number.'],
+    ['invalid_email', "That email doesn't look right. Check it and try again."],
+    ['rate_limited', 'Too many tries. Try again later.'],
+    ['offline', "You're offline. Connect to sign in."],
+    ['error', "Couldn't sign in. Try again."],
+  ] as const)('a refused registration (%s) says so in place', async (result, words) => {
+    mockRegister.mockResolvedValueOnce(result);
+    await mount();
+    await tick();
+    await fill();
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+    expect(mockStartConfirmation).not.toHaveBeenCalled();
+  });
+
+});
+
+describe('signing in with an email and password', () => {
+  const toSignIn = async () => {
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+  };
+
+  test('shows only email and password, with Forgot password', async () => {
+    await toSignIn();
+    expect(screen.getByLabelText('Email')).toBeTruthy();
+    expect(screen.getByLabelText('Password')).toBeTruthy();
+    expect(screen.getByLabelText('Password').props.textContentType).toBe('password');
+    expect(screen.getByLabelText('Password').props.autoComplete).toBe('current-password');
+    expect(screen.queryByLabelText('Confirm password')).toBeNull();
+    expect(screen.getByRole('button', { name: 'New here? Create an account' })).toBeTruthy();
+    expect(screen.getByRole('button', FORGOT)).toBeEnabled();
+  });
+
+  test('signs in with the address and password, any password the account has, and shows no error', async () => {
+    await toSignIn();
+    expect(screen.getByRole('button', SIGN_IN)).toBeDisabled();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'x');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    await waitFor(() => expect(mockSignInPassword).toHaveBeenCalledWith('ava@example.com', 'x'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test.each([
+    ['invalid', "That email and password don't match. Check them and try again."],
+    ['rate_limited', 'Too many tries. Try again later.'],
+    ['offline', "You're offline. Connect to sign in."],
+    ['error', "Couldn't sign in. Try again."],
+  ] as const)('a refused sign-in (%s) says so in place', async (result, words) => {
+    mockSignInPassword.mockResolvedValueOnce(result);
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'wrong');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+  });
+
+  test('switching back and forth keeps the email and drops the passwords', async () => {
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'secret-pass');
+    await fireEvent.press(screen.getByRole('button', { name: 'New here? Create an account' }));
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
+    expect(screen.getByLabelText('Password').props.value).toBe('');
+    expect(screen.getByLabelText('Confirm password')).toBeTruthy();
+  });
+
+  test('Forgot password opens the reset screen with the email typed so far, and back returns here', async () => {
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'wrong');
+    await fireEvent.press(screen.getByRole('button', FORGOT));
+    expect(screen.getByRole('header')).toHaveTextContent('Reset your password');
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
+    await fireEvent.press(screen.getByRole('button', { name: 'Back to sign in' }));
+    expect(screen.getByRole('button', SIGN_IN)).toBeTruthy();
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
+    expect(screen.getByLabelText('Password').props.value).toBe('');
+  });
+});
+
+describe('confirming the address with the mailed code', () => {
+  const register = async () => {
+    mockRegister.mockResolvedValueOnce('confirm_email');
+    await mount();
+    await tick();
+    await fill({ email: ' Ava@Example.com ' });
+    await fireEvent.press(screen.getByRole('button', REGISTER));
+    await screen.findByText('Check your email');
+  };
+  const typeCode = (code: string) => fireEvent.changeText(screen.getByLabelText('8-digit code'), code);
+
+  test('a sign-up goes to the code screen, naming the address', async () => {
+    await register();
+    expect(screen.getByText('We sent an 8-digit code to Ava@Example.com.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('8-digit code').props.textContentType).toBe('oneTimeCode');
+    expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+    expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(mockResend).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('the confirmation carries the password chosen on the form; the right code is checked', async () => {
+    await register();
+    expect(mockStartConfirmation).toHaveBeenCalledWith(' Ava@Example.com ', PASSWORD, undefined);
+    await typeCode('12345678');
+    await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('12345678'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('a wrong code says so in place', async () => {
+    mockVerify.mockResolvedValueOnce('wrong_code');
+    await register();
+    await typeCode('00000000');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That code is wrong or has expired. Check it, or send a new one.'
+    );
+  });
+
+  test('a right code whose account could not be finished: Try again finishes', async () => {
+    mockVerify.mockResolvedValueOnce('unfinished');
+    await register();
+    await typeCode('12345678');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Couldn't finish signing you in. Check your connection and try again."
+    );
+    await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(mockFinish).toHaveBeenCalledTimes(1));
+  });
+
+  test('leaving the code screen gives the confirmation up', async () => {
+    await register();
+    expect(mockAbandon).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Use a different email' }));
+    expect(mockAbandon).toHaveBeenCalledTimes(1);
+  });
+
+  test('the screen going any other way (a route change) gives the confirmation up too', async () => {
+    mockVerify.mockResolvedValueOnce('unfinished');
+    await register();
+    await typeCode('12345678');
+    await screen.findByRole('button', { name: 'Try again' });
+    expect(mockAbandon).not.toHaveBeenCalled();
+    await screen.unmount();
+    expect(mockAbandon).toHaveBeenCalledTimes(1);
+  });
+
+  test('"Use a different email" goes back to the form with everything typed there kept', async () => {
+    await register();
+    await fireEvent.press(screen.getByRole('button', { name: 'Use a different email' }));
+    expect(screen.getByLabelText('Email').props.value).toBe(' Ava@Example.com ');
+    expect(screen.getByLabelText('Password').props.value).toBe(PASSWORD);
+    expect(screen.getByLabelText('Confirm password').props.value).toBe(PASSWORD);
+    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getByRole('button', REGISTER)).toBeEnabled();
+  });
+
+  const signInUnconfirmed = async () => {
+    mockSignInPassword.mockResolvedValueOnce('unconfirmed');
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), PASSWORD);
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+  };
+
+  test('signing in to an address never confirmed sends a fresh code and goes to the code screen', async () => {
+    await signInUnconfirmed();
+    expect(await screen.findByText('Check your email')).toBeOnTheScreen();
+    expect(mockResend).toHaveBeenCalledWith('ava@example.com');
+    expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    // The server clears the password at confirmation, so the one just typed is set again.
+    expect(mockStartConfirmation).toHaveBeenCalledWith('ava@example.com', PASSWORD, undefined);
+  });
+
+  test('a code sent within the minute still counts: the code screen waits out the rest', async () => {
+    mockResend.mockResolvedValueOnce('too_soon');
+    await signInUnconfirmed();
+    expect(await screen.findByText('Check your email')).toBeOnTheScreen();
+    expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('any other refusal for too many (the per-address cap) sent nothing: the screen says so and never "We sent"', async () => {
+    mockResend.mockResolvedValueOnce('rate_limited');
+    await signInUnconfirmed();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many tries. Try again later.');
+    expect(screen.queryByText(/We sent/)).toBeNull();
+    expect(screen.getByText('Confirm ava@example.com with an 8-digit code.')).toBeOnTheScreen();
+  });
+
+  test('back from the code screen reached by sign-in is the sign-in form', async () => {
+    await signInUnconfirmed();
+    await fireEvent.press(await screen.findByRole('button', { name: 'Use a different email' }));
+    expect(screen.getByRole('button', SIGN_IN)).toBeTruthy();
+    expect(screen.getByLabelText('Email').props.value).toBe('ava@example.com');
+  });
 });

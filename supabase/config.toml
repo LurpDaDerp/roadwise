@@ -184,7 +184,9 @@ enable_manual_linking = false
 minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
-password_requirements = ""
+# An email account's password: at least 8 characters, with at least one letter and one digit. The
+# app checks the same before it sends one (src/features/auth/emailPassword.ts, passwordProblem).
+password_requirements = "letters_digits"
 
 # Configure passkey sign-ins.
 # [auth.passkey]
@@ -206,8 +208,13 @@ anonymous_users = 30
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
 token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
-sign_in_sign_ups = 30
+# Covers sign-up, Resend code, Forgot password and a password change. A driver needs three or four.
+# Every per-IP limit here is a bucket of 30 that refills at this rate, so a burst of 30 goes through
+# first. Production sets the same ([remotes.production.auth.rate_limit]).
+sign_in_sign_ups = 20
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
+# The hosted default: a code is 8 digits, so 30 at once and then 30 every 5 minutes is no help to a
+# guesser, and a class confirming on one school network still fits. Production sets the same.
 token_verifications = 30
 # Number of Web3 logins that can be made in a 5 minute interval per IP address.
 web3 = 30
@@ -227,15 +234,22 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# On, as in production: an email sign-up types the 8-digit code from its confirmation mail into the
+# app. The local stack sends no real mail; Mailpit catches it at http://127.0.0.1:54624 ([local_smtp]).
+# Accounts made through the admin API with email_confirm (the seed scripts) and the tests' own
+# auth.users rows need no code.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
-secure_password_change = false
+# On: a password changes only from a session less than a day old. The app changes one only right
+# after a code signs in (sign-up and Forgot password), so it never needs a reauthentication mail.
+secure_password_change = true
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
-# Number of characters used in the email OTP.
-otp_length = 6
-# Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+# Number of characters used in the email OTP. The app's code field takes 8 (CODE_LENGTH).
+otp_length = 8
+# Number of seconds before the email OTP expires (defaults to 1 hour). 10 minutes, as in production:
+# the mails say so.
+otp_expiry = 600
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
@@ -247,10 +261,18 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# The two mails as Auth itself renders them, for the local stack (into Mailpit). Production sends
+# every mail through its send-email hook instead (supabase/functions/send-email/mail.ts writes the
+# same mails). The 8-digit code (in the subject too, so the phone can offer it), no link, so a mail
+# scanner that opens links can't use it up and the code works whichever device reads the mail.
+# content_path is read from the repo root.
+[auth.email.template.confirmation]
+subject = "{{ .Token }} is your RoadWise code"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "{{ .Token }} is your RoadWise reset code"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
@@ -288,6 +310,18 @@ max_frequency = "5s"
 # [auth.hook.custom_access_token]
 # enabled = true
 # uri = "pg-functions://<database>/<schema>/<hook_name>"
+
+# Every mail Auth sends goes through the send-email function (supabase/functions/send-email), which
+# mails only the sign-up code and the password-reset code (an account that signs in with Apple or
+# Google gets a reminder of that instead of a reset code) and refuses every other kind, so no other
+# code is ever minted. It is on in production ([remotes.production.auth.hook.send_email]). Locally it
+# is off and Mailpit takes the mail (the templates above): switching it on needs SEND_EMAIL_HOOK_SECRET
+# ("v1,whsec_<base64>") in the CLI's environment and in the function's (with RESEND_API_KEY and
+# RESEND_FROM).
+[auth.hook.send_email]
+enabled = false
+uri = "http://host.docker.internal:54621/functions/v1/send-email"
+secrets = "env(SEND_EMAIL_HOOK_SECRET)"
 
 # Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
 [auth.sms.twilio]
@@ -410,6 +444,12 @@ import_map = "./functions/deno.json"
 verify_jwt = false
 import_map = "./functions/deno.json"
 
+# send-email is Auth's Send Email hook: Auth calls it with the hook's Standard Webhooks signature, not
+# a user's JWT, and it checks that signature itself, so the gateway JWT check is off for it too.
+[functions.send-email]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [functions.speed-limits]
 import_map = "./functions/deno.json"
 
@@ -449,26 +489,78 @@ enabled = true
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
 
-# Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, email
-# confirmations off, Apple and Google disabled). `supabase db push` loads this file (and stops if it
+# Hosted project overrides. The [auth] values above are LOCAL ONLY (a 127.0.0.1 site_url, mail caught
+# by Mailpit, Apple and Google disabled). `supabase db push` loads this file (and stops if it
 # is invalid) but changes no settings, while `supabase config push` after `supabase link` would carry
 # those values to the hosted project; this stanza is what it sends instead. `supabase config diff` previews the push without changing anything.
 [remotes.production]
 project_id = "cjcpotetcslpscsbkdnj"
 
 [remotes.production.auth]
-site_url = "https://roadwise.app"
-# Sign-in is Apple and Google only. Both are native (an id token handed to Auth) except Sign in with
-# Apple on Android, Apple's web sign-in, which comes back to the app on roadwise://auth-callback
-# (the only link Auth may send anywhere).
+site_url = "https://getroadwise.app"
+# Sign-in is Apple, Google, or an email and password. Apple and Google are native (an id token handed
+# to Auth) except Sign in with Apple on Android, Apple's web sign-in, which comes back to the app on
+# roadwise://auth-callback (the only link Auth may send anywhere). Email accounts confirm their
+# address, and reset a password, with a code typed into the app, so no link is ever mailed.
 additional_redirect_urls = ["roadwise://auth-callback"]
+# The password rules (8 characters, letters and digits) come from [auth].
 
-# No email accounts: the email provider is off, so Auth refuses an email sign-up or a password
-# sign-in and sends no mail. Apple and Google sign-in are not affected. (The password and email-code
-# settings above reach it too; with no email accounts they apply to nothing.)
+# A new email account confirms its address before it is signed in: Auth mints an 8-digit code, the
+# send-email hook below mails it, and the app's code screen takes it. Forgot password works the same
+# way with a reset code. Apple and Google sign-in are not affected.
 [remotes.production.auth.email]
-enable_signup = false
-enable_confirmations = false
+enable_signup = true
+enable_confirmations = true
+secure_password_change = true
+# One mail per address a minute: the app's "Resend code" waits the same 60 s (RESEND_COOLDOWN_S).
+max_frequency = "60s"
+# The app's code field takes 8 digits (CODE_LENGTH). A code lasts 10 minutes (the mails say so), with
+# token_verifications below holding guesses down.
+otp_length = 8
+otp_expiry = 600
+
+# No SMTP: Auth sends every mail through the send-email hook, which mails the sign-up and reset codes
+# through Resend's HTTP API from no-reply@getroadwise.app (its own secrets: RESEND_API_KEY,
+# RESEND_FROM, SEND_EMAIL_HOOK_SECRET) and refuses every other kind (magic link, invite, email change,
+# reauthentication), so Auth's public endpoints can't mint those codes for any address. Forgot
+# password for an account that signs in with Apple or Google mails no code, only a reminder of how it
+# signs in. It caps each inbox at 5 mails an hour and 10 a day, and each IP address Auth reports at 20
+# an hour and 50 a day (0045). `secrets` is the same "v1,whsec_<base64>" value
+# as the function's SEND_EMAIL_HOOK_SECRET, read from the root .env (never committed) when
+# `supabase config push` runs: unset, the push sends no secret and every code mail fails.
+[remotes.production.auth.hook.send_email]
+enabled = true
+uri = "https://cjcpotetcslpscsbkdnj.supabase.co/functions/v1/send-email"
+secrets = "env(SEND_EMAIL_HOOK_SECRET)"
+
+# Resend's SMTP server is the project's mail server too. With the hook on, Auth sends nothing
+# through it (the hook sends every mail); it is set so the project counts as having its own mail
+# server: Supabase's built-in sender only mails the organisation's own members and holds the project
+# to 2 mails an hour, and neither may apply to the hook's mails. Same key as send-email
+# (RESEND_API_KEY, sending access, getroadwise.app only), read from the root .env at the push.
+[remotes.production.auth.email.smtp]
+enabled = true
+host = "smtp.resend.com"
+port = 465
+user = "resend"
+pass = "env(RESEND_API_KEY)"
+admin_email = "no-reply@getroadwise.app"
+sender_name = "RoadWise"
+
+# Per IP address unless noted. Auth answers anything over a limit with 429 ("Too many tries"). Each
+# per-IP limit is a bucket of 30 that refills at the rate given, so a burst of 30 goes through first.
+[remotes.production.auth.rate_limit]
+# Mails the whole project may send an hour (sign-up and reset codes together). Room for a class
+# signing up at once; Resend's free plan (100 a day) binds first.
+email_sent = 60
+# Sign-ups, Resend code, Forgot password and password changes, per 5 minutes.
+sign_in_sign_ups = 20
+# Code checks per 5 minutes: a driver needs one or two; a code is 8 digits.
+token_verifications = 30
+# Password sign-ins, Apple and Google id tokens and session refreshes share this one, per 5 minutes:
+# the hosted default, as every signed-in phone behind one address (a carrier's shared NAT) refreshes
+# through it.
+token_refresh = 150
 
 # MFA (TOTP and phone) and storage analytics stay off, as above: the app has no MFA screen and keeps
 # nothing in Storage.
