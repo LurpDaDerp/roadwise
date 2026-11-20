@@ -79,4 +79,4 @@ google-play-service-account*.json
 /web/site-dist/
 
 # iOS App Store checklist: local notes, never committed
-/ios distribution checklist.md
+IOS_DISTRIBUTION_CHECKLIST.md
