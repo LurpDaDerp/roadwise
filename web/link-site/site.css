@@ -698,13 +698,11 @@ footer p {
     margin: 0;
   }
   .lede {
+    font-size: 1.12rem;
     margin-bottom: 0.9rem;
   }
   .log-head p {
     font-size: 0.95rem;
-  }
-  .lede {
-    font-size: 1.12rem;
   }
   .log-cols {
     display: none;

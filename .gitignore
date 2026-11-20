@@ -77,3 +77,6 @@ google-play-service-account*.json
 
 # getroadwise.app build output (npm run site:build); .vercel/ inside it links the Vercel project
 /web/site-dist/
+
+# iOS App Store checklist: local notes, never committed
+/ios distribution checklist.md
