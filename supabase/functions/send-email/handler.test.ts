@@ -63,6 +63,7 @@ const payload = (
 interface World {
   deps: SendEmailDeps;
   taken: Uint8Array[];
+  takenPair: (Uint8Array | null)[];
   takenIp: (Uint8Array | null)[];
   sent: { apiKey: string; mail: Mail; options: DeliveryOptions }[];
   logs: unknown[][];
@@ -72,7 +73,7 @@ function world(
   over: Partial<SendEmailDeps> = {},
   opts: { capped?: boolean; cap?: CapAnswer; delivery?: Delivery; clock?: number[] } = {}
 ): World {
-  const w: World = { taken: [], takenIp: [], sent: [], logs: [], deps: undefined as unknown as SendEmailDeps };
+  const w: World = { taken: [], takenPair: [], takenIp: [], sent: [], logs: [], deps: undefined as unknown as SendEmailDeps };
   // Milliseconds handed out in turn by nowMs (the last one repeats); 0 by default.
   const clock = opts.clock ?? [0];
   let tick = 0;
@@ -81,8 +82,9 @@ function world(
     hookSecret: SECRET,
     resendKey: 're_test_key',
     from: 'no-reply@mail.example.com',
-    takeMail: (hash, ipHash) => {
+    takeMail: (hash, pairHash, ipHash) => {
       w.taken.push(hash);
+      w.takenPair.push(pairHash);
       w.takenIp.push(ipHash);
       return Promise.resolve(opts.cap ?? (opts.capped ? 'address' : 'ok'));
     },
@@ -184,20 +186,24 @@ Deno.test('a sign-up code goes out whatever the providers say (the account is be
   assertEquals(w.sent[0].mail.subject, '12345678 is your RoadWise code');
 });
 
-Deno.test('the IP Auth reports is capped too, by its hash; one over its cap is a 429 with no mail', async () => {
+Deno.test('with the IP Auth reports, the inbox from that IP and the IP are capped too, by their hashes', async () => {
+  const digest = async (text: string) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
   const w = world();
   assertEquals(await call(w, await signed(payload('signup', { ip: ' 203.0.113.7 ' }))), { status: 200, body: {} });
-  const ipHash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ip:203.0.113.7')));
-  assertEquals(w.takenIp, [ipHash]);
+  assertEquals(w.taken, [await digest('ava@example.com')]);
+  assertEquals(w.takenPair, [await digest('pair:ava@example.com|ip:203.0.113.7')]);
+  assertEquals(w.takenIp, [await digest('ip:203.0.113.7')]);
   assert(!JSON.stringify(w.logs).includes('203.0.113.7'), 'no log carries the IP');
 
   const noIp = world();
   await call(noIp, await signed(payload('signup')));
-  assertEquals(noIp.takenIp, [null]);
+  assertEquals([noIp.takenPair, noIp.takenIp], [[null], [null]]);
 
-  const capped = world({}, { cap: 'ip' });
-  assertRefusal(await call(capped, await signed(payload('signup', { ip: '203.0.113.7' }))), 429);
-  assertEquals(capped.sent.length, 0);
+  for (const cap of ['pair', 'address', 'ip'] as const) {
+    const capped = world({}, { cap });
+    assertRefusal(await call(capped, await signed(payload('signup', { ip: '203.0.113.7' }))), 429);
+    assertEquals(capped.sent.length, 0);
+  }
 });
 
 Deno.test('the IP key: "ip:" and a lower-cased address; nothing for anything else', () => {

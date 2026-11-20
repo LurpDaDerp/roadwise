@@ -3,16 +3,21 @@
 -- and a password a confirmation never lets through.
 --
 --   * private.auth_mail_sends: one row per key the hook has mailed for, keyed by SHA-256, with two
---     fixed windows (an hour and a day). Two kinds of key: an inbox (the address as send-email
+--     fixed windows (an hour and a day). Three kinds of key: an inbox (the address as send-email
 --     normalises it: lower case, no "+tag", a Gmail name without dots on gmail.com, so spellings
---     of one inbox share a row) and the IP address the request came from ("ip:" + the address
---     Auth reports). Neither the address nor the IP is ever stored, only the hash. A row whose day
---     ended more than a day ago is dropped the next time anything is mailed.
---   * private.take_auth_mail(address hash, ip hash or null): takes one mail for both at once, or
---     for neither: 'address' when the inbox has had 5 this hour or 10 today, 'ip' when the IP has
---     had 20 this hour or 50 today, else 'ok'. send-email calls it before every mail, as postgres
---     over a direct connection, and answers Auth with a 429 when it is not 'ok', so Auth fails the
---     request and the code is never stored.
+--     of one inbox share a row), the IP address the request came from ("ip:" + the address Auth
+--     reports), and the two together ("pair:" + inbox + "|" + IP key). Neither the address nor the
+--     IP is ever stored, only the hash. A row whose day ended more than a day ago is dropped the
+--     next time anything is mailed.
+--   * private.take_auth_mail(address hash, pair hash, ip hash): takes one mail for every key at
+--     once, or for none. With an IP (pair and ip hashes both given): an inbox from one IP gets 5 an
+--     hour and 10 a day ('pair'), an inbox from all IPs together 20 an hour and 30 a day
+--     ('address'), and an IP 20 an hour and 50 a day across inboxes ('ip'). So one requester can't
+--     use up an inbox's mails and lock its owner out of sign-up and Forgot password, while the
+--     inbox's own ceiling still stops it being flooded from many IPs. With no IP reported (both
+--     null), the inbox alone gets 5 an hour and 10 a day. 'ok' when taken. send-email calls it
+--     before every mail, as postgres over a direct connection, and answers Auth with a 429 when it
+--     is not 'ok', so Auth fails the request and the code is never stored.
 --   * auth.users trigger clear_password_on_first_confirm: when an address is confirmed for the
 --     first time (email_confirmed_at goes from null to a time) and the same update sets no new
 --     password, the password the account had is cleared. Auth keeps the password of the first
@@ -54,33 +59,48 @@ begin
    returning s.hour_count, s.day_count into o_hour_count, o_day_count;
 end $$;
 
--- one mail for the inbox whose SHA-256 is p_address_hash and the IP whose SHA-256 is p_ip_hash
--- (null when Auth reported none): 'ok' when taken for both, else which cap is full ('address',
--- then 'ip'), with nothing taken
-create or replace function private.take_auth_mail(p_address_hash bytea, p_ip_hash bytea) returns text
-language plpgsql volatile set search_path = '' as $$
+-- one mail for the inbox, the inbox from this IP and the IP whose SHA-256s are given (pair and ip
+-- both null when Auth reported no IP): 'ok' when taken for all of them, else which cap is full
+-- ('pair', 'address', then 'ip'), with nothing taken
+create or replace function private.take_auth_mail(p_address_hash bytea, p_pair_hash bytea, p_ip_hash bytea) returns text
+language plpgsql volatile set search_path = '' as $
 declare
   v_address_hour int;
   v_address_day int;
+  v_pair_hour int;
+  v_pair_day int;
   v_ip_hour int;
   v_ip_day int;
 begin
   if p_address_hash is null or octet_length(p_address_hash) <> 32 then
     raise exception 'a 32-byte address hash is required' using errcode = 'invalid_parameter_value';
   end if;
-  if p_ip_hash is not null and (octet_length(p_ip_hash) <> 32 or p_ip_hash = p_address_hash) then
-    raise exception 'the ip hash must be 32 bytes and not the address hash' using errcode = 'invalid_parameter_value';
+  if (p_pair_hash is null) <> (p_ip_hash is null) then
+    raise exception 'the pair and ip hashes come together or not at all' using errcode = 'invalid_parameter_value';
+  end if;
+  if p_ip_hash is not null and (octet_length(p_ip_hash) <> 32 or octet_length(p_pair_hash) <> 32
+      or p_ip_hash = p_address_hash or p_pair_hash = p_address_hash or p_pair_hash = p_ip_hash) then
+    raise exception 'the pair and ip hashes must be 32 bytes and all three different' using errcode = 'invalid_parameter_value';
   end if;
   -- rows whose day ended more than a day ago; one another mail has locked is left for later
   delete from private.auth_mail_sends
    where key_hash in (select key_hash from private.auth_mail_sends
                        where day_start < now() - interval '2 days' for update skip locked);
-  -- always the inbox first, then the IP: two calls never wait on each other in a circle
+  -- always the inbox first, then the pair, then the IP: two calls never wait on each other in a
+  -- circle (the three kinds of key never share a hash)
   select o_hour_count, o_day_count into v_address_hour, v_address_day from private.auth_mail_window(p_address_hash);
-  if v_address_hour >= 5 or v_address_day >= 10 then
-    return 'address';
-  end if;
-  if p_ip_hash is not null then
+  if p_ip_hash is null then
+    if v_address_hour >= 5 or v_address_day >= 10 then
+      return 'address';
+    end if;
+  else
+    select o_hour_count, o_day_count into v_pair_hour, v_pair_day from private.auth_mail_window(p_pair_hash);
+    if v_pair_hour >= 5 or v_pair_day >= 10 then
+      return 'pair';
+    end if;
+    if v_address_hour >= 20 or v_address_day >= 30 then
+      return 'address';
+    end if;
     select o_hour_count, o_day_count into v_ip_hour, v_ip_day from private.auth_mail_window(p_ip_hash);
     if v_ip_hour >= 20 or v_ip_day >= 50 then
       return 'ip';
@@ -88,13 +108,13 @@ begin
   end if;
   update private.auth_mail_sends
      set hour_count = hour_count + 1, day_count = day_count + 1
-   where key_hash = p_address_hash or key_hash = p_ip_hash;
+   where key_hash = p_address_hash or key_hash = p_pair_hash or key_hash = p_ip_hash;
   return 'ok';
-end $$;
+end $;
 
 -- run only by send-email (postgres over a direct connection)
 revoke all on function private.auth_mail_window(bytea) from public, anon, authenticated;
-revoke all on function private.take_auth_mail(bytea, bytea) from public, anon, authenticated;
+revoke all on function private.take_auth_mail(bytea, bytea, bytea) from public, anon, authenticated;
 
 -- An address confirmed for the first time keeps no password it had before, unless the same update
 -- sets a new one (an admin confirming and setting a password together). Runs as Auth's own role

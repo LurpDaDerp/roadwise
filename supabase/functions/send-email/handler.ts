@@ -4,9 +4,11 @@
 // request that wants the mail; an error answer fails that request, and the code it was about to
 // store goes with it. So a code exists only for the two mails RoadWise sends:
 //   * `signup` (a sign-up's confirmation code, also its Resend code) and `recovery` (the code that
-//     lets an email account's owner choose a new password): mailed through Resend, at most 5 an
-//     hour and 10 a day per inbox and 20 an hour and 50 a day per IP address (when Auth reports
-//     one), all kinds together (`private.take_auth_mail` on `capKey` and `ipKey`, else 429).
+//     lets an email account's owner choose a new password): mailed through Resend, all kinds
+//     together within the caps of `private.take_auth_mail` (0045), else 429. With the IP Auth
+//     reports: 5 an hour and 10 a day to an inbox from one IP, 20 and 30 to an inbox from all IPs,
+//     20 and 50 from one IP to all inboxes, so no one requester can use up an inbox's mails and
+//     lock its owner out; with no IP, 5 and 10 per inbox.
 //   * `recovery` for an account with no email sign-in (Apple or Google only, by Auth's
 //     `app_metadata.providers`): no code goes out, so Forgot password never hands an Apple or
 //     Google account to whoever reads its mailbox; the account gets a mail saying how it signs in
@@ -70,7 +72,7 @@ export const HookPayloadSchema = z.object({
 });
 
 /** What `private.take_auth_mail` answers: taken, or which cap is full. */
-export type CapAnswer = 'ok' | 'address' | 'ip';
+export type CapAnswer = 'ok' | 'pair' | 'address' | 'ip';
 
 export interface SendEmailLogger extends Logger {
   info(...args: unknown[]): void;
@@ -83,8 +85,11 @@ export interface SendEmailDeps {
   resendKey: string | null;
   /** RESEND_FROM: the From address on the domain verified in Resend; null when unset. */
   from: string | null;
-  /** Takes one mail for the inbox and the IP (null: none reported) with these SHA-256s, both or neither. */
-  takeMail(addressHash: Uint8Array, ipHash: Uint8Array | null): Promise<CapAnswer>;
+  /**
+   * Takes one mail for the inbox, the inbox from this IP and the IP with these SHA-256s (pair and
+   * ip null: no IP reported), all or none.
+   */
+  takeMail(addressHash: Uint8Array, pairHash: Uint8Array | null, ipHash: Uint8Array | null): Promise<CapAnswer>;
   deliver(apiKey: string, mail: Mail, options: DeliveryOptions): Promise<Delivery>;
   nowS(): number;
   nowMs(): number;
@@ -238,10 +243,15 @@ export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<
       : codeMail(type, code, deps.from, to);
     const kind = reminder ? 'reminder' : type;
 
+    const inbox = capKey(to);
     const ip = ipKey(payload.metadata?.ip_address);
     let cap: CapAnswer;
     try {
-      cap = await deps.takeMail(await sha256(capKey(to)), ip === null ? null : await sha256(ip));
+      cap = await deps.takeMail(
+        await sha256(inbox),
+        ip === null ? null : await sha256(`pair:${inbox}|${ip}`),
+        ip === null ? null : await sha256(ip)
+      );
     } catch (err) {
       log.error('[send-email] cap check failed: no mail is sent', { id, kind, user, err: err instanceof Error ? err.name : 'unknown' });
       return refuse(500, 'The code could not be sent.');

@@ -35,7 +35,7 @@ Deno.serve(
     hookSecret,
     resendKey,
     from,
-    takeMail: (addressHash, ipHash) => cap.take(addressHash, ipHash),
+    takeMail: (addressHash, pairHash, ipHash) => cap.take(addressHash, pairHash, ipHash),
     deliver: (apiKey, mail, options) => sendWithResend(apiKey, mail, options),
     nowS: () => Math.floor(Date.now() / 1000),
     nowMs: () => Date.now(),

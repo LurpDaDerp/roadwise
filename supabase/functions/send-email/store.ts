@@ -8,15 +8,15 @@ import type { CapAnswer } from './handler.ts';
 
 export interface MailCap {
   /**
-   * Takes one mail for the inbox and the IP (null: none reported) with these SHA-256s, both or
-   * neither: 'ok', or which cap is full ('address': 5 this hour or 10 today; 'ip': 20 or 50).
+   * Takes one mail for the inbox, the inbox from this IP and the IP with these SHA-256s (pair and
+   * ip null: no IP reported), all or none: 'ok', or which cap is full (0045).
    */
-  take(addressHash: Uint8Array, ipHash: Uint8Array | null): Promise<CapAnswer>;
+  take(addressHash: Uint8Array, pairHash: Uint8Array | null, ipHash: Uint8Array | null): Promise<CapAnswer>;
 }
 
 const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
-const AnswerSchema = z.enum(['ok', 'address', 'ip']);
+const AnswerSchema = z.enum(['ok', 'pair', 'address', 'ip']);
 
 /** One small pool per isolate (`prepare: false` for the transaction pooler). */
 export function createMailCap(dbUrl: string): MailCap {
@@ -28,12 +28,12 @@ export function createMailCap(dbUrl: string): MailCap {
     connection: { lock_timeout: 1000, statement_timeout: 1500 },
   });
   return {
-    take: async (addressHash, ipHash) => {
+    take: async (addressHash, pairHash, ipHash) => {
       let rows: { r: unknown }[];
       try {
-        rows = ipHash === null
-          ? await sql<{ r: unknown }[]>`select private.take_auth_mail(decode(${toHex(addressHash)}, 'hex'), null) as r`
-          : await sql<{ r: unknown }[]>`select private.take_auth_mail(decode(${toHex(addressHash)}, 'hex'), decode(${toHex(ipHash)}, 'hex')) as r`;
+        rows = pairHash === null || ipHash === null
+          ? await sql<{ r: unknown }[]>`select private.take_auth_mail(decode(${toHex(addressHash)}, 'hex'), null, null) as r`
+          : await sql<{ r: unknown }[]>`select private.take_auth_mail(decode(${toHex(addressHash)}, 'hex'), decode(${toHex(pairHash)}, 'hex'), decode(${toHex(ipHash)}, 'hex')) as r`;
       } catch (err) {
         throw toPgError(err);
       }
