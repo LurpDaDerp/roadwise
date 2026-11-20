@@ -63,7 +63,7 @@ end $$;
 -- both null when Auth reported no IP): 'ok' when taken for all of them, else which cap is full
 -- ('pair', 'address', then 'ip'), with nothing taken
 create or replace function private.take_auth_mail(p_address_hash bytea, p_pair_hash bytea, p_ip_hash bytea) returns text
-language plpgsql volatile set search_path = '' as $
+language plpgsql volatile set search_path = '' as $$
 declare
   v_address_hour int;
   v_address_day int;
@@ -110,7 +110,7 @@ begin
      set hour_count = hour_count + 1, day_count = day_count + 1
    where key_hash = p_address_hash or key_hash = p_pair_hash or key_hash = p_ip_hash;
   return 'ok';
-end $;
+end $$;
 
 -- run only by send-email (postgres over a direct connection)
 revoke all on function private.auth_mail_window(bytea) from public, anon, authenticated;
