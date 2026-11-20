@@ -1,7 +1,8 @@
 /**
  * The web domain RoadWise's share links live on (`app.config.ts` reads `ROADWISE_LINK_DOMAIN` into
- * `extra.linkDomain`, beside `ios.associatedDomains`). ONE value: none is set yet, and until it is,
- * a shared Wrapped's link is `roadwise://w/<id>` and no https link opens the app.
+ * `extra.linkDomain`, beside `ios.associatedDomains`). ONE value: every EAS build profile sets
+ * getroadwise.app (`eas.json`); a build without it (a local run with no `.env` value) shares
+ * `roadwise://w/<id>` and no https link opens the app.
  */
 
 /** A bare host name: letters, digits and hyphens in dot-separated labels, no scheme, port or path. `app.config.ts` copies it (`LINK_HOST_RE`). */

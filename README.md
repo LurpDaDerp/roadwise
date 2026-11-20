@@ -108,8 +108,9 @@ installed straight from its build page) and a production **app bundle** (`--prof
    (`EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`); the Android clients only have to exist with the right SHA-1,
    or the account sheet ends in an error.
 7. **App Links.** Put the app signing key's and the upload key's SHA-256 into
-   `web/link-site/.well-known/assetlinks.json` and deploy the link site
-   (`web/link-site/README.md`), then set `ROADWISE_LINK_DOMAIN` and rebuild.
+   `androidCertSha256` in `web/link-site/site.json` and run `npm run site:deploy`
+   (`web/link-site/README.md`). Every EAS profile already builds with
+   `ROADWISE_LINK_DOMAIN=getroadwise.app`.
 8. **Store link.** Set `store_urls.android` in the remote app config to
    `https://play.google.com/store/apps/details?id=com.lurp.safedrive`, so the update-required screen
    opens Play.

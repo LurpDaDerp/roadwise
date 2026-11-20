@@ -14,6 +14,11 @@ it('only the development profile turns diagnostics on', () => {
   }
 });
 
+it('every build profile shares links on getroadwise.app', () => {
+  for (const [name, profile] of Object.entries(eas.build)) {
+    expect({ name, domain: profile.env?.ROADWISE_LINK_DOMAIN }).toEqual({ name, domain: 'getroadwise.app' });
+  }
+});
 
 // Android release builds: testers install the preview build directly (an APK), the store gets an
 // app bundle, and `eas submit` puts it on Play's internal track as a draft. The Play service

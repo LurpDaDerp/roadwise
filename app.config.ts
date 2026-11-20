@@ -54,7 +54,7 @@ export const LINK_HOST_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?
 /**
  * The web domain of RoadWise's share links (a shared monthly Wrapped's `https://<domain>/w/<id>`),
  * from `ROADWISE_LINK_DOMAIN`: a bare host name, or nothing when unset or blank (any other value
- * fails the config). None is set yet.
+ * fails the config). Every EAS build profile sets getroadwise.app (`eas.json`).
  * When set, the app reads it as `extra.linkDomain` (`src/lib/linkDomain.ts`) and both phones open
  * those links in the app: iOS through `applinks:<domain>` (with
  * `web/link-site/.well-known/apple-app-site-association` served at the domain's root), Android
