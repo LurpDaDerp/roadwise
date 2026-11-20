@@ -25,17 +25,7 @@
   --ink: #111113;
   --muted: #55565e;
   --rule: #dcdce2;
-  --rule-strong: #111113;
   --accent: #3a3fc8;
-  --route: #1f9d55;
-  --map: #eef3f6;
-  --street: #d5dee5;
-  --park: #d6ecd9;
-  /* Event tiers: DESIGN.md signals (fill for map discs, text for small marks). */
-  --minor-fill: #f5cf00;
-  --minor-text: #735d00;
-  --moderate-fill: #f07400;
-  --moderate-text: #ad4800;
   --road: 'Barlow Semi Condensed', 'Arial Narrow', sans-serif;
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   /* The sky: three stops top to bottom, each dark enough for white text (4.6:1 or more). */
@@ -91,16 +81,7 @@
     --ink: #f4f4f2;
     --muted: #b4b4ba;
     --rule: #2a2a2f;
-    --rule-strong: #f4f4f2;
     --accent: #8fb6ff;
-    --route: #3ccf7e;
-    --map: #161618;
-    --street: #26292f;
-    --park: #1b3022;
-    --minor-fill: #ffe14a;
-    --minor-text: #ffe14a;
-    --moderate-fill: #ff8c2e;
-    --moderate-text: #ff9a45;
   }
 }
 
@@ -854,13 +835,17 @@ a:hover {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--av);
   display: grid;
   place-items: center;
   font: 700 11px/1 var(--road);
   font-style: normal;
   color: #111113;
 }
+.board .av-blue { background: #7fb2ff; }
+.board .av-gold { background: #ffc300; }
+.board .av-green { background: #5ee08a; }
+.board .av-purple { background: #b79cff; }
+.board .av-pink { background: #ff8fa3; }
 .board b {
   font: italic 800 20px/1 var(--road);
   font-variant-numeric: tabular-nums;
@@ -980,7 +965,7 @@ a:hover {
   grid-column: 1 / -1;
   height: 6px;
   border-radius: 3px;
-  background: linear-gradient(90deg, #3a3fc8 var(--p), #e7e8f8 var(--p));
+  background: linear-gradient(90deg, #3a3fc8 46%, #e7e8f8 46%);
 }
 .pdf {
   margin-top: 14px;
