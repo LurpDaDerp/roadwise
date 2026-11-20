@@ -9,7 +9,7 @@ import { linkDomain } from '@/lib/linkDomain';
  * shared monthly Wrapped (`w/<id>`, a trailing slash, query or fragment dropped) and the Wrapped archive or one month of it (`wrapped`,
  * `wrapped/YYYY-MM`); anything else (any `dashpal` path, a `drive` link with parameters) opens
  * Home. A web link opens the app only as a shared Wrapped: `https://<link domain>/w/<id>` on the
- * one configured link domain (`@/lib/linkDomain`; none is set yet, so no web link opens anything).
+ * one configured link domain (`@/lib/linkDomain`; getroadwise.app in every EAS build).
  * Nothing a link can open starts a drive (plan §1.4): the driving screen only shows a drive
  * already recording. The dev client's launcher links pass untouched in development builds only.
  * On Android, Apple's web sign-in comes back on `roadwise://auth-callback`: while the app runs that

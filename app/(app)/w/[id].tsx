@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 
 import { SharedWrappedScreen } from '@/features/wrapped/WrappedScreens';
 
-/** `/w/<id>`: a shared Wrapped (`roadwise://w/<id>`, or `https://<link domain>/w/<id>` once one is set), for anyone signed in. */
+/** `/w/<id>`: a shared Wrapped (`roadwise://w/<id>`, or `https://getroadwise.app/w/<id>` in EAS builds), for anyone signed in. */
 export default function SharedWrappedRoute() {
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
   return (
