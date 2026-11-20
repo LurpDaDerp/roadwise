@@ -25,7 +25,11 @@ function bodyHtml(blocks) {
       out.push('</ul>');
       inList = false;
     }
-    if (b.kind === 'heading') out.push(`<h${b.level}>${escape(b.text)}</h${b.level}>`);
+    if (b.kind === 'heading') {
+      // Sections get stable anchors (getroadwise.app/privacy#4-your-choices) for store forms.
+      const id = b.level > 1 ? ` id="${b.text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}"` : '';
+      out.push(`<h${b.level}${id}>${escape(b.text)}</h${b.level}>`);
+    }
     else if (b.kind === 'paragraph') out.push(`<p>${spansHtml(b.spans)}</p>`);
     else if (b.kind === 'rule') out.push('<hr>');
     else {
