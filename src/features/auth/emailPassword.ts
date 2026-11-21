@@ -62,8 +62,11 @@ function isCommonPassword(password: string, email: string | undefined): boolean 
   const lower = password.toLowerCase();
   if (COMMON_RUNS.some((run) => lower.includes(run))) return true;
   const letters = lower.replace(/[^a-z]/g, '');
+  // Letters of any alphabet (a to z, and everything past ASCII: an accent, Cyrillic, kana), so a
+  // passphrase in another script with one a-to-z letter isn't read as almost no letters.
+  const anyLetters = [...lower].filter((ch) => (ch >= 'a' && ch <= 'z') || ch > '\u007f');
   // "a1234567", "ab123456", "aaaa1111": a number with a letter or two, or one letter over and over.
-  if (letters.length <= 2 || new Set(letters).size === 1) return true;
+  if (anyLetters.length <= 2 || new Set(anyLetters).size === 1) return true;
   // The word with the digits and symbols at its ends dropped, and look-alikes read as letters.
   const core = lower
     .replace(/^[^a-z@$!]+|[^a-z]+$/g, '')

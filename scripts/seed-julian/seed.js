@@ -302,6 +302,11 @@ async function createAccount(target, url, keys, person, password) {
   const admin = createClient(url, keys.secret, opts);
   const created = await retrying('create account', () => admin.auth.admin.createUser({ email: person.email, password, email_confirm: true }));
   if (created.error) throw new Error(`create account ${person.email}: ${created.error.message}`);
+  // Auth confirms the new address in an update of its own, and 0045's clear_password_on_first_confirm
+  // drops a password an address had before its first confirmation, so the password is set again now
+  // that the address is confirmed (as scripts/seed-demo.js does).
+  const reset = await retrying('set password', () => admin.auth.admin.updateUserById(created.data.user.id, { password }));
+  if (reset.error) throw new Error(`set password ${person.email}: ${reset.error.message}`);
   const client = createClient(url, keys.publishable, opts);
   const signedIn = await retrying('sign in', () => client.auth.signInWithPassword({ email: person.email, password }));
   if (signedIn.error) throw new Error(`sign in ${person.email}: ${signedIn.error.message}`);

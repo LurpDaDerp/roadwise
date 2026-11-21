@@ -21,6 +21,8 @@
  */
 import { FunctionRegion } from '@supabase/supabase-js';
 
+import { processTimers } from '@/lib/timers';
+
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 /** The second way: the same query through the edge function. Null when it gave no response. */
@@ -70,29 +72,34 @@ export const edgeFallback: OpenMeteoFallback = async (query, timeoutMs) => {
   }
 };
 
-/** One direct request, aborted after `timeoutMs`: its response, or null when it threw or timed out. */
+/**
+ * One direct request, aborted after `timeoutMs`: its response, or null when it threw or timed out.
+ * The time-out is one of the process's pumped timers (`@/lib/timers`): Android pauses plain JS
+ * timers while RoadWise is behind, and a drive's rows then fire it, so a request that stalls
+ * mid-drive is still abandoned (the drive's weather watch asks nothing more while one is out).
+ */
 async function direct(doFetch: FetchLike, url: string, timeoutMs: number): Promise<Response | null> {
   const control = new AbortController();
-  const timer = setTimeout(() => control.abort(), timeoutMs);
+  const timer = processTimers.setTimeout(() => control.abort(), timeoutMs);
   try {
     return await doFetch(url, { signal: control.signal, headers: { Accept: 'application/json' } });
   } catch {
     return null;
   } finally {
-    clearTimeout(timer);
+    processTimers.clearTimeout(timer);
   }
 }
 
-/** `work`'s value, or null when it throws, rejects or has not settled after `ms`. */
+/** `work`'s value, or null when it throws, rejects or has not settled after `ms` (a pumped timer, as `direct`'s). */
 async function within<T>(work: () => Promise<T | null>, ms: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: unknown;
   const late = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), ms);
+    timer = processTimers.setTimeout(() => resolve(null), ms);
   });
   try {
     return await Promise.race([Promise.resolve().then(work).catch(() => null), late]);
   } finally {
-    clearTimeout(timer);
+    processTimers.clearTimeout(timer);
   }
 }
 

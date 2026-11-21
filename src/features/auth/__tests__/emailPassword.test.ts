@@ -103,6 +103,8 @@ describe('passwordProblem: the server\'s rules (8 code points to 72 bytes, a let
     ['blue7ocean', null],
     ['zebra crossing 9', null],
     ['Kx9mPq2w', null],
+    // A passphrase in another alphabet with one a-to-z letter: its own letters count as letters.
+    ['надёжный пароль 7z', null],
     ['b1' + 'x'.repeat(70), null],
     ['b1' + 'x'.repeat(71), 'long'],
     // 72 characters but more than 72 bytes: Auth counts bytes.

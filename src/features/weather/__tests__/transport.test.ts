@@ -1,3 +1,4 @@
+import { processTimers } from '@/lib/timers';
 import { openMeteoUrl } from '@/ui/sky/weather';
 
 import { forecastUrl } from '../forecast';
@@ -85,6 +86,33 @@ describe('requestOpenMeteo', () => {
       expect(await pending).toBe(down);
     } finally {
       jest.useRealTimers();
+    }
+  });
+
+  test("both time-outs are the process's pumped timers: with JS timers paused (Android, RoadWise behind) a pump abandons a stalled request", async () => {
+    const t0 = performance.now();
+    const monotonic = jest.spyOn(performance, 'now').mockReturnValue(t0);
+    try {
+      let aborted = false;
+      const hang: FetchLike = (_url, init) =>
+        new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new Error('aborted'));
+          })
+        );
+      const pending = requestOpenMeteo(URL_, { fetch: hang, fallback: () => new Promise<Response | null>(() => {}) });
+      // No JS timer fires here: only the clock moves, and a row's pump finds the time-out due.
+      monotonic.mockReturnValue(t0 + DIRECT_TIMEOUT_MS);
+      processTimers.pump();
+      expect(aborted).toBe(true);
+      await new Promise<void>((resolve) => setImmediate(() => resolve()));
+      monotonic.mockReturnValue(t0 + DIRECT_TIMEOUT_MS + FALLBACK_TIMEOUT_MS);
+      processTimers.pump();
+      expect(await pending).toBeNull();
+      expect(processTimers.pending()).toBe(0);
+    } finally {
+      monotonic.mockRestore();
     }
   });
 

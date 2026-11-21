@@ -645,6 +645,32 @@ describe('on Android (the same car link: the drive’s car, "Are you driving?", 
     await h.host.stop({ endOpenTrip: false });
   });
 
+  test('a pump that throws on a motion report is reported, and the report still counts (the parked spot is stored)', async () => {
+    let failing = false;
+    const pump = jest.fn(() => {
+      if (failing) throw new Error('boom');
+    });
+    const h = buildIos({ platform: 'android', pump });
+    await pair(h, civic);
+    await start(h);
+    await feedIos(h, rows(60, { t0: T0 + 40_000, speedMps: 15 }));
+    await feedIos(h, rows(10, { t0: T0 + 100_000, speedMps: 0 }));
+    h.detect.setCarRoute([]);
+    await feedIos(h, rows(3, { t0: T0 + 110_000, speedMps: 0 }));
+    await h.host.end();
+    failing = true;
+    clock += 5_000;
+    activity(h, 'walking');
+    await h.host.settled();
+    clock += 60_000;
+    activity(h, 'walking');
+    await h.host.settled();
+    await flush();
+    expect(await readParkedSpot(db)).toMatchObject({ driveId: NATIVE });
+    expect(h.errors).toEqual(['timers: boom', 'timers: boom']);
+    await h.host.stop({ endOpenTrip: false });
+  });
+
   test('iPhone never pumps on a motion report (its JS timers run in the background)', async () => {
     const pump = jest.fn();
     const h = buildIos({ pump });

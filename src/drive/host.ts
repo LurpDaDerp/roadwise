@@ -2416,9 +2416,17 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
         // Every valid report goes to the engine, which reads it for the walking end alone
         // (`core/engine/motion.ts`); a malformed payload is dropped. With motion not granted none come.
         source.addListener('activity', (raw) => {
-          // Android pauses JS timers in the background: after an automatic end the reports (every
-          // 5 s through the watch that follows it) are what fire the parked watch's timer.
-          if (platform === 'android') (deps.pump ?? processTimers.pump)();
+          // Android pauses JS timers in the background: after an automatic end no row comes, so the
+          // reports (every 5 s through the watch that follows it) pump the process's timers. The
+          // parked watch is settled by each report's own time (`onParkedActivity`). A pump that
+          // throws is reported and the report still counts, as with a row.
+          if (platform === 'android') {
+            try {
+              (deps.pump ?? processTimers.pump)();
+            } catch (e) {
+              report(e, 'timers');
+            }
+          }
           const activity = parseActivity(raw);
           if (activity === null) return;
           void run(async () => {
