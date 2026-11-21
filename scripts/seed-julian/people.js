@@ -235,7 +235,7 @@ const K = (speed, braking, acceleration, turning, phone) => ({ speed, braking, a
 const JULIAN = {
   key: 'julian',
   username: 'julian',
-  email: 'julian.demo@roadwise.app',
+  email: 'julian.demo@getroadwise.app',
   state: 'WA',
   seed: 20261022,
   plan: planJulian,
@@ -285,7 +285,7 @@ const FRIENDS = [
   friend({
     key: 'maya',
     username: 'maya_chen',
-    email: 'maya.demo@roadwise.app',
+    email: 'maya.demo@getroadwise.app',
     seed: 11101,
     friendDaysAgo: 84,
     plan: planRoutine({
@@ -300,7 +300,7 @@ const FRIENDS = [
   friend({
     key: 'sofia',
     username: 'sofia_r',
-    email: 'sofia.demo@roadwise.app',
+    email: 'sofia.demo@getroadwise.app',
     seed: 11102,
     friendDaysAgo: 71,
     plan: planRoutine({
@@ -315,7 +315,7 @@ const FRIENDS = [
   friend({
     key: 'ethan',
     username: 'ethan_park',
-    email: 'ethan.demo@roadwise.app',
+    email: 'ethan.demo@getroadwise.app',
     seed: 11103,
     friendDaysAgo: 52,
     plan: planRoutine({
@@ -330,7 +330,7 @@ const FRIENDS = [
   friend({
     key: 'priya',
     username: 'priya_s',
-    email: 'priya.demo@roadwise.app',
+    email: 'priya.demo@getroadwise.app',
     seed: 11104,
     friendDaysAgo: 33,
     plan: planRoutine({
@@ -346,7 +346,7 @@ const FRIENDS = [
   friend({
     key: 'marcus',
     username: 'marcus_j',
-    email: 'marcus.demo@roadwise.app',
+    email: 'marcus.demo@getroadwise.app',
     seed: 11105,
     friendDaysAgo: 15,
     plan: planRoutine({
@@ -367,7 +367,7 @@ const PENDING = [
   friend({
     key: 'liam',
     username: 'liam_n',
-    email: 'liam.demo@roadwise.app',
+    email: 'liam.demo@getroadwise.app',
     seed: 11106,
     plan: planRoutine({
       startBack: 26,
@@ -382,7 +382,7 @@ const PENDING = [
   friend({
     key: 'olivia',
     username: 'olivia_t',
-    email: 'olivia.demo@roadwise.app',
+    email: 'olivia.demo@getroadwise.app',
     seed: 11107,
     plan: planRoutine({
       startBack: 89,

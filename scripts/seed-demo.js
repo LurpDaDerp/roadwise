@@ -11,7 +11,7 @@
  *
  * It touches only the demo account's own rows.
  *
- * The demo signs in with demo@roadwise.app and DEMO_PASSWORD (email and password, as the app's
+ * The demo signs in with demo@getroadwise.app and DEMO_PASSWORD (email and password, as the app's
  * sign-in screen does); its username is demo_driver. A hosted run needs DEMO_PASSWORD set (it is
  * never printed); a local run falls back to a fixed dev password, printed at the end. The account
  * is created confirmed and onboarded with the Terms accepted at the app's own `TERMS_VERSION`
@@ -80,7 +80,7 @@ const { sunIsDown, dayKey } = require('../src/lib/time.ts');
 const { encodeRuns } = require('../src/lib/polyline.ts');
 const { TERMS_VERSION } = require('../src/features/auth/legal.ts');
 
-const DEMO_EMAIL = 'demo@roadwise.app';
+const DEMO_EMAIL = 'demo@getroadwise.app';
 const DEMO_USERNAME = 'demo_driver';
 /** The local-only fallback password; a hosted run must set DEMO_PASSWORD. */
 const DEFAULT_PASSWORD = 'RoadWiseDemo!2026';

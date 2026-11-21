@@ -7,7 +7,7 @@
  *
  *   node scripts/seed-julian/seed.js --dry                      build everything and print what the app would show; touches nothing
  *   node scripts/seed-julian/seed.js --local                    seed the local Supabase stack
- *   SUPABASE_SERVICE_ROLE_KEY=<secret key> node scripts/seed-julian/seed.js --linked
+ *   SUPABASE_SERVICE_ROLE_KEY=<secret key> JULIAN_PASSWORD=<password> node scripts/seed-julian/seed.js --linked
  *                                                               seed the linked (hosted) project
  *   node scripts/seed-julian/seed.js --linked --replace         start over: delete the demo accounts first, then seed
  *   node scripts/seed-julian/seed.js --linked --remove          delete the demo accounts and nothing else
@@ -229,8 +229,20 @@ function batchSql(userId, items) {
 // ---------------------------------------------------------------------------------------------
 // Passwords
 
-/** Julian's password: the same on every run, so a re-seed does not lock the demo out. */
-const JULIAN_PASSWORD = 'test1234';
+/**
+ * Julian's password: the same on every run, so a re-seed does not lock the demo out. On the local
+ * stack it is this fixed value; a hosted run needs JULIAN_PASSWORD set (never printed), because this
+ * file is public and a fixed password here signs anyone in to the hosted account.
+ */
+const LOCAL_JULIAN_PASSWORD = 'test1234';
+
+/** The password for this target: JULIAN_PASSWORD for a hosted project, else the local fixed one. */
+function julianPassword(target) {
+  if (target.flag === '--local') return process.env.JULIAN_PASSWORD || LOCAL_JULIAN_PASSWORD;
+  const own = process.env.JULIAN_PASSWORD;
+  if (!own) throw new Error('set JULIAN_PASSWORD for a hosted project (the local password in this file is public)');
+  return own;
+}
 
 /** A friend's password: nobody signs in as a friend, so it is 256 random bits and is not kept. */
 const secretPassword = () => crypto.randomBytes(32).toString('base64url');
@@ -502,6 +514,8 @@ async function main() {
     return;
   }
 
+  // Before anything is written or removed: a hosted run with no JULIAN_PASSWORD stops here.
+  const julianPass = julianPassword(target);
   const pre = preflight(target);
   console.log(`  migrations up to ${pre.migration}; ${pre.accounts} demo accounts already there`);
   if (!(pre.migration >= '0026')) throw new Error('the database needs migration 0026 (phone use) before the demo drives can be stored');
@@ -531,7 +545,7 @@ async function main() {
   const passwords = {};
   for (const b of builds) {
     const person = b.person;
-    passwords[person.key] = person.key === 'julian' ? JULIAN_PASSWORD : secretPassword();
+    passwords[person.key] = person.key === 'julian' ? julianPass : secretPassword();
     const account = await createAccount(target, target.url, keys, person, passwords[person.key]);
     ids[person.key] = account.id;
     console.log(`  created @${person.username} (${account.id})`);
@@ -556,7 +570,8 @@ async function main() {
     console.error(`\nPROBLEMS:\n  ${v.problems.join('\n  ')}`);
     process.exitCode = 1;
   }
-  console.log(`\nSign in to the app with:\n  email     ${JULIAN.email}\n  password  ${passwords.julian}\n  username  @${JULIAN.username}`);
+  const shown = target.flag === '--local' ? passwords.julian : 'JULIAN_PASSWORD';
+  console.log(`\nSign in to the app with:\n  email     ${JULIAN.email}\n  password  ${shown}\n  username  @${JULIAN.username}`);
 }
 
 module.exports = { uploadProblem, toEnvelope, batchSql, parseJson, ratingFromServer };
