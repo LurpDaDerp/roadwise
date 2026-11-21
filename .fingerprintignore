@@ -10,3 +10,10 @@ android/**/*
 # Gradle caches inside local Expo modules (machine-specific)
 **/.gradle
 **/.gradle/**/*
+
+# @react-native-masked-view/masked-view (a dependency of expo-router) rewrites its own
+# AndroidManifest.xml in node_modules on every Android Gradle build (its build.gradle strips the
+# `package` attribute). A machine that has built Android locally then fingerprints a different
+# file than EAS's clean install, and EAS fails the build with "Runtime version mismatch". The
+# file holds nothing else; a new version of the package still changes its package.json.
+**/node_modules/@react-native-masked-view/masked-view/android/src/main/AndroidManifest.xml
