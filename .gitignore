@@ -80,3 +80,6 @@ google-play-service-account*.json
 
 # iOS App Store checklist: local notes, never committed
 IOS_DISTRIBUTION_CHECKLIST.md
+
+# Future todos (Android release and later work): local notes, never committed
+FUTURE_TODO.md
