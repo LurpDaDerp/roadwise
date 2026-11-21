@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { BackHandler } from 'react-native';
+import { Alert, BackHandler, type AlertButton } from 'react-native';
 
 import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { memoryDb as createTestDb } from '@/features/permissions/__fixtures__/harness';
@@ -37,8 +37,13 @@ jest.mock('../steps/DashcamStep', () => {
 const mockFinish = jest.fn<Promise<void>, [unknown]>(() => Promise.resolve());
 jest.mock('../finish', () => ({ finishOnboarding: (deps: unknown) => mockFinish(deps) }));
 const mockRefreshProfile = jest.fn(() => Promise.resolve());
+const mockSignOut = jest.fn<Promise<unknown>, [{ force?: boolean }?]>(async () => ({ signedOut: true }));
 jest.mock('@/data/supabase/session', () => ({
-  useSession: () => ({ session: { user: { id: 'user-1' } }, refreshProfile: mockRefreshProfile }),
+  useSession: () => ({
+    session: { user: { id: 'user-1' } },
+    refreshProfile: mockRefreshProfile,
+    signOut: (opts?: { force?: boolean }) => mockSignOut(opts),
+  }),
 }));
 
 const mockRouter = { replace: jest.fn(), push: jest.fn(), back: jest.fn() };
@@ -63,6 +68,7 @@ beforeEach(async () => {
   settings = createSettingsRepo(await createTestDb());
   mockRouter.replace.mockClear();
   mockFinish.mockReset().mockResolvedValue(undefined);
+  mockSignOut.mockReset().mockResolvedValue({ signedOut: true });
   resetSessionPlan();
 });
 
@@ -200,6 +206,71 @@ describe('OnboardingStepper', () => {
     );
     expect(screen.getByText('Step 3 of 6')).toBeOnTheScreen();
     await waitFor(async () => expect(await readSavedPlan(settings)).toEqual(NOW));
+  });
+
+  describe('Cancel', () => {
+    let alert: jest.SpyInstance;
+    beforeEach(() => {
+      alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    });
+    afterEach(() => alert.mockRestore());
+
+    /** Presses a button of the alert that is showing. */
+    const answer = async (label: string) => {
+      const buttons = alert.mock.calls.at(-1)![2] as AlertButton[];
+      await act(async () => buttons.find((b) => b.text === label)!.onPress?.());
+    };
+
+    it.each(['username', 'how', 'location', 'motion', 'notifications', 'dashcam'] as StepId[])(
+      'is offered on the %s step',
+      async (step) => {
+        await renderStepper(step, ctx({ hasUsername: step !== 'username' }));
+        expect(screen.getByRole('button', { name: 'Cancel setup' })).toBeOnTheScreen();
+      }
+    );
+
+    it('asks first, and signs nobody out until the driver confirms', async () => {
+      await renderStepper('username', ctx({ hasUsername: false }));
+      await fireEvent.press(screen.getByRole('button', { name: 'Cancel setup' }));
+      expect(alert).toHaveBeenCalledTimes(1);
+      const [title, body, buttons] = alert.mock.calls[0] as [string, string, AlertButton[]];
+      expect(title).toBe('Cancel setup?');
+      expect(body).toBe("You'll be signed out. Sign in again anytime to finish setting up.");
+      expect(buttons.map((b) => b.text)).toEqual(['Keep setting up', 'Cancel setup']);
+      expect(mockSignOut).not.toHaveBeenCalled();
+
+      await answer('Keep setting up');
+      expect(mockSignOut).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Cancel setup' })).not.toBeDisabled();
+    });
+
+    it('signs the driver out on Cancel setup, and moves no route itself: the gate shows sign-in', async () => {
+      let release: (outcome: unknown) => void = () => {};
+      mockSignOut.mockImplementationOnce(() => new Promise((r) => (release = r)));
+      await renderStepper('location', ctx());
+      await fireEvent.press(screen.getByRole('button', { name: 'Cancel setup' }));
+      await answer('Cancel setup');
+      expect(mockSignOut).toHaveBeenCalledTimes(1);
+      // While the sign-out runs, the step's buttons wait.
+      expect(screen.getByRole('button', { name: 'Cancel setup' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+      await act(async () => release({ signedOut: true }));
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      // The saved step stays: signing in again on this phone resumes here.
+      expect(await readSavedStep(settings)).toBe('location');
+    });
+
+    it('says so when the session could not be ended, and leaves the step usable', async () => {
+      mockSignOut.mockResolvedValueOnce({ signedOut: false, failed: true });
+      await renderStepper('how', ctx());
+      await fireEvent.press(screen.getByRole('button', { name: 'Cancel setup' }));
+      await answer('Cancel setup');
+      await waitFor(() =>
+        expect(alert).toHaveBeenLastCalledWith("Couldn't sign out", expect.any(String), expect.any(Array))
+      );
+      expect(screen.getByRole('button', { name: 'Continue' })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Cancel setup' })).not.toBeDisabled();
+    });
   });
 
   it('finishes onboarding after the last step', async () => {

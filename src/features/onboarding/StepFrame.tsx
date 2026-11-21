@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { Button, IconButton, Screen, Text, useTheme } from '@/ui';
 
@@ -21,6 +21,20 @@ const FinishContext = createContext<StepFinishState>({ busy: false, error: null 
 
 export const StepFinishProvider = FinishContext.Provider;
 
+/**
+ * Cancel, from the stepper: `onCancel` asks before it leaves setup, and `busy` is true while the
+ * sign-out it leads to runs, when every button on the frame waits.
+ */
+export interface StepCancelState {
+  onCancel: () => void;
+  busy: boolean;
+}
+
+const CancelContext = createContext<StepCancelState | null>(null);
+
+/** Outside the stepper there is nothing to cancel, and the frame shows no Cancel. */
+export const StepCancelProvider = CancelContext.Provider;
+
 export interface StepAction {
   label: string;
   onPress: () => void;
@@ -35,8 +49,9 @@ const TARGET = 44;
 
 /**
  * The frame every onboarding step prints on: where the driver is ("Step n of total"), Back when
- * there is somewhere to go back to, the step's title and body, its own content, and one
- * bottom-anchored primary action with an optional quieter secondary under it.
+ * there is somewhere to go back to, Cancel on the right of the same row (inside the stepper), the
+ * step's title and body, its own content, and one bottom-anchored primary action with an optional
+ * quieter secondary under it.
  *
  * The position reads like a field on the card — a small-caps label over a rule — and the rule is
  * split into one segment per step. The segments are decoration for sighted readers only; the words
@@ -69,6 +84,9 @@ export function StepFrame({
   const fromStepper = useContext(PositionContext);
   const at = position ?? fromStepper;
   const finish = useContext(FinishContext);
+  const cancel = useContext(CancelContext);
+  // Leaving (finishing setup, or the sign-out Cancel leads to): nothing on the frame starts anything else.
+  const leaving = finish.busy || (cancel?.busy ?? false);
 
   return (
     <Screen scroll testID={testID}>
@@ -79,23 +97,68 @@ export function StepFrame({
               flexDirection: 'row',
               alignItems: 'center',
               minHeight: TARGET,
+              gap: th.space.md,
             }}
           >
             {onBack ? (
-              <IconButton icon="chevron-back" accessibilityLabel={onboardingCopy.frame.back} onPress={onBack} variant="surface" size={TARGET} />
+              <IconButton
+                icon="chevron-back"
+                accessibilityLabel={onboardingCopy.frame.back}
+                onPress={onBack}
+                variant="surface"
+                size={TARGET}
+                disabled={cancel?.busy}
+              />
             ) : null}
             {at ? (
               <Text
                 variant="caption"
                 tone="muted"
                 style={{
-                  marginLeft: 'auto',
+                  // Beside Cancel the position reads from the left; alone it keeps the right edge.
+                  marginLeft: cancel ? undefined : 'auto',
+                  flexShrink: 1,
                   textTransform: 'uppercase',
                   letterSpacing: LABEL_TRACKING,
                 }}
               >
                 {onboardingCopy.frame.stepOf(at.index, at.total)}
               </Text>
+            ) : null}
+            {cancel ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={onboardingCopy.cancel.label}
+                accessibilityState={{ disabled: leaving }}
+                disabled={leaving}
+                onPress={cancel.onCancel}
+                hitSlop={8}
+                style={({ pressed }) => ({
+                  marginLeft: 'auto',
+                  minHeight: TARGET,
+                  minWidth: TARGET,
+                  justifyContent: 'center',
+                  opacity: leaving ? 0.5 : pressed ? 0.6 : 1,
+                })}
+                testID="onboarding-cancel"
+              >
+                {/* A paper capsule with a hairline (the DashPal setup's Cancel), its 44 pt target around it. */}
+                <View
+                  style={{
+                    minHeight: 36,
+                    justifyContent: 'center',
+                    paddingHorizontal: th.space.md,
+                    borderRadius: th.radius.pill,
+                    borderWidth: 1,
+                    borderColor: th.colors.border,
+                    backgroundColor: th.colors.surface,
+                  }}
+                >
+                  <Text variant="subhead" style={{ fontWeight: '600' }}>
+                    {onboardingCopy.cancel.button}
+                  </Text>
+                </View>
+              </Pressable>
             ) : null}
           </View>
           {at ? (
@@ -140,7 +203,7 @@ export function StepFrame({
         <Button
           label={primary.label}
           onPress={primary.onPress}
-          disabled={primary.disabled || finish.busy}
+          disabled={primary.disabled || leaving}
           loading={primary.loading}
           testID={primary.testID}
         />
@@ -148,7 +211,7 @@ export function StepFrame({
           <Button
             label={secondary.label}
             onPress={secondary.onPress}
-            disabled={secondary.disabled || finish.busy}
+            disabled={secondary.disabled || leaving}
             loading={secondary.loading}
             testID={secondary.testID}
             variant="ghost"

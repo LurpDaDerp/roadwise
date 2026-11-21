@@ -28,6 +28,15 @@ export const onboardingCopy = {
     loading: 'Loading',
     finishFailed: "Couldn't finish setting up. Check your connection and try again.",
   },
+  /** Cancel, on every step: it asks first, then signs the driver out, back to the sign-in screen. */
+  cancel: {
+    button: 'Cancel',
+    label: 'Cancel setup',
+    title: 'Cancel setup?',
+    body: "You'll be signed out. Sign in again anytime to finish setting up.",
+    keep: 'Keep setting up',
+    confirm: 'Cancel setup',
+  },
   /** The name each step goes by in its title until the step itself is built. */
   stepTitles: {
     username: 'Pick a username',

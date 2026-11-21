@@ -1,9 +1,10 @@
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, View } from 'react-native';
+import { Alert, BackHandler, View } from 'react-native';
 
 import type { SettingsRepo } from '@/data/db/settings';
 import { useSession } from '@/data/supabase/session';
+import { useSignOutFlow } from '@/features/settings/useSignOutFlow';
 import { Screen, Skeleton, useTheme } from '@/ui';
 
 import { onboardingCopy } from './copy';
@@ -22,7 +23,7 @@ import {
 } from './flow';
 import { readSavedPlan, readSavedStep, savePlan, saveStep } from './state';
 import { STEP_REGISTRY } from './stepRegistry';
-import { StepFinishProvider, StepPositionProvider, type StepFinishState } from './StepFrame';
+import { StepCancelProvider, StepFinishProvider, StepPositionProvider, type StepFinishState } from './StepFrame';
 
 /**
  * The steps passed this session, so "Step n of total" survives a step being replaced by the next.
@@ -54,6 +55,10 @@ export function resetSessionPlan(): void {
  * Past the last step the stepper finishes onboarding (`finishOnboarding`): the account is marked
  * onboarded and the driver lands on Home, or on a link held from before setup. While that runs the
  * step's buttons wait; when it fails the frame says so and the step can be pressed again.
+ *
+ * Every step carries Cancel: it asks first, then signs the driver out (the app's one sign-out), and
+ * the gate shows the sign-in screen. The account and the saved step stay, so signing in again on
+ * this phone goes on with setup where it stopped.
  *
  * Nothing here reroutes out of onboarding on its own; leaving the flow (and never doing so while a
  * drive records, I10) is the gate's job (Task 17).
@@ -179,13 +184,33 @@ function ActiveStep({
     }, [onBack])
   );
 
+  // Cancel leaves setup by signing out; the auth event, not this screen, moves the driver to sign-in.
+  const { signOut, signingOut } = useSignOutFlow();
+  const cancel = { onCancel: () => confirmCancel(() => void signOut()), busy: signingOut };
+
   const Step = STEP_REGISTRY[step];
   return (
     <StepPositionProvider value={position}>
       <StepFinishProvider value={finish}>
-        <Step ctx={ctx} onNext={onNext} onBack={onBack} />
+        <StepCancelProvider value={cancel}>
+          <Step ctx={ctx} onNext={onNext} onBack={onBack} />
+        </StepCancelProvider>
       </StepFinishProvider>
     </StepPositionProvider>
+  );
+}
+
+/** "Cancel setup?": Keep setting up closes it (as does Android's back button); Cancel setup runs `leave`. */
+function confirmCancel(leave: () => void): void {
+  const c = onboardingCopy.cancel;
+  Alert.alert(
+    c.title,
+    c.body,
+    [
+      { text: c.keep, style: 'cancel' },
+      { text: c.confirm, style: 'destructive', onPress: leave },
+    ],
+    { cancelable: true }
   );
 }
 

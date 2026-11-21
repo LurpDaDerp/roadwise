@@ -4,7 +4,7 @@ import { View } from 'react-native';
 
 import { ThemeProvider } from '@/ui/theme';
 
-import { StepFrame, StepPositionProvider } from '../StepFrame';
+import { StepCancelProvider, StepFrame, StepPositionProvider } from '../StepFrame';
 
 function renderFrame(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>);
@@ -120,6 +120,61 @@ describe('StepFrame', () => {
     expect(primary).toBeDisabled();
     await fireEvent.press(primary);
     expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('shows no Cancel outside the stepper', async () => {
+    await renderFrame(<StepFrame title="Ready" primary={{ label: 'Go to Home', onPress: () => {} }} />);
+    expect(screen.queryByRole('button', { name: 'Cancel setup' })).toBeNull();
+  });
+
+  it('offers Cancel inside the stepper, on a target of at least 44 points', async () => {
+    const onCancel = jest.fn();
+    await renderFrame(
+      <StepCancelProvider value={{ onCancel, busy: false }}>
+        <StepFrame
+          position={{ index: 1, total: 6 }}
+          title="Pick a username"
+          primary={{ label: 'Claim username', onPress: () => {} }}
+        />
+      </StepCancelProvider>
+    );
+    const cancel = screen.getByRole('button', { name: 'Cancel setup' });
+    expect(cancel).toHaveTextContent('Cancel');
+    const style = [cancel.props.style]
+      .flat(Infinity)
+      .reduce((a: object, s: object) => ({ ...a, ...s }), {});
+    expect(style.minHeight).toBeGreaterThanOrEqual(44);
+    expect(style.minWidth).toBeGreaterThanOrEqual(44);
+    await fireEvent.press(cancel);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    // The position is still printed beside it.
+    expect(screen.getByText('Step 1 of 6')).toBeOnTheScreen();
+  });
+
+  it('makes every button wait while Cancel signs the driver out', async () => {
+    const onCancel = jest.fn();
+    const onPrimary = jest.fn();
+    const onSkip = jest.fn();
+    const onBack = jest.fn();
+    await renderFrame(
+      <StepCancelProvider value={{ onCancel, busy: true }}>
+        <StepFrame
+          title="Motion"
+          onBack={onBack}
+          primary={{ label: 'Continue', onPress: onPrimary }}
+          secondary={{ label: 'Not now', onPress: onSkip }}
+        />
+      </StepCancelProvider>
+    );
+    for (const name of ['Cancel setup', 'Continue', 'Not now', 'Back']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      await fireEvent.press(button);
+    }
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(onBack).not.toHaveBeenCalled();
   });
 
   it('renders the step content between the body and the actions', async () => {
