@@ -72,6 +72,20 @@ The android job's Gradle step runs locally the same way (JDK 17 and an Android S
     cd android && ./gradlew :drive-sense:testDebugUnitTest :google-credential:compileDebugKotlin :app:assembleDebug -PreactNativeArchitectures=arm64-v8a,x86_64
     python scripts/check-16kb-pages.py android/app/build/outputs/apk/debug/app-debug.apk
 
+## Server pushes (once per Supabase project)
+
+    node scripts/setup-push.js
+
+The weekly recap, friend-request and monthly Wrapped pushes go out through pg_cron's
+`push-sender-sweep` (`private.dispatch_push()`, every minute) and the `push-sender` function. They
+share one key, and the sweep needs the function's URL: the Vault secrets `push_sender_hmac_key` and
+`push_sender_url`, and the function secret `PUSH_SENDER_HMAC_KEY`. No migration can set them, and
+until all three are there the sweep answers `unconfigured` and every push stays `pending` in
+`public.inbox`. The script makes the key (never printed) and stores all three on the linked
+project; run it again to rotate the key. Check afterwards:
+
+    npx supabase db query --linked "select push_state, push_reason, count(*) from public.inbox group by 1, 2"
+
 ## Android release (Google Play)
 
 The build side is in the repo: `eas.json` makes a preview **APK** for testers (`--profile preview`,
