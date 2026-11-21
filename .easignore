@@ -33,12 +33,16 @@ supabase/data/downloads/
 
 # agent and design-tool artifacts (never committed)
 .agent/
+.agents/
 .impeccable/
 .claude/
+CLAUDE.md
 .superpowers/
 PRODUCT.md
+product spec v3.md
 DESIGN.md
 docs/
+skills-lock.json
 
 # os / editor
 .DS_Store
@@ -66,3 +70,10 @@ google-play-service-account*.json
 
 # Privacy Policy, Terms and the data audit drafts (the app bundles src/features/legal/documents.ts)
 /legal/
+
+# getroadwise.app build output (npm run site:build): the app never reads it
+/web/site-dist/
+
+# Local release notes (the App Store checklist holds the App Review demo account): never uploaded
+IOS_DISTRIBUTION_CHECKLIST.md
+FUTURE_TODO.md
