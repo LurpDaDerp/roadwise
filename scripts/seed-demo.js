@@ -11,15 +11,19 @@
  *
  * It touches only the demo account's own rows.
  *
- * The demo signs in with demo@roadwise.app and DEMO_PASSWORD (printed at the end); its username is
- * demo_driver.
+ * The demo signs in with demo@roadwise.app and DEMO_PASSWORD (email and password, as the app's
+ * sign-in screen does); its username is demo_driver. A hosted run needs DEMO_PASSWORD set (it is
+ * never printed); a local run falls back to a fixed dev password, printed at the end. The account
+ * is created confirmed and onboarded with the Terms accepted at the app's own `TERMS_VERSION`
+ * (src/features/auth/legal.ts), so sign-in goes straight to Home.
  *
  * Re-running starts over: the old demo account is deleted (every row of it cascades from
  * auth.users) and a new one is made. Nothing derived is written by hand. The account is created
  * through the Auth admin API and onboarded through the app's own RPCs (claim_username,
  * complete_onboarding, update_profile). Every drive goes through the same path as a phone upload:
  * a v5 upload (its counters as the server would estimate them, and its seconds at driving speed, so
- * every drive was watched for phone use; now and then a phone pickup), stored as finalize-trip
+ * every drive was watched for phone use; now and then a phone pickup; the worst weather it saw,
+ * wetter into the autumn, so Analytics' weather card shows), stored as finalize-trip
  * stores it (`keepDashcamEvents`, `classifyDrive`) through `private.drive_context` +
  * `private.apply_drive`, oldest first. So the Safety Rating (Phone use included), the weekly goals
  * and the achievements are the server's own derivations. A few places repeat the same event
@@ -29,14 +33,15 @@
  * `private.*` is not on the Data API, so the drives go through `supabase db query`: `--local` when
  * SUPABASE_URL is a local address, else `--linked` (the CLI's linked project, which must be the
  * project SUPABASE_URL names). The drives are sent in batches, each one checking that drive_context
- * answers version 23 with nothing stored (two demo drives never start within 5 min and 150 m of
- * each other).
+ * answers version 23 with nothing stored (called as finalize-trip calls it, with no start point;
+ * two demo drives never start within 5 min and 150 m of each other).
  *
  * Env:
  *   SUPABASE_URL                the project URL (local: `supabase status`, API_URL)
  *   SUPABASE_SERVICE_ROLE_KEY   the service_role / secret key (local: `supabase status`)
- *   SUPABASE_ANON_KEY           optional: the key the demo user's own calls use (default: the service key)
- *   DEMO_PASSWORD               optional: default `RoadWiseDemo!2026`
+ *   SUPABASE_ANON_KEY           optional: the key the demo user's own calls use, e.g. the publishable
+ *                               key, so the password sign-in is the app's own (default: the service key)
+ *   DEMO_PASSWORD               required for a hosted project; local default `RoadWiseDemo!2026`
  *
  * The drives are generated from a fixed seed relative to now, so two runs on the same day give the
  * same account. scripts/__tests__/seed-demo.test.ts checks the generator against the upload
@@ -73,11 +78,12 @@ const { parseFinalizeUpload } = require('../src/data/sync/payload.ts');
 const { integrityReason } = require(path.join(ROOT, 'supabase', 'functions', '_shared', 'finalize_rules.ts'));
 const { sunIsDown, dayKey } = require('../src/lib/time.ts');
 const { encodeRuns } = require('../src/lib/polyline.ts');
+const { TERMS_VERSION } = require('../src/features/auth/legal.ts');
 
 const DEMO_EMAIL = 'demo@roadwise.app';
 const DEMO_USERNAME = 'demo_driver';
+/** The local-only fallback password; a hosted run must set DEMO_PASSWORD. */
 const DEFAULT_PASSWORD = 'RoadWiseDemo!2026';
-const TERMS_VERSION = '2026-10-05';
 const TZ = 'America/Los_Angeles';
 const APP_VERSION = '3.0.0-demo';
 const SEED = 20261019;
@@ -575,11 +581,22 @@ function spotEvents(tripIndex, rec, rndSpots, picked) {
   return events.map((e) => ({ id: uuid(rndSpots), ...e }));
 }
 
+/**
+ * The worst weather the phone saw on a drive (`DRIVE_WEATHERS`), from its own generator so the rest
+ * of the history is the same with or without it: a dry Seattle summer, wetter through the autumn.
+ * Weather never moves a score; it fills Analytics' weather card (wet against dry).
+ */
+function driveWeather(trip, rnd) {
+  const month = trip.day.m;
+  const wet = month >= 11 ? 0.5 : month === 10 ? 0.35 : month === 9 ? 0.15 : 0.05;
+  return rnd() < wet ? 'rain' : 'clear';
+}
+
 // ---------------------------------------------------------------------------------------------
 // The whole history, stored as finalize-trip stores it
 
 /** The finalize-trip upload (v5) a phone would have sent for a recorded drive. */
-function toPayload(trip, rec, events, rnd, dashcam) {
+function toPayload(trip, rec, events, rnd, dashcam, weather) {
   const first = rec.track[0];
   const last = rec.track[rec.track.length - 1];
   const exposure = scoring.estimateExposure(rec.miles, rec.durationS);
@@ -604,6 +621,7 @@ function toPayload(trip, rec, events, rnd, dashcam) {
     // the counters the phone would have counted, as the server would estimate them for this drive,
     // and its seconds at driving speed
     exposure: { ...exposure, phoneS: phoneSecondsOf(rec, exposure.movingS) },
+    weather,
   };
   if (dashcam) {
     const movingS = Math.round(rec.durationS * 0.93);
@@ -637,13 +655,13 @@ function toEnvelope(userId, p, stored) {
       miles: p.miles,
       nightMiles: p.nightMiles,
       durationS: Math.round(p.durationS),
-      end: p.end,
       polyline: p.polyline,
       appVersion: p.appVersion,
       dashcam: p.dashcam ?? null,
       origin: p.origin,
       notDrivingExpired: p.notDrivingExpired,
       exposure: p.exposure ? scoring.clampExposure(p.exposure) : null,
+      weather: p.weather ?? null,
     },
     scored,
     reason,
@@ -672,6 +690,7 @@ function buildHistory(now, seed = SEED) {
   const rnd = mulberry32(seed);
   const rndSpots = mulberry32(seed ^ 0x5b07);
   const rndPhone = mulberry32(seed ^ 0x9e37);
+  const rndWeather = mulberry32(seed ^ 0x3c6e);
   const trips = planTrips(now, rnd).filter((t) => localInstant(t.day, t.minutes) < now - 2 * 3600 * 1000);
   const picked = spotTrips(trips);
   const scoredIdx = trips.map((t, i) => (t.short ? -1 : i)).filter((i) => i >= 0);
@@ -685,7 +704,7 @@ function buildHistory(now, seed = SEED) {
     const dashcamEvent = i === lateIdx ? 'drowsy' : i === eyesIdx ? 'eyes_off' : null;
     const others = [...makeEvents(trip, rec, rnd, { dashcamEvent }), ...spotEvents(i, rec, rndSpots, picked)];
     const events = [...others, ...phonePickups(trip, rec, rndPhone, others)].sort((a, b) => a.startedAt - b.startedAt);
-    const payload = toPayload(trip, rec, events, rnd, dashcamIdx.includes(i));
+    const payload = toPayload(trip, rec, events, rnd, dashcamIdx.includes(i), driveWeather(trip, rndWeather));
     return { trip, payload, stored: storeUpload(payload) };
   });
 }
@@ -804,9 +823,10 @@ function jsonLiteral(value) {
   return `$j$${text}$j$::jsonb`;
 }
 
+/** drive_context as finalize-trip calls it (engine.ts): no start point is ever passed on. */
 const contextCall = (userId, p) =>
   `private.drive_context('${userId}'::uuid, '${p.clientTripId}'::uuid, to_timestamp(${p.startedAt} / 1000.0), '${p.localDay}'::date, ` +
-  `${p.start.lat}, ${p.start.lng}, to_timestamp(${p.endedAt} / 1000.0))`;
+  `null::double precision, null::double precision, to_timestamp(${p.endedAt} / 1000.0))`;
 
 /**
  * One batch of drives as one statement: for each, the server's context must be a fresh drive
@@ -831,12 +851,17 @@ function batchSql(userId, items) {
 async function main() {
   const url = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const password = process.env.DEMO_PASSWORD || DEFAULT_PASSWORD;
   if (!url || !serviceKey) {
     console.error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (local: `npx supabase status`).');
     process.exit(2);
   }
   const target = cliTarget(url);
+  const ownPassword = Boolean(process.env.DEMO_PASSWORD);
+  if (!ownPassword && target.flag !== '--local') {
+    console.error('Set DEMO_PASSWORD for a hosted project (the local fallback password is public).');
+    process.exit(2);
+  }
+  const password = process.env.DEMO_PASSWORD || DEFAULT_PASSWORD;
   const { createClient } = require('@supabase/supabase-js');
   const opts = { auth: { persistSession: false, autoRefreshToken: false } };
   const admin = createClient(url, serviceKey, opts);
@@ -851,6 +876,11 @@ async function main() {
   const { data: created, error: createError } = await admin.auth.admin.createUser({ email: DEMO_EMAIL, password, email_confirm: true });
   if (createError) throw createError;
   const userId = created.user.id;
+  // Auth confirms the new address in an update of its own, and 0045's clear_password_on_first_confirm
+  // drops a password an address had before its first confirmation, so the password is set again now
+  // that the address is confirmed.
+  const { error: passwordError } = await admin.auth.admin.updateUserById(userId, { password });
+  if (passwordError) throw passwordError;
 
   const asUser = createClient(url, process.env.SUPABASE_ANON_KEY || serviceKey, opts);
   const { error: signInError } = await asUser.auth.signInWithPassword({ email: DEMO_EMAIL, password });
@@ -910,7 +940,9 @@ async function main() {
   console.log(`  this week's goals: ${summary.challenges.map((c) => `${c.title} ${c.progress}/${c.target}`).join(', ') || 'none'}`);
   console.log(`  categories: ${Object.entries(expect.axes).map(([k, v]) => `${k} ${v ?? '-'}`).join(', ')}`);
   console.log(`  events: ${Object.entries(expect.counts).map(([k, v]) => `${k} ${v}`).join(', ')}; ${expect.clean} of ${expect.scored} scored drives clean`);
-  console.log(`\nSign in with ${DEMO_EMAIL} / ${password} (username @${DEMO_USERNAME})`);
+  const wrapped = await rpc('list_my_wrapped');
+  console.log(`  monthly Wrapped: ${wrapped.map((w) => `${w.month} (${w.drives} drives)`).join(', ') || 'none'}`);
+  console.log(`\nSign in with ${DEMO_EMAIL} / ${ownPassword ? 'DEMO_PASSWORD' : password} (username @${DEMO_USERNAME})`);
 }
 
 module.exports = { buildHistory, summarize, uploadProblem, toEnvelope, batchSql, parseQueryOutput, DEMO_SPOTS };
