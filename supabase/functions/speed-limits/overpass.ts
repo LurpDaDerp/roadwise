@@ -1,6 +1,7 @@
 // The Overpass side of the road-layer fill (migrations 0013, 0021): one query per 0.1° cell for the
 // street classes osm.ways holds and the service roads that post a limit, streamed and normalised
-// into `osm_upsert_ways` rows (a limit read per direction of travel, numbers and implicit values).
+// into `osm_upsert_ways` rows (a limit read per direction of travel, numbers and implicit values;
+// a number with no unit is mph on a US road, km/h elsewhere: united_states.ts).
 //
 //   * `out geom` prints each way's complete geometry (the sample run showed ways reaching outside
 //     the bbox), so a way crossing a cell edge is stored whole, once, under its OSM id, whichever
@@ -25,6 +26,7 @@
 //   * An operator URL can hold an API key, so no URL is ever logged, and a fetch error that names
 //     its URL has it cut out before it leaves `fetchWays`.
 import type { BBox } from '../_shared/speedLimits/geometry';
+import { bareUnitOf, type BareUnit } from './united_states.ts';
 
 /** https://overpass.private.coffee — free, no rate limit. */
 export const PRIVATE_COFFEE = 'https://overpass.private.coffee/api/interpreter';
@@ -204,16 +206,24 @@ export function implicitMaxspeed(raw: unknown): number | null {
 
 /**
  * An OSM `maxspeed` as whole mph in 5..85, or null for anything that is not one posted number:
- * "25 mph" → 25; a bare number or "50 km/h" is km/h (OSM's default unit) → 31; an implicit value
- * ("DE:urban") through `implicitMaxspeed`; "none", "signals", "walk", "variable", a pair like
- * "25 mph;35 mph", or junk → null.
+ * "25 mph" → 25; "50 km/h" → 31; an implicit value ("DE:urban") through `implicitMaxspeed`;
+ * "none", "signals", "walk", "variable", a pair like "25 mph;35 mph", or junk → null. A number
+ * with no unit is read in `bare` (united_states.ts' `bareUnitOf` for the road): km/h, OSM's
+ * default unit ("50" → 31); mph on a US road, by the import's rule (parse_maxspeed.sql): a whole
+ * multiple of 5 in 5..85 is that many mph ("25" → 25), any other number ("27", "05", "90",
+ * "25.5") nothing; or nothing at all on a road crossing out of the United States.
  */
-export function parseMaxspeed(raw: unknown): number | null {
+export function parseMaxspeed(raw: unknown, bare: BareUnit = 'kmh'): number | null {
   if (typeof raw !== 'string') return null;
   const s = raw.trim().toLowerCase();
   let m = /^(\d+(?:\.\d+)?)\s*mph$/.exec(s);
   if (m) return inRange(Number(m[1]));
-  if ((m = /^(\d+(?:\.\d+)?)\s*(?:km\/h|kmh|kph)?$/.exec(s))) return inRange(Number(m[1]) / KMH_PER_MPH);
+  if ((m = /^(\d+(?:\.\d+)?)\s*(?:km\/h|kmh|kph)$/.exec(s))) return inRange(Number(m[1]) / KMH_PER_MPH);
+  if (/^\d+(?:\.\d+)?$/.test(s)) {
+    if (bare === 'kmh') return inRange(Number(s) / KMH_PER_MPH);
+    const n = Number(s);
+    return bare === 'mph' && /^[1-9]\d?$/.test(s) && n % 5 === 0 && n >= 5 && n <= 85 ? n : null;
+  }
   if ((m = /^(\d+(?:\.\d+)?)\s*knots$/.exec(s))) return inRange(Number(m[1]) * MPH_PER_KNOT);
   return implicitMaxspeed(raw);
 }
@@ -224,14 +234,15 @@ const ZONE_KEYS = ['maxspeed:type', 'source:maxspeed', 'zone:maxspeed'] as const
 /**
  * The way's limit in each direction of travel, whole mph or null: `maxspeed:forward` along the
  * digitised direction and `maxspeed:backward` against it, else `maxspeed`, else the implicit limit
- * its zone tags name (`maxspeed:type=DE:urban` and the like).
+ * its zone tags name (`maxspeed:type=DE:urban` and the like). A number with no unit is read in
+ * `bare` (`parseMaxspeed`).
  */
-export function wayLimits(tags: Record<string, unknown>): { forward: number | null; backward: number | null } {
-  let base = parseMaxspeed(tags.maxspeed);
+export function wayLimits(tags: Record<string, unknown>, bare: BareUnit = 'kmh'): { forward: number | null; backward: number | null } {
+  let base = parseMaxspeed(tags.maxspeed, bare);
   for (const k of ZONE_KEYS) base ??= implicitMaxspeed(tags[k]);
   return {
-    forward: parseMaxspeed(tags['maxspeed:forward']) ?? base,
-    backward: parseMaxspeed(tags['maxspeed:backward']) ?? base,
+    forward: parseMaxspeed(tags['maxspeed:forward'], bare) ?? base,
+    backward: parseMaxspeed(tags['maxspeed:backward'], bare) ?? base,
   };
 }
 
@@ -256,9 +267,10 @@ const text = (v: unknown, max: number): string | null => {
 
 /**
  * One Overpass element as upsert rows: none for anything but a road of a loaded class with a line;
- * one for most roads, carrying the limit for its direction of travel (`wayLimits`); two for a
- * two-way road with a different limit each way, one-way each (`BACKWARD_ID_OFFSET`). A service road
- * gives a row only for a direction it posts a limit for.
+ * one for most roads, carrying the limit for its direction of travel (`wayLimits`, a number with no
+ * unit read by where the line lies: `bareUnitOf`); two for a two-way road with a different limit
+ * each way, one-way each (`BACKWARD_ID_OFFSET`). A service road gives a row only for a direction it
+ * posts a limit for.
  */
 export function toWayRows(el: unknown): WayRow[] {
   if (el === null || typeof el !== 'object') return [];
@@ -280,7 +292,7 @@ export function toWayRows(el: unknown): WayRow[] {
   }
   if (line.length < 2) return [];
   const oneway = parseOneway(tags);
-  const { forward, backward } = wayLimits(tags);
+  const { forward, backward } = wayLimits(tags, bareUnitOf(line));
   const raw = (key: string): string | null => text(tags[key], 64) ?? text(tags.maxspeed, 64);
   const row = (rowId: number, mph: number | null, rawKey: string, dir: -1 | 0 | 1): WayRow => ({
     id: rowId,

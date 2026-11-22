@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(31);
+select plan(32);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -19,10 +19,20 @@ set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000001","role":"authenticated"}', true);
 select is(public.get_notification_prefs(), '{"tz": null, "social": true, "leagues": true, "quiet_end": "07:00", "quiet_start": "22:00", "weekly_recap": true, "quiet_enabled": true}'::jsonb, 'defaults without a row');
 select throws_ok($$ select public.set_notification_prefs(p_quiet_start := '25:00') $$, '22023', 'quiet hours must be HH:MM', 'a bad time is refused');
-select throws_ok($$ select public.set_notification_prefs(p_tz := 'Mars/Olympus') $$, '22023', 'unknown time zone', 'an unknown zone is refused');
+-- answered, not raised (0046: its take from the zone budget stands), as PostgREST's error body
+select is(public.set_notification_prefs(p_tz := 'Mars/Olympus'), '{"code": "22023", "details": null, "hint": null, "message": "unknown time zone"}'::jsonb,
+  'an unknown zone is refused');
 select is(public.set_notification_prefs(p_weekly_recap := false, p_quiet_start := '23:30', p_tz := 'America/Los_Angeles') -> 'weekly_recap', 'false'::jsonb, 'A turns the weekly recap off');
 select is(public.get_notification_prefs(), '{"tz": "America/Los_Angeles", "social": true, "leagues": true, "quiet_end": "07:00", "quiet_start": "23:30", "weekly_recap": false, "quiet_enabled": true}'::jsonb, 'the row holds the changes, the rest default');
+-- B's row, there only for the read below
+reset role;
+insert into public.notification_prefs (user_id, tz) values ('00000000-0000-0000-0000-000000000002', 'Europe/Paris');
+set local role authenticated;
 select is((select count(*)::int from public.notification_prefs), 1, 'the owner reads their prefs row');
+select is_empty($$ select 1 from public.notification_prefs where user_id = '00000000-0000-0000-0000-000000000002' $$, 'and never another account''s');
+reset role;
+delete from public.notification_prefs where user_id = '00000000-0000-0000-0000-000000000002';
+set local role authenticated;
 select throws_ok($$ update public.notification_prefs set weekly_recap = true $$, '42501', null, 'but cannot write it directly');
 select throws_ok($$ select count(*) from public.inbox $$, '42501', null, 'the inbox is server-only');
 select throws_ok($$ select public.claim_push_batch(10, 60) $$, '42501', null, 'a client cannot claim pushes');
@@ -87,7 +97,7 @@ select is((select bool_and(has_function_privilege('service_role', f, 'execute') 
     from unnest(array['public.claim_push_batch(int, int)', 'public.record_push_outcomes(jsonb)', 'public.push_receipts_due(int)', 'public.record_push_receipts(jsonb)']) f), true, 'the push writers execute for service_role only');
 select is((select count(*)::int from information_schema.role_table_grants g where g.grantee in ('anon', 'authenticated') and g.table_name in ('inbox', 'push_deliveries')), 0,
   'inbox and deliveries have no client grants');
-select is((select array_agg(jobname order by jobname) from cron.job), array['cron-log-purge', 'inbox-purge', 'monthly-stats', 'monthly-wrapped', 'purge-auth-audit', 'push-sender-sweep', 'rating-refresh', 'route-archive', 'weekly-recap'], 'the nine cron jobs are scheduled (no league close; 0038: the Wrapped cohort and push)');
+select is((select array_agg(jobname order by jobname) from cron.job), array['auth-mail-purge', 'cron-log-purge', 'inbox-purge', 'monthly-stats', 'monthly-wrapped', 'purge-auth-audit', 'push-sender-sweep', 'rating-refresh', 'route-archive', 'weekly-recap'], 'the ten cron jobs are scheduled (no league close; 0038: the Wrapped cohort and push; 0046: the send-email cap purge)');
 
 select * from finish();
 rollback;

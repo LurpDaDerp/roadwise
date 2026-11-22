@@ -19,6 +19,20 @@ Deno.test('a weekly recap is sent to every token with its words and the home url
   assertEquals(d.message.channelId, 'pushes');
 });
 
+Deno.test('a send carries the rest of its kind’s life as the providers’ ttl, in whole seconds and never 0', () => {
+  const ttl = (o: Partial<PushItem>) => {
+    const d = decide(item(o), NOW);
+    return d.kind === 'send' ? d.message.ttl : d.kind;
+  };
+  assertEquals(ttl({}), 2 * 86_400 - 3_600); // a recap made an hour ago: 2 days less that hour
+  assertEquals(ttl({ createdAt: NOW, kind: 'friend_request', payload: {} }), 7 * 86_400);
+  assertEquals(ttl({ createdAt: NOW, kind: 'monthly_wrapped', payload: { month: '2026-08' } }), 3 * 86_400);
+  assertEquals(ttl({ createdAt: NOW - 1_500 }), 2 * 86_400 - 2); // part seconds round down
+  // At the edge of its life the item is still sent, held for the least a provider takes.
+  assertEquals(ttl({ createdAt: NOW - TTL_MS.weekly_recap }), 1);
+  assertEquals(ttl({ createdAt: NOW - TTL_MS.weekly_recap + 999 }), 1);
+});
+
 Deno.test('a token held by two device rows of one account is sent to once, in the claim order', () => {
   const a = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
   const b = 'ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]';

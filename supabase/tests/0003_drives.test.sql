@@ -5,7 +5,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(66);
+select plan(67);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -143,6 +143,8 @@ select is(private.dispute_event(pg_temp.a(), '44444444-4444-4444-8444-4444444444
 -- ---------------------------------------------------------------------------
 -- "Wasn't driving"
 -- ---------------------------------------------------------------------------
+select throws_ok($$ select private.mark_not_driving('00000000-0000-0000-0000-000000000002', '44444444-4444-4444-8444-444444444444') $$,
+  'P0002', 'trip not found', 'B cannot mark A''s drive: it is not found');
 select throws_ok($$ select private.mark_not_driving('00000000-0000-0000-0000-000000000001', '33333333-3333-4333-8333-333333333333') $$,
   '42501', 'the not driving option expired', 'a drive whose "Not driving?" ran out cannot be marked');
 -- an older drive (not the latest) within 24 h

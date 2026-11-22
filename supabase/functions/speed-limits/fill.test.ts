@@ -1,6 +1,7 @@
 import { assert, assertAlmostEquals, assertEquals } from '@std/assert';
 import { fillCellKey, parseTileKey, tileBounds } from '../_shared/speedLimits/tiles';
 import {
+  CEILING_LOG_MS,
   CELL_DEG,
   cellBounds,
   cellKey,
@@ -253,6 +254,26 @@ Deno.test('a tile whose own cell another caller is filling reads filling; its lo
   assertEquals(h.background.length, 1);
   await h.fill.settled();
   assertEquals(h.finishes, [{ cell: SOUTH, outcome: 'done', ways: 3 }]);
+});
+
+Deno.test('with the road layer at its ceiling (0047), an area never loaded reads filling: nothing is fetched or charged, and the isolate says so at most every CEILING_LOG_MS', async () => {
+  assertEquals(CEILING_LOG_MS, 600_000);
+  const h = harness({ claim: (c) => (c.y === SEATTLE.y ? 'full' : 'done') });
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
+  assertEquals(h.background.length, 0);
+  assertEquals(h.userBudgets, []);
+  assertEquals(h.finishes, []);
+  const warned = () => h.logs.filter((l) => l.level === 'warn' && String(l.args[0]).includes('ceiling')).length;
+  assertEquals(warned(), 1);
+  assert(!JSON.stringify(h.logs).includes('476'), 'no cell in the log');
+  // asked again like any filling cell, warned again only once the log interval has passed
+  h.clock.now += FILLING_MEMO_MS;
+  assertEquals(await h.fill.ensure([TILE], UID), [true]);
+  assertEquals(h.claims.filter((c) => c.y === SEATTLE.y).length, 2);
+  assertEquals(warned(), 1);
+  h.clock.now += CEILING_LOG_MS;
+  await h.fill.ensure([TILE], UID);
+  assertEquals(warned(), 2);
 });
 
 Deno.test('a tile across a cell edge is filling until both its cells are done; several tiles share one claim per cell', async () => {
@@ -579,7 +600,8 @@ Deno.test("the operator's instances (OVERPASS_URL) are asked first at no budget;
 // --- the database port ---
 
 Deno.test('the claim and the finish carry the road-layer version, so a cell filled by an older one is filled again (0021)', async () => {
-  assertEquals(FILL_VERSION, 2);
+  // 3: a number with no unit is mph on a US road, so every cell loaded by version 2 is loaded again.
+  assertEquals(FILL_VERSION, 3);
   const calls: [string, unknown][] = [];
   const client = {
     rpc: (name: string, args: unknown) => {
@@ -594,4 +616,11 @@ Deno.test('the claim and the finish carry the road-layer version, so a cell fill
     ['osm_claim_fill_cell', { p_y: 476, p_x: -1224, p_version: FILL_VERSION }],
     ['osm_finish_fill_cell', { p_y: 476, p_x: -1224, p_outcome: 'done', p_way_count: 12, p_version: FILL_VERSION }],
   ]);
+});
+
+Deno.test('the claim reads the database’s answers: claimed, done, full (0047), and anything else as filling', async () => {
+  for (const [data, want] of [['claimed', 'claimed'], ['done', 'done'], ['full', 'full'], ['filling', 'filling'], ['what', 'filling'], [null, 'filling']] as const) {
+    const db = createOsmFillDb({ rpc: () => Promise.resolve({ data, error: null }) } as never);
+    assertEquals(await db.claimFillCell(SEATTLE), want, String(data));
+  }
 });

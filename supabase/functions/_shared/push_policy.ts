@@ -6,6 +6,10 @@
 //
 // Quiet hours run in `ctx.tz` with zoned arithmetic through Intl, so a deferral across a DST shift
 // lands on the wall-clock time it names. A zone Intl does not know falls back to New York.
+//
+// A send carries what is left of the kind's life (`TTL_MS`) as the message's `ttl`, so a push
+// APNs or FCM cannot hand to the phone within that life is dropped there too, never delivered
+// days or weeks later when the phone comes back.
 import type { ExpoMessage } from './expo_push.ts';
 import { ANDROID_CHANNEL, isPushKind, renderPush, TTL_MS } from './push_copy.ts';
 
@@ -167,6 +171,9 @@ export function decide(item: PushItem, now: number): Decision {
       sound: 'default',
       priority: 'default',
       channelId: ANDROID_CHANNEL,
+      // The rest of the item's life, in whole seconds. Never 0: to the providers that means try
+      // once and keep nothing, and an item exactly at its edge is still sent (the stale rule above).
+      ttl: Math.max(1, Math.floor((item.createdAt + TTL_MS[item.kind] - now) / 1000)),
     },
   };
 }

@@ -226,6 +226,7 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
       sound: 'default',
       priority: 'default',
       channelId: 'pushes',
+      ttl: 2 * 86_400 - 600, // recap made 10 min ago: 2 days less 10 min
     },
     {
       to: TOKEN_B,
@@ -235,6 +236,7 @@ Deno.test('happy path: every token gets the rendered message, outcomes record th
       sound: 'default',
       priority: 'default',
       channelId: 'pushes',
+      ttl: 7 * 86_400 - 600,
     },
   ]);
   assertEquals(h.fake.outcomes, [
@@ -261,6 +263,7 @@ Deno.test('a monthly Wrapped is sent with its month and the url of that month', 
       sound: 'default',
       priority: 'default',
       channelId: 'pushes',
+      ttl: 3 * 86_400 - 600,
     },
   ]);
   assertEquals(h.fake.outcomes, [{ inbox_id: w.inboxId, state: 'sent', reason: 'ok', deliveries: [{ token: TOKEN_A, ticket_id: 'ticket-0-aaa' }] }]);

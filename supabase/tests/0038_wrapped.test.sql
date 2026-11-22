@@ -9,7 +9,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(107);
+select plan(114);
 
 -- ava (01) drives September 2026 in New York; bo (02) and 28 more drivers (03..30) fill the cohort.
 -- 31..36 never join September's cohort: 31 has 2 September drives and one in October; 32 is set to
@@ -341,6 +341,9 @@ select is(public.get_shared_wrapped((select id from share)), null, 'nor does one
 reset role;
 insert into public.user_achievements (user_id, achievement_id, unlocked_at)
   values ('00000000-0000-0000-0000-000000000001', 'clean_500', timestamptz '2026-09-15 12:00 America/New_York');
+-- bob shares his September too: ava's re-share, unshare and new share below leave it alone
+select pg_temp.as_user(2);
+create temporary table share2 as select public.create_wrapped_share('2026-09') as id;
 set local role authenticated;
 select pg_temp.as_user(1);
 select is((select x ->> 'badgesCount' from (select public.get_shared_wrapped((select id from share)) as x) y), '2', 'the link shows the snapshot');
@@ -354,6 +357,21 @@ select isnt(public.create_wrapped_share('2026-09'), (select id from share), 'sha
 select pg_temp.as_user(5);
 select is(pg_temp.open_n(60), 60, '60 opens in a minute pass');
 select throws_ok($$ select public.get_shared_wrapped('AAAAAAAAAAAA') $$, '42501', 'too many requests', 'the 61st is refused');
+-- the other budgets, all but one spent: 60 Wrapped opens and 30 archive loads a minute, and 20 shares
+-- and unshares an hour together
+reset role;
+insert into public.rate_limits (user_id, key, window_start, count) values
+  ('00000000-0000-0000-0000-000000000005', 'get_my_wrapped', now(), 59), ('00000000-0000-0000-0000-000000000005', 'list_my_wrapped', now(), 29),
+  ('00000000-0000-0000-0000-000000000001', 'wrapped_share', now(), 19)
+  on conflict (user_id, key) do update set window_start = now(), count = excluded.count;
+set local role authenticated;
+select lives_ok($$ select public.get_my_wrapped('2026-09') $$, 'the 60th Wrapped open in a minute');
+select throws_ok($$ select public.get_my_wrapped('2026-09') $$, '42501', 'too many requests', 'the 61st is refused');
+select lives_ok($$ select public.list_my_wrapped() $$, 'the 30th archive load in a minute');
+select throws_ok($$ select public.list_my_wrapped() $$, '42501', 'too many requests', 'the 31st is refused');
+select pg_temp.as_user(1);
+select lives_ok($$ select public.create_wrapped_share('2026-09') $$, 'the 20th share or unshare in an hour');
+select throws_ok($$ select public.delete_wrapped_share('2026-09') $$, '42501', 'too many requests', 'the 21st is refused, an unshare counting with the shares');
 select set_config('request.jwt.claims', '{"role":"authenticated"}', true);
 select throws_ok($$ select public.list_my_wrapped() $$, '42501', 'list_my_wrapped requires an authenticated user', 'no user, no archive');
 select throws_ok($$ select public.get_my_wrapped('2026-09') $$, '42501', 'get_my_wrapped requires an authenticated user', 'nor a Wrapped');
@@ -364,7 +382,9 @@ set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
 select throws_ok($$ select public.get_shared_wrapped('AAAAAAAAAAAA') $$, '42501', null, 'anon opens no share');
 reset role;
-select is((select count(*)::int from public.wrapped_shares), 1, 'one share row per driver and month');
+select is((select count(*)::int from public.wrapped_shares), 2, 'one share row per driver and month (ava''s and bob''s)');
+select is((select array[id, snapshot ->> 'username'] from public.wrapped_shares where user_id = '00000000-0000-0000-0000-000000000002' and month = '2026-09'),
+  array[(select id from share2), 'bob'], 'another driver''s share of the same month survives ava''s re-share, unshare and new share');
 
 -- ---------------------------------------------------------------------------
 -- the push
@@ -411,7 +431,8 @@ select is((select array[jsonb_array_length(e -> 'wrapped_archive')::text, e -> '
   array['2', '2026-07', 'false'], 'and the archive''s kept lines');
 reset role;
 delete from auth.users where id = '00000000-0000-0000-0000-000000000001';
-select is((select count(*)::int from public.wrapped_shares) + (select count(*)::int from private.monthly_stats where user_id = '00000000-0000-0000-0000-000000000001')
+select is((select count(*)::int from public.wrapped_shares where user_id = '00000000-0000-0000-0000-000000000001')
+    + (select count(*)::int from private.monthly_stats where user_id = '00000000-0000-0000-0000-000000000001')
     + (select count(*)::int from private.wrapped_archive where user_id = '00000000-0000-0000-0000-000000000001'), 0,
   'deleting the account deletes its shares, monthly numbers and archive lines');
 

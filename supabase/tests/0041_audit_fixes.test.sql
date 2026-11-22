@@ -1,15 +1,17 @@
 -- 0041_audit_fixes: user_tz reads the stored zone without scanning pg_timezone_names and falls back to
 -- New York for a zone of the wrong shape or one the server does not know; the friend RPCs refuse a
--- caller who never finished setting up and list_friends leaves such accounts out; a refusal after the
--- rate-limit take is answered (PostgREST's error body and status), so the take stands; a report about
--- nobody stores nothing and still costs a report; a friend-request push whose request was cancelled or
--- ended by a block is skipped at the claim, while a standing one is sent.
+-- caller who never finished setting up, such an account is never found, opened or asked, and
+-- list_friends leaves it out; a refusal after the rate-limit take is answered (PostgREST's error body
+-- and status), so the take stands; a report about nobody stores nothing and still costs a report;
+-- search_users takes 30 a minute; a friend-request push whose request was cancelled or ended by a
+-- block is skipped at the claim, while a standing one is sent.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(21);
+select plan(27);
 
--- ann (01), bob (02), cal (03), dee (06) and eve (05) are set up; 04 signed in and stopped there
+-- ann (01), bob (02), cal (03), dee (06) and eve (05) are set up; 04 claimed 'zed' and stopped
+-- before the terms
 insert into auth.users (id, email)
   select ('00000000-0000-0000-0000-00000000000' || g)::uuid, 'u' || g || '@example.com' from generate_series(1, 6) g;
 update public.profiles p set username = v.name, onboarded_at = now()
@@ -17,6 +19,7 @@ update public.profiles p set username = v.name, onboarded_at = now()
                ('00000000-0000-0000-0000-000000000003'::uuid, 'cal'), ('00000000-0000-0000-0000-000000000005'::uuid, 'eve'),
                ('00000000-0000-0000-0000-000000000006'::uuid, 'dee')) v(id, name)
   where p.id = v.id;
+update public.profiles set username = 'zed' where id = '00000000-0000-0000-0000-000000000004';
 insert into public.notification_prefs (user_id, tz) values ('00000000-0000-0000-0000-000000000001', 'America/Chicago'),
   ('00000000-0000-0000-0000-000000000002', 'Mars/Olympus'), ('00000000-0000-0000-0000-000000000003', 'posix/America/Chicago')
   on conflict (user_id) do update set tz = excluded.tz;
@@ -62,6 +65,13 @@ insert into public.friend_requests (from_id, to_id) values ('00000000-0000-0000-
 set local role authenticated;
 select pg_temp.as_user(1);
 select is(jsonb_array_length(public.list_friends() -> 'incoming'), 0, 'a request from an account that never finished setting up is not listed');
+-- nor can anyone find it, open its profile or ask it (eve's budgets are unused)
+select pg_temp.as_user(5);
+select is(public.search_users('zed'), '[]'::jsonb, 'an account that never finished setting up is not found by search');
+select is(public.get_profile('zed'), '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'nor by its username');
+select is(public.send_friend_request('00000000-0000-0000-0000-000000000004'),
+  '{"code": "P0002", "details": null, "hint": null, "message": "profile not found"}'::jsonb, 'nor can it be sent a request');
+select pg_temp.as_user(1);
 
 -- ---------------------------------------------------------------------------
 -- refusals after the take stand
@@ -81,6 +91,14 @@ reset role;
 select is(array[pg_temp.taken(1, 'send_friend_request'), pg_temp.taken(1, 'report_target'),
     (select count(*)::int from public.reports r where r.reporter_id = '00000000-0000-0000-0000-000000000001')],
   array[1, 1, 0], 'both cost their budget, and the report stored nothing');
+
+-- search_users: 30 a minute, empty answers included (ann has searched nothing yet)
+set local role authenticated;
+select pg_temp.as_user(1);
+select is((select count(*)::int from generate_series(1, 30) g, lateral (select public.search_users('zzz' || g) as r) x), 30, '30 searches in a minute');
+select throws_ok($$ select public.search_users('zzz31') $$, '42501', 'too many requests', 'the 31st search in a minute is refused');
+reset role;
+select is(pg_temp.taken(1, 'search_users'), 30, 'every search counts, empty answers included');
 
 -- ---------------------------------------------------------------------------
 -- a friend-request push only while the request stands

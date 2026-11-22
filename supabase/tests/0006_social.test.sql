@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(48);
+select plan(50);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -115,6 +115,17 @@ select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000
 select throws_ok($$ select public.report_target('clan', '00000000-0000-0000-0000-00000000dead', 'other', '') $$, '22023', 'kind must be user with a target id', 'a report names a user only (0032: clans are gone)');
 select is((select count(*)::int from generate_series(1, 10) i, lateral (select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', 'note ' || i)) r), 10, 'ten reports go through');
 select throws_ok($$ select public.report_target('user', '00000000-0000-0000-0000-000000000002', 'harassment', '') $$, '42501', 'too many requests', 'the eleventh in a day is refused');
+
+-- the 500-block cap: ben already blocks 499 (the 200 above and 299 more)
+reset role;
+insert into auth.users (id, email) select ('b0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid, 'g' || i || '@example.com' from generate_series(1, 301) i;
+insert into public.blocks (blocker_id, blocked_id)
+  select '00000000-0000-0000-0000-000000000002', u.id from auth.users u
+  where u.email like 'f%@example.com' or (u.email like 'g%@example.com' and u.id < 'b0000000-0000-4000-8000-000000000300');
+set local role authenticated;
+select pg_temp.as_user(2);
+select lives_ok($$ select public.block_user('b0000000-0000-4000-8000-000000000300') $$, 'a 500th block');
+select throws_ok($$ select public.block_user('b0000000-0000-4000-8000-000000000301') $$, '42501', 'you have reached the block limit', 'a 501st is refused');
 
 select * from finish();
 rollback;

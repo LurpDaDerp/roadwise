@@ -5,7 +5,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(39);
+select plan(44);
 
 -- ava (1) rides; fay (2) is her friend; sam (3) is a stranger
 insert into auth.users (id, email) values
@@ -143,6 +143,24 @@ select pg_temp.as_user(2);
 select throws_ok($$ select public.get_passenger_rides('00000000-0000-0000-0000-000000000001') $$, 'P0002', 'profile not found', 'nor a friend across a block');
 select set_config('request.jwt.claims', '{"role":"authenticated"}', true);
 select throws_ok($$ select public.get_passenger_rides() $$, '42501', 'get_passenger_rides requires an authenticated user', 'a JWT without sub is refused');
+-- the mark reads the caller's own drives only: fay naming one of ava's finds nothing
+select pg_temp.as_user(2);
+select throws_ok($$ select public.mark_passenger_ride('a0000000-0000-4000-8000-000000000001') $$, 'P0002', 'trip not found', 'another account''s drive is not found');
+reset role;
+
+-- the budgets, all but one spent: 60 rides an hour (the in-drive claim and the notification's mark
+-- together) and 60 count reads a minute
+insert into public.rate_limits (user_id, key, window_start, count) values
+  ('00000000-0000-0000-0000-000000000001', 'passenger_rides', now(), 59), ('00000000-0000-0000-0000-000000000003', 'get_passenger_rides', now(), 59)
+  on conflict (user_id, key) do update set window_start = now(), count = excluded.count;
+set local role authenticated;
+select pg_temp.as_user(1);
+select lives_ok($$ select public.record_passenger_ride('b0000000-0000-4000-8000-000000000001', pg_temp.today()) $$, 'the 60th ride in an hour');
+select throws_ok($$ select public.mark_passenger_ride('a0000000-0000-4000-8000-000000000001') $$, '42501', 'too many requests',
+  'the 61st is refused, a mark counting with the claims');
+select pg_temp.as_user(3);
+select lives_ok($$ select public.get_passenger_rides() $$, 'the 60th count read in a minute');
+select throws_ok($$ select public.get_passenger_rides() $$, '42501', 'too many requests', 'the 61st is refused');
 reset role;
 
 -- ---------------------------------------------------------------------------

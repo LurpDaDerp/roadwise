@@ -20,6 +20,10 @@
 //     at once, so no one user can drain the shared Overpass budget for everyone. A paid claim that
 //     was released without a query is re-claimed free for the budget's window (per isolate), so
 //     the user's budget is spent on queries, not on waiting out a busy app-wide minute.
+//   * What the layer can grow to is bounded too: once osm.ways reaches the size ceiling the
+//     database keeps (migration 0047), a cell that has never loaded is not claimed (`full`, read
+//     as filling and logged), so no number of accounts can fill the database's disk. Loaded cells
+//     keep refreshing; below the ceiling nothing changes.
 //   * Memo: a cell known `done` is not asked about again for `DONE_MEMO_MS` in this isolate, and one
 //     known `filling` not for `FILLING_MEMO_MS`, so steady-state tile requests cost no claim RPC.
 //   * The fill streams the cell's ways from Overpass (overpass.ts) and upserts them in batches of
@@ -79,9 +83,12 @@ export const REFUSED_COOLDOWN_MS = 60_000;
  * the next time a driver needs it, so a change to the classes or to how a limit is read reaches
  * every loaded area, not only new ones. Raised with `TILE_DATA_VERSION` on the device, which then
  * fetches its stored tiles again. 2: living streets, `road`s and service roads with a limit;
- * limits per direction; implicit (zone) limits.
+ * limits per direction; implicit (zone) limits. 3: a number with no unit is mph on a US road
+ * (united_states.ts).
  */
-export const FILL_VERSION = 2;
+export const FILL_VERSION = 3;
+/** How often an isolate logs that the road layer is at its size ceiling (migration 0047). */
+export const CEILING_LOG_MS = 10 * 60_000;
 
 const M_PER_DEG = 111_320;
 const DEG = Math.PI / 180;
@@ -93,10 +100,14 @@ export interface Cell {
   x: number;
 }
 
-export type ClaimStatus = 'claimed' | 'filling' | 'done';
+/**
+ * `full`: the cell has never loaded and the road layer is at its size ceiling (migration 0047), so
+ * it is not claimed; to the device it reads as a cell still filling.
+ */
+export type ClaimStatus = 'claimed' | 'filling' | 'done' | 'full';
 export type FillOutcome = 'done' | 'failed' | 'released';
 
-/** The fill's database port: the three fill functions (0013, versioned in 0021) and the two budgets, service-role only. */
+/** The fill's database port: the three fill functions (0013, versioned in 0021, the ceiling in 0047) and the two budgets, service-role only. */
 export interface OsmFillDb {
   claimFillCell(cell: Cell): Promise<ClaimStatus>;
   finishFillCell(cell: Cell, outcome: FillOutcome, wayCount: number): Promise<boolean>;
@@ -172,7 +183,7 @@ export const fillable = (b: BBox): boolean =>
   b.minLng >= -180 &&
   b.maxLng <= 180;
 
-const toStatus = (v: unknown): ClaimStatus => (v === 'claimed' || v === 'done' ? v : 'filling');
+const toStatus = (v: unknown): ClaimStatus => (v === 'claimed' || v === 'done' || v === 'full' ? v : 'filling');
 
 export function createOsmFillDb(client: SupabaseClient): OsmFillDb {
   return {
@@ -257,6 +268,8 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
   let queue: Promise<void> = Promise.resolve();
   /** Mirrors that refused, by when they may be asked again. */
   const cooling = new Map<string, number>();
+  /** When this isolate may next log that the road layer is at its ceiling. */
+  let ceilingLogAt = 0;
 
   const take = (b: { key: string; window: string; max: number }): Promise<boolean> =>
     db.takeGlobalRateLimit(b.key, b.window, b.max).catch((err: unknown) => {
@@ -363,6 +376,15 @@ export function createOsmFill(deps: OsmFillDeps): OsmFill {
       return s;
     }
     filling.set(key, t + FILLING_MEMO_MS);
+    if (s === 'full') {
+      // An area never loaded, with the road layer at its size ceiling: nothing is fetched, and the
+      // device keeps asking as it does while a cell fills. The operator raises the ceiling (0047).
+      if (t >= ceilingLogAt) {
+        ceilingLogAt = t + CEILING_LOG_MS;
+        log.warn('speed-limits osm fill ceiling reached: areas never loaded are not loaded', {});
+      }
+      return 'filling';
+    }
     if (s !== 'claimed') return s;
     // The claim is this user's to pay for, unless they already paid for this cell and no query was
     // made with it: refused, it goes straight back.

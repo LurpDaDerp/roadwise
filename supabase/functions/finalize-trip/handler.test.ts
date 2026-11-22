@@ -320,6 +320,13 @@ Deno.test('integrity: a mock location is stored unscored as spoofed, on its own;
   assertEquals([envelopeOf(h3).scored, envelopeOf(h3).reason], [false, 'implausible']);
 });
 
+Deno.test('integrity: a drive that never left a privacy zone (no route uploaded) is scored on its miles', async () => {
+  const h = harness();
+  const res = await handleFinalizeTrip(post(payload({ miles: 7, polyline: '' })), h.deps);
+  assertEquals(res.status, 200);
+  assertEquals([envelopeOf(h).scored, envelopeOf(h).reason], [true, null]);
+});
+
 Deno.test('a drive overlapping another stored drive of the user is stored unscored as implausible; a replay never asks', async () => {
   const h = harness({ overlaps: true });
   const res = await handleFinalizeTrip(post(payload()), h.deps);

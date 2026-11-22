@@ -4,7 +4,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(17);
+select plan(19);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -56,6 +56,16 @@ select is(public.release_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4
 reset role;
 select isnt((select live_activity_sent_at from public.devices where user_id = '00000000-0000-0000-0000-000000000001' and device_id = 'device-aaaaaaaa'), null,
   'and A''s claim stands');
+
+-- 30 releases an hour (all but one spent)
+insert into public.rate_limits (user_id, key, window_start, count) values ('00000000-0000-0000-0000-000000000001', 'live_activity_release', now(), 29)
+  on conflict (user_id, key) do update set window_start = now(), count = excluded.count;
+set local role authenticated;
+select pg_temp.as_user(1);
+select lives_ok($$ select public.release_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000009') $$, 'the 30th release in an hour');
+select throws_ok($$ select public.release_live_activity_start('device-aaaaaaaa', 'aaaaaaaa-0000-4000-8000-000000000009') $$, '42501', 'too many requests',
+  'the 31st is refused');
+reset role;
 
 select * from finish();
 rollback;

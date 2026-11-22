@@ -140,6 +140,57 @@ Deno.test('maxspeed: mph as is, km/h (bare or tagged) converted to the nearest m
   for (const [raw, want] of cases) assertEquals(parseMaxspeed(raw), want, `maxspeed ${JSON.stringify(raw)}`);
 });
 
+Deno.test('maxspeed with no unit on a US road is mph by the import\'s rule (a whole multiple of 5 in 5..85, else nothing); on a road crossing out of the US it is nothing; a unit always decides', () => {
+  const mph: [unknown, number | null][] = [
+    ['25', 25],
+    [' 35 ', 35],
+    ['10', 10],
+    ['5', 5],
+    ['85', 85],
+    ['40', 40],
+    ['27', null],
+    ['05', null],
+    ['90', null],
+    ['100', null],
+    ['0', null],
+    ['25.5', null],
+    ['25.0', null],
+    // a unit, or a name, reads as it does anywhere
+    ['50 km/h', 31],
+    ['25 mph', 25],
+    ['10 knots', 12],
+    ['US:urban', null],
+    ['none', null],
+  ];
+  for (const [raw, want] of mph) assertEquals(parseMaxspeed(raw, 'mph'), want, `US maxspeed ${JSON.stringify(raw)}`);
+  for (const [raw, want] of [['25', null], ['50', null], ['50 km/h', 31], ['25 mph', 25]] as const) {
+    assertEquals(parseMaxspeed(raw, 'none'), want, `border maxspeed ${raw}`);
+  }
+  assertEquals([parseMaxspeed('25', 'kmh'), parseMaxspeed('50', 'kmh')], [16, 31]);
+  assertEquals(wayLimits({ maxspeed: '25', 'maxspeed:forward': '35' }, 'mph'), { forward: 35, backward: 25 });
+});
+
+Deno.test('a road\'s bare limit follows where its line lies: mph in the US (Willows Road NE, Redmond: way 1338209412), km/h in Canada, nothing across the border', () => {
+  const lim = (rows: WayRow[]) => rows.map((r) => [r.id, r.oneway, r.maxspeed_mph, r.maxspeed_raw]);
+  // A four-lane secondary tagged 35 one way and 40 the other with no unit: two rows of 35 and 40 mph, not 22 and 25.
+  const redmond = [{ lat: 47.6895, lon: -122.1503 }, { lat: 47.6912, lon: -122.1508 }];
+  assertEquals(lim(toWayRows(way(1338209412, { highway: 'secondary', 'maxspeed:forward': '35', 'maxspeed:backward': '40' }, redmond))), [
+    [1338209412, 1, 35, '35'],
+    [1338209412 + BACKWARD_ID_OFFSET, -1, 40, '40'],
+  ]);
+  // A Seattle residential street tagged '25' reads 25 mph, not 16.
+  assertEquals(toWayRow(way(7, { highway: 'residential', maxspeed: '25' }))?.maxspeed_mph, 25);
+  // Victoria, BC (south of the 49th parallel) and Vancouver, BC: '50' is 50 km/h, 31 mph.
+  assertEquals(toWayRow(way(8, { highway: 'residential', maxspeed: '50' }, [{ lat: 48.4284, lon: -123.3656 }, { lat: 48.4290, lon: -123.3650 }]))?.maxspeed_mph, 31);
+  assertEquals(toWayRow(way(9, { highway: 'residential', maxspeed: '50' }, [{ lat: 49.2827, lon: -123.1207 }, { lat: 49.2830, lon: -123.1200 }]))?.maxspeed_mph, 31);
+  // A road over the 49th parallel at Blaine: a bare number gives no limit; a tagged one still counts.
+  const blaine = [{ lat: 48.995, lon: -122.756 }, { lat: 49.005, lon: -122.756 }];
+  assertEquals(toWayRow(way(10, { highway: 'trunk', maxspeed: '60' }, blaine))?.maxspeed_mph, null);
+  assertEquals(toWayRow(way(10, { highway: 'trunk', maxspeed: '60 mph' }, blaine))?.maxspeed_mph, 60);
+  // Germany: OSM's default unit, as before.
+  assertEquals(toWayRow(way(11, { highway: 'residential', maxspeed: '30' }, [{ lat: 52.52, lon: 13.405 }, { lat: 52.521, lon: 13.406 }]))?.maxspeed_mph, 19);
+});
+
 Deno.test('oneway: yes/true/1 along, -1/reverse against, no/reversible/alternating/junk both; untagged motorways and roundabouts are one-way', () => {
   assertEquals(parseOneway({ oneway: 'yes' }), 1);
   assertEquals(parseOneway({ oneway: 'true' }), 1);

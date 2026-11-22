@@ -3,7 +3,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(98);
+select plan(108);
 
 insert into auth.users (id, email) values
   ('00000000-0000-0000-0000-000000000001', 'a@example.com'),
@@ -59,8 +59,19 @@ select policies_are('public', 'profiles', array['profiles_select_own']::name[], 
 select policies_are('public', 'progress', array['progress_select_own']::name[], 'progress has exactly its select policy');
 select policies_are('public', 'devices', '{}'::name[], 'devices has no policies');
 select policies_are('public', 'app_config', array['app_config_public']::name[], 'app_config has exactly its public policy');
+select policies_are('public', 'consents', array['consents_select_own']::name[], 'consents has exactly its select policy');
+select policies_are('public', 'notification_prefs', array['notification_prefs_select_own']::name[], 'notification_prefs has exactly its select policy');
+select policies_are('public', 'user_achievements', array['user_achievements_select_own']::name[], 'user_achievements has exactly its select policy');
 select is((select count(*)::int from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and p.polcmd <> 'r'), 0, 'no policy in public allows a client write');
+-- catch-alls: a new policy or a column grant on any other table in public fails here
+select is((select array_agg(policyname::text order by policyname::text) from pg_policies where schemaname = 'public'),
+  array['app_config_public', 'consents_select_own', 'notification_prefs_select_own', 'profiles_select_own', 'progress_select_own', 'user_achievements_select_own'],
+  'public has exactly the six known policies');
+select is((select array_agg(distinct c.table_name::text order by c.table_name::text) from information_schema.column_privileges c
+    where c.grantee in ('anon', 'authenticated') and c.table_schema = 'public'),
+  array['app_config', 'consents', 'notification_prefs', 'profiles', 'progress', 'user_achievements'],
+  'the API roles hold column privileges only on the six owner-read tables');
 select hasnt_index('public', 'progress', 'progress_global_board_idx', 'the global board index is gone with the board');
 select has_index('public', 'profiles', 'profiles_username_text_idx', 'the username prefix search has its text_pattern_ops index');
 select has_index('public', 'trips', 'trips_started_brin', 'trips has a time-leading BRIN index');
@@ -89,6 +100,9 @@ select is(private.league_week(timestamptz '2026-10-05 04:00:00+00'), '2026-W41',
 select is(private.week_end(timestamptz '2026-10-07 12:00:00+00'), timestamptz '2026-10-12 04:00:00+00', 'the week ends next Monday 00:00 New York');
 -- the per-opportunity rating (0023): null with no drives
 select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'rating', 'null'::jsonb, 'no drives: no Safety Rating');
+
+-- B's consent, which A must never read
+insert into public.consents (user_id, kind, version) values ('00000000-0000-0000-0000-000000000002', 'terms_13_plus', '2026-10');
 
 -- ---------------------------------------------------------------------------
 -- act as A
@@ -124,6 +138,7 @@ select hasnt_column('public', 'profiles', 'license_stage', 'profiles keeps no li
 select is((select count(*)::int from public.consents where user_id = '00000000-0000-0000-0000-000000000001' and kind = 'terms_13_plus' and version = '2026-10'), 1, 'the consent row is recorded once');
 select lives_ok($$ select public.accept_terms('2026-10') $$, 'accepting the same version again');
 select is((select count(*)::int from public.consents), 1, 'does not duplicate it');
+select is_empty($$ select 1 from public.consents where user_id = '00000000-0000-0000-0000-000000000002' $$, 'and A never reads B''s consent');
 select throws_ok($$ select public.update_profile(p_state := 'wa') $$, '22023', 'state must be a two-letter US state code', 'state must be upper-case');
 select lives_ok($$ select public.update_profile(p_units := 'km', p_state := 'WA', p_heatmap_visibility := 'friends') $$, 'A updates profile fields');
 select is((select row(units, state, heatmap_visibility)::text from public.profiles where id = '00000000-0000-0000-0000-000000000001'), row('km', 'WA', 'friends')::text, 'fields updated');
@@ -164,6 +179,16 @@ set local role authenticated;
 select is(public.register_device('device-aaaaaaaa', 'ios'), '{"league_eligible": false}'::jsonb, 'C registers a device A has not been seen on for 91 days');
 reset role;
 select is((select league_eligible from public.profiles where id = '00000000-0000-0000-0000-000000000001'), false, 'and A''s league_eligible is left as stored');
+-- C's budgets, all but one spent: claim_username 5 a day, register_device 60 an hour
+insert into public.rate_limits (user_id, key, window_start, count) values
+  ('00000000-0000-0000-0000-000000000003', 'claim_username', now(), 4), ('00000000-0000-0000-0000-000000000003', 'register_device', now(), 59)
+  on conflict (user_id, key) do update set window_start = now(), count = excluded.count;
+set local role authenticated;
+select lives_ok($$ select public.claim_username('cee_1') $$, 'the 5th username claim in a day');
+select throws_ok($$ select public.claim_username('cee_2') $$, '42501', 'too many requests', 'the 6th is refused');
+select lives_ok($$ select public.register_device('device-cccccccc', 'android') $$, 'the 60th registration in an hour');
+select throws_ok($$ select public.register_device('device-cccccccc', 'android') $$, '42501', 'too many requests', 'the 61st is refused');
+reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000002","role":"authenticated"}', true);
 

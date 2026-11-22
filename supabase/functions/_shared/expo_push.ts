@@ -44,6 +44,11 @@ export interface ExpoMessage {
   priority: 'default' | 'normal' | 'high';
   channelId: string;
   categoryId?: string;
+  /**
+   * Seconds APNs and FCM may hold the message for a phone they cannot reach; past that it is
+   * dropped undelivered. Left out, each provider keeps it for its own default of 4 weeks.
+   */
+  ttl?: number;
 }
 
 /** `unknown`: the request may have reached Expo but no answer came (never re-sent). */

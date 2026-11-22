@@ -21,8 +21,10 @@
 //
 // Order, cheapest refusal first: method; the hook secret set and well formed (else 500, logged);
 // the body (64 KB, streamed, else 413) and its signature (else 401); the payload's shape (else
-// 400); the type; Resend set up (RESEND_API_KEY and RESEND_FROM, else 500, logged); the code is
-// digits; the caps; time left (else 504); the send (a refusal or no answer is 502).
+// 400); the type; for a code that would confirm the address, the account's metadata no larger
+// than `MAX_CONFIRM_METADATA_CHARS` (else 400); Resend set up (RESEND_API_KEY and RESEND_FROM,
+// else 500, logged); the code is digits; the caps; time left (else 504); the send (a refusal or no
+// answer is 502).
 //
 // Auth gives the whole call 5 s, so the hook works to its own deadline of `DEADLINE_MS` from the
 // call's start: Resend gets what is left of it (at most 3.5 s), and with less than `MIN_SEND_MS`
@@ -58,6 +60,16 @@ export const CODE_PATTERN = /^\d{6,10}$/;
 export const DEADLINE_MS = 4_200;
 /** The least time worth handing Resend; with less left, nothing is sent. */
 export const MIN_SEND_MS = 800;
+/**
+ * The most `user_metadata` (as JSON text) an account may carry into a mail that would confirm its
+ * address. Auth copies a sign-up's `data` into it, keeps it when the same address signs up again,
+ * and puts it in every access token; the Edge Functions gateway refuses a token past about 16 KB,
+ * so a sign-up made in someone else's name with a large `data` would leave their account unable
+ * to reach any function once they confirmed it. The app sends no `data` (Auth's own keys are
+ * under 200 characters), and each character can grow to six bytes in the token (`<`, `>` and `&`
+ * are escaped), so 1,000 keeps the token far below the gateway's limit.
+ */
+export const MAX_CONFIRM_METADATA_CHARS = 1_000;
 
 export const HookPayloadSchema = z.object({
   user: z
@@ -65,6 +77,8 @@ export const HookPayloadSchema = z.object({
       id: z.string().min(1),
       email: z.string(),
       app_metadata: z.object({ providers: z.array(z.string()).optional() }).passthrough().optional(),
+      user_metadata: z.unknown().optional(),
+      email_confirmed_at: z.unknown().optional(),
     })
     .passthrough(),
   email_data: z.object({ token: z.string(), email_action_type: z.string().min(1) }).passthrough(),
@@ -192,6 +206,19 @@ export function hasEmailSignIn(providers: readonly string[] | undefined): boolea
   return Array.isArray(providers) && providers.includes('email');
 }
 
+/**
+ * Whether entering this mail's code confirms the account's address: always for a sign-up, and for
+ * a reset when Auth has not confirmed the address yet (`email_confirmed_at` absent).
+ */
+export function confirmsAddress(type: CodeKind, emailConfirmedAt: unknown): boolean {
+  return type === 'signup' || !(typeof emailConfirmedAt === 'string' && emailConfirmedAt !== '');
+}
+
+/** `user_metadata` as Auth stores it, in JSON characters; none counts as `{}`. */
+export function metadataChars(metadata: unknown): number {
+  return JSON.stringify(metadata ?? {})?.length ?? 0;
+}
+
 /** How an account with no email sign-in signs in, for its reminder. */
 export function signInWith(providers: readonly string[] | undefined): SignInWith {
   const apple = providers?.includes('apple') ?? false;
@@ -275,6 +302,16 @@ export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<
       log.warn('[send-email] refused: type', { id, type, user });
       return refuse(403, 'RoadWise does not send this email.');
     }
+    // Forgot password for an account with no password of its own gets the reminder, not a code.
+    const providers = payload.user.app_metadata?.providers;
+    const reminder = type === 'recovery' && !hasEmailSignIn(providers);
+    // A code that would confirm the address (a sign-up's, or a reset's for an email account not
+    // yet confirmed) is refused while the account carries oversized metadata, before any cap is
+    // spent: Auth then fails its whole request, so such an account is never created or confirmed.
+    if (!reminder && confirmsAddress(type, payload.user.email_confirmed_at) && metadataChars(payload.user.user_metadata) > MAX_CONFIRM_METADATA_CHARS) {
+      log.warn('[send-email] refused: metadata', { id, type, user });
+      return refuse(400, 'Invalid payload.');
+    }
     if (!deps.resendKey || !deps.from) {
       log.error('[send-email] RESEND_API_KEY or RESEND_FROM is unset: no mail is sent', { id, type, user });
       return refuse(500, 'Email is not set up.');
@@ -286,9 +323,6 @@ export function createSendEmail(deps: SendEmailDeps): (req: Request) => Promise<
       return refuse(400, 'Invalid payload.');
     }
 
-    // Forgot password for an account with no password of its own gets the reminder, not a code.
-    const providers = payload.user.app_metadata?.providers;
-    const reminder = type === 'recovery' && !hasEmailSignIn(providers);
     const mail = reminder
       ? signInReminderMail(signInWith(providers), deps.from, to)
       : codeMail(type, code, deps.from, to);

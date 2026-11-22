@@ -1,11 +1,14 @@
 import { assert, assertEquals } from '@std/assert';
 import {
   capKey,
+  confirmsAddress,
   createSendEmail,
   DEADLINE_MS,
   hasEmailSignIn,
   ipKey,
   MAX_BODY_BYTES,
+  MAX_CONFIRM_METADATA_CHARS,
+  metadataChars,
   signInWith,
   type CapAnswer,
   type SendEmailDeps,
@@ -37,7 +40,16 @@ async function signed(body: string, opts: { key?: Uint8Array<ArrayBuffer>; ts?: 
 
 const payload = (
   type: string,
-  over: { token?: string; email?: string; providers?: string[] | null; ip?: string | null } = {}
+  over: {
+    token?: string;
+    email?: string;
+    providers?: string[] | null;
+    ip?: string | null;
+    /** The account's `user_metadata`; null leaves it out. */
+    metadata?: unknown;
+    /** Auth's `email_confirmed_at`, present once the address is confirmed. */
+    confirmedAt?: string;
+  } = {}
 ) =>
   JSON.stringify({
     user: {
@@ -45,8 +57,9 @@ const payload = (
       aud: 'authenticated',
       role: '',
       email: over.email ?? 'Ava@Example.com',
+      ...(over.confirmedAt === undefined ? {} : { email_confirmed_at: over.confirmedAt }),
       ...(over.providers === null ? {} : { app_metadata: { provider: 'email', providers: over.providers ?? ['email'] } }),
-      user_metadata: { username: 'x' },
+      ...(over.metadata === null ? {} : { user_metadata: over.metadata ?? { username: 'x' } }),
     },
     ...(over.ip === null || over.ip === undefined ? {} : { metadata: { ip_address: over.ip } }),
     email_data: {
@@ -184,6 +197,51 @@ Deno.test('a sign-up code goes out whatever the providers say (the account is be
   const w = world();
   assertEquals(await call(w, await signed(payload('signup', { providers: null }))), { status: 200, body: {} });
   assertEquals(w.sent[0].mail.subject, '12345678 is your RoadWise code');
+});
+
+Deno.test('a code that would confirm an address is refused (400) while the account carries oversized metadata, before any cap is spent', async () => {
+  // A sign-up made in someone else's name with 13 KB of `data`: Auth fails it, so the row that
+  // would have bloated their access token past the gateway's limit is never made.
+  const big = { note: 'x'.repeat(13_000) };
+  const signup = world();
+  assertRefusal(await call(signup, await signed(payload('signup', { metadata: big }))), 400);
+  assertEquals([signup.taken.length, signup.sent.length], [0, 0]);
+  assertQuietLogs(signup);
+  assert(JSON.stringify(signup.logs).includes('refused: metadata'));
+  // Escaped characters grow in the token, so the limit is on characters, well under the gateway's.
+  const atLimit = { n: 'x'.repeat(MAX_CONFIRM_METADATA_CHARS - 8) }; // {"n":"…"} is exactly the limit
+  assertEquals(metadataChars(atLimit), MAX_CONFIRM_METADATA_CHARS);
+  assertEquals(await call(world(), await signed(payload('signup', { metadata: atLimit }))), { status: 200, body: {} });
+  assertRefusal(await call(world(), await signed(payload('signup', { metadata: { n: `${atLimit.n}<` } }))), 400);
+  // A reset for an account not yet confirmed would confirm it: refused the same way.
+  const unconfirmed = world();
+  assertRefusal(await call(unconfirmed, await signed(payload('recovery', { metadata: big }))), 400);
+  assertEquals([unconfirmed.taken.length, unconfirmed.sent.length], [0, 0]);
+  // A confirmed account's reset confirms nothing new: its owner still gets the code.
+  const confirmed = world();
+  assertEquals(
+    await call(confirmed, await signed(payload('recovery', { metadata: big, confirmedAt: '2026-11-01T10:00:00Z' }))),
+    { status: 200, body: {} }
+  );
+  assertEquals(confirmed.sent[0].mail.subject, '12345678 is your RoadWise reset code');
+  // Forgot password for an Apple or Google account mails no code, so it confirms nothing: the reminder still goes.
+  const google = world();
+  assertEquals(await call(google, await signed(payload('recovery', { metadata: big, providers: ['google'] }))), { status: 200, body: {} });
+  assertEquals(google.sent[0].mail.subject, 'How you sign in to RoadWise');
+  // The app's own sign-up (Auth's keys only, or no metadata at all) goes out as before.
+  const app = { sub: USER, email: 'ava@example.com', email_verified: false, phone_verified: false };
+  assertEquals(await call(world(), await signed(payload('signup', { metadata: app }))), { status: 200, body: {} });
+  assertEquals(await call(world(), await signed(payload('signup', { metadata: null }))), { status: 200, body: {} });
+});
+
+Deno.test('which mails confirm an address, and how metadata is measured', () => {
+  assertEquals(confirmsAddress('signup', undefined), true);
+  assertEquals(confirmsAddress('signup', '2026-11-01T10:00:00Z'), true);
+  assertEquals(confirmsAddress('recovery', undefined), true);
+  assertEquals(confirmsAddress('recovery', null), true);
+  assertEquals(confirmsAddress('recovery', ''), true);
+  assertEquals(confirmsAddress('recovery', '2026-11-01T10:00:00Z'), false);
+  assertEquals([metadataChars(undefined), metadataChars(null), metadataChars({}), metadataChars({ a: 'bc' })], [2, 2, 2, 10]);
 });
 
 Deno.test('with the IP Auth reports, the inbox from that IP and the IP are capped too, by their hashes', async () => {
