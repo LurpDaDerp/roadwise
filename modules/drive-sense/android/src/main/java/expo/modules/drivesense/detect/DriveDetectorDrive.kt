@@ -363,7 +363,7 @@ internal fun DriveDetector.finishSensing(holdMs: Long, demote: Boolean = false) 
 /**
  * The journal says where the drive got to: a last row 5 min old or less resumes it (sensing again,
  * then a `gap` line and rows from past the gap's seq); older, it ends as an orphan for JS to
- * finalize. A start Android refuses leaves the drive as it is, for the next foreground or process.
+ * finalize. A start Android refuses leaves the drive as it is, for the next foreground, wake or process.
  * The wakes that came meanwhile are replayed once it settles ([HeldWakes]); a sticky restart's
  * service (already in the foreground) is kept through them, so a drive that ended can watch at once.
  */
@@ -432,8 +432,8 @@ private fun DriveDetector.onResumeSensing(driveId: String, s: JournalSummary, st
   val r = rec
   if (r == null || r.driveId != driveId || !r.recording || sensing) return
   if (code != null) {
-    // The record and the journal stay as they are: the next foreground or process start resumes
-    // the drive (or ends it as an orphan, past its 5 min).
+    // The record and the journal stay as they are: the next foreground, wake or process start
+    // resumes the drive (or ends it as an orphan, past its 5 min).
     resumePending = true
     return
   }

@@ -55,14 +55,21 @@ class DriveDetectAccess(context: Context) {
     LocationAccess.WHEN_IN_USE -> "whenInUse"
     LocationAccess.NONE -> "denied"
   }
-  /** Battery use Restricted for RoadWise (Android 9+): the background work automatic drives need may not run. */
-  private fun backgroundRestricted(): Boolean =
-    try {
-      Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-        (app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager?)?.isBackgroundRestricted == true
-    } catch (_: Exception) {
-      false
-    }
+  private fun backgroundRestricted(): Boolean = backgroundRestricted(app)
+
+  companion object {
+    /**
+     * Battery use Restricted for RoadWise (Android 9+): the background work automatic drives need
+     * may not run. Also the capture service's read ([expo.modules.drivesense.ForegroundRules]).
+     */
+    fun backgroundRestricted(context: Context): Boolean =
+      try {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+          (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager?)?.isBackgroundRestricted == true
+      } catch (_: Exception) {
+        false
+      }
+  }
 
   /** The drive notification can show: notifications on, and its channel (once made) not turned off. */
   private fun driveNotificationAllowed(): Boolean =

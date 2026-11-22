@@ -148,6 +148,20 @@ test('iOS: never calls checkState; the state arrives as an event; settledBluetoo
   expect(await settled).toBe('unauthorized');
 });
 
+test('Android: Bluetooth still turning on is not settled; settledBluetoothState answers once it is on', async () => {
+  const r = rig('android');
+  r.ble.setState('turning_on');
+  await r.t.start();
+  expect(r.t.bluetoothState()).toBe('turning_on');
+  let settled: BluetoothState | null = null;
+  void r.t.settledBluetoothState().then((s) => (settled = s));
+  await flush();
+  expect(settled).toBeNull();
+  r.ble.setState('on');
+  await flush();
+  expect(settled).toBe('on');
+});
+
 test('Android connect order: autoconnect, MTU 247, services, INFO, SESSION_REQ (bid over INFO’s Nc), its answer, SESSION_FIN, the RESULT, TX notifications, link up', async () => {
   const r = rig('android');
   await up(r);
@@ -789,6 +803,50 @@ test('setup: the scans pass low latency and aggressive matching (fast); the near
     { serviceUUIDs: [PAIRING_NEW, PAIRING_SETUP, PAIRING_OPEN, DASHPAL_SERVICE], seconds: 15, scanMode: 2, matchMode: 1 },
     { serviceUUIDs: [PAIRING_NEW], seconds: 15 },
   ]);
+});
+
+test('Android: a scan start that is never answered (the adapter not on yet) gives up after OP_TIMEOUT_MS, stops the scan and drops its hits; the next scan works', async () => {
+  const r = rig('android');
+  await r.t.start();
+  r.ble.hangNext('scan');
+  const hits: string[] = [];
+  let failed: unknown = null;
+  const asked = r.t.scan({ services: [PAIRING_NEW], seconds: 15, fast: true, onHit: (h) => hits.push(h.id) }).catch((e: unknown) => void (failed = e));
+  await flush();
+  await r.clock.advance(OP_TIMEOUT_MS - 1);
+  expect(failed).toBeNull();
+  await r.clock.advance(1);
+  await asked;
+  expect(failed).toMatchObject({ message: 'scan timed out' });
+  expect(r.ble.calls.at(-1)).toBe('stopScan');
+  const advert = { id: 'N', rssi: -55, advertising: { serviceUUIDs: [PAIRING_NEW] } };
+  r.ble.advertise(advert);
+  expect(hits).toEqual([]);
+  const next = await r.t.scan({ services: [PAIRING_NEW], seconds: 15, onHit: (h) => hits.push(h.id) });
+  r.ble.advertise(advert);
+  expect(hits).toEqual(['N']);
+  await next.stop();
+});
+
+test('a scan start that gives up after a newer scan began leaves the newer one running: no stopScan, its hits still arrive', async () => {
+  const r = rig('android');
+  await r.t.start();
+  r.ble.hangNext('scan');
+  const old: string[] = [];
+  let failed: unknown = null;
+  const asked = r.t.scan({ services: [PAIRING_NEW], seconds: 15, onHit: (h) => old.push(h.id) }).catch((e: unknown) => void (failed = e));
+  await flush();
+  const hits: string[] = [];
+  const newer = await r.t.scan({ services: [PAIRING_NEW], seconds: 15, fast: true, onHit: (h) => hits.push(h.id) });
+  await r.clock.advance(OP_TIMEOUT_MS);
+  await asked;
+  expect(failed).toMatchObject({ message: 'scan timed out' });
+  expect(r.ble.calls).not.toContain('stopScan');
+  r.ble.advertise({ id: 'N', rssi: -55, advertising: { serviceUUIDs: [PAIRING_NEW] } });
+  expect(hits).toEqual(['N']);
+  expect(old).toEqual([]);
+  await newer.stop();
+  expect(r.ble.calls.at(-1)).toBe('stopScan');
 });
 
 test('setup connect with no OS bond never calls removeBond (it would never settle); with a bond listed, it is removed once first', async () => {

@@ -114,10 +114,10 @@ Types are in `src/types.ts`. "Resolves" means the promise resolves with `null`/`
 ### Android only: share images and the geocoder
 
 Not in `DRIVE_SENSE_METHODS` (the iOS module has none of them): `ANDROID_SHARE_METHODS`
-(`src/share.ts`), `ANDROID_GEOCODE_METHODS` (`src/geocode.ts`) and `ANDROID_UNUSED_APP_METHODS`
-(`src/unusedApps.ts`), each reached through a wrapper or a feature check that answers `null` (or
-leaves the row out) where the build has no such function (iOS, Jest, an older Android build), so
-the caller keeps its own path. None of them rejects but `getUnusedAppRestrictions` (`E_IO`).
+(`src/share.ts`), `ANDROID_GEOCODE_METHODS` (`src/geocode.ts`), `ANDROID_UNUSED_APP_METHODS`
+(`src/unusedApps.ts`) and `ANDROID_SECURE_DIALOG_METHODS` (`src/secureDialogs.ts`), each
+reached through a wrapper or a feature check that answers `null` (or leaves the row out) where the
+build has no such function (iOS, Jest, an older Android build), so the caller keeps its own path. None of them rejects but `getUnusedAppRestrictions` (`E_IO`).
 
 | Method | Behaviour |
 |---|---|
@@ -126,6 +126,7 @@ the caller keeps its own path. None of them rejects but `getUnusedAppRestriction
 | `forwardGeocode(query)` | The same geocoder for a typed address (1-200 characters): `[{ latitude, longitude }]`, `[]` for none, `null` as above. |
 | `getUnusedAppRestrictions()` | Android 11+'s "Pause app activity if unused" for RoadWise, from androidx.core's `PackageManagerCompat.getUnusedAppRestrictionsStatus` (a future, never waited on: its listener runs on the thread that completes it): `'enabled'` (API_30_BACKPORT, API_30, API_31), `'disabled'` (DISABLED), `'unavailable'` (FEATURE_NOT_AVAILABLE). Rejects `E_IO` on its ERROR or with no answer in 5 s. |
 | `openUnusedAppRestrictionsSettings()` | The page with that switch (`IntentCompat.createManageUnusedAppRestrictionsIntent`: the app's info page on 12+, its permissions page on 11), started on the main thread. `true` once started, `false` where the phone has no such page (JS then opens the app's settings page). |
+| `secureDialogs(key, on)` | FLAG_SECURE on React Native's Modal dialog windows (an `ExtraWindowEventListener` registered with the React context from OnCreate to OnDestroy) while any key is held. A dialog opened during a hold is secured at once, and the last key let go clears the flag. Used by the DashPal aiming picture's setup and re-aim sheets, next to expo-screen-capture, which secures only the activity's window. Runs on the main thread, resolves nothing, never rejects, and does nothing where the build has no such function (iOS, Jest, an older Android build). |
 
 ### Errors
 
@@ -885,10 +886,11 @@ driver sees the Live Activity (a push-to-start brings its own alert) or the note
 
 iOS: Location Always + Precise + Motion & Fitness for drives that start on their own; While Using +
 Precise for Start drive. Background App Refresh off (Low Power Mode turns it off) is reported as a
-need: iOS may then not relaunch RoadWise for a wake. The blue background-location indicator never
-shows (`showsBackgroundLocationIndicator = false` on every manager). Idle costs nothing but the
-wakes; a candidate is bounded (3 min without a vehicle sign, 30 min at most, 6 empty ones an hour,
-the motion gate); a drive costs what a manual drive did.
+need: iOS may then not relaunch RoadWise for a wake. With Always the blue background-location
+indicator never shows (`showsBackgroundLocationIndicator = false` on every manager); on While Using
+iOS shows it whenever a Start drive records in the background, whatever that property says. Idle
+costs nothing but the wakes; a candidate is bounded (3 min without a vehicle sign, 30 min at most, 6
+empty ones an hour, the motion gate); a drive costs what a manual drive did.
 
 ### Android
 

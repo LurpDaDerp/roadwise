@@ -13,7 +13,7 @@ import { AUTH_CHAR, DASHPAL_SERVICE, PAIRING_NEW, PAIRING_OPEN, PAIRING_SETUP, S
 import { createDashpalSecrets, type DashpalSecrets } from '../secure';
 import { AIM_FIRST_MS, AIM_GIVE_UP_MS, AIM_STALL_MS, BUSY_WAIT_MS, createSetupFlow, HOLD_MAX_MS, HOLD_RECONNECT_MS, PRESS_WAIT_MS, type SetupFlow, type SetupPhase, type SetupStart } from '../setup';
 import type { SetupSpeed } from '../setupSpeed';
-import { createBleTransport, type DashcamTransport } from '../transport';
+import { createBleTransport, OP_TIMEOUT_MS, type DashcamTransport, type TransportOptions } from '../transport';
 
 const flush = async () => {
   for (let i = 0; i < 60; i++) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -60,10 +60,19 @@ interface Rig {
   states(last?: number): Extract<RxFrame, { type: 'STATE' }>[];
 }
 
-function rig(o: { platform?: 'ios' | 'android'; access?: BluetoothAccess; previous?: PairedDashcam | null; cams?: CamSpec[] } = {}): Rig {
+function rig(
+  o: {
+    platform?: 'ios' | 'android';
+    access?: BluetoothAccess;
+    previous?: PairedDashcam | null;
+    cams?: CamSpec[];
+    /** The transport's own timers (its time limits); by default they never fire. */
+    transportTimers?: Pick<TransportOptions, 'setTimer' | 'clearTimer'>;
+  } = {}
+): Rig {
   const platform = o.platform ?? 'android';
   const ble = createFakeBle();
-  const t = createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {} });
+  const t = createBleTransport(ble, { platform, setTimer: () => 0, clearTimer: () => {}, ...o.transportTimers });
   const cams = new Map<number, FakeDashcam>();
   const specs = o.cams ?? [{ last: 0xd5 }];
   for (const c of specs) {
@@ -322,6 +331,41 @@ describe('one tap, the hold, the commit', () => {
     void open.flow.start();
     expect(await open.until('confirm')).toMatchObject({ mode: 'open' });
     await open.flow.cancel();
+  });
+
+  test('a search whose scan start is never answered (Android: Bluetooth not on yet): the transport gives up at OP_TIMEOUT_MS, failed with Try again, never a search that spins on', async () => {
+    let now = 0;
+    let seq = 0;
+    const timers = new Map<number, { at: number; fn: () => void }>();
+    const fire = (until: number) => {
+      now = until;
+      for (const [id, p] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+        if (p.at > until) continue;
+        timers.delete(id);
+        p.fn();
+      }
+    };
+    const r = rig({
+      transportTimers: {
+        setTimer: (fn, ms) => {
+          seq += 1;
+          timers.set(seq, { at: now + ms, fn });
+          return seq;
+        },
+        clearTimer: (h) => void timers.delete(h as number),
+      },
+    });
+    r.ble.hangNext('scan');
+    const started = r.flow.start();
+    await r.until('search');
+    fire(OP_TIMEOUT_MS - 1);
+    await flush();
+    expect(r.flow.phase().kind).toBe('search');
+    fire(OP_TIMEOUT_MS);
+    await started;
+    expect(r.flow.phase()).toEqual({ kind: 'failed', reason: 'error', name: null, retry: 'restart' });
+    expect(kinds(r)).toEqual(['permission', 'search', 'failed']);
+    expect(r.ble.calls.at(-1)).toBe('stopScan');
   });
 
   test('the Home card’s DashPal: no search; 2 phones: notAllYours', async () => {

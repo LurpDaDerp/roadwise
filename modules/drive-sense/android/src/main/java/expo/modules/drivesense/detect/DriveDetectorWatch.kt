@@ -55,9 +55,10 @@ fun DriveDetector.onCarConnected(address: String, done: () -> Unit) {
 }
 
 /**
- * A wake. A rest past its end ends first and a permission change is taken in; then the policy's
- * wake gate (armed, an owner, the permissions, nothing under way, the rest after an empty watch
- * for all but the geofence, a paired car and the app, at most 6 empty watches an hour). The
+ * A wake. A drive whose resume Android refused behind is tried again first, the wake held through
+ * it. Otherwise a rest past its end ends first and a permission change is taken in; then the
+ * policy's wake gate (armed, an owner, the permissions, nothing under way, the rest after an empty
+ * watch for all but the geofence, a paired car and the app, at most 6 empty watches an hour). The
  * geofence's exit and a paired car connecting are car-motion evidence enough; the others need the
  * motion history's car motion in the last 2 min with the driver not on foot or on a bike
  * ([DetectPolicy.motionGate]).
@@ -67,6 +68,18 @@ internal fun DriveDetector.onWake(reason: WakeReason, done: () -> Unit = {}) {
   // then lets it watch), its done held with it.
   if (resuming) {
     heldWakes.hold(reason, done)
+    return
+  }
+  // A drive whose resume Android refused behind records with nothing sensing it, and the gate would
+  // answer every wake busy for as long as this process lives. This wake's broadcast may start the
+  // location service, so the resume is tried again under it, as a process start does, with the wake
+  // held: a drive resumed answers it busy, one past its 5 min ends as an orphan and lets it watch.
+  // The flag goes first, so the replayed wake never tries again; another refusal sets it again.
+  val pendingId = rec?.takeIf { it.recording }?.driveId
+  if (resumePending && pendingId != null && !sensing && !CaptureService.isCapturing) {
+    resumePending = false
+    heldWakes.hold(reason, done)
+    resumeDrive(pendingId)
     return
   }
   if (reason == WakeReason.REGION && lingerToWatch()) {
@@ -305,7 +318,8 @@ internal fun DriveDetector.candidateRow(d: DetectRow, body: Map<String, Any?>) {
 /**
  * A path confirmed on the buffer's last row (`runStart`: its run's first row): the start traced
  * back over the buffer; a drive whose rows begin moving reads the motion history for when the car
- * set off (never before the last drive's end): so a geofence exit Android delivered minutes late
+ * set off (never before the last drive's end, and never from the last drive's own in-a-vehicle
+ * report: [ActivityHistory.startSamples]): so a geofence exit Android delivered minutes late
  * still starts the drive at the pull-away, placed at the parked spot when the car could have come
  * from there. Then the drive begins with the buffer's rows from its start on.
  */
@@ -319,7 +333,8 @@ internal fun DriveDetector.confirm(runStart: Double?) {
     if (DetectPolicy.traceStart(rows, h) != null) {
       0.0
     } else {
-      motionSince(maxOf(lastEnd?.decidedAt ?: 0.0, now - DetectPolicy.MOTION_LOOKBACK_MS), now).automotiveSince
+      val from = maxOf(lastEnd?.decidedAt ?: 0.0, now - DetectPolicy.MOTION_LOOKBACK_MS)
+      DetectPolicy.summarize(ActivityHistory.startSamples(history, from), now).automotiveSince
     }
   val start = DetectPolicy.startOf(rows, h, TriggerKind.AUTO, automotiveSince, lastEnd)
   beginAutoDrive(start, rows[start.index].ts)

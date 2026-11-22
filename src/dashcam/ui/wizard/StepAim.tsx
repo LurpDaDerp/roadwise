@@ -1,4 +1,3 @@
-import { usePreventScreenCapture } from 'expo-screen-capture';
 import { View } from 'react-native';
 
 import { Button, Text, useTheme } from '@/ui';
@@ -6,6 +5,7 @@ import { Button, Text, useTheme } from '@/ui';
 import { dashpalCopy } from '../../copy';
 import type { ViewReason } from '../../protocol';
 import { AIM_RETRY, type AimStatus, type SetupFlow } from '../../setup';
+import { useAimCaptureGuard } from '../useAimCaptureGuard';
 import { AimView } from './AimView';
 import { StepTitle } from './StepTitle';
 
@@ -17,8 +17,9 @@ export const refusalText = (reason: ViewReason | null): string => copy.aim.refus
 /**
  * Screen 3: DashPal's live picture to aim it by (`AimView`), the refusal in words with Try again
  * where it can help, the hold's last minute and a reconnect, and Next, always enabled: the driver
- * decides when it is aimed, and the step changes nothing on the dashcam. While it is mounted the
- * system keeps screenshots, recordings and the app switcher from showing it.
+ * decides when it is aimed, and the step changes nothing on the dashcam. While it is mounted, and
+ * through its exit, the system keeps screenshots, recordings and the app switcher from showing it.
+ * The hold's time left is no live region: it changes every second, and TalkBack would read each one.
  */
 export function StepAim({
   status,
@@ -40,7 +41,7 @@ export function StepAim({
   onNext(): void;
 }) {
   const th = useTheme();
-  usePreventScreenCapture('dashpal-aim');
+  useAimCaptureGuard('dashpal-aim');
   const refused = status === 'refused';
   const canRetry = refused && reason !== null && AIM_RETRY.includes(reason);
   return (
@@ -60,7 +61,7 @@ export function StepAim({
         </Text>
       ) : null}
       {holdLeftS !== null ? (
-        <Text variant="callout" tone="warning" accessibilityLiveRegion="polite" testID="wizard-hold-left">
+        <Text variant="callout" tone="warning" testID="wizard-hold-left">
           {copy.holdLeft(holdLeftS)}
         </Text>
       ) : null}

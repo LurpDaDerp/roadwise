@@ -1,8 +1,10 @@
 /**
  * The re-aim sheet (`ui/ReaimSheet.tsx`): the paired DashPal's live picture with the setup's frame and
  * hint (a good aim says Done, not Next), Try again on a refusal it can help with, firmware too old for
- * the picture, screenshots blocked while it shows, and Done stopping the picture.
+ * the picture, screenshots blocked while it shows (Android's sheet dialog too), a body that scrolls
+ * when it is taller than the sheet, and Done stopping the picture.
  */
+import { setSecureDialogsModuleForTests } from '@drive-sense/secureDialogs';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { ThemeProvider } from '@/ui';
@@ -16,14 +18,22 @@ jest.mock('expo-haptics', () => ({
   notificationAsync: jest.fn(async () => {}),
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }));
-jest.mock('expo-screen-capture', () => ({ usePreventScreenCapture: jest.fn() }));
+jest.mock('expo-screen-capture', () => ({ preventScreenCaptureAsync: jest.fn(async () => {}), allowScreenCaptureAsync: jest.fn(async () => {}) }));
 jest.mock('expo-image', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
   const { View } = require('react-native') as typeof import('react-native');
   return { Image: (p: Record<string, unknown>) => <View {...p} /> };
 });
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocks above
-const capture = require('expo-screen-capture') as { usePreventScreenCapture: jest.Mock };
+const capture = require('expo-screen-capture') as { preventScreenCaptureAsync: jest.Mock };
+/** Android's DriveSense `secureDialogs` (FLAG_SECURE on the sheet's dialog window). */
+const dialogs = { secureDialogs: jest.fn(async (_key: string, _on: boolean) => {}) };
+
+beforeEach(() => {
+  capture.preventScreenCaptureAsync.mockClear();
+  dialogs.secureDialogs.mockClear();
+  setSecureDialogsModuleForTests(dialogs);
+});
 
 const copy = dashpalCopy.screen.reaim;
 const record = (frame: number, data: number[]): number[] => [1, 1, frame, 0, data.length & 0xff, data.length >> 8, 0, 0, ...data];
@@ -44,6 +54,7 @@ const renderSheet = async (onClose = jest.fn()) =>
 
 afterEach(async () => {
   await act(async () => setActiveDashcam(null));
+  setSecureDialogsModuleForTests(undefined);
 });
 
 test('the live picture: the image as a mirror, a good aim says tap Done; screenshots are blocked; Done stops the picture without Recalibrate', async () => {
@@ -51,7 +62,8 @@ test('the live picture: the image as a mirror, a good aim says tap Done; screens
   const onClose = jest.fn();
   await renderSheet(onClose);
   await waitFor(() => expect(rt.log).toContain('command:10:1'));
-  expect(capture.usePreventScreenCapture).toHaveBeenCalledWith('dashpal-reaim');
+  expect(capture.preventScreenCaptureAsync).toHaveBeenCalledWith(expect.stringMatching(/^dashpal-reaim-\d+$/));
+  expect(dialogs.secureDialogs).toHaveBeenCalledWith(capture.preventScreenCaptureAsync.mock.calls[0]![0], true);
   await act(async () => {
     rt.viewFrame({ type: 'VIEW_STATE', on: 1, reason: 0, leftS: 600 });
     view.record(record(1, [0xff, 0xd8, 0xff, 0xd9]));
@@ -66,6 +78,23 @@ test('the live picture: the image as a mirror, a good aim says tap Done; screens
   expect(rt.log).toContain('command:10:0');
   expect(rt.log).not.toContain('command:2:0');
   expect(view.subscribed()).toBe(false);
+});
+
+test('the body scrolls inside the sheet, so Done and Try again stay in reach with large text or a small screen', async () => {
+  const { rt } = connected();
+  await renderSheet();
+  await waitFor(() => expect(rt.log).toContain('command:10:1'));
+  await act(async () => rt.viewFrame({ type: 'VIEW_STATE', on: 0, reason: 2, leftS: 600 }));
+  await screen.findByTestId('reaim-retry');
+  const scrolls = (id: string): boolean => {
+    for (let n = screen.getByTestId(id).parent; n; n = n.parent) {
+      if (n.type === 'RCTScrollView') return true;
+      if (n.props.testID === 'reaim-sheet') return false;
+    }
+    return false;
+  };
+  expect(scrolls('reaim-done')).toBe(true);
+  expect(scrolls('reaim-retry')).toBe(true);
 });
 
 test('a refusal Try again can help with offers it, and it asks once more', async () => {

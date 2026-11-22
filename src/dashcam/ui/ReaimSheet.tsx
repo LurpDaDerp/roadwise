@@ -1,4 +1,3 @@
-import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useEffect, useMemo, useState } from 'react';
 import { AppState, View } from 'react-native';
 
@@ -8,6 +7,7 @@ import { dashpalCopy } from '../copy';
 import { createReaimFlow, REAIM_RETRY, type ReaimFlow, type ReaimPhase } from '../reaim';
 import type { DashcamRuntime } from '../runtime';
 import type { AimStatus } from '../setup';
+import { useAimCaptureGuard } from './useAimCaptureGuard';
 import { useDashcamRuntime } from './useDashcam';
 import { AimView } from './wizard/AimView';
 
@@ -42,7 +42,7 @@ export function ReaimSheet({ visible, onClose }: { visible: boolean; onClose(): 
 
 function ReaimBody({ runtime, onClose }: { runtime: DashcamRuntime; onClose(): void }) {
   const th = useTheme();
-  usePreventScreenCapture('dashpal-reaim');
+  useAimCaptureGuard('dashpal-reaim');
   const flow: ReaimFlow = useMemo(
     () =>
       createReaimFlow({

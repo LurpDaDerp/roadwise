@@ -1,8 +1,10 @@
 // Location: 1 Hz fixes while the detector senses or a plain capture runs, and nothing otherwise.
 // Every mode keeps the distance filter unset (iOS 16.4+ suspends an app whose updates use one while
-// significant-change monitoring runs) and never shows the blue background-location indicator (U3:
-// the status-bar arrow is enough, and the Dynamic Island stays free for the Live Activity). The same
-// manager answers the authorisation and precise-location questions. Created and used on main.
+// significant-change monitoring runs) and, with Location set to Always, never shows the blue
+// background-location indicator (U3: the status-bar arrow is enough, and the Dynamic Island stays
+// free for the Live Activity). On While Using iOS shows it whenever a Start drive records with
+// RoadWise behind, whatever `showsBackgroundLocationIndicator` says. The same manager answers the
+// authorisation and precise-location questions. Created and used on main.
 import CoreLocation
 import Foundation
 

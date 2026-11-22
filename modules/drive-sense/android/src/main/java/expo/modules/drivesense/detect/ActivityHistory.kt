@@ -7,9 +7,10 @@ package expo.modules.drivesense.detect
  * STILL) is written down with the time it happened (the transition's own boot-clock time, not its
  * arrival, which can be minutes later), for the last 3 h ([DetectPolicy.MOTION_LOOKBACK_MS]) and at
  * most [MAX_ENTRIES]. A wake's motion gate and a start's trace-back read it as the policy's
- * [ActivitySample]s ([samples]), exactly as iOS reads its history: so a drive the phone caught
- * already moving (a geofence exit Android delivered minutes late, a car that confirmed only in
- * traffic) begins when the phone's in-a-vehicle report says the car set off.
+ * [ActivitySample]s ([samples]; a start's through [startSamples]), exactly as iOS reads its
+ * history: so a drive the phone caught already moving (a geofence exit Android delivered minutes
+ * late, a car that confirmed only in traffic) begins when the phone's in-a-vehicle report says the
+ * car set off.
  *
  * Every transition is confident (Play services sends one only when it is sure). An IN_VEHICLE EXIT
  * is a sample that is no car motion and says nothing else, so the car stretch ends there. Pure: no
@@ -71,6 +72,22 @@ object ActivityHistory {
     if (before != null) out.add(sample(before, from))
     for (e in sorted) if (e.at >= from) out.add(sample(e))
     return out
+  }
+
+  /**
+   * The samples a drive's start reads from [from] (the last drive's end), as [samples] gives them,
+   * but for an in-a-vehicle report still standing at [from] that a later transition ended (the walk
+   * away, a stop, the vehicle's EXIT: Play services may date it after the end was decided). That
+   * report was the last drive's, so the history is read from just after the transition that ended
+   * it, and the old report never dates the new drive from the last end. A vehicle report with
+   * nothing after it, or any other report standing at [from], reads as [samples] does.
+   */
+  fun startSamples(list: List<Entry>, from: Double): List<ActivitySample> {
+    val sorted = list.sortedBy { it.at }
+    if (sorted.lastOrNull { it.at < from }?.kind != Kind.VEHICLE) return samples(sorted, from)
+    val ended = sorted.firstOrNull { it.at >= from && it.kind != Kind.VEHICLE } ?: return samples(sorted, from)
+    // Just after it: read from its own time, the old report would stand again, dated then.
+    return samples(sorted, Math.nextUp(ended.at))
   }
 
   /** "at:code;at:code" (whole ms). */

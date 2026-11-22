@@ -239,7 +239,10 @@ describe('the steps', () => {
     expect(screen.queryByTestId('wizard-hold-left')).toBeNull();
     await s.to({ kind: 'instructions', aimAllowed: true, holdLeftS: 42, reconnecting: true });
     expect(screen.getByTestId('wizard-hold-left')).toHaveTextContent('Finish setup within 0:42');
+    // It changes every second: no live region, or TalkBack reads each second (VoiceOver reads it once).
+    expect(screen.getByTestId('wizard-hold-left').props.accessibilityLiveRegion).toBeUndefined();
     expect(screen.getByTestId('wizard-reconnecting')).toHaveTextContent('Reconnecting…');
+    expect(screen.getByTestId('wizard-reconnecting').props.accessibilityLiveRegion).toBe('polite');
     expect(screen.queryByTestId('wizard-next')).toBeNull();
     await tap('wizard-start');
     expect(s.answers).toEqual(['startAim']);
@@ -303,6 +306,7 @@ describe('the steps', () => {
     await s.to({ kind: 'aim', status: 'refused', reason: 'moving', holdLeftS: 42, reconnecting: true });
     expect(screen.getByTestId('wizard-aim-refused')).toHaveTextContent('Stop the car to aim DashPal.');
     expect(screen.getByTestId('wizard-hold-left')).toHaveTextContent('Finish setup within 0:42');
+    expect(screen.getByTestId('wizard-hold-left').props.accessibilityLiveRegion).toBeUndefined();
     expect(screen.getByTestId('wizard-reconnecting')).toHaveTextContent('Reconnecting…');
     await tap('wizard-aim-retry');
     await tap('wizard-aim-next');

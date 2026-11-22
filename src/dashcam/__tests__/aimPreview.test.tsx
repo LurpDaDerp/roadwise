@@ -2,9 +2,11 @@
  * Screen 3, the aiming picture: two image layers loaded with no cache and shown as a mirror, nothing
  * drawn on the face, the frame's colour and the hint following DashPal's AIM frames, no verdict on a
  * stale reading, the good latch with its check, haptic and announcement, the picture covered and
- * dropped the moment RoadWise leaves the front, screenshots blocked while it shows, the refusals with
- * Try again where it helps, and Next at every moment.
+ * dropped the moment RoadWise leaves the front, screenshots blocked while it shows and through its
+ * exit (Android's sheet dialog too), the refusals with Try again where it helps, and Next at every
+ * moment.
  */
+import { setSecureDialogsModuleForTests } from '@drive-sense/secureDialogs';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { AccessibilityInfo, AppState, StyleSheet, type AppStateStatus } from 'react-native';
@@ -17,14 +19,16 @@ import { AIM_BORDER, AIM_BORDER_GOOD, aimColor, hintText } from '../aim';
 import { dashpalCopy } from '../copy';
 import type { AimFrame, ViewReason } from '../protocol';
 import type { AimStatus } from '../setup';
+import { CAPTURE_RELEASE_MS } from '../ui/useAimCaptureGuard';
 import { StepAim } from '../ui/wizard/StepAim';
+import { STEP_FADE_MS, STEP_OUT_MS } from '../ui/wizard/StepTransition';
 import { jpegDataUri } from '../view';
 
 jest.mock('expo-haptics', () => ({
   notificationAsync: jest.fn(async () => {}),
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }));
-jest.mock('expo-screen-capture', () => ({ usePreventScreenCapture: jest.fn() }));
+jest.mock('expo-screen-capture', () => ({ preventScreenCaptureAsync: jest.fn(async () => {}), allowScreenCaptureAsync: jest.fn(async () => {}) }));
 // expo-image as a plain view that keeps the props the screen gives it.
 jest.mock('expo-image', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
@@ -34,7 +38,9 @@ jest.mock('expo-image', () => {
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocks above
 const haptics = require('expo-haptics') as { notificationAsync: jest.Mock };
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the mocks above
-const capture = require('expo-screen-capture') as { usePreventScreenCapture: jest.Mock };
+const capture = require('expo-screen-capture') as { preventScreenCaptureAsync: jest.Mock; allowScreenCaptureAsync: jest.Mock };
+/** Android's DriveSense `secureDialogs` (FLAG_SECURE on the sheet's dialog window). */
+const dialogs = { secureDialogs: jest.fn(async (_key: string, _on: boolean) => {}) };
 
 const aimCopy = dashpalCopy.wizard.aim;
 
@@ -71,7 +77,10 @@ let say: jest.SpyInstance;
 beforeEach(() => {
   jest.useFakeTimers();
   haptics.notificationAsync.mockClear();
-  capture.usePreventScreenCapture.mockClear();
+  capture.preventScreenCaptureAsync.mockClear();
+  capture.allowScreenCaptureAsync.mockClear();
+  dialogs.secureDialogs.mockClear();
+  setSecureDialogsModuleForTests(dialogs);
   // React Native's jest setup already mocks it: the spy is that mock, cleared here.
   say = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
   say.mockClear();
@@ -83,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   jest.useRealTimers();
   jest.restoreAllMocks();
+  setSecureDialogsModuleForTests(undefined);
 });
 
 function Screen(p: { f: ReturnType<typeof feed>; status?: AimStatus; reason?: ViewReason | null; onNext?: () => void; onRetry?: () => void }): ReactElement {
@@ -224,9 +234,34 @@ describe('the picture', () => {
     expect(v.props).toMatchObject({ accessible: true, accessibilityRole: 'image', accessibilityLabel: 'What DashPal’s camera sees', accessibilityValue: { text: hintText(7) } });
   });
 
-  it('blocks screenshots and the app switcher’s picture while it is shown', async () => {
+  it('blocks screenshots and the app switcher’s picture while it is shown, the app’s window and (Android) the sheet’s dialog alike', async () => {
     await show(<Screen f={feed()} />);
-    expect(capture.usePreventScreenCapture).toHaveBeenCalled();
+    expect(capture.preventScreenCaptureAsync).toHaveBeenCalledTimes(1);
+    const key = capture.preventScreenCaptureAsync.mock.calls[0]![0] as string;
+    expect(key).toMatch(/^dashpal-aim-\d+$/);
+    expect(dialogs.secureDialogs.mock.calls).toEqual([[key, true]]);
+    expect(capture.allowScreenCaptureAsync).not.toHaveBeenCalled();
+  });
+
+  it('keeps them blocked through its exit (the step’s slide-out still shows the last frame), then lets go of its own key only', async () => {
+    expect(CAPTURE_RELEASE_MS).toBeGreaterThan(Math.max(STEP_OUT_MS, STEP_FADE_MS));
+    const first = await show(<Screen f={feed()} />);
+    const key = capture.preventScreenCaptureAsync.mock.calls[0]![0] as string;
+    await first.unmount();
+    await advance(CAPTURE_RELEASE_MS - 1);
+    expect(capture.allowScreenCaptureAsync).not.toHaveBeenCalled();
+    expect(dialogs.secureDialogs.mock.calls).toEqual([[key, true]]);
+    // Screen 3 again within that time: its own key, which the late release leaves alone.
+    await show(<Screen f={feed()} />);
+    const again = capture.preventScreenCaptureAsync.mock.calls[1]![0] as string;
+    expect(again).not.toBe(key);
+    await advance(1);
+    expect(capture.allowScreenCaptureAsync.mock.calls).toEqual([[key]]);
+    expect(dialogs.secureDialogs.mock.calls).toEqual([
+      [key, true],
+      [again, true],
+      [key, false],
+    ]);
   });
 
   it.each(['inactive', 'background'] as const)('RoadWise %s: covered, and the images and the reading dropped in that render', async (state) => {

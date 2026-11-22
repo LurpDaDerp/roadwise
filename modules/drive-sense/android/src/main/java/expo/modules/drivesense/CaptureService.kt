@@ -14,6 +14,7 @@ import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.HeadlessJsTaskService
+import expo.modules.drivesense.detect.DriveDetectAccess
 import expo.modules.drivesense.detect.DriveDetector
 import expo.modules.drivesense.detect.onCaptureGone
 import expo.modules.drivesense.detect.onRow
@@ -485,9 +486,9 @@ class CaptureService : Service() {
     // A START_STICKY restart after the process died mid-capture (rev1: I2).
     if (intent == null) {
       // A detector drive: in the foreground first (Android may refuse that behind; the drive stays
-      // journaled and the detector's next process start or foreground resumes or ends it), then the
-      // detector decides from its journal: resume (it starts sensing here) or orphan (this stops,
-      // after its motion-gated `app` wake). A drive this process's launch already ended as an orphan,
+      // journaled and the detector's next process start, foreground or wake resumes or ends it),
+      // then the detector decides from its journal: resume (it starts sensing here) or orphan (this
+      // stops, after its motion-gated `app` wake). A drive this process's launch already ended as an orphan,
       // before this service was in the foreground, still gets that wake ([DriveDetector.owesStickyWake]),
       // under "Checking for a drive". The service is kept until the detector has settled the restart.
       val owned = prefs.detectorOwned
@@ -617,13 +618,33 @@ class CaptureService : Service() {
     return try {
       val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
       ServiceCompat.startForeground(this, NotificationFactory.NOTIFICATION_ID, notification, type)
-      inForeground = true
-      null
+      // Battery use Restricted with RoadWise behind: Android ignored the call without throwing (no
+      // notification, never a foreground service), so it is the refusal it is and the service stops.
+      if (foregroundIgnored()) {
+        "E_FGS_REFUSED"
+      } else {
+        inForeground = true
+        null
+      }
     } catch (_: SecurityException) {
       // Android 14+: a location service needs location permission.
       "E_PERMISSION"
     } catch (_: Exception) {
       "E_FGS_REFUSED"
+    }
+  }
+
+  /**
+   * The `startForeground` just made was ignored ([ForegroundRules]). Read only while battery use is
+   * Restricted; a read that fails keeps the answer the call gave (in the foreground).
+   */
+  private fun foregroundIgnored(): Boolean {
+    if (!DriveDetectAccess.backgroundRestricted(this)) return false
+    return try {
+      val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) foregroundServiceType else 0
+      ForegroundRules.suppressed(Build.VERSION.SDK_INT, type, restricted = true, visible = AppVisibility.visible())
+    } catch (_: Exception) {
+      false
     }
   }
 

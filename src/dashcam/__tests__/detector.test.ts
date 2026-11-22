@@ -224,6 +224,26 @@ test('a check while one scans (not cut short): already scanning', async () => {
   expect((await first).kind).toBe('none');
 });
 
+test('a scan that fails to start (Android: Bluetooth not on yet, its start bounded): skipped, and a later check scans again', async () => {
+  let fail = true;
+  const scans: number[] = [];
+  const errors: string[] = [];
+  const r = rig({
+    scan: async () => {
+      scans.push(1);
+      if (fail) throw new Error('scan timed out');
+      return { stop: async () => {} };
+    },
+    onError: (_e, ctx) => void errors.push(ctx),
+  });
+  expect(await r.d.check()).toEqual({ kind: 'skipped', why: 'error' });
+  expect(errors).toEqual(['detect']);
+  fail = false;
+  r.clock.t += DETECT_MIN_GAP_MS;
+  expect(await r.d.check()).toEqual({ kind: 'none' });
+  expect(scans).toHaveLength(2);
+});
+
 test('snoozed(): 7 days for this one; expired entries are dropped', () => {
   expect(snoozed({ old: 5, keep: 2_000 }, 'X', 1_000)).toEqual({ keep: 2_000, X: 1_000 + SNOOZE_MS });
 });

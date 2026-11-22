@@ -12,7 +12,8 @@ const copy = dashpalCopy.wizard;
  * normal driving position to confirm, and what happens to the picture. `onStart` starts the aiming
  * picture (Start); without it the button is Next, which finishes. A DashPal opened by Add another
  * phone (`aimAllowed` false) was aimed by the other phone: it says so, with Next. The time left in
- * the hold's last minute and a lost link reconnecting show above the button.
+ * the hold's last minute and a lost link reconnecting show above the button. The time left is no
+ * live region: it changes every second, and TalkBack would read each one.
  */
 export function StepInstructions({
   aimAllowed,
@@ -76,7 +77,7 @@ export function StepInstructions({
         </Text>
       ) : null}
       {holdLeftS !== null ? (
-        <Text variant="callout" tone="warning" accessibilityLiveRegion="polite" testID="wizard-hold-left">
+        <Text variant="callout" tone="warning" testID="wizard-hold-left">
           {copy.holdLeft(holdLeftS)}
         </Text>
       ) : null}

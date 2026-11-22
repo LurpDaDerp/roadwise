@@ -136,7 +136,10 @@ export interface DashcamTransport {
   start(): Promise<void>;
   started(): boolean;
   bluetoothState(): BluetoothState;
-  /** The first state that is not unknown/resetting (iOS answers the permission through it). */
+  /**
+   * The first state that is not unknown/resetting/turning_on (iOS answers the permission through
+   * it; Android's radio switched on a moment ago answers once it is on).
+   */
   settledBluetoothState(timeoutMs?: number): Promise<BluetoothState>;
   onBluetoothState(fn: (s: BluetoothState) => void): () => void;
   attach(sink: TransportSink): () => void;
@@ -149,7 +152,11 @@ export interface DashcamTransport {
   write(bytes: number[], opts: { withResponse: boolean; urgent?: boolean }): Promise<void>;
   linked(): boolean;
   // ——— setup (foreground, the driver's explicit action) ———
-  /** `fast`: Android scans in low-latency mode (setup); otherwise the platform default (the nearby prompt). */
+  /**
+   * `fast`: Android scans in low-latency mode (setup); otherwise the platform default (the nearby
+   * prompt). Rejects when the start is not answered within `OP_TIMEOUT_MS` (Android's ble-manager
+   * never answers a scan asked while the adapter is not on).
+   */
   scan(opts: { services: string[]; seconds: number; onHit(hit: ScanHit): void; fast?: boolean }): Promise<{ stop(): Promise<void> }>;
   /**
    * Connect for setup. Android: an OS bond with this peripheral (left from link v1) is removed first,
@@ -903,11 +910,14 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     bluetoothState: () => bt,
 
     settledBluetoothState(timeoutMs = 10_000) {
-      if (bt !== 'unknown' && bt !== 'resetting') return Promise.resolve(bt);
+      // Android's turning_on lasts a second or two after the driver switches Bluetooth on: a scan
+      // asked then is never answered (the adapter is not enabled yet), so it waits for 'on' too.
+      const unsettled = (s: BluetoothState): boolean => s === 'unknown' || s === 'resetting' || s === 'turning_on';
+      if (!unsettled(bt)) return Promise.resolve(bt);
       return new Promise<BluetoothState>((resolve) => {
         let timer: unknown = null;
         const off = self.onBluetoothState((s) => {
-          if (s === 'unknown' || s === 'resetting') return;
+          if (unsettled(s)) return;
           off();
           clearTimer(timer);
           resolve(s);
@@ -1012,12 +1022,26 @@ export function createBleTransport(api: BleApi, opts: TransportOptions): Dashcam
     async scan({ services, seconds, onHit, fast = false }) {
       await self.start();
       const wanted = services.map((u) => u.toLowerCase());
-      scanHit = (e) => {
+      const hit = (e: BlePeripheralEvent): void => {
         const advertised = (e.advertising?.serviceUUIDs ?? []).map((u) => u.toLowerCase());
         if (!advertised.some((u) => wanted.includes(u))) return;
         onHit({ id: e.id, name: e.advertising?.localName ?? e.name ?? null, rssi: e.rssi, adv: advOf(advertised) });
       };
-      await api.scan({ serviceUUIDs: services, seconds, allowDuplicates: false, ...(fast ? { scanMode: 2, matchMode: 1 } : {}) });
+      scanHit = hit;
+      try {
+        // Bounded like every other native call that can hang: Android's ble-manager returns without
+        // answering a scan asked while the adapter is not on (Bluetooth still turning on, or just
+        // switched off), and the search and Home's check would wait on it for ever.
+        await bounded(api.scan({ serviceUUIDs: services, seconds, allowDuplicates: false, ...(fast ? { scanMode: 2, matchMode: 1 } : {}) }), OP_TIMEOUT_MS, 'scan');
+      } catch (e) {
+        // Stopped only while this scan still owns the hits: a newer scan started meanwhile (Home's
+        // check timing out under setup's search) keeps its native search running.
+        if (scanHit === hit) {
+          scanHit = null;
+          await api.stopScan().catch((err: unknown) => report(err, 'stopScan'));
+        }
+        throw e;
+      }
       return {
         stop: async () => {
           scanHit = null;

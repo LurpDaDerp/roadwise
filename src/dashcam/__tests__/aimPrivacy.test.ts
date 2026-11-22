@@ -13,7 +13,7 @@ const { join } = require('path') as { join(...p: string[]): string };
 const src = (...p: string[]) => readFileSync(join(__dirname, '..', ...p), 'utf8');
 
 /** The files the picture and its AIM frames pass through. */
-const PICTURE = ['view.ts', 'aim.ts', 'reaim.ts', 'ui/wizard/AimView.tsx', 'ui/wizard/AimBorder.tsx', 'ui/wizard/StepAim.tsx', 'ui/ReaimSheet.tsx'];
+const PICTURE = ['view.ts', 'aim.ts', 'reaim.ts', 'ui/wizard/AimView.tsx', 'ui/wizard/AimBorder.tsx', 'ui/wizard/StepAim.tsx', 'ui/ReaimSheet.tsx', 'ui/useAimCaptureGuard.ts'];
 
 describe('the aiming picture stays in memory', () => {
   it.each(PICTURE)('%s imports no storage, file, secure store or app store module and logs nothing', (file) => {
@@ -23,6 +23,15 @@ describe('the aiming picture stays in memory', () => {
     if (file !== 'view.ts') expect(imports.length).toBeGreaterThan(0);
     for (const i of imports) expect(i).not.toMatch(/sqlite|file-system|secure-store|async-storage|\/store$|\/secure$|\/data\/|supabase|telemetry|sentry|media-library|sharing|view-shot/i);
     expect(text).not.toMatch(/console\./);
+  });
+
+  it('both screens that show the picture keep it out of captures through the one guard (Android’s sheet dialogs included)', () => {
+    for (const file of ['ui/wizard/StepAim.tsx', 'ui/ReaimSheet.tsx']) {
+      const text = src(...file.split('/'));
+      expect(text).toMatch(/useAimCaptureGuard\('dashpal-(re)?aim'\);/);
+      expect(text).not.toMatch(/usePreventScreenCapture/);
+    }
+    expect(src('ui', 'useAimCaptureGuard.ts')).toMatch(/secureDialogs\(key, true\)/);
   });
 
   it('the setup flow hands the picture to the screen’s listeners only, and never a record, an image or an AIM value to a report', () => {

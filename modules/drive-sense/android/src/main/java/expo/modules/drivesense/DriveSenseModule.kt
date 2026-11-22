@@ -9,12 +9,14 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.ActivityCompat
+import com.facebook.react.bridge.ReactContext
 import expo.modules.drivesense.detect.DriveDetector
 import expo.modules.interfaces.permissions.PermissionsResponseListener
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -43,6 +45,12 @@ class DriveSenseModule : Module() {
 
   private val emitter = EventBus.Emitter { name, body -> sendEvent(name, body) }
 
+  /** React Native's Modal dialogs, secured while the DashPal aiming picture shows (SecureDialogs). */
+  private val dialogWindows = SecureDialogWindows()
+
+  /** The React context the dialogs' listener is registered with, to take it off at OnDestroy. */
+  private var windowEvents: ReactContext? = null
+
   private fun coded(code: String, message: String) = CodedException(code, message, null)
 
   /** The retired reminder's fixed status (`tripReminderStatusSchema`): off, nothing missing. */
@@ -60,11 +68,15 @@ class DriveSenseModule : Module() {
       // RoadWise-in-front for the rows: DriveSensePackage registers it at Application.onCreate; this
       // late registration runs only if that hook never did (seeded from the activity on screen now).
       (context as? Application)?.let { AppVisibility.registerLate(it, appContext.currentActivity) }
+      // Every Modal dialog React Native shows and dismisses, for the aiming picture's FLAG_SECURE.
+      windowEvents = (appContext.reactContext as? ReactContext)?.also { it.addExtraWindowEventListener(dialogWindows) }
     }
 
     OnDestroy {
       // The JS runtime is going away: nobody listens for rows any more (the watchdog's signal).
       EventBus.detach(emitter)
+      windowEvents?.removeExtraWindowEventListener(dialogWindows)
+      windowEvents = null
     }
 
     for (name in OBSERVED_EVENTS) {
@@ -400,5 +412,15 @@ class DriveSenseModule : Module() {
       }
       if (ctx == null) promise.resolve(null) else AlertSpeech.voiceCount(ctx) { promise.resolve(it) }
     }
+
+    // ---- The DashPal aiming picture kept out of captures in its sheet (SecureDialogs). Android only:
+    // ANDROID_SECURE_DIALOG_METHODS in src/secureDialogs.ts, outside DRIVE_SENSE_METHODS (iPhone's
+    // expo-screen-capture already covers its Modals). ----
+
+    // A screen showing the picture holds (true) or lets go of (false) FLAG_SECURE on the Modal
+    // dialogs, under its own key. On the main thread, where React Native reports its dialogs. Never rejects.
+    AsyncFunction("secureDialogs") { key: String, on: Boolean ->
+      if (on) dialogWindows.dialogs.hold(key) else dialogWindows.dialogs.release(key)
+    }.runOnQueue(Queues.MAIN)
   }
 }

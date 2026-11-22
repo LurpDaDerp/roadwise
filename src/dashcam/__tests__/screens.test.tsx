@@ -25,7 +25,7 @@ jest.mock('expo-haptics', () => ({
   notificationAsync: jest.fn(async () => {}),
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
 }));
-jest.mock('expo-screen-capture', () => ({ usePreventScreenCapture: jest.fn() }));
+jest.mock('expo-screen-capture', () => ({ preventScreenCaptureAsync: jest.fn(async () => {}), allowScreenCaptureAsync: jest.fn(async () => {}) }));
 // expo-image as a plain view (the re-aim sheet's picture)
 jest.mock('expo-image', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- inside the mock factory
@@ -441,7 +441,8 @@ describe('Home: the camera needs adjusting', () => {
     const w = await appWorld();
     const r = await w.render(<ReaimCard />);
     const card = await screen.findByTestId('home-dashpal-reaim');
-    expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Not now' }]);
+    // iOS: the ✕'s action only (VoiceOver's double-tap reaches onPress); Android lists activate first (withActivate).
+    expect(card.props.accessibilityActions).toEqual([{ name: 'dismiss', label: 'Not now' }]);
     expect(screen.getByTestId('home-dashpal-reaim-dismiss')).toHaveStyle({ alignSelf: 'flex-start' });
     await tap('home-dashpal-reaim-dismiss');
     expect(screen.queryByTestId('home-dashpal-reaim')).toBeNull();

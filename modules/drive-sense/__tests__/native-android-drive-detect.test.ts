@@ -176,6 +176,14 @@ describe('native-android: the drive (policy.ts decides, as on iOS)', () => {
     expect(sensed).toMatch(/endClock = DetectPolicy\.endClockAt\(s\.lastRowTs \?: now\)/);
     // The refused resume is tried again when RoadWise comes to the front.
     expect(fn(det('DriveDetector'), '  fun appForeground(', 2)).toMatch(/if \(resumePending && !resuming && !sensing && r\.recording\) r\.driveId\?\.let \{ resumeDrive\(it\) \}/);
+    // ...and at any wake (its broadcast may start the location service), never answered busy while
+    // nothing senses the drive: the wake is held through the resume, the flag cleared first so its
+    // replay never retries, all before the gate.
+    const wake = fn(det('DriveDetectorWatch'), 'internal fun DriveDetector.onWake(');
+    expect(wake).toMatch(
+      /if \(resuming\) \{\s*heldWakes\.hold\(reason, done\)\s*return\s*\}\s*val pendingId = rec\?\.takeIf \{ it\.recording \}\?\.driveId\s*if \(resumePending && pendingId != null && !sensing && !CaptureService\.isCapturing\) \{\s*resumePending = false\s*heldWakes\.hold\(reason, done\)\s*resumeDrive\(pendingId\)\s*return\s*\}/,
+    );
+    expect(wake.indexOf('resumeDrive(pendingId)')).toBeLessThan(wake.indexOf('DetectPolicy.wakeGate(ctx)'));
     expect(kt('AppVisibility')).toMatch(/DriveDetector\.peek\(\)\?\.appForeground\(\)/);
   });
 

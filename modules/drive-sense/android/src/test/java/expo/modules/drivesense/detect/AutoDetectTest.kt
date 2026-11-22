@@ -76,6 +76,43 @@ class AutoDetectTest {
   }
 
   @Test
+  fun `a start never dates from the last drive's own in-a-vehicle report, ended after the end was decided`() {
+    val end = t0 - 15 * min
+    // The last drive's car report, still standing at its end; Play services dated the walk away 20 s after it.
+    val last = listOf(e(end - 20 * min, ActivityHistory.Kind.VEHICLE), e(end + 20_000, ActivityHistory.Kind.WALKING))
+    fun since(list: List<ActivityHistory.Entry>) = DetectPolicy.summarize(ActivityHistory.startSamples(list, end), t0).automotiveSince
+    // Driving home 15 min later: the run begins at the new IN_VEHICLE ENTER, not at the last end.
+    assertEquals(end, DetectPolicy.summarize(ActivityHistory.samples(last + e(t0 - 1 * min, ActivityHistory.Kind.VEHICLE), end), t0).automotiveSince, 0.0)
+    assertEquals(t0 - 1 * min, since(last + e(t0 - 1 * min, ActivityHistory.Kind.VEHICLE)), 0.0)
+    // Confirmed before the new ENTER is delivered: no car run (the drive starts at its first row).
+    assertEquals(0.0, since(last), 0.0)
+    // The vehicle's EXIT ends it too, and a stop inside the new run still merges into it.
+    val exited = listOf(e(end - 20 * min, ActivityHistory.Kind.VEHICLE), e(end + 5_000, ActivityHistory.Kind.VEHICLE_EXIT))
+    val stopped = exited + e(t0 - 8 * min, ActivityHistory.Kind.VEHICLE) + e(t0 - 5 * min, ActivityHistory.Kind.STILL) + e(t0 - 4 * min, ActivityHistory.Kind.VEHICLE)
+    assertEquals(t0 - 8 * min, since(stopped), 0.0)
+  }
+
+  @Test
+  fun `a start reads the history as before when no car report of the last drive stands at its end`() {
+    val end = t0 - 15 * min
+    // The walk was dated before the end: the new run's own stop does not cut its start.
+    val walked = listOf(
+      e(end - 20 * min, ActivityHistory.Kind.VEHICLE),
+      e(end - 10_000, ActivityHistory.Kind.WALKING),
+      e(t0 - 8 * min, ActivityHistory.Kind.VEHICLE),
+      e(t0 - 5 * min, ActivityHistory.Kind.STILL),
+      e(t0 - 4 * min, ActivityHistory.Kind.VEHICLE)
+    )
+    assertEquals(ActivityHistory.samples(walked, end), ActivityHistory.startSamples(walked, end))
+    assertEquals(t0 - 8 * min, DetectPolicy.summarize(ActivityHistory.startSamples(walked, end), t0).automotiveSince, 0.0)
+    // A car report still standing with nothing after it: dated from the end, as the trace-back always read it.
+    val riding = listOf(e(end - 20 * min, ActivityHistory.Kind.VEHICLE))
+    assertEquals(ActivityHistory.samples(riding, end), ActivityHistory.startSamples(riding, end))
+    assertEquals(end, DetectPolicy.summarize(ActivityHistory.startSamples(riding, end), t0).automotiveSince, 0.0)
+    assertEquals(emptyList<ActivitySample>(), ActivityHistory.startSamples(emptyList(), end))
+  }
+
+  @Test
   fun `the wake gate - 6 empty watches an hour, 10 min rest after an empty one except the geofence and the app`() {
     val starts = List(5) { t0 - it * 5 * min }
     val ctx = WakeCtx(t0, WakeReason.SLC, DetectPhase.ARMED, armed = true, hasOwner = true, permissionsOk = true, candidateRestUntil = 0.0, candidateStarts = starts)

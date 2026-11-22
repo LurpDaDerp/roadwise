@@ -14,6 +14,7 @@ import { DRIVE_SENSE_ERROR_CODES, DRIVE_SENSE_EVENTS, DRIVE_SENSE_METHODS, DRIVE
 import { DRIVE_DETECT_ERROR_CODES } from '../src/detect/types';
 import { DANGER_ORDER } from '../../../src/features/weather/danger';
 import { ANDROID_GEOCODE_METHODS } from '../src/geocode';
+import { ANDROID_SECURE_DIALOG_METHODS } from '../src/secureDialogs';
 import { ANDROID_SHARE_METHODS } from '../src/share';
 import { ANDROID_SPEECH_METHODS } from '../src/speech';
 import { ANDROID_UNUSED_APP_METHODS } from '../src/unusedApps';
@@ -113,10 +114,10 @@ describe('native-android: the bridge surface (README §1)', () => {
     expect(MODULE()).toContain(`AsyncFunction("${name}")`);
   });
 
-  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share, geocoder, unused-app and speech ones, and none twice', () => {
+  it('declares no AsyncFunction outside DRIVE_SENSE_METHODS and the Android-only share, geocoder, unused-app, speech and secure-dialog ones, and none twice', () => {
     const declared = [...MODULE().matchAll(/AsyncFunction\("([^"]+)"\)/g)].map((x) => x[1]);
     expect([...declared].sort()).toEqual(
-      [...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS, ...ANDROID_UNUSED_APP_METHODS, ...ANDROID_SPEECH_METHODS].sort()
+      [...DRIVE_SENSE_METHODS, ...ANDROID_SHARE_METHODS, ...ANDROID_GEOCODE_METHODS, ...ANDROID_UNUSED_APP_METHODS, ...ANDROID_SPEECH_METHODS, ...ANDROID_SECURE_DIALOG_METHODS].sort()
     );
   });
 
@@ -369,6 +370,30 @@ describe('native-android: spoken alerts on the process engine (AlertSpeech)', ()
   });
 });
 
+describe('native-android: the DashPal aiming picture kept out of captures in its sheet (SecureDialogs)', () => {
+  const block = (re: RegExp): string => re.exec(MODULE())?.[0] ?? '';
+
+  it.each([...ANDROID_SECURE_DIALOG_METHODS])('%s is an Android-only function', (name) => {
+    expect(MODULE()).toContain(`AsyncFunction("${name}")`);
+    expect(DRIVE_SENSE_METHODS as readonly string[]).not.toContain(name);
+  });
+
+  it('secureDialogs holds or lets go of its key on the main thread, where React Native reports its dialogs, and never rejects', () => {
+    const fn = block(/AsyncFunction\("secureDialogs"\)[\s\S]*?\}\.runOnQueue\(Queues\.MAIN\)/);
+    expect(fn).toMatch(/\{ key: String, on: Boolean ->\s*if \(on\) dialogWindows\.dialogs\.hold\(key\) else dialogWindows\.dialogs\.release\(key\)\s*\}/);
+    expect(fn).not.toMatch(/reject|throw|promise/i);
+  });
+
+  it('listens to every Modal dialog window from OnCreate to OnDestroy, and the flag is FLAG_SECURE', () => {
+    expect(block(/OnCreate \{[\s\S]*?\n {4}\}/)).toMatch(/addExtraWindowEventListener\(dialogWindows\)/);
+    expect(block(/OnDestroy \{[\s\S]*?\n {4}\}/)).toMatch(/removeExtraWindowEventListener\(dialogWindows\)/);
+    const s = code(kt('SecureDialogs'));
+    expect(s).toMatch(/class SecureDialogWindows : ExtraWindowEventListener/);
+    expect(s).toMatch(/window\.addFlags\(WindowManager\.LayoutParams\.FLAG_SECURE\)/);
+    expect(s).toMatch(/window\.clearFlags\(WindowManager\.LayoutParams\.FLAG_SECURE\)/);
+  });
+});
+
 describe('native-android: "Pause app activity if unused" (ruling 15)', () => {
   const src = () => code(kt('UnusedAppRestrictions'));
   const fn = (name: string) => {
@@ -457,6 +482,18 @@ describe('native-android: who starts the location service', () => {
     const fg = /private fun goForeground\([\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
     expect(fg).toMatch(/ServiceInfo\.FOREGROUND_SERVICE_TYPE_LOCATION/);
     expect(fg).toMatch(/catch \(_: SecurityException\) \{[\s\S]*?"E_PERMISSION"[\s\S]*?catch \(_: Exception\) \{\s*"E_FGS_REFUSED"/);
+    // Restricted with RoadWise behind, Android ignores startForeground without throwing: that is a
+    // refusal too, so no watch or drive runs hidden as a background service with no notification.
+    expect(fg).toMatch(/ServiceCompat\.startForeground\([^\n]*\)\s*if \(foregroundIgnored\(\)\) \{\s*"E_FGS_REFUSED"\s*\} else \{\s*inForeground = true\s*null\s*\}/);
+    expect(fg.match(/inForeground = true/g)).toHaveLength(1);
+    const ignored = /private fun foregroundIgnored\(\): Boolean \{[\s\S]*?\n {2}\}/.exec(svc)?.[0] ?? '';
+    expect(ignored).toMatch(/if \(!DriveDetectAccess\.backgroundRestricted\(this\)\) return false/);
+    expect(ignored).toMatch(/if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.Q\) foregroundServiceType else 0/);
+    expect(ignored).toMatch(/ForegroundRules\.suppressed\(Build\.VERSION\.SDK_INT, type, restricted = true, visible = AppVisibility\.visible\(\)\)/);
+    expect(ignored).toMatch(/catch \(_: Exception\) \{\s*false\s*\}/);
+    const rules = code(kt('ForegroundRules'));
+    expect(rules).toMatch(/sdk >= 29 -> type == ServiceInfo\.FOREGROUND_SERVICE_TYPE_NONE/);
+    expect(rules).toMatch(/sdk == 28 -> !visible/);
   });
 
   it('the FGS refusal codes pass through unchanged', () => {
@@ -689,7 +726,15 @@ describe('native-android: automatic drives (WP03b, rulings 1-4)', () => {
     expect(row).toMatch(/DetectPolicy\.confirmStep\(confirmState, d, TriggerKind\.AUTO, veto = veto, carFresh = carFresh\(\)\)/);
     expect(row).toMatch(/DetectPolicy\.slowTrafficStep\(slowState, d\)/);
     const confirm = /internal fun DriveDetector\.confirm\([\s\S]*?\n\}/.exec(w)?.[0] ?? '';
-    expect(confirm).toMatch(/motionSince\(maxOf\(lastEnd\?\.decidedAt \?: 0\.0, now - DetectPolicy\.MOTION_LOOKBACK_MS\), now\)\.automotiveSince/);
+    // Never before the last end, and never from the last drive's own in-a-vehicle report that a later
+    // transition ended (Play services may date it after the end was decided): startSamples, not samples.
+    expect(confirm).toMatch(/val from = maxOf\(lastEnd\?\.decidedAt \?: 0\.0, now - DetectPolicy\.MOTION_LOOKBACK_MS\)\s*DetectPolicy\.summarize\(ActivityHistory\.startSamples\(history, from\), now\)\.automotiveSince/);
+    expect(confirm).not.toMatch(/motionSince\(/);
+    const hist = code(read(join(KT_DIR_DETECT, 'ActivityHistory.kt')));
+    const start = /fun startSamples\([\s\S]*?\n {2}\}/.exec(hist)?.[0] ?? '';
+    expect(start).toMatch(/if \(sorted\.lastOrNull \{ it\.at < from \}\?\.kind != Kind\.VEHICLE\) return samples\(sorted, from\)/);
+    expect(start).toMatch(/sorted\.firstOrNull \{ it\.at >= from && it\.kind != Kind\.VEHICLE \} \?: return samples\(sorted, from\)/);
+    expect(start).toMatch(/return samples\(sorted, Math\.nextUp\(ended\.at\)\)/);
     expect(confirm).toMatch(/DetectPolicy\.startOf\(rows, h, TriggerKind\.AUTO, automotiveSince, lastEnd\)/);
   });
 

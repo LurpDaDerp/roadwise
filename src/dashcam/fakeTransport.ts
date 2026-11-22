@@ -178,6 +178,8 @@ export function createFakeBle(): FakeBle {
     async scan(o) {
       calls.push(`scan:${o.serviceUUIDs.join(',')}:${o.seconds}`);
       scans.push({ serviceUUIDs: [...o.serviceUUIDs], seconds: o.seconds, ...(o.scanMode !== undefined ? { scanMode: o.scanMode } : {}), ...(o.matchMode !== undefined ? { matchMode: o.matchMode } : {}) });
+      // Android's ble-manager never answers a scan asked while the adapter is not on (`hangNext('scan')`).
+      if (hang('scan')) return never();
       fail('scan');
     },
     async stopScan() {

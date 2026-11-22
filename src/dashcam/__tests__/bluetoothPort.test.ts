@@ -1,5 +1,6 @@
 // The DashPal radio the permissions adapter starts on the driver's tap: on iOS the start shows the
-// Bluetooth prompt, and the answer is waited for as long as a driver takes to read it.
+// Bluetooth prompt, and the answer is waited for as long as a driver takes to read it; on Android a
+// radio still turning on is waited out until it is on.
 import { createBluetoothPort, PROMPT_SETTLE_MS } from '../bluetoothPort';
 import { createFakeBle } from '../fakeTransport';
 import { createBleTransport } from '../transport';
@@ -42,6 +43,19 @@ test('an answer to the iOS prompt 30 s after the tap is the answer, not "undeter
   void port.startRadio().then((s) => (answer = s));
   await flush();
   advance(30_000);
+  await flush();
+  expect(answer).toBeUndefined();
+  ble.setState('on');
+  await flush();
+  expect(answer).toBe('on');
+});
+
+test('Android: Bluetooth switched on a moment ago (still turning on) answers "on" once it is on, never "turning_on"', async () => {
+  const ble = createFakeBle();
+  ble.setState('turning_on');
+  const port = createBluetoothPort(() => createBleTransport(ble, { platform: 'android', setTimer: () => 0, clearTimer: () => {} }));
+  let answer: string | null | undefined;
+  void port.startRadio().then((s) => (answer = s));
   await flush();
   expect(answer).toBeUndefined();
   ble.setState('on');

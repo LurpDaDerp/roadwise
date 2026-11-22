@@ -38,8 +38,8 @@ import java.util.concurrent.Executors
  * front; a confirmed watch becomes the drive in place (no gap), and an automatic end becomes the
  * linger's watch in place. A start Android refuses (ForegroundServiceStartNotAllowedException, or a
  * SecurityException on 14+) never loses a drive: its record and journal stay, and the next process
- * start or foreground resumes it or ends it. With nothing sensing, RoadWise uses no GPS: the wakes
- * are Play services' transitions and geofence, delivered to a stopped app.
+ * start, foreground or wake resumes it or ends it. With nothing sensing, RoadWise uses no GPS: the
+ * wakes are Play services' transitions and geofence, delivered to a stopped app.
  *
  * The record ([DriveDetectRecord]) is saved before each transition's side effects.
  */
@@ -104,7 +104,7 @@ class DriveDetector private constructor(context: Context) {
   /** The sticky restart came while the resume read the journal: it settles as the restart's. */
   internal var stickyResume = false
 
-  /** A resume Android refused to start sensing for: tried again at the next foreground or process start. */
+  /** A resume Android refused to start sensing for: tried again at the next foreground, wake or process start. */
   internal var resumePending = false
 
   internal var endClock = DetectPolicy.endClockAt(0.0)
