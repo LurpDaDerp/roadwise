@@ -77,3 +77,6 @@ google-play-service-account*.json
 # Local release notes (the App Store checklist holds the App Review demo account): never uploaded
 IOS_DISTRIBUTION_CHECKLIST.md
 FUTURE_TODO.md
+
+# App Store screenshots and artwork: never uploaded to EAS builds
+/store-assets/

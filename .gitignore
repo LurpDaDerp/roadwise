@@ -83,3 +83,6 @@ IOS_DISTRIBUTION_CHECKLIST.md
 
 # Future todos (Android release and later work): local notes, never committed
 FUTURE_TODO.md
+
+# App Store screenshots and artwork (designed outside the app; uploaded to App Store Connect by hand): never committed
+/store-assets/
