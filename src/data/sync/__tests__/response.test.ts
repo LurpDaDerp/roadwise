@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { classifyInvokeError, classifyStatus, NEWER_PAYLOAD_KEYS, SERVER_BEHIND_CODE } from '@/data/sync/response';
-import { functionsHttpError } from '@/data/sync/__fixtures__/fakes';
+import { functionsAbortError, functionsHttpError } from '@/data/sync/__fixtures__/fakes';
 import { payloadV5, uuid } from '@/data/sync/__fixtures__/drives';
 import { FinalizeTripPayloadV5Schema } from '@/data/sync/payload';
 import { z } from 'zod';
@@ -17,6 +17,32 @@ test('a function’s own 404 `not_found` (no such trip or event on the server) i
   expect(own).toMatchObject({ kind: 'terminal', code: 'not_found', status: 404 });
   const empty = await classifyInvokeError(functionsHttpError(404, {}).error, 0);
   expect(empty).toMatchObject({ kind: 'retryable', code: 'http_404' });
+});
+
+test('a 402 (Supabase restricting the project for a quota or a bill) is no refusal: nothing read the payload, so the item retries', async () => {
+  expect(classifyStatus(402)).toBe('retryable');
+  const restricted = await classifyInvokeError(
+    functionsHttpError(402, { message: 'Service for this project is restricted due to the following violations: exceed_egress_quota' }).error,
+    0
+  );
+  expect(restricted).toEqual({ kind: 'retryable', code: 'http_402', status: 402, retryAfterS: null });
+  // Any other 4xx with no function code stays a refusal: the same bytes would get the same answer.
+  expect(await classifyInvokeError(functionsHttpError(403, '<html>blocked</html>').error, 0)).toMatchObject({ kind: 'terminal', code: 'http_403' });
+  expect(await classifyInvokeError(functionsHttpError(413, {}).error, 0)).toMatchObject({ kind: 'terminal', code: 'http_413' });
+});
+
+test('a request the client gave up on (its time-out aborted it) reads as a transport failure, whatever the abort carries', async () => {
+  // functions-js wraps a fetch that rejected in a FunctionsFetchError, the fetch's error as its context.
+  expect(await classifyInvokeError(functionsAbortError().error, 0)).toEqual({ kind: 'retryable', code: 'network', status: null, retryAfterS: null });
+  const domAbort = { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function', context: new DOMException('This operation was aborted', 'AbortError') };
+  expect(await classifyInvokeError(domAbort, 0)).toMatchObject({ kind: 'retryable', code: 'network', status: null });
+  // An abort while the answer's body was being read comes back bare.
+  const bodyAbort = new Error('The request did not finish within 300000 ms');
+  bodyAbort.name = 'AbortError';
+  expect(await classifyInvokeError(bodyAbort, 0)).toMatchObject({ kind: 'retryable', code: 'network', status: null });
+  // A refusal whose body read was aborted is read by its status alone.
+  const refusalBodyAborted = { name: 'FunctionsHttpError', message: 'x', context: { status: 503, headers: { get: () => null }, json: async () => Promise.reject(bodyAbort) } };
+  expect(await classifyInvokeError(refusalBodyAborted, 0)).toMatchObject({ kind: 'retryable', code: 'http_503', status: 503 });
 });
 
 test('the server’s own refusals stay terminal', () => {

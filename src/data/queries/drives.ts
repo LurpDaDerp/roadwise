@@ -3,8 +3,9 @@
  * reader; the readers are exported so a test can run them against sql.js directly.
  *
  * Every reader asks SQLite for only what it shows: a count is a COUNT, the recent drives a LIMIT,
- * a sum reads the summed columns, and a list leaves each drive's stored server answer unread. The
- * rows, their order and every number are those of filtering the whole table.
+ * a sum reads the summed columns, and a list leaves each drive's speed trace, stored server answer
+ * and integrity block unread (`TRIP_LIST_VIEW`). The rows, their order and every number are those
+ * of filtering the whole table.
  *
  * A drive archived 183 days after it ended (`@/data/db/archive`) is a stat, never a list item: the
  * lists (recent drives, history) and a drive's own read (its recap) leave it out, while the sums
@@ -32,6 +33,7 @@ import {
   type LocalDrive,
   type LocalDriveEvent,
   type SummedDrive,
+  TRIP_LIST_VIEW,
   TRIP_VIEW,
   toTripView,
 } from '@/data/queries/rows';
@@ -55,7 +57,7 @@ export async function readRecentDrives(db: Db, limit: number): Promise<LocalDriv
 }
 
 export async function readDriveHistory(db: Db, filter: DriveHistoryFilter): Promise<LocalDrive[]> {
-  const { rows } = await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE ${LISTED} ${NEWEST_FIRST}`);
+  const { rows } = await db.execute(`SELECT ${TRIP_LIST_VIEW} FROM trips t WHERE ${LISTED} ${NEWEST_FIRST}`);
   return rows.map((row) => toListedDrive(toTripView(row))).filter((d) => matchesHistoryFilter(d, filter));
 }
 

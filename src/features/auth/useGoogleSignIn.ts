@@ -84,8 +84,12 @@ export function useGoogleSignInAuthSession(): GoogleSignIn {
   async function signIn(): Promise<void> {
     if (!request) return;
     const result = await promptAsync();
-    if (result.type === 'error') throw result.error ?? new Error('Google sign-in failed');
-    // Backing out of the Google sheet must leave the screen exactly as it was, with no error.
+    // Backing out of the Google sheet must leave the screen exactly as it was, with no error. Cancel
+    // on Google's own page comes back as an error too (access_denied), as Apple's does.
+    if (result.type === 'error') {
+      if (result.error?.code === 'access_denied' || result.params?.error === 'access_denied') return;
+      throw result.error ?? new Error('Google sign-in failed');
+    }
     if (result.type !== 'success') return;
 
     const { error } = await supabase.auth.signInWithIdToken({

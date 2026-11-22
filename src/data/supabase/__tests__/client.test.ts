@@ -16,10 +16,20 @@ const mockAuth = {
   startAutoRefresh: jest.fn(async () => {}),
   stopAutoRefresh: jest.fn(async () => {}),
   getSession: jest.fn(),
+  // auth-js's own key for the stored session (supabase-js derives it from the project URL).
+  storageKey: 'sb-example-auth-token',
 };
 jest.mock('@supabase/supabase-js', () => ({ createClient: jest.fn(() => ({ auth: mockAuth })) }));
 jest.mock('@/lib/env', () => ({ env: { supabaseUrl: 'https://example.supabase.co', supabasePublishableKey: 'sb_publishable_test' } }));
-jest.mock('@/data/supabase/largeSecureStore', () => ({ LargeSecureStore: class {} }));
+// The client's storage: what each key holds, as LargeSecureStore would decrypt it.
+const mockStorage = new Map<string, string>();
+jest.mock('@/data/supabase/largeSecureStore', () => ({
+  LargeSecureStore: class {
+    async getItem(key: string): Promise<string | null> {
+      return mockStorage.get(key) ?? null;
+    }
+  },
+}));
 jest.mock('react-native-get-random-values', () => ({}));
 
 const appState = AppState as unknown as { currentState: string; addEventListener: jest.Mock };
@@ -105,4 +115,71 @@ test('an unreadable stored session has initialised all the same: a background la
   await settle();
   expect(mockAuth.stopAutoRefresh).toHaveBeenCalledTimes(1);
   expect(mockAuth.startAutoRefresh).not.toHaveBeenCalled();
+});
+
+test('every request the client sends goes through the bounded fetch; the stored session keeps its key and storage', () => {
+  deferInitialisation();
+  appState.currentState = 'active';
+  let createClient: jest.Mock | undefined;
+  jest.isolateModules(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the module instance the client sees
+    createClient = (require('@supabase/supabase-js') as { createClient: jest.Mock }).createClient;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- a fresh module instance per launch
+    require('@/data/supabase/client');
+  });
+  const options = createClient?.mock.calls.at(-1)?.[2] as { auth: Record<string, unknown>; global: { fetch: unknown } };
+  expect(typeof options.global.fetch).toBe('function');
+  // No storageKey of its own: a different key would sign every install out.
+  expect(options.auth.storageKey).toBeUndefined();
+  expect(options.auth.storage).toBeDefined();
+});
+
+describe('readStoredSession: the session auth-js keeps on the phone, read without a refresh', () => {
+  type ClientModule = typeof import('@/data/supabase/client');
+  function load(): ClientModule {
+    deferInitialisation();
+    appState.currentState = 'active';
+    let mod: ClientModule | undefined;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- a fresh module instance
+      mod = require('@/data/supabase/client') as ClientModule;
+    });
+    return mod as ClientModule;
+  }
+  const whole = { access_token: 'a', refresh_token: 'r', expires_at: 1_700_000_000, user: { id: 'u1' } };
+
+  beforeEach(() => mockStorage.clear());
+
+  test('reads the session under the client’s own key, expired or not', async () => {
+    mockStorage.set('sb-example-auth-token', JSON.stringify(whole));
+    expect(await load().readStoredSession()).toEqual(whole);
+  });
+
+  test('nothing stored is null', async () => {
+    expect(await load().readStoredSession()).toBeNull();
+  });
+
+  test.each([
+    ['not JSON', 'v2:garbage'],
+    ['no refresh token', JSON.stringify({ ...whole, refresh_token: undefined })],
+    ['no access token', JSON.stringify({ ...whole, access_token: 1 })],
+    ['no expiry', JSON.stringify({ ...whole, expires_at: undefined })],
+    ['no user', JSON.stringify({ ...whole, user: null })],
+    ['a user with no id', JSON.stringify({ ...whole, user: { id: '' } })],
+  ])('what is not a whole session (%s) is null', async (_label, raw) => {
+    mockStorage.set('sb-example-auth-token', raw);
+    expect(await load().readStoredSession()).toBeNull();
+  });
+
+  test('a storage read that throws is null, never a rejection', async () => {
+    const mod = load();
+    const getItem = jest.spyOn(Map.prototype, 'get').mockImplementation(() => {
+      throw new Error('keystore busy');
+    });
+    try {
+      expect(await mod.readStoredSession()).toBeNull();
+    } finally {
+      getItem.mockRestore();
+    }
+  });
 });

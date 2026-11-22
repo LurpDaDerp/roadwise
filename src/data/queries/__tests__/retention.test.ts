@@ -105,6 +105,13 @@ test('Drive history learns which kinds of drive are archived (its empty titles):
   expect(await readArchivedKinds(db)).toEqual({ all: true, clean: true, passenger: true });
 });
 
+test('an archived "Wasn’t driving" drive that still carries the clean flag (a mark the server never answered) is no archived clean drive', async () => {
+  await db.execute('UPDATE trips SET clean = 1 WHERE client_trip_id = ?', [uuid(5)]);
+  await db.execute('UPDATE trips SET clean = 0 WHERE client_trip_id = ?', [uuid(4)]);
+  await archiveDue(db, NOW);
+  expect(await readArchivedKinds(db)).toEqual({ all: true, clean: false, passenger: true });
+});
+
 test('all time, the routes are the drives’ own and then the pool’s: a scored archived drive’s line is still drawn', async () => {
   const before = await readRoutePolylines(db, null);
   await archiveDue(db, NOW);

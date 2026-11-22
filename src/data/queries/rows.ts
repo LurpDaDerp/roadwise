@@ -9,7 +9,7 @@ import { parseSpeedTrace, type SpeedTrace } from '@/core/engine/speedTrace';
 
 import { UPLOAD_FAILED_SQL } from '@/data/db/queue';
 import { asNumberOrNull } from '@/data/db/row';
-import { toTripRow } from '@/data/db/trips';
+import { toTripRow, TRIP_COLUMNS } from '@/data/db/trips';
 import type { DriveOrigin, DriveWeather, EventRow, StartSource, TripEndCause, TripRow, TripStatus } from '@/data/db/types';
 import { carFilterUid, type DriveHistoryFilter } from '@/data/queries/keys';
 import { FinalizeTripResponseSchema, type FinalizeTripResponse } from '@/data/sync/payload';
@@ -140,6 +140,19 @@ export type TripView = TripRow & { upload_failed?: number | null };
 /** A trip's columns and whether its upload has failed, for a select over `trips t`. */
 export const TRIP_VIEW = `t.*, ${UPLOAD_FAILED_SQL} AS upload_failed`;
 
+/**
+ * The trip columns a list read (`toListedDrive`) never reads: the speed trace, the stored server
+ * answer and the integrity block. Each runs to kilobytes on a drive, and a list reads a whole history.
+ */
+const LIST_UNREAD: readonly string[] = ['speed_trace_json', 'result_json', 'integrity_json'];
+
+/**
+ * `TRIP_VIEW` for the list reads, which map rows with `toListedDrive`: every other trip column, by
+ * name, and the upload flag. `toTripRow` reads a missing text column as null, so a list builds the
+ * same drives it would from the whole row. A drive's own read (`toLocalDrive`) needs `TRIP_VIEW`.
+ */
+export const TRIP_LIST_VIEW = `${TRIP_COLUMNS.filter((c) => !LIST_UNREAD.includes(c)).map((c) => `t.${c}`).join(', ')}, ${UPLOAD_FAILED_SQL} AS upload_failed`;
+
 /** A row selected with `TRIP_VIEW`. */
 export const toTripView = (row: Record<string, unknown>): TripView => ({ ...toTripRow(row), upload_failed: asNumberOrNull(row, 'upload_failed') });
 
@@ -245,6 +258,7 @@ export function toLocalDrive(row: TripView): LocalDrive {
 /**
  * A row as a list reads it: the stored server answer and the speed trace left unread (`result` and
  * `speedTrace` null), so a list of a whole history spends no parse per drive on a field it never shows.
+ * Its select, `TRIP_LIST_VIEW`, leaves them in SQLite.
  */
 export function toListedDrive(row: TripView): LocalDrive {
   return toDrive(row, null, null);
@@ -365,7 +379,10 @@ export function matchesHistoryFilter(d: Pick<LocalDrive, 'status' | 'archived' |
     case 'all':
       return true;
     case 'clean':
-      return d.clean === true;
+      // A "Wasn't driving" drive is never clean. The tap keeps the stored flag (a refused mark puts
+      // the drive back with it), so until the server's answer clears it, and for good when that
+      // answer never comes, the status decides.
+      return d.clean === true && d.status !== 'not_driving';
     case 'passenger':
       return d.status === 'not_driving';
     default: {

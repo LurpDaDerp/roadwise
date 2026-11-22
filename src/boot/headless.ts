@@ -79,8 +79,11 @@ export function createDriveHeadlessTask(deps: DriveHeadlessTaskDeps): (data: unk
       try {
         rt = await deps.ensureRuntime('background');
       } catch (error) {
-        // Only a boot that failed stops the capture: nobody would record it otherwise.
-        await deps.stopCapture().catch(() => {});
+        // Only a boot that failed stops a plain capture: nobody would record it otherwise. A drive
+        // the detector records is native's own and records on (the next good boot takes it in). An
+        // unreadable state stops, and never hides the boot's error.
+        const native = await (deps.detectorRecording ?? (async () => false))().catch(() => false);
+        if (!native) await deps.stopCapture().catch(() => {});
         throw error;
       }
       // Nothing to continue (the drive was finalized as an orphan, or there was none): the capture

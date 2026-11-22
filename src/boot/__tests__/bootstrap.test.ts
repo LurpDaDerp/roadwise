@@ -461,7 +461,9 @@ test('every wipe tells the cache: drive lists and stats cached before a sign-out
     expect(qc.getQueryState(queryKeys.recentDrives(5))?.isInvalidated).toBe(false);
     await wipe();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(qc.getQueryState(queryKeys.recentDrives(5))?.isInvalidated).toBe(true);
+    // Read again either way: marked stale, or (no screen showing it) dropped from the cache.
+    const after = qc.getQueryState(queryKeys.recentDrives(5));
+    expect(after === undefined || after.isInvalidated).toBe(true);
   }
   off();
   await rt.stop();
@@ -751,6 +753,39 @@ test('iOS: a launch whose session cannot be read (an expired token, no network) 
   expect(detect.calls).not.toContain('setArmed:false');
   await jobs.stop();
   await rt.stop();
+});
+
+test('a launch whose session read is still retrying an offline refresh past the session wait keeps the owner and reports nothing to the crash sink', async () => {
+  const seed = await bootstrapApp(deps().deps);
+  await seed.stop();
+  const d = deps();
+  // auth-js retries the refresh for about 25 s, then answers no session with the refresh's error.
+  // The launch's own read is that one; later reads (the runner's) answer as usual.
+  const getSession = d.supabase.auth.getSession.bind(d.supabase.auth);
+  let reads = 0;
+  const supabase = {
+    ...d.supabase,
+    auth: {
+      ...d.supabase.auth,
+      getSession: () =>
+        reads++ === 0
+          ? new Promise((resolve) => setTimeout(() => resolve({ data: { session: null }, error: { name: 'AuthRetryableFetchError', message: 'Network request failed' } }), 50))
+          : getSession(),
+    },
+  } as unknown as BootSupabase;
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const errors: string[] = [];
+  try {
+    const rt = await bootstrapApp({ ...d.deps, supabase, sessionTimeoutMs: 5, onError: (_e, context) => void errors.push(context) });
+    expect(rt.owner).toBe('same');
+    expect(rt.drive.signedIn()).toBe(true);
+    // An expected condition, not a fault: the dev console only.
+    expect(errors).not.toContain('identity: session');
+    expect(warn).toHaveBeenCalledWith('[bootstrap] identity: session: getSession did not answer within 5 ms');
+    await rt.stop();
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test('iOS: a launch for a different driver wipes native’s journals before the host looks: the last driver’s drive is never stored for the new one', async () => {

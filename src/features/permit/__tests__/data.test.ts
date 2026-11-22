@@ -6,10 +6,13 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { archiveDue, RETENTION_MS } from '@/data/db/archive';
 import { createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
+import { fullTrip } from '@/data/queries/__fixtures__/fullTrip';
+import { toListedDrive, toTripView, TRIP_VIEW } from '@/data/queries/rows';
 import { dayKey } from '@/lib/time';
 
 import { keepArchivedNight, permitFinalizeDeps, readPracticeCandidates, writeDriveSupervisor } from '../data';
 import { practiceLog } from '../log';
+import { nightByRule } from '../night';
 import { ARCHIVED_NIGHT_KEY, DRIVE_SUPERVISORS_KEY, EMPTY_NOTES, parseNight, parseSupervisors, readPracticeNotes, writeSupervisorNote } from '../notes';
 import {
   cleanName,
@@ -128,6 +131,32 @@ describe('the drives and their supervisors', () => {
     expect(found[0]?.archived).toBe(true);
   });
 
+  test('the candidates leave the speed trace, server answer and integrity block in SQLite and are the very drives the whole row builds', async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    await trips().insert(fullTrip('full', at(5, 12), { tz, archived_at: null }), NOW);
+    await trips().insert(fullTrip('kept', at(5, 9), { tz }), NOW);
+    await trips().insert(fullTrip('marked', at(5, 10), { tz, status: 'not_driving', archived_at: null }), NOW);
+    const { rows } = await db.execute(
+      `SELECT ${TRIP_VIEW} FROM trips t WHERE t.status NOT IN ('recording', 'not_driving') AND t.started_at >= ? ORDER BY t.started_at DESC, t.client_trip_id ASC`,
+      [at(3, 0)]
+    );
+    const sent: string[] = [];
+    const recording: Db = {
+      execute: (sql, params) => {
+        sent.push(sql);
+        return db.execute(sql, params);
+      },
+      transaction: (fn) => db.transaction(fn),
+    };
+    const found = await readPracticeCandidates(recording, '2026-11-05');
+    expect(sent).toHaveLength(1);
+    for (const column of ['t.*', 'speed_trace_json', 'result_json', 'integrity_json']) expect(sent[0]).not.toContain(column);
+    expect(found).toEqual(rows.map((row) => toListedDrive(toTripView(row))));
+    expect(found.map((d) => d.clientTripId)).toEqual(['full', 'kept']);
+    // What the log reads of a drive is all there.
+    expect(found[0]).toMatchObject({ startedAt: at(5, 12), durationS: 1200, miles: 11.4, nightMiles: 2.5, tz, practiceSupervisor: 'Dad', start: { lat: 47.6062, lng: -122.3321 } });
+  });
+
   test("a drive's supervisor is written to its row and the kept map, cleaned; a drive not on the phone is false", async () => {
     await trips().insert({ client_trip_id: 'd', started_at: NOW, tz: 'UTC', status: 'scored' }, NOW);
     expect(await writeDriveSupervisor(db, 'd', '  Coach Kim  ', NOW)).toBe(true);
@@ -184,6 +213,19 @@ describe('what is kept beside the rows', () => {
     expect(await settings.get(DRIVE_SUPERVISORS_KEY)).toEqual({ x: 'Jo', z: 'Kim' });
     await writeSupervisorNote(settings, 'x', null);
     expect(await settings.get(DRIVE_SUPERVISORS_KEY)).toEqual({ z: 'Kim' });
+  });
+
+  test('the night kept before the archive is worked out from the very drive the whole row builds', async () => {
+    // A Seattle drive across sunset, every column set; the read leaves its speed trace, server answer and integrity block in SQLite.
+    const startedAt = Date.parse('2026-06-22T03:41:00Z');
+    const endedAt = startedAt + 60 * 60_000;
+    await createTripsRepo(db).insert(fullTrip('dusk', startedAt, { tz: 'America/Los_Angeles', ended_at: endedAt, duration_s: 3600, archived_at: null }), startedAt);
+    await settings.set(PERMIT_KEYS.startDay, '2026-06-01');
+    expect(await keepArchivedNight(db, endedAt + RETENTION_MS + 86_400_000)).toBe(1);
+    const { rows } = await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE t.client_trip_id = ?`, ['dusk']);
+    const night = nightByRule(toListedDrive(toTripView(rows[0]!)));
+    expect(night).not.toBeNull();
+    expect((await readPracticeNotes(settings)).night).toEqual({ dusk: night });
   });
 
   test("before the archive: a due drive's night under every rule is kept, so its split survives losing its position", async () => {

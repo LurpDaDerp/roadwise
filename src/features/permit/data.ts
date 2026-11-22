@@ -8,7 +8,7 @@ import { archiveCutoff } from '@/data/db/archive';
 import { createSettingsRepo } from '@/data/db/settings';
 import type { Db } from '@/data/db/driver';
 import { createTripsRepo } from '@/data/db/trips';
-import { toListedDrive, toTripView, TRIP_VIEW, type LocalDrive } from '@/data/queries/rows';
+import { toListedDrive, toTripView, TRIP_LIST_VIEW, type LocalDrive } from '@/data/queries/rows';
 
 import { isKeptDrive } from './log';
 import { nightByRule } from './night';
@@ -26,7 +26,7 @@ export async function readPracticeCandidates(db: Db, startDay: string): Promise<
   const [y, m, d] = startDay.split('-').map(Number);
   const from = new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).getTime() - 2 * DAY_MS;
   const { rows } = await db.execute(
-    `SELECT ${TRIP_VIEW} FROM trips t WHERE t.status NOT IN ('recording', 'not_driving') AND t.started_at >= ? ORDER BY t.started_at DESC, t.client_trip_id ASC`,
+    `SELECT ${TRIP_LIST_VIEW} FROM trips t WHERE t.status NOT IN ('recording', 'not_driving') AND t.started_at >= ? ORDER BY t.started_at DESC, t.client_trip_id ASC`,
     [Number.isFinite(from) ? from : 0]
   );
   return rows.map((row) => toListedDrive(toTripView(row)));
@@ -68,7 +68,7 @@ export async function keepArchivedNight(db: Db, now: number): Promise<number> {
   const settings = createSettingsRepo(db);
   if ((await readPermit(settings)).startDay === null) return 0;
   const { rows } = await db.execute(
-    `SELECT ${TRIP_VIEW} FROM trips t WHERE t.archived_at IS NULL AND t.ended_at IS NOT NULL AND t.ended_at < ? AND t.status NOT IN ('recording', 'not_driving')`,
+    `SELECT ${TRIP_LIST_VIEW} FROM trips t WHERE t.archived_at IS NULL AND t.ended_at IS NOT NULL AND t.ended_at < ? AND t.status NOT IN ('recording', 'not_driving')`,
     [archiveCutoff(now)]
   );
   const entries: Record<string, NightByRule> = {};

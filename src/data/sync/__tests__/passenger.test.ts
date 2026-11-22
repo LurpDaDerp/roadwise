@@ -6,7 +6,7 @@
 // function's answers.
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createQueueRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
-import { createFakeSupabase, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
+import { createFakeSupabase, functionsHttpError, invokeOk, rpcAbortError } from '@/data/sync/__fixtures__/fakes';
 import { answer, finishedDrive, T0, uuid } from '@/data/sync/__fixtures__/drives';
 import { markNotDriving } from '@/data/sync/driveActions';
 import { enqueuePassengerRide } from '@/data/sync/queue';
@@ -148,6 +148,8 @@ describe('the recap notification’s "I wasn’t driving"', () => {
 test('classifyRpcError: no code is the network; the writers’ refusals are terminal under their codes; the rate limit and anything undecided wait', () => {
   expect(classifyRpcError({ code: '', message: 'TypeError: Network request failed' })).toMatchObject({ kind: 'retryable', code: 'network', status: null });
   expect(classifyRpcError(new Error('boom'))).toMatchObject({ kind: 'retryable', code: 'network' });
+  // What postgrest-js answers a request the client's time-out aborted.
+  expect(classifyRpcError(rpcAbortError().error)).toMatchObject({ kind: 'retryable', code: 'network', status: null });
   expect(classifyRpcError({ code: 'PGRST202', message: 'Could not find the function' })).toMatchObject({ kind: 'retryable', code: 'http_404' });
   expect(classifyRpcError({ code: 'PGRST301', message: 'JWT expired' })).toMatchObject({ kind: 'unauthorized' });
   expect(classifyRpcError({ code: '42501', message: 'too many requests' })).toMatchObject({ kind: 'retryable', code: 'too_many_requests', retryAfterS: 600 });

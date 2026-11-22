@@ -12,8 +12,12 @@
 // - **Never while the engine is recording or finalizing**: a drain competes for SQLite's write lock.
 // - **Only under the owner's session**: an item carries the uid it was queued for; a session of
 //   another user never posts it, and every local write asserts, inside its transaction, that the
-//   device still records that owner.
-// - **A claim is only ever closed by the pass that holds it.**
+//   device still records that owner. The session is read again before each item is sent, so a
+//   sign-out or another driver's sign-in partway through a round sends nothing more under it.
+// - **A claim is only ever closed by the pass that holds it.** A stopped runner sends nothing more
+//   from its round, so `stop()` waits on the one item in flight at most. The app's client bounds
+//   every request (`boundedFetch`), and one it gives up on comes back as the network failing: a
+//   retry, the claim closed by this pass like any other.
 // - **Retries** follow the queue's ladder; a terminal refusal fails the item for good and is shown.
 //   A server older than the upload (`server_behind`) is a retry, never a refusal.
 import { isDashcamType } from '@scoring';
@@ -136,7 +140,12 @@ export interface SyncRunner {
   signedIn(): Promise<void>;
 }
 
-type Outcome = { kind: 'done' } | { kind: 'retry'; error: string; untilMs?: number } | { kind: 'refused'; error: string } | { kind: 'release'; untilMs: number };
+/** `unauthorized`: the token was refused (by the function, or by the gateway before it ran, whatever code its body carries). */
+type Outcome =
+  | { kind: 'done' }
+  | { kind: 'retry'; error: string; untilMs?: number; unauthorized?: true }
+  | { kind: 'refused'; error: string }
+  | { kind: 'release'; untilMs: number };
 
 const noop = (): void => {};
 
@@ -283,12 +292,19 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
   /** The wake for the next item in a retry back-off; only while the app is open. */
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let subscriptions: (() => void)[] = [];
+  /** The uid this pass last recorded under `SESSION_UID_KEY`: written once a pass, and again only when the session changes. */
+  let recordedUid: string | null = null;
 
+  /** The live session's uid, or null. Read before every item is sent. */
   async function readSession(): Promise<string | null> {
     try {
       const { data } = await supabase.auth.getSession();
       const uid = data.session?.user.id ?? null;
-      if (uid !== null) await settings.set(SESSION_UID_KEY, uid).catch(noop);
+      if (uid !== null && uid !== recordedUid) {
+        await settings.set(SESSION_UID_KEY, uid).then(() => {
+          recordedUid = uid;
+        }, noop);
+      }
       return uid;
     } catch (error) {
       report(error, 'sync session');
@@ -458,7 +474,14 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     if (failure.kind === 'terminal') return { kind: 'refused', error: failure.code };
     // Held to the back-off's ceiling: the queue reads a time further ahead as a clock set back.
     const untilMs = failure.retryAfterS !== null ? now() + Math.min(failure.retryAfterS, MAX_DELAY_S) * 1000 : undefined;
-    return { kind: 'retry', error: failure.status === null ? TRANSPORT_FAILURE : failure.code, ...(untilMs !== undefined ? { untilMs } : {}) };
+    return {
+      kind: 'retry',
+      error: failure.status === null ? TRANSPORT_FAILURE : failure.code,
+      ...(untilMs !== undefined ? { untilMs } : {}),
+      // Read off the kind, never the code: the gateway refuses an expired token before the function
+      // runs, with a body of its own (no `unauthorized` code), and that is the refusal a refresh cures.
+      ...(failure.kind === 'unauthorized' ? { unauthorized: true as const } : {}),
+    };
   }
 
   /** A drive's upload failed for the first time in this pass: its recap and its row now say "Not synced yet". */
@@ -503,6 +526,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
     const result: DrainResult = { ran: true, done: 0, failed: 0, deferred: 0 };
     let refreshed = false;
     uploadFirstFailed = false;
+    recordedUid = null;
     for (let round = 0; round < MAX_ROUNDS; round += 1) {
       if (!started || !deps.mayDrain() || deps.isRecording()) break;
       let items: QueueItem[];
@@ -513,8 +537,18 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
         break;
       }
       if (items.length === 0) break;
-      const uid = await readSession();
       for (const item of items) {
+        // A stopped runner sends nothing more: the rest of its round goes back, due at once, and
+        // `stop()` waits on the one item in flight at most.
+        if (!started) {
+          await queue.release(item.id, now()).catch(noop);
+          result.deferred += 1;
+          continue;
+        }
+        // Read for each item, never once a round: the request carries whatever session is live
+        // when it goes, so after a sign-out or another driver's sign-in mid-round the rest of the
+        // round waits, rather than going with no session or under the wrong account.
+        const uid = await readSession();
         if (uid === null) {
           await queue.release(item.id, now() + NO_SESSION_RETRY_MS).catch(noop);
           result.deferred += 1;
@@ -532,7 +566,7 @@ export function createSyncRunner(deps: SyncRunnerDeps): SyncRunner {
           else if (item.kind === 'passenger-ride') outcome = await runPassenger(item);
           else outcome = await runAction(item, uid);
           // One token refresh per pass, then the item goes straight back for the next round.
-          if (outcome.kind === 'retry' && outcome.error === 'unauthorized' && !refreshed) {
+          if (outcome.kind === 'retry' && outcome.unauthorized === true && !refreshed) {
             refreshed = true;
             await supabase.auth.refreshSession().catch(noop);
             await queue.release(item.id, now()).catch(noop);

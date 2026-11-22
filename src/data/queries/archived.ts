@@ -19,9 +19,11 @@ export interface ArchivedKinds {
 }
 
 export async function readArchivedKinds(db: Db): Promise<ArchivedKinds> {
+  // Clean as the Clean filter reads it (`matchesHistoryFilter`): a "Wasn't driving" drive whose
+  // stored flag was never cleared is not one.
   const { rows } = await db.execute(
     `SELECT EXISTS (SELECT 1 FROM trips WHERE archived_at IS NOT NULL) AS a,
-            EXISTS (SELECT 1 FROM trips WHERE archived_at IS NOT NULL AND clean = 1) AS c,
+            EXISTS (SELECT 1 FROM trips WHERE archived_at IS NOT NULL AND clean = 1 AND status != 'not_driving') AS c,
             EXISTS (SELECT 1 FROM trips WHERE archived_at IS NOT NULL AND status = 'not_driving') AS p`
   );
   const row = rows[0] ?? {};

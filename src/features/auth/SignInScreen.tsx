@@ -4,8 +4,9 @@ import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 
 import { createSettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { useSession } from '@/data/supabase/session';
 import { t } from '@/i18n';
-import { Button, Screen, Text, useTheme } from '@/ui';
+import { Button, Screen, Text, useAnnounce, useTheme } from '@/ui';
 
 import { AuthField } from './AuthField';
 import { EmailCodeScreen, emailCodeCopy } from './EmailCodeScreen';
@@ -34,6 +35,9 @@ export const signInCopy = {
   needsTick: 'Check the box above first.',
   saveFailed: "Couldn't save that. Try again.",
 } as const;
+
+/** The three ways in. */
+type Way = 'apple' | 'google' | 'email';
 
 /**
  * An address waiting for the code from its confirmation mail. A sign-up's confirmation holds the
@@ -78,11 +82,18 @@ export function SignInScreen() {
   const google = useGoogleSignIn();
   const db = useDb();
   const settings = useMemo(() => createSettingsRepo(db), [db]);
+  const { session } = useSession();
 
   const [agreed, setAgreed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'apple' | 'google' | 'email' | null>(null);
+  const [busy, setBusy] = useState<Way | null>(null);
+  // The way in last tapped. Once its sign-in has made a session, the screen holds as it was while
+  // the sign-in ran (that button's spinner, everything else off) until the gate moves the driver
+  // on, which waits for the profile read (up to 10 s): re-armed in that gap, a second tap would
+  // start a second sign-in. A session that ends first lifts the hold.
+  const [tapped, setTapped] = useState<Way | null>(null);
+  const held = busy ?? (session !== null ? tapped : null);
   const [mode, setMode] = useState<'create' | 'signIn'>('create');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -108,6 +119,10 @@ export function SignInScreen() {
     };
   }, [pending]);
 
+  // A failed sign-in's line shows at the foot of the form while the screen reader stays on the
+  // button that was tapped, so it is read out as it appears (`useAnnounce`, on both platforms).
+  useAnnounce(error);
+
   const toggle = async () => {
     if (saving) return;
     setError(null);
@@ -128,17 +143,19 @@ export function SignInScreen() {
   };
 
   // One sign-in at a time: a second tap while a sheet is opening would stack two of them.
-  const run = (key: 'apple' | 'google' | 'email', fn: () => Promise<unknown>) => async () => {
-    if (busy !== null || inFlight.current) return;
+  const run = (key: Way, fn: () => Promise<unknown>) => async () => {
+    if (held !== null || inFlight.current) return;
     inFlight.current = true;
     setError(null);
     setBusy(key);
+    setTapped(key);
     try {
       await fn();
     } catch (e) {
       // The screen says only that it failed; the reason (a provider switched off on the server, a
       // client id that does not match) is in the Metro log for whoever is setting the app up.
       if (__DEV__) console.warn('[sign-in] ' + key + ':', e);
+      setTapped(null);
       setError(t('signIn.errorGeneric'));
     } finally {
       inFlight.current = false;
@@ -147,7 +164,7 @@ export function SignInScreen() {
   };
 
   const showApple = Platform.OS === 'ios' || apple.available;
-  const locked = !agreed || busy !== null;
+  const locked = !agreed || held !== null;
   const lockedHint = agreed ? undefined : signInCopy.needsTick;
   const creating = mode === 'create';
   const problem = passwordProblem(password, email);
@@ -294,7 +311,7 @@ export function SignInScreen() {
             label={t('signIn.apple')}
             icon="logo-apple"
             onPress={run('apple', apple.signIn)}
-            loading={busy === 'apple'}
+            loading={held === 'apple'}
             disabled={locked}
             accessibilityHint={lockedHint}
           />
@@ -303,7 +320,7 @@ export function SignInScreen() {
           label={t('signIn.google')}
           variant="secondary"
           onPress={run('google', google.signIn)}
-          loading={busy === 'google'}
+          loading={held === 'google'}
           disabled={!google.ready || locked}
           accessibilityHint={lockedHint}
         />
@@ -324,7 +341,7 @@ export function SignInScreen() {
           label={t('signIn.emailLabel')}
           value={email}
           onChangeText={setEmail}
-          editable={busy === null}
+          editable={held === null}
           keyboardType="email-address"
           inputMode="email"
           // The account name a password manager saves with the password, on both forms.
@@ -335,7 +352,7 @@ export function SignInScreen() {
           label={t('signIn.passwordLabel')}
           value={password}
           onChangeText={setPassword}
-          editable={busy === null}
+          editable={held === null}
           secureTextEntry
           maxLength={PASSWORD_MAX}
           textContentType={creating ? 'newPassword' : 'password'}
@@ -347,7 +364,7 @@ export function SignInScreen() {
               label={t('signIn.passwordConfirmLabel')}
               value={confirm}
               onChangeText={setConfirm}
-              editable={busy === null}
+              editable={held === null}
               secureTextEntry
               maxLength={PASSWORD_MAX}
               textContentType="newPassword"
@@ -371,7 +388,7 @@ export function SignInScreen() {
           label={creating ? t('signIn.createAccount') : t('signIn.emailSignIn')}
           variant="secondary"
           onPress={submit}
-          loading={busy === 'email'}
+          loading={held === 'email'}
           disabled={!canSubmit || locked}
           accessibilityHint={lockedHint}
         />
@@ -379,7 +396,7 @@ export function SignInScreen() {
           label={creating ? t('signIn.modeSignIn') : t('signIn.modeCreate')}
           variant="ghost"
           onPress={switchMode}
-          disabled={busy !== null}
+          disabled={held !== null}
         />
         {creating ? null : (
           <Button
@@ -392,8 +409,9 @@ export function SignInScreen() {
         )}
       </View>
 
+      {/* No live region: `useAnnounce` reads it on Android too, and a live region as well could say it twice. */}
       {error ? (
-        <Text variant="callout" tone="danger" accessibilityRole="alert" accessibilityLiveRegion="polite">
+        <Text variant="callout" tone="danger" accessibilityRole="alert">
           {error}
         </Text>
       ) : null}

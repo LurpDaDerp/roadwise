@@ -35,7 +35,8 @@ export interface RuntimeState {
   /**
    * `booting` — a launch is in flight (`error` carries the last failure while a retry runs);
    * `ready` — `runtime` is live; `failed` — the last launch failed, `error` says why;
-   * `switching` — a handover's rebuild is tearing the old runtime down.
+   * `switching` — a handover's rebuild: the old runtime tearing down, then the next launch (its
+   * wipe) booting, until it lands ready or failed.
    */
   status: 'booting' | 'ready' | 'failed' | 'switching';
   runtime: AppRuntime | null;
@@ -156,9 +157,11 @@ export function createRuntimeController(deps: RuntimeControllerDeps = {}): Runti
       jobsReady: null,
       unlisten: null,
     };
-    // A retry keeps showing what failed, as "retrying", until it lands one way or the other.
+    // A retry keeps showing what failed, as "retrying", until it lands one way or the other. A
+    // handover's launch stays `switching` (its wipe is what that screen describes) until it lands.
     const carried = state.status === 'failed' ? state.error : null;
-    publish({ status: 'booting', runtime: null, error: carried, generation: gen.id });
+    const status = state.status === 'switching' ? 'switching' : 'booting';
+    publish({ status, runtime: null, error: carried, generation: gen.id });
     gen.promise = boot(profile, opts).then(
       (runtime) => {
         if (gen.retired) return runtime; // its teardown awaits this promise and stops it

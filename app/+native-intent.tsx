@@ -15,8 +15,11 @@ import { linkDomain } from '@/lib/linkDomain';
  * On Android, Apple's web sign-in comes back on `roadwise://auth-callback`: while the app runs that
  * link moves nothing (the sign-in screen is waiting for it and makes the session itself); one that
  * cold-starts the app opens Home like any other.
+ *
+ * A segment holds no backslash: the router's URL parser reads one as a slash and then resolves
+ * `..`, so `add/..\settings` would open any route. No RoadWise link has one.
  */
-const ALLOWED = /^(add\/[^/?#]+|drives(\/[^/?#]+)?)([?#].*)?$|^drive$|^wrapped(\/\d{4}-(0[1-9]|1[0-2]))?$/;
+const ALLOWED = /^(add\/[^/?#\\]+|drives(\/[^/?#\\]+)?)([?#].*)?$|^drive$|^wrapped(\/\d{4}-(0[1-9]|1[0-2]))?$/;
 /**
  * A shared Wrapped: `w/<id>`, then at most a trailing slash and a query or fragment (apps add
  * tracking parameters to tapped links). The route is built from the id alone, so those are dropped.

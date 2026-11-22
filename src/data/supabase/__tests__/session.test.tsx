@@ -1,12 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { AppState, Text, View, type AppStateStatus } from 'react-native';
 
+import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createSettingsRepo } from '@/data/db/settings';
 import { DataProvider } from '@/data/queries/context';
 import { SessionProvider, registerAfterSignOut, registerBeforeSignOut, useSession, type SignOutOutcome } from '@/data/supabase/session';
+import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { PENDING_TERMS_KEY } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { readHomeNotice, showHomeNotice } from '@/features/home/homeNotice';
@@ -30,13 +32,18 @@ const mockProfileQueue: Gate<unknown>[] = [];
 const authCalls: string[] = [];
 // What `auth.signOut` answers: null (ended), or the error Supabase reports when it could not end it.
 const mockSignOutError: { current: unknown } = { current: null };
+// The options each `auth.signOut` was called with.
+const mockSignOutOptions: unknown[] = [];
+// What the client's own storage holds (`readStoredSession`), and how often it was read.
+const mockStored: { session: unknown; reads: number } = { session: null, reads: 0 };
 
 jest.mock('@/data/supabase/client', () => ({
+  readStoredSession: jest.fn(async () => { mockStored.reads += 1; return mockStored.session; }),
   supabase: {
     auth: {
       getSession: jest.fn(() => new Promise((resolve, reject) => { mockSessionGate.resolve = resolve; mockSessionGate.reject = reject; })),
       onAuthStateChange: jest.fn((cb: AuthListener) => { listeners.push(cb); return { data: { subscription: { unsubscribe: jest.fn() } } }; }),
-      signOut: jest.fn(async () => { authCalls.push('signOut'); return { error: mockSignOutError.current }; }),
+      signOut: jest.fn(async (options?: unknown) => { authCalls.push('signOut'); mockSignOutOptions.push(options); return { error: mockSignOutError.current }; }),
     },
   },
 }));
@@ -84,6 +91,9 @@ beforeEach(async () => {
   mockProfileQueue.length = 0;
   authCalls.length = 0;
   mockSignOutError.current = null;
+  mockSignOutOptions.length = 0;
+  mockStored.session = null;
+  mockStored.reads = 0;
   delete mockSessionGate.resolve;
   delete mockSessionGate.reject;
   delete mockProfileGate.resolve;
@@ -178,6 +188,8 @@ test('signOut asks Supabase to end the session and clears it on the event', asyn
   await act(async () => { fireEvent.press(screen.getByText('sign out')); });
   // The session ends first; then the pending drive summaries are cancelled.
   expect(authCalls).toEqual(['signOut', 'cancelDriveSummaries']);
+  // This phone's session only: the driver's other phones stay signed in.
+  expect(mockSignOutOptions).toEqual([{ scope: 'local' }]);
   // Home's notice line belongs to this driver: the next one never sees it.
   expect(readHomeNotice()).toBeNull();
 
@@ -259,6 +271,18 @@ describe('sign-out stops recording (final review I3)', () => {
     await signedInWith({ recording, flushBeforeSignOut: flush });
     await act(async () => { fireEvent.press(screen.getByText('sign out')); });
     expect(authCalls).toEqual(['stopRecording', 'resumeRecording']);
+  });
+
+  test('a forced sign-out (deletes left unsent, or Delete account) also ends this phone’s session only', async () => {
+    function Forced() {
+      const s = useSession();
+      return <Text onPress={() => { void s.signOut({ force: true }); }}>forced</Text>;
+    }
+    await render(<DataProvider db={db}><SessionProvider flushBeforeSignOut={async () => ({ sent: 0, left: 2 })}><Probe /><Forced /></SessionProvider></DataProvider>);
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: sessionFor('u1') } }); });
+    await act(async () => { mockProfileGate.resolve?.(ava); });
+    await act(async () => { fireEvent.press(screen.getByText('forced')); });
+    expect(mockSignOutOptions).toEqual([{ scope: 'local' }]);
   });
 
   test('a recording stop that fails still signs out (the next launch is signed out anyway)', async () => {
@@ -428,6 +452,123 @@ describe('the profile cache (rev1: I11)', () => {
     await act(async () => { mockProfileGate.resolve?.({ ...ava, username: 'ava_stone' }); });
     await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
     expect(screen.getByText('source:network')).toBeTruthy();
+  });
+});
+
+describe('an offline cold start with an expired access token (auth-js retries the refresh for about 25 s)', () => {
+  const settings = () => createSettingsRepo(db);
+  const unknown = { data: { session: null }, error: { name: 'AuthRetryableFetchError', status: 0 } };
+  const stored = { ...sessionFor('u1'), access_token: 'a', refresh_token: 'r', expires_at: 1 };
+
+  // The phone is u1's: the launch that settled them as its owner has run.
+  beforeEach(async () => {
+    await settings().set(LAST_USER_KEY, 'u1');
+    await settings().set(SESSION_UID_KEY, 'u1');
+  });
+  afterEach(() => jest.useRealTimers());
+
+  test('while the read is still retrying, the stored session stands in after the launch’s wait: the cached profile lands', async () => {
+    await writeProfileCache(settings(), { ...ava, flags: { onboarded: true } } as never);
+    mockStored.session = stored;
+    jest.useFakeTimers();
+    await mount();
+    await act(async () => { jest.advanceTimersByTime(1_499); });
+    expect(screen.getByText('loading:-')).toBeTruthy();
+    expect(mockStored.reads).toBe(0);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await act(async () => {});
+    expect(screen.getByText('signedIn:ava')).toBeTruthy();
+    expect(screen.getByText('source:cache')).toBeTruthy();
+
+    // The read gives up at last: no session, with the refresh's error, and INITIAL_SESSION with
+    // null. Neither signs the driver out.
+    await act(async () => { emit('INITIAL_SESSION', null); });
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    expect(screen.getByText('signedIn:ava')).toBeTruthy();
+
+    // The network comes back and the refresh lands: the server row replaces the cached one.
+    await act(async () => { emit('TOKEN_REFRESHED', sessionFor('u1')); });
+    await act(async () => { mockProfileQueue[mockProfileQueue.length - 1]?.resolve?.({ ...ava, username: 'ava_stone' }); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava_stone')).toBeTruthy());
+  });
+
+  test('a read that answers no session with an error lets the stored session stand in at once', async () => {
+    await writeProfileCache(settings(), ava as never);
+    mockStored.session = stored;
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    await act(async () => { emit('INITIAL_SESSION', null); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    expect(mockStored.reads).toBe(1);
+  });
+
+  test('with nothing stored, that answer is a sign-out after all', async () => {
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+  });
+
+  test('a launch that is really signed out (no session, no error) never reads the storage', async () => {
+    mockStored.session = stored;
+    jest.useFakeTimers();
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.({ data: { session: null }, error: null } as never); });
+    await act(async () => { emit('INITIAL_SESSION', null); });
+    await act(async () => { jest.advanceTimersByTime(5_000); });
+    expect(screen.getByText('signedOut:-')).toBeTruthy();
+    expect(mockStored.reads).toBe(0);
+  });
+
+  test('the server refusing the stored session (SIGNED_OUT) ends the stand-in', async () => {
+    await writeProfileCache(settings(), ava as never);
+    mockStored.session = stored;
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    await waitFor(() => expect(screen.getByText('signedIn:ava')).toBeTruthy());
+    await act(async () => { emit('SIGNED_OUT', null); });
+    await waitFor(() => expect(screen.getByText('signedOut:-')).toBeTruthy());
+  });
+
+  test('a SIGNED_OUT while the storage is read is not undone by the stand-in', async () => {
+    let release: (s: unknown) => void = () => {};
+    jest.requireMock<{ readStoredSession: jest.Mock }>('@/data/supabase/client').readStoredSession.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; })
+    );
+    await mount();
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    await act(async () => { emit('SIGNED_OUT', null); });
+    await act(async () => { release(stored); });
+    expect(screen.getByText('signedOut:-')).toBeTruthy();
+  });
+
+  // B signed in on A's phone and the process died before the handover's wipe: A's drives are still
+  // on the phone, and B's session and cached profile are stored. Offline, B must not land on Home
+  // over A's drives; the sign-in screen shows, as it did before any session stood in.
+  test.each([
+    { name: 'another driver’s stored session', settled: { owner: 'u1', seen: 'u1', pending: null }, storedFor: 'u2' },
+    { name: 'a handover to another driver under way', settled: { owner: 'u1', seen: 'u1', pending: 'u2' }, storedFor: 'u1' },
+    { name: 'a session the sync runner saw for another driver', settled: { owner: 'u1', seen: 'u2', pending: null }, storedFor: 'u1' },
+    { name: 'a phone whose owner was never settled', settled: { owner: null, seen: null, pending: 'u1' }, storedFor: 'u1' },
+  ])('$name never stands in: the read’s answer is a sign-out', async ({ settled, storedFor }) => {
+    const repo = settings();
+    for (const [key, value] of [[LAST_USER_KEY, settled.owner], [SESSION_UID_KEY, settled.seen], [PENDING_OWNER_KEY, settled.pending]] as const) {
+      if (value === null) await repo.remove(key);
+      else await repo.set(key, value);
+    }
+    await writeProfileCache(repo, { ...ava, id: storedFor, username: 'ben', flags: { onboarded: true } } as never);
+    mockStored.session = { ...stored, ...sessionFor(storedFor) };
+    jest.useFakeTimers();
+    await mount();
+    // The launch's wait passes: nothing stands in, the read is still out.
+    await act(async () => { jest.advanceTimersByTime(1_500); });
+    await act(async () => {});
+    expect(screen.getByText('loading:-')).toBeTruthy();
+    // The read gives up: no session, with the refresh's error.
+    await act(async () => { mockSessionGate.resolve?.(unknown as never); });
+    await act(async () => {});
+    expect(screen.getByText('signedOut:-')).toBeTruthy();
+    expect(screen.queryByText(/ben/)).toBeNull();
+    expect(profileCalls).toEqual([]);
   });
 });
 

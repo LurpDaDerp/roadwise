@@ -316,7 +316,10 @@ const meanDeg = (s: number, c: number): number => (s === 0 && c === 0 ? 0 : (toD
 
 function cellOf(kind: SpotKind, p: LatLng, dx = 0, dy = 0): string {
   const y = floor((p.lat * M_PER_DEG) / GRID_M) + dy;
-  const x = floor((p.lng * M_PER_DEG * cos(toRad(p.lat))) / GRID_M) + dx;
+  // One east-west scale per grid row (its middle), not the point's own latitude: a cluster's cell
+  // and a search of that row then agree, so a step north never shifts a candidate out of the 3 × 3.
+  const k = cos(toRad(((y + 0.5) * GRID_M) / M_PER_DEG));
+  const x = floor((p.lng * M_PER_DEG * k) / GRID_M) + dx;
   return `${kind}|${y}|${x}`;
 }
 

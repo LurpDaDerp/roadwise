@@ -15,14 +15,21 @@ const ignore = () => undefined;
  */
 export const WIPE_RESET_ROOTS: readonly string[] = ['places', 'emergency', 'permit'];
 
+const DRIVE_ROOTS: readonly string[] = QUERY_ROOTS;
+
 /**
  * Everything this layer caches is now suspect, except after a spots recompute: it moved only the
  * spots, so only they refresh. A wipe also resets the settings-backed caches (`WIPE_RESET_ROOTS`)
- * to empty, so no screen paints the leaving driver's places or contacts from the cache.
+ * to empty, so no screen paints the leaving driver's places or contacts from the cache, and drops
+ * the drive caches no screen shows: the next driver on the phone (after a deleted account, the
+ * same cache) would otherwise see the leaving driver's drives first when opening one. A change
+ * whose writer already refreshed the cache itself (`cacheRefreshed`) is not refreshed again.
  */
 export async function invalidateAfterSync(queryClient: QueryClient, change?: DataChange): Promise<void> {
+  if (change?.cacheRefreshed === true) return;
   if (change?.source === 'wipe') {
     await queryClient.resetQueries({ predicate: (q) => WIPE_RESET_ROOTS.includes(String(q.queryKey[0])) }).catch(ignore);
+    queryClient.removeQueries({ predicate: (q) => DRIVE_ROOTS.includes(String(q.queryKey[0])) && q.getObserversCount() === 0 });
   }
   const roots = change?.source === 'spots' ? (['spots'] as const) : QUERY_ROOTS;
   await Promise.all(roots.map((root) => queryClient.invalidateQueries({ queryKey: [root] }).catch(ignore)));

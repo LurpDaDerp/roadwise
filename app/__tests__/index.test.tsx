@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
 
+import { LAST_USER_KEY } from '@/boot/device';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
@@ -17,6 +18,13 @@ import Launch, { launchCopy } from '../index';
 // offline cold start below runs through the same code a phone in a garage does.
 const mockWorld: {
   session: unknown;
+  /**
+   * How auth-js's own read answers: at once with `session`; still retrying the refresh of an
+   * expired token offline (about 25 s); or, after that, no session with the refresh's error.
+   */
+  read: 'answer' | 'retrying' | 'unknown';
+  /** The session auth-js keeps on the phone (`readStoredSession`). */
+  stored: unknown;
   profile: 'fail' | Record<string, unknown>;
   driveStatus: string;
   /** How the open drive began (the engine snapshot's origin). */
@@ -25,7 +33,7 @@ const mockWorld: {
   driveTripId: string | null;
   hostBusy: boolean;
   update: 'required' | 'ok' | 'unknown' | null;
-} = { session: null, profile: 'fail', driveStatus: 'idle', driveOrigin: null, driveTripId: null, hostBusy: false, update: 'ok' };
+} = { session: null, read: 'answer', stored: null, profile: 'fail', driveStatus: 'idle', driveOrigin: null, driveTripId: null, hostBusy: false, update: 'ok' };
 const mockProfileCalls: string[] = [];
 
 jest.mock('expo-router', () => {
@@ -33,9 +41,18 @@ jest.mock('expo-router', () => {
   return { Redirect: ({ href }: { href: string }) => <RNText>{`redirect:${href}`}</RNText> };
 });
 jest.mock('@/data/supabase/client', () => ({
+  readStoredSession: jest.fn(async () => mockWorld.stored),
   supabase: {
     auth: {
-      getSession: jest.fn(async () => ({ data: { session: mockWorld.session } })),
+      getSession: jest.fn(() =>
+        mockWorld.read === 'retrying'
+          ? new Promise(() => {})
+          : Promise.resolve(
+              mockWorld.read === 'unknown'
+                ? { data: { session: null }, error: { name: 'AuthRetryableFetchError', status: 0 } }
+                : { data: { session: mockWorld.session } }
+            )
+      ),
       onAuthStateChange: jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } })),
       signOut: jest.fn(async () => ({ error: null })),
     },
@@ -67,6 +84,8 @@ beforeEach(async () => {
   resetDriveScreenPresence();
   Object.assign(mockWorld, {
     session: { user: { id: 'u1' } },
+    read: 'answer',
+    stored: null,
     profile: ONBOARDED,
     driveStatus: 'idle',
     driveOrigin: null,
@@ -173,6 +192,47 @@ describe('an offline cold start (rev1: I11)', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  test('with an expired token, while auth-js still retries the refresh: Home from the cache after the launch’s wait, never sign-in', async () => {
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'u1');
+    await writeProfileCache(createSettingsRepo(db), ONBOARDED as never);
+    Object.assign(mockWorld, { read: 'retrying', stored: { user: { id: 'u1' } }, profile: 'fail' });
+    jest.useFakeTimers();
+    try {
+      await launch();
+      expect(landed()).toBeUndefined();
+      await act(async () => { jest.advanceTimersByTime(1_500); });
+      await act(async () => {});
+      expect(landed()).toBe('redirect:/(tabs)/home');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('with an expired token, once auth-js answers no session with the refresh’s error: Home from the cache, never sign-in', async () => {
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'u1');
+    await writeProfileCache(createSettingsRepo(db), ONBOARDED as never);
+    Object.assign(mockWorld, { read: 'unknown', stored: { user: { id: 'u1' } }, profile: 'fail' });
+    await launch();
+    await act(async () => {});
+    expect(landed()).toBe('redirect:/(tabs)/home');
+  });
+
+  test('that answer with nothing stored is a sign-out after all', async () => {
+    Object.assign(mockWorld, { read: 'unknown', stored: null });
+    await launch();
+    await act(async () => {});
+    expect(landed()).toBe('redirect:/(auth)/sign-in');
+  });
+
+  test('a stored session that is not the phone’s owner (a handover the process died in) is a sign-out too, never Home', async () => {
+    await createSettingsRepo(db).set(LAST_USER_KEY, 'u0');
+    await writeProfileCache(createSettingsRepo(db), ONBOARDED as never);
+    Object.assign(mockWorld, { read: 'unknown', stored: { user: { id: 'u1' } }, profile: 'fail' });
+    await launch();
+    await act(async () => {});
+    expect(landed()).toBe('redirect:/(auth)/sign-in');
   });
 
   test('with no cache: a held frame, then after 10 s the retry card, whose retry lands', async () => {

@@ -50,10 +50,18 @@ jest.mock('@/data/supabase/session', () => ({
     refreshProfile: mockRefresh,
   }),
 }));
+// The root navigation state: expo-router's `__root` slot holding app/_layout.tsx's stack.
+const mockDispatch = jest.fn();
+const mockNav: { ready: boolean; rootStack: Record<string, unknown> | null } = { ready: true, rootStack: null };
 jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   useSegments: () => mockWorld.segments,
   usePathname: () => mockWorld.pathname,
+  useNavigationContainerRef: () => ({
+    isReady: () => mockNav.ready,
+    getRootState: () => ({ type: 'stack', key: 'root', index: 0, routes: [{ key: '__root-1', name: '__root', state: mockNav.rootStack ?? undefined }] }),
+    dispatch: mockDispatch,
+  }),
 }));
 jest.mock('@/drive/useDrive', () => ({
   useDrive: (select: (s: { status: string }) => unknown) =>
@@ -102,6 +110,8 @@ beforeEach(async () => {
   });
   mockReplace.mockReset();
   mockPush.mockReset();
+  mockDispatch.mockReset();
+  Object.assign(mockNav, { ready: true, rootStack: null });
   mockRefresh.mockClear();
   mockFrom.mockReset();
   mockRpc.mockClear();
@@ -152,6 +162,60 @@ test.each(cases)('%s with %j at [%s] redirects to %s', async (status, profile, s
 test('passes the app through untouched', async () => {
   await mount({ status: 'signedIn', profile: READY, profileSource: 'network', segments: ['(tabs)', 'home'] });
   expect(screen.getByText('app')).toBeOnTheScreen();
+});
+
+describe('crossing between the signed-out and signed-in screens leaves nothing beneath the new one', () => {
+  const route = (name: string) => ({ key: `${name}-key`, name, state: { stale: false, type: 'stack', key: `${name}-inner`, index: 0, routes: [] } });
+  const stackOf = (...names: string[]) => ({
+    stale: false,
+    type: 'stack',
+    key: 'layout-stack',
+    index: names.length - 1,
+    routeNames: ['index', '(auth)', '(onboarding)', 'update-required', '(tabs)', '(app)', 'legal/[doc]', 'drive'],
+    routes: names.map(route),
+  });
+
+  test('signing out from Profile › Account: only the screen on show is kept, then it is replaced by sign-in', async () => {
+    mockNav.rootStack = stackOf('(tabs)', '(app)');
+    await mount({ status: 'signedOut', segments: ['(app)', 'settings', 'account'] });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledWith({
+      type: 'RESET',
+      target: 'layout-stack',
+      payload: { ...stackOf('(tabs)', '(app)'), index: 0, routes: [route('(app)')] },
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/(auth)/sign-in');
+    expect(mockDispatch.mock.invocationCallOrder[0]).toBeLessThan(mockReplace.mock.invocationCallOrder[0]!);
+  });
+
+  test.each([
+    ['Home', READY, '/(tabs)/home'],
+    ['setup', OWED, '/(onboarding)/start'],
+    ['the launch router', null, '/'],
+  ] as const)('signing in from the sign-in screen (to %s): whatever was beneath it goes too', async (_label, profile, to) => {
+    mockNav.rootStack = stackOf('(tabs)', '(auth)');
+    await mount({ status: 'signedIn', profile, profileSource: profile ? 'network' : null, segments: ['(auth)', 'sign-in'] });
+    expect(mockDispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'RESET', target: 'layout-stack', payload: expect.objectContaining({ index: 0, routes: [route('(auth)')] }) }));
+    expect(mockReplace).toHaveBeenCalledWith(to);
+  });
+
+  test('a move inside the signed-in screens (setup owed, from the tabs) keeps the stack as it is', async () => {
+    mockNav.rootStack = stackOf('(tabs)', '(app)');
+    await mount({ status: 'signedIn', profile: OWED, profileSource: 'network', segments: ['(app)', 'drives'] });
+    expect(mockReplace).toHaveBeenCalledWith('/(onboarding)/start');
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['nothing beneath', () => Object.assign(mockNav, { rootStack: stackOf('(app)') })],
+    ['a navigator not ready', () => Object.assign(mockNav, { rootStack: stackOf('(tabs)', '(app)'), ready: false })],
+    ['a state not yet built (stale)', () => Object.assign(mockNav, { rootStack: { ...stackOf('(tabs)', '(app)'), stale: true } })],
+  ])('%s: the replace alone, as before', async (_label, arrange) => {
+    arrange();
+    await mount({ status: 'signedOut', segments: ['(app)', 'settings', 'account'] });
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(auth)/sign-in');
+  });
 });
 
 describe('a drive under way (rev1: I10)', () => {

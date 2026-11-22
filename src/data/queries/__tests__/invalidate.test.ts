@@ -27,9 +27,46 @@ describe('invalidateAfterSync', () => {
     const qc = seeded();
     await invalidateAfterSync(qc, { source: 'wipe' });
     for (const key of SETTINGS_KEYS) expect({ key, data: qc.getQueryData(key) }).toEqual({ key, data: undefined });
-    // The drive lists are invalidated as before (kept until refetched); the rest is not touched.
-    expect(qc.getQueryState(['drives', 'recent', 5])?.isInvalidated).toBe(true);
+    // A drive list no screen shows is dropped; the rest is not touched.
+    expect(qc.getQueryData(['drives', 'recent', 5])).toBeUndefined();
     expect(qc.getQueryData(['notificationPrefs'])).toEqual({ quiet: true });
+    qc.clear();
+  });
+
+  test("a wipe drops every drive cache no screen shows, so the next driver never sees the leaving driver's drives first; a mounted screen keeps its rows until it has read the empty phone", async () => {
+    const qc = createQueryClient();
+    const unobserved = [['drives', 'history', 'all'], ['drive', 'trip-1'], ['stats', null], ['driveCount'], ['routes', null], ['spots']] as const;
+    for (const key of unobserved) qc.setQueryData(key, { owner: 'driver A' });
+    let reads = 0;
+    const queryFn = async () => ((reads += 1) === 1 ? ['driver A’s drive'] : []);
+    const observer = new QueryObserver(qc, { queryKey: ['drives', 'recent', 5], queryFn });
+    const seen: { status: string; data: unknown }[] = [];
+    const off = observer.subscribe((r) => seen.push({ status: r.status, data: r.data }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(qc.getQueryData(['drives', 'recent', 5])).toEqual(['driver A’s drive']);
+    const mark = seen.length;
+
+    await invalidateAfterSync(qc, { source: 'wipe' });
+    for (const key of unobserved) expect({ key, data: qc.getQueryData(key) }).toEqual({ key, data: undefined });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reads).toBe(2);
+    expect(qc.getQueryData(['drives', 'recent', 5])).toEqual([]);
+    // Refetched in place: never reset to loading on the way.
+    expect(seen.slice(mark).every((s) => s.status === 'success')).toBe(true);
+
+    // A screen opened next reads the empty phone; nothing of driver A is painted first.
+    const later = new QueryObserver(qc, { queryKey: ['drives', 'history', 'all'], queryFn: async () => [] });
+    expect(later.getCurrentResult().data).toBeUndefined();
+    off();
+    qc.clear();
+  });
+
+  test('a change whose writer already refreshed the cache (a drive action) is not refreshed again', async () => {
+    const qc = seeded();
+    await invalidateAfterSync(qc, { source: 'enqueue', cacheRefreshed: true });
+    expect(qc.getQueryState(['drives', 'recent', 5])?.isInvalidated).toBe(false);
+    await invalidateAfterSync(qc, { source: 'enqueue' });
+    expect(qc.getQueryState(['drives', 'recent', 5])?.isInvalidated).toBe(true);
     qc.clear();
   });
 

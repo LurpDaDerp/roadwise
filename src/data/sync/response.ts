@@ -9,7 +9,8 @@ export { DisputeResultSchema, NotDrivingResultSchema, type DisputeResult, type N
  *   bytes and gets the identical refusal, so the item is failed and the user is told why.
  * - `unauthorized` — the access token had expired under the request. One refresh, one retry.
  * - `retryable` — nothing was decided (no network), or the server asked for later (429, 5xx), or the
- *   server is older than the upload (`server_behind`: it refused the contract version itself).
+ *   server is older than the upload (`server_behind`: it refused the contract version itself), or
+ *   Supabase restricted the project (402) and no function read the request.
  *
  * `functions.invoke` reports a non-2xx as a `FunctionsHttpError` whose `context` is the raw
  * `Response`, and a request that never left as a `FunctionsFetchError` with no context at all.
@@ -40,13 +41,15 @@ const asStatus = (value: unknown): number | null => {
  * What an HTTP status means for a queued item. 408, 425 and 429 join the 5xx range as "not
  * decided", and so does a bare 404: nothing read the payload, the function is simply not deployed
  * (yet, or any more), and the same bytes go through once it is (a function's own `not_found` is
- * told apart in `classifyInvokeError`). 409 is an answer: the server already holds the action
+ * told apart in `classifyInvokeError`). A 402 is not decided either: it is Supabase's own answer
+ * while the project is restricted (a quota or a bill), never a function's, and the same bytes go
+ * through once the restriction lifts. 409 is an answer: the server already holds the action
  * (`ALREADY_APPLIED` in the runner) or refuses it for good.
  */
 export function classifyStatus(status: number | null): FailureKind {
   if (status === null) return 'retryable';
   if (status === 401) return 'unauthorized';
-  if (status === 404 || status === 408 || status === 425 || status === 429) return 'retryable';
+  if (status === 402 || status === 404 || status === 408 || status === 425 || status === 429) return 'retryable';
   if (status >= 500) return 'retryable';
   if (status >= 400) return 'terminal';
   return 'retryable';

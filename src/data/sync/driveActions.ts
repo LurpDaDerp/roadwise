@@ -23,6 +23,15 @@ export interface DriveActionDeps {
   now?: () => number;
 }
 
+/**
+ * The action's announcement: it wakes the runner. With a cache in hand the action refreshes the
+ * drive's queries itself and waits on that, so the announcement says so (`cacheRefreshed`) and the
+ * cache listener does not read every mounted query a second time, cancelling the first read.
+ */
+function announce(deps: DriveActionDeps): void {
+  emitDataChanged(deps.queryClient ? { source: 'enqueue', cacheRefreshed: true } : { source: 'enqueue' });
+}
+
 export type ReportOutcome = 'queued' | 'already' | 'missing';
 
 /**
@@ -44,7 +53,7 @@ export async function reportEvent(clientTripId: string, eventId: string, reason:
     await createQueueRepo(db).makeDue(finalizeIdempotencyKey(clientTripId), at, tx);
     await enqueueAction(db, { action: 'dispute', clientTripId, eventId, reason }, at, tx);
   });
-  emitDataChanged({ source: 'enqueue' });
+  announce(deps);
   if (deps.queryClient) await invalidateDrive(deps.queryClient, clientTripId);
   return 'queued';
 }
@@ -70,7 +79,7 @@ export async function markNotDriving(clientTripId: string, deps: DriveActionDeps
     await createQueueRepo(db).makeDue(finalizeIdempotencyKey(clientTripId), at, tx);
     await enqueueAction(db, { action: 'not_driving', clientTripId, previousStatus: trip.status, ...(opts.via ? { via: opts.via } : {}) }, at, tx);
   });
-  emitDataChanged({ source: 'enqueue' });
+  announce(deps);
   if (deps.queryClient) await invalidateDrive(deps.queryClient, clientTripId);
   return 'queued';
 }

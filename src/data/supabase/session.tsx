@@ -2,15 +2,17 @@ import type { Session } from '@supabase/supabase-js';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
-import { createSettingsRepo } from '@/data/db/settings';
+import { LAST_USER_KEY, PENDING_OWNER_KEY } from '@/boot/device';
+import { createSettingsRepo, type SettingsRepo } from '@/data/db/settings';
 import { useDb } from '@/data/queries/context';
+import { SESSION_UID_KEY } from '@/data/sync/queue';
 import { bindPendingTerms, clearTermsAccepted } from '@/features/auth/pendingConsent';
 import { readProfileCache, writeProfileCache } from '@/features/auth/profileCache';
 import { cancelDriveSummaries } from '@/features/drive/summaryNotifier';
 import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
 import { clearHomeNotice } from '@/features/home/homeNotice';
 
-import { supabase } from './client';
+import { readStoredSession, supabase } from './client';
 import { fetchProfile, type Profile } from './profile';
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
@@ -54,9 +56,9 @@ const afterSignOut = new Set<BeforeSignOutTask>();
 
 /**
  * Registers `task` to run on every sign-out the driver goes through with, after the drive has
- * been stopped and the deletes sent, before `supabase.auth.signOut()`. Returns the unregister.
- * Tasks run together under one 2-second budget; one that throws, rejects or hangs costs the others
- * nothing. Registering the same function twice runs it once.
+ * been stopped and the deletes sent, before `supabase.auth.signOut({ scope: 'local' })`. Returns
+ * the unregister. Tasks run together under one 2-second budget; one that throws, rejects or hangs
+ * costs the others nothing. Registering the same function twice runs it once.
  */
 export function registerBeforeSignOut(task: BeforeSignOutTask): () => void {
   beforeSignOut.add(task);
@@ -141,6 +143,35 @@ async function stillSignedIn(): Promise<boolean> {
  * process, and every later auth event would join the same hung promise.
  */
 const PROFILE_TIMEOUT_MS = 10_000;
+
+/**
+ * How long the stored session is waited on before the session auth-js keeps on the phone stands in
+ * for it: the launch's own session wait (bootstrap's `SESSION_TIMEOUT_MS`).
+ */
+export const STORED_SESSION_WAIT_MS = 1_500;
+
+/**
+ * A session read that answered nothing but an error: auth-js hands back no session with the
+ * refresh's error when the stored access token has expired and could not be refreshed (no
+ * network). Signed out reads answer no session and no error. Bootstrap's `sessionUnknown`.
+ */
+function sessionUnknown(read: { data: { session: unknown }; error?: unknown }): boolean {
+  return read.data.session === null && read.error !== null && read.error !== undefined;
+}
+
+/**
+ * Whether `userId` is the phone's settled owner, with no handover to anyone else under way: only
+ * then are the drives, stats and cached profile on the phone theirs. The same test as DeviceHost's
+ * `ownerHolds` and bootstrap's `ownerMayHaveChanged`. A stored session that fails it never stands
+ * in: it may be a driver who signed in on someone else's phone just before the process died, with
+ * the last driver's drives still waiting for the handover's wipe.
+ */
+async function ownsPhone(settings: SettingsRepo, userId: string): Promise<boolean> {
+  const owner = await settings.get<string>(LAST_USER_KEY);
+  const pending = await settings.get<string>(PENDING_OWNER_KEY);
+  const seen = await settings.get<string>(SESSION_UID_KEY);
+  return owner === userId && (pending === null || pending === userId) && (seen === null || seen === userId);
+}
 
 function withTimeout(promise: Promise<Profile>): Promise<Profile> {
   return new Promise<Profile>((resolve, reject) => {
@@ -343,11 +374,53 @@ export function SessionProvider({
       apply(row, mineTicket);
     };
 
+    // Offline with an expired access token, auth-js retries the refresh for about 25 s before its
+    // read answers, and then answers no session with the refresh's error (and INITIAL_SESSION with
+    // null), though the session is still stored and still good. That driver is not signed out: the
+    // session auth-js keeps on the phone stands in, read straight from its storage, once the read
+    // has not answered after the launch's own wait or has answered that way. The cached profile then
+    // lands them as on any offline start; TOKEN_REFRESHED replaces it once the network is back,
+    // and SIGNED_OUT ends it if the server refuses it. Only the phone's own driver stands in; any
+    // other stored session is treated as nothing stored.
+    async function standIn(orElse: 'wait' | 'signedOut'): Promise<void> {
+      // Only while nothing has decided yet: `generation` moves with every load.
+      const before = generation;
+      let stored: Session | null = null;
+      try {
+        stored = await readStoredSession();
+        if (stored && !(await ownsPhone(settings, stored.user.id))) stored = null;
+      } catch {
+        // A settings read that fails proves nothing about the owner: nothing stands in.
+        stored = null;
+      }
+      if (!active || generation !== before) return;
+      if (stored) void load(stored);
+      else if (orElse === 'signedOut') void load(null);
+    }
+    let answered = false;
+    const storedWait = setTimeout(() => {
+      if (!answered && generation === 0) void standIn('wait');
+    }, STORED_SESSION_WAIT_MS);
+
     supabase.auth.getSession().then(
-      ({ data }) => load(data.session),
+      (read) => {
+        answered = true;
+        clearTimeout(storedWait);
+        if (!sessionUnknown(read)) {
+          void load(read.data.session);
+        } else if (generation === 0) {
+          // Unknown, not signed out. A session already standing in stays; otherwise the stored
+          // one stands in now, and with nothing stored the driver really is signed out.
+          void standIn('signedOut');
+        }
+      },
       // An unreadable stored session (a reset Keychain, a corrupt blob) rejects here. Treat it as
       // signed out; leaving the app on 'loading' would strand it on the splash screen.
-      () => load(null)
+      () => {
+        answered = true;
+        clearTimeout(storedWait);
+        void load(null);
+      }
     );
     const appSub = AppState.addEventListener('change', (state) => {
       if (state !== 'active' || !waitingForFront || !active) return;
@@ -365,11 +438,16 @@ export function SessionProvider({
         void clearTermsAccepted(settings).catch(() => {});
         clearHomeNotice();
       }
+      // INITIAL_SESSION reports the same read `getSession()` answers above, but a null here does not
+      // say whether that read failed (offline, with the session still stored). The answer above
+      // carries the error, so it decides.
+      if (event === 'INITIAL_SESSION' && !next) return;
       void load(next as Session | null);
     });
 
     return () => {
       active = false;
+      clearTimeout(storedWait);
       appSub.remove();
       sub.subscription.unsubscribe();
     };
@@ -407,7 +485,9 @@ export function SessionProvider({
         // Still signed in: whatever must reach the server under this session goes now (the push
         // token), all of it inside one 2-second budget, none of it able to hold the sign-out.
         await runBeforeSignOut();
-        const { error: signOutError } = await supabase.auth.signOut();
+        // This phone's session only: the server still revokes it, and the driver's other phones
+        // stay signed in (and keep recording). Supabase's default would end every one of them.
+        const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
         if (signOutError && (await stillSignedIn())) {
           // Nothing ended (offline with an expired token): the driver keeps their session, so the
           // drive host arms again rather than refusing Start Drive until a relaunch.

@@ -1,6 +1,6 @@
 /** @jest-environment node */
 import { limitActionable, limitShown } from '@/core/detectors/common';
-import { createSupabaseSpeedLimitApi, type SpeedLimitApi } from '@/core/speedLimits/api';
+import { createSupabaseSpeedLimitApi, SPEED_LIMIT_REQUEST_TIMEOUT_MS, type SpeedLimitApi } from '@/core/speedLimits/api';
 import {
   createSpeedLimitClient,
   FILLING_RETRIES_MAX,
@@ -28,6 +28,7 @@ import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
 import { createTilesRepo } from '@/data/db/tiles';
 import { encodePolyline } from '@/lib/polyline';
+import { createPumpedTimers } from '@/lib/timers';
 import { mphToMps } from '@/lib/units';
 
 const T0 = 1_700_000_000_000;
@@ -242,6 +243,32 @@ describe('the network budget (§3.5, R7)', () => {
     client.prefetch(LAT, LNG0, EAST);
     await client.settled();
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('a request that never answers is let go at the time-out by a pump alone (Android, RoadWise behind), and its tiles are asked for again', async () => {
+    let t = 0;
+    // Plain JS timers paused: only a pump (the drive's next row) fires the time-out.
+    const timers = createPumpedTimers({ now: () => t, setTimeout: () => null, clearTimeout: () => {} });
+    const invoke = jest.fn((_name: string, _options: Record<string, unknown>) => new Promise<{ data: unknown; error: unknown }>(() => {}));
+    const flush = async () => {
+      for (let i = 0; i < 20; i += 1) await new Promise<void>((r) => setImmediate(() => r()));
+    };
+    make(createSupabaseSpeedLimitApi({ functions: { invoke } }, timers)).startTrip(LAT, LNG0, EAST);
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    // Held in flight: asking again sends nothing.
+    client.prefetch(LAT, LNG0, EAST);
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    t = SPEED_LIMIT_REQUEST_TIMEOUT_MS;
+    timers.pump();
+    await flush();
+    expect(errors).toHaveLength(1);
+    client.prefetch(LAT, LNG0, EAST);
+    await flush();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]![0]).toBe(invoke.mock.calls[0]![0]);
   });
 
   it('ignores a tile in the reply that it did not ask for', async () => {
@@ -949,7 +976,8 @@ describe('fix round 1', () => {
 
   it('a tile stored from an older road layer (a plain array, or an envelope without the version) is not used: it is fetched again', async () => {
     // The server's road layer changed what a tile holds (TILE_DATA_VERSION 2: more road classes,
-    // directional and zone limits), so a tile kept from before must not stand for its 30 days.
+    // directional and zone limits; 3: a number with no unit is mph on a US road), so a tile kept
+    // from before must not stand for its 30 days.
     for (const old of [[road({ limitMph: 25 })], { truncated: false, segments: [road({ limitMph: 25 })] }]) {
       await createTilesRepo(db).putTile(keyAt(LAT, LNG0), clock + DAY, old);
       const { api, getTiles } = fakeApi();
@@ -961,7 +989,7 @@ describe('fix round 1', () => {
       expect(client.lookup(LAT, LNG0, EAST, MOVING)?.limitMps).toBeCloseTo(mphToMps(35));
       expect(client.stats().truncatedTiles).toBe(0);
     }
-    expect(TILE_DATA_VERSION).toBe(2);
+    expect(TILE_DATA_VERSION).toBe(3);
   });
 
   it("I1: a truncated tile that dropped the car's road but kept a parallel one never answers confidently", async () => {

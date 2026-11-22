@@ -69,11 +69,12 @@ function wrapExpo(native: SQLiteDatabase, insideTransaction: boolean): Db {
       // connection, so an unrelated concurrent write (the engine appending a 1 Hz row while the
       // uploader drains the queue) would be swept into — and rolled back with — this
       // transaction. `withExclusiveTransactionAsync` opens its own connection and hands it over
-      // as `txn`. Another writer that meets this transaction's lock waits up to
-      // `BUSY_TIMEOUT_MS` (the pragma below, set on every connection) and only then fails with
-      // `database is locked`. Nothing in the driver retries such a failure: a checkpoint that
-      // still fails is redone at the next cadence, a finalize that still fails is retried by the
-      // host with the same closed session (see `finalize.ts`).
+      // as `txn`. The transaction takes the write lock as it starts (BEGIN IMMEDIATE, below), so
+      // it and any other writer that meets the lock wait up to `BUSY_TIMEOUT_MS` (the pragma
+      // below, set on every connection) and only then fail with `database is locked`. Nothing in
+      // the driver retries such a failure: a checkpoint that still fails is redone at the next
+      // cadence, a finalize that still fails is retried by the host with the same closed session
+      // (see `finalize.ts`).
       await native.withExclusiveTransactionAsync(async (txn) => {
         // Both pragmas are per connection, and `txn` is a fresh one. `busy_timeout` is honoured
         // inside an open transaction; `foreign_keys` is not — SQLite treats it as a no-op once a
@@ -81,6 +82,22 @@ function wrapExpo(native: SQLiteDatabase, insideTransaction: boolean): Db {
         // take effect. See the note on `createExpoDb`.
         await txn.execAsync('PRAGMA foreign_keys = ON;');
         await txn.execAsync(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};`);
+        // expo's BEGIN is deferred: the write lock is only asked for at the first write. SQLite
+        // waits out `busy_timeout` only for a connection that has read nothing yet, so a body that
+        // reads before it writes (the runner's owner check, a queue claim) would fail at once
+        // when another connection holds the lock or has committed since that read. Swapped for
+        // BEGIN IMMEDIATE, the lock is taken before anything is read, while the wait still
+        // applies. Nothing goes between the two statements: `foreign_keys` set there would take
+        // effect and change what a transaction's statements enforce.
+        try {
+          await txn.execAsync('ROLLBACK; BEGIN IMMEDIATE;');
+        } catch (error) {
+          // The lock never came (`database is locked` after the wait). A plain BEGIN gives expo's
+          // own ROLLBACK a transaction to end, so the caller sees this error and not "no
+          // transaction is active".
+          await txn.execAsync('BEGIN;').catch(() => {});
+          throw error;
+        }
         out = await fn(wrapExpo(txn, true));
         ran = true;
       });
@@ -99,24 +116,27 @@ function wrapExpo(native: SQLiteDatabase, insideTransaction: boolean): Db {
  *
  * Locking: every `transaction()` runs on a connection of its own (see `wrapExpo`), so the
  * engine's checkpoint, the finalize write and the sync runner's queue claims do contend for
- * SQLite's one write lock. With `PRAGMA busy_timeout` on each connection, the loser waits up to
+ * SQLite's one write lock. Each transaction takes that lock as it begins (BEGIN IMMEDIATE), before
+ * it reads anything, because SQLite only waits out `busy_timeout` for a connection that holds no
+ * read yet. With `PRAGMA busy_timeout` on each connection, the loser waits up to
  * `BUSY_TIMEOUT_MS` and only then gets `database is locked`. The driver never retries that: a
  * checkpoint that still fails is left unrecorded and redone at the next cadence; a finalize that
  * still fails is reported through the engine's `onError` and retried by the host with the same
  * closed session (`finalize.ts`).
  *
  * Known caveat: `expo-sqlite` runs an exclusive transaction on its own connection and opens the
- * transaction before handing the handle over, so `PRAGMA foreign_keys` cannot be set for it.
- * Statements inside a `transaction()` may therefore run with foreign keys off on device — the
- * atomicity guarantees hold, but a cascade or a rejected orphan row inside a transaction does
- * not. Repositories rely on foreign keys only outside transactions (`trips.remove`); the one
- * place a test leans on it inside one is `events.insertMany`.
+ * transaction before handing the handle over, so `PRAGMA foreign_keys` cannot be set for it (the
+ * swap to BEGIN IMMEDIATE leaves that as it is). Statements inside a `transaction()` may
+ * therefore run with foreign keys off on device — the atomicity guarantees hold, but a cascade or
+ * a rejected orphan row inside a transaction does not. Repositories rely on foreign keys only
+ * outside transactions (`trips.remove`); the one place a test leans on it inside one is
+ * `events.insertMany`.
  *
  * `expo-sqlite` is imported lazily so that importing this module (for the `Db` type, or for a
  * repository that only ever sees an injected `Db`) never pulls a native module into a test
  * process. `open` defaults to expo's `openDatabaseAsync`; the one Jest suite that calls this
  * function (`__tests__/expoDriver.test.ts`) passes a fake handle instead, to pin the pragmas
- * each connection is opened with.
+ * each connection is opened with and how a transaction begins.
  */
 export async function createExpoDb(name: string, open?: OpenDatabase): Promise<Db> {
   const openDatabaseAsync = open ?? (await import('expo-sqlite')).openDatabaseAsync;

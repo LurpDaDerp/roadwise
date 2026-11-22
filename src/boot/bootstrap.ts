@@ -389,7 +389,10 @@ async function runLaunch(deps: BootstrapDeps, enter: (name: BootstrapStage) => v
       owner = await decide(late.data.session?.user.id ?? null);
     } else {
       owner = (await readDeviceOwner(db)) === null ? 'signed-out' : 'same';
-      onError(new Error(`getSession did not answer within ${sessionMs} ms`), 'identity: session');
+      // Offline with an expired token, auth-js retries the refresh for about 25 s before the read
+      // answers, so every such launch lands here rather than in the branch above: the dev console
+      // only, never the crash sink.
+      if (__DEV__) console.warn(`[bootstrap] identity: session: getSession did not answer within ${sessionMs} ms`);
     }
     return { supabase, owner };
   });

@@ -1,4 +1,4 @@
-import { usePathname, useRouter, useSegments, type Href } from 'expo-router';
+import { useNavigationContainerRef, usePathname, useRouter, useSegments, type Href } from 'expo-router';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
@@ -11,6 +11,7 @@ import { ONBOARDING_PENDING_HREF_KEY } from '@/features/onboarding/state';
 import {
   HOME,
   ONBOARDING_START,
+  SIGN_IN,
   driveFacts,
   pendingHrefFor,
   profileGate,
@@ -20,6 +21,34 @@ import {
 } from './authGuard';
 import { flushTermsAcceptance } from './pendingConsent';
 import { useUpdateStatus } from './version';
+
+type NavigationRef = ReturnType<typeof useNavigationContainerRef>;
+type StackState = { type?: unknown; key?: unknown; index?: unknown; stale?: unknown; routes?: unknown };
+
+/**
+ * Leaves only the screen on show in the root stack (`app/_layout.tsx`'s, which lives in
+ * expo-router's own `__root` slot), so the replace that follows has nothing beneath it. A replace
+ * swaps only the top screen: after a sign-out from Profile › Account the tabs stayed under the
+ * sign-in screen (back or a swipe showed the last driver's Home, and the next sign-in stacked a
+ * second tab tree on them). The screen on show keeps its key, so nothing visibly moves. When the
+ * navigator is not ready, or its state is not the shape expected, nothing is done and the replace
+ * goes on as before.
+ */
+function dropBeneath(nav: NavigationRef): void {
+  try {
+    if (!nav.isReady()) return;
+    const slot = nav.getRootState()?.routes.find((route) => route.name === '__root');
+    const stack = slot?.state as StackState | undefined;
+    if (!stack || stack.type !== 'stack' || stack.stale !== false || typeof stack.key !== 'string') return;
+    const routes = Array.isArray(stack.routes) ? (stack.routes as unknown[]) : [];
+    const index = typeof stack.index === 'number' ? stack.index : routes.length - 1;
+    const onShow = routes[index];
+    if (routes.length <= 1 || onShow === undefined) return;
+    nav.dispatch({ type: 'RESET', target: stack.key, payload: { ...stack, index: 0, routes: [onShow] } });
+  } catch {
+    // The replace still happens.
+  }
+}
 
 /**
  * The route guard. `app/index.tsx` decides where a cold start lands; this watches the session,
@@ -37,6 +66,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const segments = useSegments();
   const pathname = usePathname();
   const router = useRouter();
+  const nav = useNavigationContainerRef();
   const host = useDriveHost();
   const driveStatus = useDrive((s) => s.status);
   const { busy, tripOpen } = driveFacts({ status: driveStatus }, host.isBusy());
@@ -107,9 +137,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
       router.replace((href ?? HOME) as Href);
       return;
     }
+    // Crossing between the signed-out screens and the signed-in ones (signing out, or signing in
+    // from the sign-in screen): nothing of the side being left stays beneath the new screen.
+    const leavingAuth =
+      (segments as readonly string[])[0] === '(auth)' && (to === HOME || to === ONBOARDING_START || to === '/');
+    if (to === SIGN_IN || leavingAuth) dropBeneath(nav);
     router.replace(to as Href);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `holdFor` reads `userId`, listed here
-  }, [status, gate, update, segments, busy, tripOpen, router, pathname, settings, inOnboarding, userId]);
+  }, [status, gate, update, segments, busy, tripOpen, router, nav, pathname, settings, inOnboarding, userId]);
 
   // The sign-in attestation, once per signed-in session. A failure (offline, or the server is not
   // ready) is retried on the next change of profile, and on the next launch.

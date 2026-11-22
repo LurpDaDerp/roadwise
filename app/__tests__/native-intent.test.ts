@@ -66,7 +66,21 @@ test.each([
   'roadwise://wrapped/2026-10?start=1',
   // No link domain is set: no web link opens anything, a Wrapped one included.
   'https://roadwise.app/w/Ab3dEf7hJk9m',
+  // A backslash: the router's URL parser reads it as a slash and resolves '..', so these would
+  // reach other screens.
+  'roadwise://add/..\\settings\\delete-account',
+  'roadwise://add/..\\settings\\dashcam?aim=1',
+  'roadwise://add/..\\friends\\scan',
+  'roadwise://drives/..\\_sitemap',
+  'roadwise://add/..\\drive?start=1',
+  'roadwise://add/.%2E\\friends\\scan',
+  'roadwise://drives/x\\y',
+  '/add/..\\settings\\delete-account',
 ])('%s opens Home', async (path) => expect(await go(path)).toBe('/'));
+
+test('a backslash link opens Home on a warm launch too', async () => {
+  expect(await redirectSystemPath({ path: 'roadwise://add/..\\settings\\delete-account', initial: false })).toBe('/');
+});
 
 test('the dev client launcher links pass untouched in a development build', async () => {
   expect(await go('exp+roadwise://expo-development-client/?url=x')).toBe('exp+roadwise://expo-development-client/?url=x');

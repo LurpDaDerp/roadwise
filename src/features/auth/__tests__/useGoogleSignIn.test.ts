@@ -44,6 +44,41 @@ test('Google gets the hashed nonce and Supabase the raw one, so the nonce check 
   expect(requested.extraParams.nonce).toBe(bytesToHex(sha256(utf8ToBytes(sent.nonce))));
 });
 
+test('Cancel on Google’s own page (access_denied) is backing out: no error, no session asked for', async () => {
+  mockPromptAsync.mockResolvedValue({
+    type: 'error',
+    error: Object.assign(new Error('access_denied'), { code: 'access_denied' }),
+    params: { error: 'access_denied', state: 's' },
+  });
+  const { result } = await renderHook(() => useGoogleSignIn());
+  await act(async () => {
+    await expect(result.current.signIn()).resolves.toBeUndefined();
+  });
+  expect(mockSignInWithIdToken).not.toHaveBeenCalled();
+});
+
+test('any other error from Google is still a failure', async () => {
+  mockPromptAsync.mockResolvedValue({
+    type: 'error',
+    error: Object.assign(new Error('bad client'), { code: 'invalid_client' }),
+    params: { error: 'invalid_client', state: 's' },
+  });
+  const { result } = await renderHook(() => useGoogleSignIn());
+  await act(async () => {
+    await expect(result.current.signIn()).rejects.toThrow('bad client');
+  });
+  expect(mockSignInWithIdToken).not.toHaveBeenCalled();
+});
+
+test('closing the browser sheet is backing out too', async () => {
+  mockPromptAsync.mockResolvedValue({ type: 'dismiss' });
+  const { result } = await renderHook(() => useGoogleSignIn());
+  await act(async () => {
+    await expect(result.current.signIn()).resolves.toBeUndefined();
+  });
+  expect(mockSignInWithIdToken).not.toHaveBeenCalled();
+});
+
 test('the nonce holds across re-renders, so the request Google answers is the one it was asked', async () => {
   const { rerender } = await renderHook(() => useGoogleSignIn());
   await rerender({});

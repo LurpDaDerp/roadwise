@@ -6,6 +6,7 @@ import {
   SPEED_LIMIT_REQUEST_TIMEOUT_MS,
   type SpeedLimitsSupabase,
 } from '@/core/speedLimits/api';
+import { createPumpedTimers } from '@/lib/timers';
 
 // The real client must satisfy the narrow seam the api takes.
 const _compat: SpeedLimitsSupabase = null as unknown as SupabaseClient;
@@ -30,6 +31,7 @@ describe('getTiles', () => {
     expect(invoke).toHaveBeenCalledWith('speed-limits?tiles=15/5249/11443,15/5250/11443', {
       method: 'GET',
       timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -42,10 +44,10 @@ describe('getTiles', () => {
     expect(first).toMatch(/^speed-limits\?tiles=15\/5249\/11443&fresh=[0-9a-z]+$/);
     expect(second).not.toBe(first);
     expect(new URLSearchParams(first!.split('?')[1]).getAll('tiles')).toEqual(['15/5249/11443']);
-    expect(invoke.mock.calls[0]![1]).toEqual({ method: 'GET', headers: { 'Cache-Control': 'no-cache' }, timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS });
+    expect(invoke.mock.calls[0]![1]).toEqual({ method: 'GET', headers: { 'Cache-Control': 'no-cache' }, timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS, signal: expect.any(AbortSignal) });
     // Without it (or with fresh false) the request is the ordinary, cacheable one.
     await api.getTiles(['15/5249/11443'], { fresh: false });
-    expect(invoke.mock.calls[2]).toEqual(['speed-limits?tiles=15/5249/11443', { method: 'GET', timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }]);
+    expect(invoke.mock.calls[2]).toEqual(['speed-limits?tiles=15/5249/11443', { method: 'GET', timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS, signal: expect.any(AbortSignal) }]);
   });
 
   it('refuses bad keys before touching the network', async () => {
@@ -84,6 +86,7 @@ describe('lookupPoint', () => {
       method: 'POST',
       body: { lat: 47.6, lng: -122.3, heading: 90, radiusM: 25 },
       timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -97,5 +100,60 @@ describe('lookupPoint', () => {
     const dishonest = { ...answer, source: 'unknown' };
     const api = createSupabaseSpeedLimitApi(fake({ data: dishonest, error: null }).supabase);
     await expect(api.lookupPoint({ lat: 47.6, lng: -122.3, heading: 90 })).rejects.toThrow();
+  });
+});
+
+describe('the time-out (Android pauses plain JS timers while RoadWise is behind)', () => {
+  /** Pumped timers whose plain JS timer never fires: only a pump (a drive's row) can fire them. */
+  function behind() {
+    let t = 0;
+    const timers = createPumpedTimers({ now: () => t, setTimeout: () => null, clearTimeout: () => {} });
+    return { timers, at: (ms: number) => (t = ms) };
+  }
+  /** A call that never answers (a stalled request, or a session read waiting on a paused refresh). */
+  function hung() {
+    const signals: AbortSignal[] = [];
+    const invoke = jest.fn((_name: string, options: { signal?: AbortSignal }) => {
+      signals.push(options.signal!);
+      return new Promise<{ data: unknown; error: unknown }>(() => {});
+    });
+    return { supabase: { functions: { invoke } }, signals };
+  }
+  const settled = async (p: Promise<unknown>) => {
+    let done = false;
+    p.then(
+      () => (done = true),
+      () => (done = true)
+    );
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    return done;
+  };
+
+  it.each([
+    ['getTiles', (api: ReturnType<typeof createSupabaseSpeedLimitApi>) => api.getTiles(['15/5249/11443'])],
+    ['lookupPoint', (api: ReturnType<typeof createSupabaseSpeedLimitApi>) => api.lookupPoint({ lat: 47.6, lng: -122.3, heading: 90 })],
+  ])('%s: a call that never answers is aborted and rejected once the time-out is due, by a pump alone', async (_name, call) => {
+    const { timers, at } = behind();
+    const { supabase, signals } = hung();
+    const pending = call(createSupabaseSpeedLimitApi(supabase, timers));
+    void pending.catch(() => {});
+    at(SPEED_LIMIT_REQUEST_TIMEOUT_MS - 1);
+    timers.pump();
+    expect(await settled(pending)).toBe(false);
+    expect(signals[0]!.aborted).toBe(false);
+
+    at(SPEED_LIMIT_REQUEST_TIMEOUT_MS);
+    timers.pump();
+    await expect(pending).rejects.toThrow(/did not answer within 15000 ms/);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(timers.pending()).toBe(0);
+  });
+
+  it('a call that answers, or fails, leaves no timer behind', async () => {
+    const timers = createPumpedTimers({ setTimeout: () => null, clearTimeout: () => {} });
+    await createSupabaseSpeedLimitApi(fake({ data: batch, error: null }).supabase, timers).getTiles(['15/5249/11443']);
+    expect(timers.pending()).toBe(0);
+    await expect(createSupabaseSpeedLimitApi(fake({ data: null, error: new Error('x') }).supabase, timers).getTiles(['15/5249/11443'])).rejects.toThrow('x');
+    expect(timers.pending()).toBe(0);
   });
 });

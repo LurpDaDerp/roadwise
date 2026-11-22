@@ -10,7 +10,7 @@ import { toEventRow } from '@/data/db/events';
 import type { EventRow } from '@/data/db/types';
 import { useDataSource } from '@/data/queries/context';
 import { queryKeys } from '@/data/queries/keys';
-import { isScoredDrive, toListedDrive, toLocalDriveEvent, toTripView, TRIP_VIEW, type LocalDrive } from '@/data/queries/rows';
+import { isScoredDrive, toListedDrive, toLocalDriveEvent, toTripView, TRIP_LIST_VIEW, type LocalDrive } from '@/data/queries/rows';
 
 /** The SQL twin of `isScoredDrive`: scored by the server, or pending and long enough to score. */
 export const SCORED_TRIP = "(t.status = 'scored' OR (t.status = 'pending' AND t.reason IS NULL))";
@@ -46,12 +46,13 @@ export async function readWindowEvents(db: Db, sinceMs: number | null): Promise<
 
 /**
  * The scored drives started at or after `sinceMs` (null: all time), newest first. A list read: each
- * drive's stored server answer is left unread (`toListedDrive`).
+ * drive's speed trace, stored server answer and integrity block are left unread (`TRIP_LIST_VIEW`,
+ * `toListedDrive`).
  */
 export async function readScoredDrives(db: Db, sinceMs: number | null): Promise<LocalDrive[]> {
   const since = sinceMs === null ? '' : 'AND t.started_at >= ?';
   const { rows } = await db.execute(
-    `SELECT ${TRIP_VIEW} FROM trips t WHERE ${SCORED_TRIP} ${since} ORDER BY t.started_at DESC, t.client_trip_id ASC`,
+    `SELECT ${TRIP_LIST_VIEW} FROM trips t WHERE ${SCORED_TRIP} ${since} ORDER BY t.started_at DESC, t.client_trip_id ASC`,
     sinceMs === null ? [] : [sinceMs]
   );
   return rows.map((row) => toListedDrive(toTripView(row))).filter(isScoredDrive);

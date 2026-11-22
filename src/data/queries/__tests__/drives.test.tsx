@@ -1,12 +1,25 @@
 /** @jest-environment node */
 import { uuid } from '@/core/engine/__fixtures__/drives';
 import { REFUSED_NEVER, type Db } from '@/data/db';
+import { TRIP_COLUMNS } from '@/data/db/trips';
 import type { TripRow } from '@/data/db/types';
+import { fullTrip, SERVER_ID } from '@/data/queries/__fixtures__/fullTrip';
 import { createTestDb, seedEvents, seedTrips } from '@/data/queries/__fixtures__/harness';
 import { readDriveCount, readDriveDetail, readDriveHistory, readDrives, readRecentDrives, readRoutePolylines, readStatSums, useDriveCount, useRecentDrives } from '@/data/queries/drives';
-import { readScoredDrives } from '@/data/queries/analytics';
+import { readScoredDrives, SCORED_TRIP } from '@/data/queries/analytics';
 import { DRIVE_HISTORY_FILTERS } from '@/data/queries/keys';
-import { countEvents, isListed, isScoredDrive, matchesHistoryFilter, sumStats, toLocalDrive } from '@/data/queries/rows';
+import {
+  countEvents,
+  isListed,
+  isScoredDrive,
+  matchesHistoryFilter,
+  sumStats,
+  toListedDrive,
+  toLocalDrive,
+  toTripView,
+  TRIP_LIST_VIEW,
+  TRIP_VIEW,
+} from '@/data/queries/rows';
 
 const T0 = 1_700_000_000_000;
 let db: Db;
@@ -134,4 +147,104 @@ test('row bridges: counts from events, filters on a drive view', () => {
   // A drive that failed to upload is still a drive the user made: listed, under "Not synced".
   expect(matchesHistoryFilter(d, 'all')).toBe(true);
   expect(matchesHistoryFilter({ ...d, status: 'recording' }, 'all')).toBe(false);
+});
+
+test('the Clean filter never lists a "Wasn’t driving" drive, whatever flag it still carries; Passenger does', async () => {
+  const drive = (status: TripRow['status'], clean: boolean | null) => ({ status, clean, archived: false, carUid: null });
+  expect(matchesHistoryFilter(drive('not_driving', true), 'clean')).toBe(false);
+  expect(matchesHistoryFilter(drive('not_driving', true), 'passenger')).toBe(true);
+  expect(matchesHistoryFilter(drive('not_driving', true), 'all')).toBe(true);
+  // A clean drive is listed under Clean whether the server has answered yet or not.
+  expect(matchesHistoryFilter(drive('scored', true), 'clean')).toBe(true);
+  expect(matchesHistoryFilter(drive('pending', true), 'clean')).toBe(true);
+  expect(matchesHistoryFilter(drive('scored', false), 'clean')).toBe(false);
+  expect(matchesHistoryFilter(drive('scored', null), 'clean')).toBe(false);
+  // Marked on this phone with the flag the tap left: under Passenger only.
+  await seedTrips(db, [{ client_trip_id: uuid(3), started_at: T0 - 3000, tz: 'UTC', status: 'not_driving', miles: 5, clean: 1 }]);
+  expect((await readDriveHistory(db, 'clean')).map((d) => d.clientTripId)).toEqual([uuid(1)]);
+  expect((await readDriveHistory(db, 'passenger')).map((d) => d.clientTripId)).toEqual([uuid(3), uuid(4)]);
+});
+
+describe('the list reads leave the speed trace, stored server answer and integrity block in SQLite', () => {
+  const UNREAD = ['speed_trace_json', 'result_json', 'integrity_json'];
+  const NEWEST_FIRST = 'ORDER BY t.started_at DESC, t.client_trip_id ASC';
+  /** The drives a list built from the whole row, as it did before it named its columns. */
+  const wholeRows = async (where: string, params: unknown[] = []) =>
+    (await db.execute(`SELECT ${TRIP_VIEW} FROM trips t WHERE ${where} ${NEWEST_FIRST}`, params)).rows.map((row) => toListedDrive(toTripView(row)));
+
+  beforeEach(async () => {
+    // Every column set: one listed (its upload failed once, still owed), one archived, one marked "Wasn't driving".
+    await seedTrips(db, [
+      fullTrip(uuid(30), T0 - 500, { archived_at: null }),
+      fullTrip(uuid(31), T0 - 700),
+      fullTrip(uuid(32), T0 - 900, { status: 'not_driving', archived_at: null }),
+    ]);
+    await db.execute(
+      "INSERT INTO sync_queue (kind, payload_json, idempotency_key, status, attempts, next_attempt_at, created_at) VALUES ('finalize-trip', '{}', ?, 'pending', 1, ?, 0)",
+      [`trip:${uuid(30)}`, T0]
+    );
+  });
+
+  test('the select names every other trip column and the upload flag, and nothing else', async () => {
+    const { rows } = await db.execute(`SELECT ${TRIP_LIST_VIEW} FROM trips t WHERE t.client_trip_id = ?`, [uuid(30)]);
+    const row = rows[0]!;
+    expect(Object.keys(row).sort()).toEqual([...TRIP_COLUMNS.filter((c) => !UNREAD.includes(c)), 'upload_failed'].sort());
+    // The seeded row really carries every column, so the reads below compare full drives.
+    const whole = (await db.execute('SELECT * FROM trips WHERE client_trip_id = ?', [uuid(30)])).rows[0]!;
+    expect(TRIP_COLUMNS.filter((c) => whole[c] === null)).toEqual(['archived_at']);
+  });
+
+  test('Drive history builds the very drives the whole row builds, under every filter', async () => {
+    for (const filter of DRIVE_HISTORY_FILTERS) {
+      const want = (await wholeRows("t.status != 'recording' AND t.archived_at IS NULL")).filter((d) => matchesHistoryFilter(d, filter));
+      expect(await readDriveHistory(db, filter)).toEqual(want);
+    }
+    const listed = (await readDriveHistory(db, 'all')).find((d) => d.clientTripId === uuid(30))!;
+    // Every field a list shows is there (and the three it never shows stay null, as they always were).
+    expect(listed).toMatchObject({
+      polyline: 'whole',
+      fromPlace: 'home',
+      carName: 'Civic',
+      start: { lat: 47.6062, lng: -122.3321 },
+      end: { lat: 47.7, lng: -122.3 },
+      limitBuckets: { high: { s: 3, m: 90 } },
+      weather: 'rain',
+      practiceSupervisor: 'Dad',
+      uploadFailed: true,
+      result: null,
+      speedTrace: null,
+    });
+  });
+
+  test('the scored drives (Home’s coaching, Analytics, commute, Wrapped, spots) are the very drives the whole row builds', async () => {
+    for (const since of [null, T0 - 800, T0 + 1]) {
+      const want = (await wholeRows(`${SCORED_TRIP} ${since === null ? '' : 'AND t.started_at >= ?'}`, since === null ? [] : [since])).filter(isScoredDrive);
+      expect(await readScoredDrives(db, since)).toEqual(want);
+    }
+    expect((await readScoredDrives(db, null)).map((d) => d.clientTripId)).toEqual([uuid(30), uuid(31), uuid(1), uuid(2)]);
+  });
+
+  test('neither list reader asks SQLite for them', async () => {
+    const sent: string[] = [];
+    const recording: Db = {
+      execute: (sql, params) => {
+        sent.push(sql);
+        return db.execute(sql, params);
+      },
+      transaction: (fn) => db.transaction(fn),
+    };
+    await readDriveHistory(recording, 'all');
+    await readScoredDrives(recording, null);
+    expect(sent).toHaveLength(2);
+    for (const sql of sent) {
+      expect(sql).not.toContain('t.*');
+      for (const column of UNREAD) expect(sql).not.toContain(column);
+    }
+  });
+
+  test('a drive’s own read still parses its server answer and speed trace', async () => {
+    const detail = (await readDriveDetail(db, uuid(30)))!;
+    expect(detail.drive.result).toMatchObject({ tripId: SERVER_ID, scored: true });
+    expect(detail.drive.speedTrace).not.toBeNull();
+  });
 });

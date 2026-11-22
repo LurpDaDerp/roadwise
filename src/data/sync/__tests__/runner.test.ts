@@ -2,11 +2,19 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import { createEventsRepo, createQueueRepo, createSamplesRepo, createSettingsRepo, createTripsRepo, migrate, type Db } from '@/data/db';
 import { REFUSED_NEVER } from '@/data/db/queue';
-import { createFakeAppState, createFakeSupabase, functionsFetchError, functionsHttpError, invokeOk } from '@/data/sync/__fixtures__/fakes';
+import {
+  createFakeAppState,
+  createFakeSupabase,
+  functionsAbortError,
+  functionsFetchError,
+  functionsHttpError,
+  invokeOk,
+  rpcAbortError,
+} from '@/data/sync/__fixtures__/fakes';
 import { answer, finishedDrive, payloadV3, payloadV4, payloadV5, pickup, speeding, T0, uuid } from '@/data/sync/__fixtures__/drives';
 import { markNotDriving, reportEvent } from '@/data/sync/driveActions';
 import { emitDataChanged, onDataChanged } from '@/data/events';
-import { enqueueFinalize } from '@/data/sync/queue';
+import { enqueueFinalize, enqueuePassengerRide } from '@/data/sync/queue';
 import { createSyncRunner, FOREIGN_OWNER_RETRY_MS, NO_SESSION_RETRY_MS, RETRY_WAKE_MIN_MS } from '@/data/sync/runner';
 import { toLocalDrive } from '@/data/queries/rows';
 import { canMarkNotDriving, notDrivingRefusal } from '@/features/drives/summary';
@@ -909,4 +917,195 @@ test('while the app is open, an upload that failed on a blip is tried again when
   } finally {
     jest.useRealTimers();
   }
+});
+
+const idOf = (body: unknown): string => (body as { clientTripId: string }).clientTripId;
+
+describe('a 402 (Supabase restricting the project for a quota or a bill) is no refusal', () => {
+  const restricted = () => functionsHttpError(402, { message: 'Service for this project is restricted due to the following violations: exceed_egress_quota' });
+
+  test('the upload stays pending ("Not synced yet") and goes up once the restriction lifts', async () => {
+    await finalized(uuid(10));
+    let lifted = false;
+    let clock = T0 + 2_000_000;
+    const supabase = createFakeSupabase({ invoke: ({ body }) => (lifted ? invokeOk(response(idOf(body))) : restricted()) });
+    const r = createSyncRunner({ db, supabase, mayDrain: () => true, isRecording: () => false, now: () => clock });
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'http_402' });
+    expect(await r.owed()).toBe(1);
+    lifted = true;
+    clock += 3_600_000;
+    expect(await r.drainOnce()).toMatchObject({ done: 1 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored', sync_error: null });
+    await r.stop();
+  });
+
+  test('a report and a "Wasn’t driving" sent meanwhile stay pending, never read as refused', async () => {
+    await finalized(uuid(10), T0, uuid(1));
+    await finalized(uuid(11), T0 + 5_000_000, uuid(2));
+    await db.execute('DELETE FROM sync_queue');
+    await reportEvent(uuid(10), uuid(1), 'wrong_limit', { db });
+    await markNotDriving(uuid(11), { db });
+    const r = runner(createFakeSupabase({ invoke: restricted }));
+    await r.start();
+    await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
+    expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 2 });
+    expect(await createEventsRepo(db).get(uuid(1))).toMatchObject({ dispute_status: 'pending', dispute_message: null });
+    expect(await createTripsRepo(db).get(uuid(11))).toMatchObject({ status: 'not_driving', sync_error: null });
+    expect(await createQueueRepo(db).countByStatus('pending')).toBe(2);
+    await r.stop();
+  });
+});
+
+describe('a token the gateway refuses before the function runs (its own 401 body, no `unauthorized` code) gets the one refresh too', () => {
+  const gatewayBodies = [
+    ['a bare status code', { code: 401, message: 'Invalid JWT' }],
+    ['the gateway’s own code', { code: 'UNAUTHORIZED_LEGACY_JWT', message: 'Invalid JWT' }],
+  ] as const;
+
+  test.each(gatewayBodies)('%s: one refresh, and the upload goes in the same pass with no attempt spent', async (_label, body) => {
+    await finalized(uuid(10));
+    const supabase = createFakeSupabase({ invoke: (call, index) => (index === 0 ? functionsHttpError(401, body) : invokeOk(response(idOf(call.body)))) });
+    const r = runner(supabase);
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 0 });
+    expect(supabase.refreshes).toBe(1);
+    expect(supabase.invokes).toHaveLength(2);
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'done', attempts: 0 });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'scored' });
+    await r.stop();
+  });
+
+  test('still refused after the refresh: one refresh a pass, then a counted retry under the code it came with', async () => {
+    await finalized(uuid(10));
+    const supabase = createFakeSupabase({ invoke: () => functionsHttpError(401, { code: 401, message: 'Invalid JWT' }) });
+    const r = runner(supabase);
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 0, failed: 0 });
+    expect(supabase.refreshes).toBe(1);
+    expect(supabase.invokes).toHaveLength(2);
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'http_401' });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+    await r.stop();
+  });
+});
+
+describe('the session is read again before each item, not once a round', () => {
+  test('a session dropped mid-round (a revoked token whose refresh failed): the passenger ride after it waits for a session, never sent without one', async () => {
+    await finalized(uuid(10));
+    await enqueuePassengerRide(db, { clientTripId: uuid(20), localDay: '2023-11-14' }, T0 + 1_900_000);
+    const supabase = createFakeSupabase({
+      invoke: () => functionsHttpError(401, { code: 'unauthorized' }),
+      // The refresh is turned down and auth-js removes the session.
+      refresh: () => {
+        supabase.setUid(null);
+        return { data: null, error: new Error('Invalid Refresh Token: Refresh Token Not Found') };
+      },
+      rpc: () => ({ data: { clientTripId: uuid(20), localDay: '2023-11-14' }, error: null }),
+    });
+    const r = runner(supabase);
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 0, failed: 0 });
+    expect(supabase.invokes).toHaveLength(1);
+    expect(supabase.rpcs).toEqual([]);
+    const q = createQueueRepo(db);
+    expect(await q.byKey(`passenger:${uuid(20)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 + NO_SESSION_RETRY_MS });
+    expect(await q.byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 + NO_SESSION_RETRY_MS });
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+    await r.stop();
+  });
+
+  test('another driver signed in mid-round: the rest of the first driver’s round is not sent under the new account', async () => {
+    await finalized(uuid(10));
+    await finalized(uuid(11), T0 + 10_000);
+    const supabase = createFakeSupabase({
+      invoke: ({ body }) => {
+        // The first driver signs out and another signs in while the first upload is in flight.
+        supabase.setUid('user-2');
+        return invokeOk(response(idOf(body)));
+      },
+    });
+    const r = runner(supabase);
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 1, deferred: 1 });
+    expect(supabase.invokes.map((i) => idOf(i.body))).toEqual([uuid(10)]);
+    expect(await createQueueRepo(db).byKey(`trip:${uuid(11)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 + FOREIGN_OWNER_RETRY_MS });
+    await r.stop();
+  });
+
+  test('a runner stopped mid-round sends nothing more: the rest goes back due at once, and stop() returns once the request in flight is settled', async () => {
+    await finalized(uuid(10));
+    await finalized(uuid(11), T0 + 10_000);
+    let stopping: Promise<void> | null = null;
+    const supabase = createFakeSupabase({
+      invoke: ({ body }) => {
+        stopping ??= r.stop();
+        return invokeOk(response(idOf(body)));
+      },
+    });
+    const r = runner(supabase);
+    await r.start();
+    const result = await r.drainOnce();
+    await stopping;
+    expect(result).toMatchObject({ done: 1, deferred: 1 });
+    expect(supabase.invokes).toHaveLength(1);
+    const q = createQueueRepo(db);
+    expect(await q.byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'done' });
+    expect(await q.byKey(`trip:${uuid(11)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 });
+    expect(await q.countByStatus('inflight')).toBe(0);
+  });
+});
+
+describe('a request the app’s client gave up on (its bound aborted a connection gone silent) is the network failing', () => {
+  test('an upload aborted mid-round is retried at its back-off, its claim closed; the rest of the round still goes', async () => {
+    await finalized(uuid(10));
+    await finalized(uuid(11), T0 + 10_000);
+    const supabase = createFakeSupabase({ invoke: ({ body }) => (idOf(body) === uuid(10) ? functionsAbortError() : invokeOk(response(idOf(body)))) });
+    const r = runner(supabase);
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ done: 1, failed: 0, deferred: 1 });
+    const q = createQueueRepo(db);
+    expect(await q.byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'network', next_attempt_at: T0 + 2_000_000 + 30_000 });
+    expect(await q.byKey(`trip:${uuid(11)}`)).toMatchObject({ status: 'done' });
+    expect(await q.countByStatus('inflight')).toBe(0);
+    expect(await createTripsRepo(db).get(uuid(10))).toMatchObject({ status: 'pending', sync_error: null });
+    await r.stop();
+  });
+
+  test('a passenger ride whose RPC was aborted waits the same way, never refused', async () => {
+    await enqueuePassengerRide(db, { clientTripId: uuid(20), localDay: '2023-11-14' }, T0);
+    const r = runner(createFakeSupabase({ rpc: rpcAbortError }));
+    await r.start();
+    expect(await r.drainOnce()).toMatchObject({ failed: 0, deferred: 1 });
+    expect(await createQueueRepo(db).byKey(`passenger:${uuid(20)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'network' });
+    await r.stop();
+  });
+
+  test('stop() during a request in flight waits for that one request only: once the client gives it up, the rest of the round goes back unsent', async () => {
+    await finalized(uuid(10));
+    await finalized(uuid(11), T0 + 10_000);
+    let giveUp: () => void = () => {};
+    const supabase = createFakeSupabase({ invoke: () => new Promise((resolve) => (giveUp = () => resolve(functionsAbortError()))) });
+    const r = runner(supabase);
+    await r.start();
+    void r.drainOnce();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(supabase.invokes).toHaveLength(1);
+    let stopped = false;
+    const stopping = r.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The pass still holds the claim: stop() does not return before it is closed.
+    expect(stopped).toBe(false);
+    giveUp();
+    await stopping;
+    expect(supabase.invokes).toHaveLength(1);
+    const q = createQueueRepo(db);
+    expect(await q.byKey(`trip:${uuid(10)}`)).toMatchObject({ status: 'pending', attempts: 1, last_error: 'network' });
+    expect(await q.byKey(`trip:${uuid(11)}`)).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: T0 + 2_000_000 });
+    expect(await q.countByStatus('inflight')).toBe(0);
+  });
 });

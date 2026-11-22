@@ -18,7 +18,10 @@
  *
  * **Coalescing.** A burst of the same bare event (ten enqueues in one batch) is delivered once. A
  * `sync` event carries the pass's counts, so two of those in one macrotask are both delivered —
- * a listener counting settled work must not lose one. Nothing is scheduled while no one listens.
+ * a listener counting settled work must not lose one. An event whose writer refreshed the cache
+ * itself (`cacheRefreshed`) keeps that mark only while nothing else of its source joins it: a
+ * plain one of the same source in the same macrotask takes the mark away, so the cache still
+ * refreshes for that other writer. Nothing is scheduled while no one listens.
  *
  * **Isolation.** Each listener is guarded: one that throws is reported to the emitter's `onError`
  * and the rest still hear the event, so an invalidation bug cannot fail the drain that fired it.
@@ -39,6 +42,12 @@ export interface DataChange {
   source: ChangeSource;
   /** Present on `sync`: what the pass that just ended settled. */
   result?: SyncApplied;
+  /**
+   * The writer already refreshed the cache for what it wrote, and waits on that refresh (a drive
+   * action: its recap shows the answer as the sheet closes). The cache listener skips the change;
+   * every other listener (the sync runner's wake among them) hears it as usual.
+   */
+  cacheRefreshed?: true;
 }
 
 type Listener = (e: DataChange) => void;
@@ -47,6 +56,9 @@ interface Pending {
   change: DataChange;
   onError?: (err: unknown) => void;
 }
+
+/** A bare change (no counts), with its `cacheRefreshed` mark when it has one. */
+const bare = (e: DataChange): DataChange => (e.cacheRefreshed === true ? { source: e.source, cacheRefreshed: true } : { source: e.source });
 
 const listeners = new Set<Listener>();
 let pending: Pending[] = [];
@@ -89,14 +101,18 @@ function flush(): void {
 
 /**
  * Announce a change, delivered once the current transaction has had its chance to commit. A bare
- * event already waiting to be delivered absorbs a second of the same source.
+ * event already waiting to be delivered absorbs a second of the same source; when only the one
+ * waiting carries `cacheRefreshed`, it loses the mark.
  */
 export function emitDataChanged(e: DataChange, onError?: (err: unknown) => void): void {
   if (listeners.size === 0) return;
-  const change: DataChange = e.result === undefined ? { source: e.source } : { ...e };
+  const change: DataChange = e.result === undefined ? bare(e) : { ...e };
   if (change.result === undefined) {
     const same = pending.find((p) => p.change.source === change.source && p.change.result === undefined);
-    if (same) return;
+    if (same) {
+      if (same.change.cacheRefreshed === true && change.cacheRefreshed !== true) same.change = { source: change.source };
+      return;
+    }
   }
   pending.push({ change, onError });
   if (scheduled) return;

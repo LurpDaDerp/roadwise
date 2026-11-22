@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 
 import type { Db } from '@/data/db/driver';
 import { DataProvider } from '@/data/queries/context';
@@ -11,7 +12,8 @@ import { ThemeProvider } from '@/ui/theme';
 // reference sits in a function body that only runs once the module has finished evaluating.
 const mockAppleSignIn = jest.fn(async () => {});
 const mockGoogleSignIn = jest.fn(async () => {});
-const mockWorld = { googleReady: true };
+// `session`: what the session provider holds (a sign-in that worked makes one).
+const mockWorld: { googleReady: boolean; session: unknown } = { googleReady: true, session: null };
 const mockMarkTermsAccepted = jest.fn(async (..._args: unknown[]) => {});
 const mockRegister = jest.fn(
   async (_email: string, _password: string) =>
@@ -52,6 +54,7 @@ jest.mock('@/features/auth/emailPassword', () => ({
 }));
 // The consent helpers import the app client; nothing here reaches the network.
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
+jest.mock('@/data/supabase/session', () => ({ useSession: () => ({ session: mockWorld.session }) }));
 jest.mock('@/features/auth/asideAuth', () => ({ createAsideAuth: jest.fn() }));
 jest.mock('@/features/auth/pendingConsent', () => ({
   ...jest.requireActual('@/features/auth/pendingConsent'),
@@ -69,6 +72,7 @@ const fakeDb = {
 
 beforeEach(() => {
   mockWorld.googleReady = true;
+  mockWorld.session = null;
   mockAppleSignIn.mockReset().mockResolvedValue(undefined);
   mockGoogleSignIn.mockReset().mockResolvedValue(undefined);
   mockMarkTermsAccepted.mockReset().mockResolvedValue(undefined);
@@ -81,7 +85,12 @@ beforeEach(() => {
   mockResend.mockReset().mockResolvedValue('sent');
   mockRequestReset.mockReset().mockResolvedValue('sent');
   executed.length = 0;
+  jest.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+  jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mockClear();
 });
+
+/** What the screen asked VoiceOver to read out (the tests run as an iPhone), in order. */
+const spoken = () => jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mock.calls.map(([text]) => text);
 
 const tree = () => (
   <ThemeProvider>
@@ -204,7 +213,7 @@ test('a save that fails leaves it unticked and says so', async () => {
   expect(screen.getByRole('button', APPLE)).toBeDisabled();
 });
 
-test('answers a rejected sign-in in place, in a live region', async () => {
+test('answers a rejected sign-in in place, and reads it out once, queued behind what VoiceOver is saying', async () => {
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   mockAppleSignIn.mockRejectedValueOnce(new Error('no identity token'));
   await mount();
@@ -215,7 +224,91 @@ test('answers a rejected sign-in in place, in a live region', async () => {
   // The reason goes to the Metro log, where whoever is setting the app up can read it.
   expect(warn).toHaveBeenCalledWith('[sign-in] apple:', expect.any(Error));
   warn.mockRestore();
-  expect(alert.props.accessibilityLiveRegion).toBe('polite');
+  expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledTimes(1);
+  expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith("Couldn't sign in. Try again.", { queue: true });
+  // Read out once on Android too: from the announcement, with no live region to say it again.
+  expect(alert.props.accessibilityLiveRegion).toBeUndefined();
+});
+
+test('Android: a rejected sign-in is read out to TalkBack once', async () => {
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockGoogleSignIn.mockRejectedValueOnce(new Error('no id token'));
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', GOOGLE));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't sign in. Try again.");
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledTimes(1);
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith("Couldn't sign in. Try again.");
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).not.toHaveBeenCalled();
+  } finally {
+    os.restore();
+    jest.mocked(console.warn).mockRestore();
+  }
+});
+
+describe('after a sign-in that made a session, until the screen leaves (the profile read, up to 10 s)', () => {
+  const signedIn = { user: { id: 'u1' } };
+  const busy = (name: { name: string }) => screen.getByRole('button', name).props.accessibilityState?.busy;
+
+  test.each([
+    ['Apple', APPLE, () => mockAppleSignIn],
+    ['Google', GOOGLE, () => mockGoogleSignIn],
+  ] as const)('%s: its spinner stays and every other way in stays off; a second tap starts nothing', async (_label, button, mock) => {
+    mock().mockImplementation(async () => {
+      mockWorld.session = signedIn;
+    });
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', button));
+    await waitFor(() => expect(mock()).toHaveBeenCalledTimes(1));
+    expect(busy(button)).toBe(true);
+    for (const name of [APPLE, GOOGLE, REGISTER]) expect(screen.getByRole('button', name)).toBeDisabled();
+    expect(screen.getByLabelText('Email').props.editable).toBe(false);
+    await fireEvent.press(screen.getByRole('button', APPLE));
+    await fireEvent.press(screen.getByRole('button', GOOGLE));
+    expect(mockAppleSignIn.mock.calls.length + mockGoogleSignIn.mock.calls.length).toBe(1);
+  });
+
+  test('an email sign-in that worked holds the same way', async () => {
+    mockSignInPassword.mockImplementation(async () => {
+      mockWorld.session = signedIn;
+      return 'ok';
+    });
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', { name: 'Have an account? Sign in' }));
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'x');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    await waitFor(() => expect(mockSignInPassword).toHaveBeenCalledTimes(1));
+    expect(busy(SIGN_IN)).toBe(true);
+    expect(screen.getByRole('button', APPLE)).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'New here? Create an account' })).toBeDisabled();
+  });
+
+  test('backing out of a sheet (no session) leaves the screen as it was: everything armed again', async () => {
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', APPLE));
+    await waitFor(() => expect(mockAppleSignIn).toHaveBeenCalledTimes(1));
+    expect(busy(APPLE)).toBe(false);
+    for (const name of [APPLE, GOOGLE]) expect(screen.getByRole('button', name)).toBeEnabled();
+  });
+
+  test('a sign-in that fails re-arms the screen and says so, whatever session the app holds', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockGoogleSignIn.mockRejectedValueOnce(new Error('no identity token'));
+    mockWorld.session = signedIn;
+    await mount();
+    await tick();
+    await fireEvent.press(screen.getByRole('button', GOOGLE));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't sign in. Try again.");
+    expect(busy(GOOGLE)).toBe(false);
+    expect(screen.getByRole('button', APPLE)).toBeEnabled();
+    warn.mockRestore();
+  });
 });
 
 test('leaves Google unarmed until its client id is configured', async () => {
@@ -349,6 +442,28 @@ describe('signing in with an email and password', () => {
     await fireEvent.changeText(screen.getByLabelText('Password'), 'wrong');
     await fireEvent.press(screen.getByRole('button', SIGN_IN));
     expect(await screen.findByRole('alert')).toHaveTextContent(words);
+  });
+
+  test('a wrong password is read out as its line appears, and again when a second try fails the same way', async () => {
+    const words = "That email and password don't match. Check them and try again.";
+    let answer: (result: 'invalid') => void = () => {};
+    mockSignInPassword
+      .mockResolvedValueOnce('invalid')
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await toSignIn();
+    await fireEvent.changeText(screen.getByLabelText('Email'), 'ava@example.com');
+    await fireEvent.changeText(screen.getByLabelText('Password'), 'wrong');
+    await fireEvent.press(screen.getByRole('button', SIGN_IN));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+    expect(spoken()).toEqual([words]);
+    // The second try clears the line while it runs, so the same words coming back are a new line.
+    await act(async () => {
+      void fireEvent.press(screen.getByRole('button', SIGN_IN));
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => answer('invalid'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+    expect(spoken()).toEqual([words, words]);
   });
 
   test('switching back and forth keeps the email and drops the passwords', async () => {

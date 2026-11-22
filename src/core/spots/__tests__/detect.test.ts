@@ -141,6 +141,20 @@ describe('clustering', () => {
     expect(spots[0]!.hits).toBe(3);
   });
 
+  test('a speeding episode 140 m on from a cluster joins it wherever the road sits in the grid (a north road at Seattle)', () => {
+    // Inside the 150 m join distance, so every placement is one spot of 3 drives. The grid's
+    // east-west cells must be measured on one scale per row, or a step north at this longitude
+    // shifts the cell and the 3 x 3 search misses the cluster.
+    const drives = [0, 1, 2].map((i) => drive(`d${i}`, i));
+    const lost: number[] = [];
+    for (let s = 200; s <= 1500; s += 7) {
+      const events = drives.map((d, i) => ev(`e${i}`, d, 'speeding', [i === 2 ? s + 140 : s, 0], { speedMph: 40, durationS: 10 }));
+      const spots = detectSpots(drives, events, T0 + 3 * DAY);
+      if (spots.length !== 1 || spots[0]!.hits !== 3) lost.push(s);
+    }
+    expect(lost).toEqual([]);
+  });
+
   test("a left-turn spot is not diluted by straight passes (the exit's direction)", () => {
     const drives: SpotDrive[] = [];
     const events: SpotEvent[] = [];

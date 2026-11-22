@@ -191,8 +191,9 @@ test('a drive through a mid-route privacy zone uploads both visible runs, so the
     for (const p of run) expect(haversineMeters(p, mid)).toBeGreaterThan(300);
     for (let i = 1; i < run.length; i += 1) expect(Math.sign(run[i - 1]!.lng - mid.lng)).toBe(Math.sign(run[i]!.lng - mid.lng));
   }
-  // The server's rule (`finalize_rules.milesExceedRoute`): miles <= visible miles x 1.25 + 4. With only the longer
-  // half (~5.3 mi) an 11.2 mi drive would be refused as implausible; with both runs it is plausible with room to spare.
+  // The server's rule (`finalize_rules.milesExceedRoute`) holds miles to the visible miles x 1.25 plus a slack.
+  // Checked here with a tighter + 4: with only the longer half (~5.3 mi) an 11.2 mi drive would fail it; with both
+  // runs it passes with room to spare.
   const visibleMiles = runs.reduce((m, run) => m + run.slice(1).reduce((s, p, i) => s + haversineMeters(run[i]!, p), 0), 0) / 1609.344;
   expect(visibleMiles).toBeGreaterThan(9);
   expect(payload.miles).toBeLessThanOrEqual(visibleMiles * 1.25 + 4);

@@ -7,6 +7,8 @@
 // wrongly is refused before it costs a network call, and a reply that breaks the contract is
 // refused rather than half-applied — the caller reports it and treats the tiles as not fetched.
 
+import { processTimers, type Timers } from '@/lib/timers';
+
 import {
   type PointRequest,
   type PointRequestInput,
@@ -23,6 +25,11 @@ export const SPEED_LIMITS_FUNCTION = 'speed-limits';
 /**
  * A request that has not answered by now is abandoned. The client holds its tile keys "in flight"
  * until the request settles, so a hung request must not hold them for the rest of the drive.
+ *
+ * The time-out is one of the process's pumped timers (`@/lib/timers`) as well as the functions
+ * client's own: Android pauses plain JS timers while RoadWise is behind, and a drive's rows then
+ * fire it. It covers the whole call, the session read before it too (a token refresh can wait
+ * there on a paused timer), so a stalled request still lets its tiles go and they are asked again.
  */
 export const SPEED_LIMIT_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -47,17 +54,41 @@ export interface SpeedLimitApi {
   lookupPoint(req: PointRequest | PointRequestInput): Promise<PointResponse>;
 }
 
+/** The options one call is made with. */
+type InvokeOptions = {
+  method?: 'GET' | 'POST';
+  body?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  timeout?: number;
+  signal?: AbortSignal;
+};
+
 /** The slice of `SupabaseClient` this needs — the real client satisfies it (tested). */
 export interface SpeedLimitsSupabase {
   functions: {
-    invoke(
-      name: string,
-      options: { method?: 'GET' | 'POST'; body?: Record<string, unknown>; headers?: Record<string, string>; timeout?: number }
-    ): Promise<{ data: unknown; error: unknown }>;
+    invoke(name: string, options: InvokeOptions): Promise<{ data: unknown; error: unknown }>;
   };
 }
 
-export function createSupabaseSpeedLimitApi(supabase: SpeedLimitsSupabase): SpeedLimitApi {
+/** `timers`: the process's pumped timers by default (see `SPEED_LIMIT_REQUEST_TIMEOUT_MS`). */
+export function createSupabaseSpeedLimitApi(supabase: SpeedLimitsSupabase, timers: Timers = processTimers): SpeedLimitApi {
+  /** One call, aborted and rejected when it has not settled after `SPEED_LIMIT_REQUEST_TIMEOUT_MS`. */
+  async function invoke(name: string, options: InvokeOptions): Promise<{ data: unknown; error: unknown }> {
+    const control = new AbortController();
+    let timer: unknown;
+    const late = new Promise<never>((_resolve, reject) => {
+      timer = timers.setTimeout(() => {
+        control.abort();
+        reject(new Error(`speed-limits request did not answer within ${SPEED_LIMIT_REQUEST_TIMEOUT_MS} ms`));
+      }, SPEED_LIMIT_REQUEST_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([supabase.functions.invoke(name, { ...options, signal: control.signal }), late]);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+
   return {
     async getTiles(keys, opts = {}) {
       const valid = TileKeysSchema.parse(keys);
@@ -66,7 +97,7 @@ export function createSupabaseSpeedLimitApi(supabase: SpeedLimitsSupabase): Spee
       // `tiles`; `fresh` is there to miss every HTTP cache entry.
       const fresh = opts.fresh === true;
       const query = `tiles=${valid.join(',')}${fresh ? `&fresh=${freshToken()}` : ''}`;
-      const { data, error } = await supabase.functions.invoke(
+      const { data, error } = await invoke(
         `${SPEED_LIMITS_FUNCTION}?${query}`,
         fresh
           ? { method: 'GET', headers: { 'Cache-Control': 'no-cache' }, timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS }
@@ -78,7 +109,7 @@ export function createSupabaseSpeedLimitApi(supabase: SpeedLimitsSupabase): Spee
 
     async lookupPoint(req) {
       const body = PointRequestSchema.parse(req);
-      const { data, error } = await supabase.functions.invoke(SPEED_LIMITS_FUNCTION, {
+      const { data, error } = await invoke(SPEED_LIMITS_FUNCTION, {
         method: 'POST',
         body,
         timeout: SPEED_LIMIT_REQUEST_TIMEOUT_MS,

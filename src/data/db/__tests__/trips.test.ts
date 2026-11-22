@@ -2,7 +2,7 @@
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
 import type { Db } from '@/data/db/driver';
 import { migrate } from '@/data/db/migrate';
-import { createTripsRepo } from '@/data/db/trips';
+import { createTripsRepo, TRIP_COLUMNS } from '@/data/db/trips';
 
 const T0 = 1_700_000_000_000;
 
@@ -95,6 +95,15 @@ test('the speed trace, limit buckets, weather and supervisor are written and rea
   expect((await trips.get('a'))?.practice_supervisor).toBe('x'.repeat(60));
   await trips.update('a', { practice_supervisor: '   ' }, T0 + 3);
   expect((await trips.get('a'))?.practice_supervisor).toBeNull();
+});
+
+test('TRIP_COLUMNS names every field a trip row is read into, and each is a column of the table', async () => {
+  // A select that names its columns from this list (the list reads) never leaves a field out.
+  const row = await trips.insert({ client_trip_id: 'a', started_at: T0, tz: 'UTC', status: 'scored' }, T0);
+  expect([...TRIP_COLUMNS].sort()).toEqual(Object.keys(row).sort());
+  const { rows } = await db.execute('PRAGMA table_info(trips)');
+  const table = new Set(rows.map((r) => r.name));
+  expect(TRIP_COLUMNS.filter((c) => !table.has(c))).toEqual([]);
 });
 
 test('list is newest first; listRecording picks the drives still recording', async () => {

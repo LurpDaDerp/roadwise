@@ -74,9 +74,9 @@ export interface StoredTilePayload {
  * a tile holds (the road classes it loads, how it reads a limit from OpenStreetMap: fill.ts'
  * `FILL_VERSION`), so a tile stored before reads as absent and is fetched again rather than kept
  * for the rest of its 30 days. 2: living streets, unclassified `road`s and service roads with a
- * limit; directional and zone limits.
+ * limit; directional and zone limits. 3: a number with no unit is mph on a US road.
  */
-export const TILE_DATA_VERSION = 2;
+export const TILE_DATA_VERSION = 3;
 
 /** A stored row from the current road layer (`TILE_DATA_VERSION`); anything older is not used. */
 export function storedIsCurrent(payload: unknown): boolean {

@@ -132,7 +132,9 @@ export type {
   WakeGate,
   WakeReason,
 } from './detect/policy';
-export { DETECT_VECTORS } from './detect/vectors';
+// Only the type: the decision table itself is test and diagnostics data, read straight from its
+// file (the diagnostics self-test behind its build-time gate), so a store build neither bundles nor
+// builds it at launch.
 export type { DetectVector } from './detect/vectors';
 export {
   detectWireVectors,

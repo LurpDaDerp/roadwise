@@ -84,6 +84,12 @@ const COLUMNS = [
   'practice_supervisor',
 ] as const;
 
+/**
+ * The same list for a select that names its columns (a list read leaves its unread ones out, see
+ * `TRIP_LIST_VIEW`). Every field `toTripRow` reads is here, so building from it never drops one.
+ */
+export const TRIP_COLUMNS: readonly (typeof COLUMNS)[number][] = COLUMNS;
+
 /** Every column except the primary key and `created_at`, which a patch must not move. */
 const PATCHABLE = COLUMNS.filter((column) => column !== 'client_trip_id' && column !== 'created_at');
 

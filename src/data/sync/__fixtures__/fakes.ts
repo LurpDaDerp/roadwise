@@ -108,6 +108,22 @@ export const functionsFetchError = (): SupabaseReply => ({
   error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' },
 });
 
+/**
+ * A request the app's client gave up on (`boundedFetch`: an `Error` named `AbortError`), as
+ * functions-js hands it back: a `FunctionsFetchError` with the fetch's error as its context.
+ */
+export function functionsAbortError(): SupabaseReply {
+  const abort = new Error('The request did not finish within 300000 ms');
+  abort.name = 'AbortError';
+  return { data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function', context: abort } };
+}
+
+/** What postgrest-js answers an RPC whose request was aborted (`code` is empty: it never reached the database). */
+export const rpcAbortError = (): SupabaseReply => ({
+  data: null,
+  error: { message: 'AbortError: The request did not finish within 300000 ms', details: '', hint: 'Request was aborted (timeout or manual cancellation)', code: '' },
+});
+
 export const invokeOk = (body: unknown): SupabaseReply => ok(body);
 
 export interface FakeAppState {
