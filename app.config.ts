@@ -118,6 +118,11 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // set by the plugins below.
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
+        // iPhone only, on the App Store too: an iPhone-only build (supportsTablet false) still installs
+        // on an iPad in its iPhone mode, so the build also requires telephony, which no iPad has.
+        // RoadWise does use it: the emergency panel dials through the phone (tel: links). arm64 is the
+        // template's own entry, kept.
+        UIRequiredDeviceCapabilities: ['arm64', 'telephony'],
         // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
         // targets/live-drive-widget), started locally or by RoadWise's push-to-start.
         NSSupportsLiveActivities: true,

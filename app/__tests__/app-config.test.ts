@@ -226,6 +226,13 @@ test('iOS: the add-to-Photos usage string, and no photo-library read string', ()
   expect(plist).not.toHaveProperty('NSPhotoLibraryUsageDescription');
 });
 
+// iPhone only: no iPad build, and telephony required so the App Store keeps it off iPad too.
+test('iOS: iPhone only, and the App Store keeps it off iPad (telephony is required)', () => {
+  const c = build();
+  expect(c.ios?.supportsTablet).toBe(false);
+  expect(c.ios?.infoPlist?.UIRequiredDeviceCapabilities).toEqual(['arm64', 'telephony']);
+});
+
 // DashPal (plan §7.1): react-native-ble-manager with no config plugin. iOS gets the Bluetooth usage
 // string and the `bluetooth-central` background mode. On Android the library's manifest never
 // reaches the build (AGP 7.3+ points it at a file the package doesn't ship), so the scan permissions
