@@ -254,8 +254,27 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
 
   const map = offered && withMap;
   const mapFailed = map && (state === 'mapError' || (mapStatus === 'failed' && state !== 'busy'));
+  // Share image is the sheet's pinned footer, so on a short phone (667 pt, with Show map offered)
+  // it stays on screen while the card scrolls above it. A failed map or share says so right above
+  // the button, in the footer too, so the driver sees it without scrolling. They keep the layout
+  // they would have at the end of the column: 16 pt above the first (the scroller's 8 pt padding
+  // and the footer's 8 pt), 16 pt between, 8 pt under the button, and the column's centring.
   return (
-    <Sheet visible={visible} onClose={onClose} title="Share your drive" scroll testID="share-sheet">
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title="Share your drive"
+      scroll
+      contentStyle={{ paddingBottom: 0 }}
+      footer={
+        <View style={{ gap: t.space.lg, alignItems: 'center', paddingBottom: t.space.sm }}>
+          {mapFailed ? <Banner tone="danger" message="Couldn't load the map. Turn off Show map or try again." testID="share-map-error" /> : null}
+          {state === 'error' ? <Banner tone="danger" message="Couldn't share the image. Try again." /> : null}
+          <Button label="Share image" icon="share-outline" onPress={share} loading={state === 'busy'} style={{ alignSelf: 'stretch' }} testID="share-image" />
+        </View>
+      }
+      testID="share-sheet"
+    >
       <View style={{ gap: t.space.lg, alignItems: 'center' }}>
         <ShareCard ref={card} data={data} map={map ? { attempt, onStatus: onMapStatus } : null} />
         {offered ? (
@@ -277,9 +296,6 @@ export function ShareSheet({ visible, data, onClose }: { visible: boolean; data:
         <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }}>
           Speeds are never shown.
         </Text>
-        {mapFailed ? <Banner tone="danger" message="Couldn't load the map. Turn off Show map or try again." testID="share-map-error" /> : null}
-        {state === 'error' ? <Banner tone="danger" message="Couldn't share the image. Try again." /> : null}
-        <Button label="Share image" icon="share-outline" onPress={share} loading={state === 'busy'} style={{ alignSelf: 'stretch' }} testID="share-image" />
       </View>
     </Sheet>
   );

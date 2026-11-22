@@ -1,7 +1,13 @@
 /**
  * The v3 navigation skeleton (plan §7): every route exists as one file, the removed v2 routes are
- * gone, and every settings href resolves to a route file.
+ * gone, and every settings href resolves to a route file. Also, under the real expo-router, the two
+ * ways a Start drive opens the driving screen never stack two of them.
  */
+import { act, renderRouter } from 'expo-router/testing-library';
+import { router, Stack, Tabs } from 'expo-router';
+import { Text } from 'react-native';
+
+import { DRIVE_HREF } from '@/features/drive/hudCopy';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
 
 declare const __dirname: string;
@@ -91,3 +97,61 @@ test('every settings href has its route file', () => {
   for (const href of Object.values(SETTINGS_HREFS)) expect([href, exists(toFile(String(href)))]).toEqual([href, true]);
 });
 
+/**
+ * A Start drive swiped with the car already rolling: the drive's hold (`LockoutGate`) can open the
+ * driving screen with `dismissTo` before `start()` resolves, and then Home opens it too
+ * (`HomeScreen`). Home navigates, so the root stack keeps one driving screen whichever goes first.
+ * The stack as the root layout has it: the tabs, and the drive group as a full-screen modal.
+ */
+describe('Start drive opens one driving screen', () => {
+  const routes = {
+    _layout: () => (
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="drive" options={{ gestureEnabled: false, presentation: 'fullScreenModal' }} />
+      </Stack>
+    ),
+    '(tabs)/_layout': () => <Tabs screenOptions={{ headerShown: false }} />,
+    '(tabs)/home': () => <Text>home</Text>,
+    'drive/_layout': () => <Stack screenOptions={{ headerShown: false }} />,
+    'drive/index': () => <Text>driving</Text>,
+  };
+  type App = ReturnType<typeof renderRouter>;
+  type Node = { name?: string; state?: { routes?: Node[] } };
+  /** Driving screens mounted anywhere: each `drive` route counts the screens in its own stack (one before it has drawn one). */
+  const count = (routes: readonly Node[] = []): number =>
+    routes.reduce((n, r) => n + (r.name === 'drive' ? Math.max(1, r.state?.routes?.length ?? 0) : count(r.state?.routes)), 0);
+  const drivingScreens = (app: App) => count(app.getRouterState()?.routes as readonly Node[] | undefined);
+  const go = async (fn: () => void) => {
+    await act(async () => fn());
+  };
+
+  test('the hold first, then Home: still one', async () => {
+    const app = renderRouter(routes, { initialUrl: '/home' });
+    await app;
+    await go(() => router.dismissTo(DRIVE_HREF));
+    await go(() => router.navigate(DRIVE_HREF));
+    expect(app.getPathname()).toBe('/drive');
+    expect(drivingScreens(app)).toBe(1);
+  });
+
+  test('Home first, then the hold: still one', async () => {
+    const app = renderRouter(routes, { initialUrl: '/home' });
+    await app;
+    await go(() => router.navigate(DRIVE_HREF));
+    expect(app.getPathname()).toBe('/drive');
+    expect(drivingScreens(app)).toBe(1);
+    // The hold skips this on the driving screen (LockoutGate's onDriveScreen); sent anyway, it adds none.
+    await go(() => router.dismissTo(DRIVE_HREF));
+    expect(app.getPathname()).toBe('/drive');
+    expect(drivingScreens(app)).toBe(1);
+  });
+
+  test('control: a push after the hold would stack a second driving screen', async () => {
+    const app = renderRouter(routes, { initialUrl: '/home' });
+    await app;
+    await go(() => router.dismissTo(DRIVE_HREF));
+    await go(() => router.push(DRIVE_HREF));
+    expect(drivingScreens(app)).toBe(2);
+  });
+});

@@ -3,7 +3,7 @@
  * centre is the Safety Rating of the last 90 days, computed here with the scoring package's
  * arithmetic (the server's), so it is always the weighted average of the categories around it.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { simplifyTrack } from '@/core/engine/privacy';
 import type { LocalDrive } from '@/data/queries/rows';
@@ -45,6 +45,27 @@ function overviewRun(run: readonly MapPoint[]): MapPoint[] {
     run.map((p) => ({ lat: p.latitude, lng: p.longitude })),
     TRIPS_MAP_SIMPLIFY_M
   ).map((q) => ({ latitude: q.lat, longitude: q.lng }));
+}
+
+/**
+ * Every line's overview runs, in the lines' order, through `cache` (a route string → its runs),
+ * which lives as long as the screen: only a line not in it is decoded and simplified, and the rest
+ * keep their arrays, so the map leaves their overlays alone. A line no longer listed leaves the
+ * cache, so it never holds a route the drives no longer have. The same lines as decoding them all.
+ */
+export function overviewRoutes(lines: readonly string[], cache: Map<string, MapPoint[][]>): MapPoint[][] {
+  const listed = new Set(lines);
+  for (const line of cache.keys()) if (!listed.has(line)) cache.delete(line);
+  const routes: MapPoint[][] = [];
+  for (const line of lines) {
+    let runs = cache.get(line);
+    if (!runs) {
+      runs = routeLines([line]).map(overviewRun);
+      cache.set(line, runs);
+    }
+    routes.push(...runs);
+  }
+  return routes;
 }
 
 export interface CoachingData extends CoachWindow {
@@ -163,11 +184,14 @@ export function useAnalytics(range: Range): AnalyticsData {
   // archived one's route from the pool (only scored drives' routes are pooled). Simplified (the
   // overview can't show what it drops), and the region fitted on what is drawn.
   const poolLines = pool.data;
+  // A drive stored or uploaded makes a new list: only a line not drawn before is decoded and
+  // simplified (`overviewRoutes`), not every route ever driven.
+  const [overviews] = useState(() => new Map<string, MapPoint[][]>());
   const map = useMemo(() => {
     const lines = [...(drives ?? []).flatMap((d) => (d.polyline ? [d.polyline] : [])), ...(poolLines ?? [])];
-    const routes = routeLines(lines).map(overviewRun);
+    const routes = overviewRoutes(lines, overviews);
     return { routes, region: fitLines(routes) };
-  }, [drives, poolLines]);
+  }, [drives, poolLines, overviews]);
 
   const { refetch: refetchAll } = all;
   const { refetch: refetchPool } = pool;

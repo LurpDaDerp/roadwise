@@ -98,6 +98,13 @@ describe('spots words from numbers', () => {
     expect(limitText(25, 'km')).toBe('40 km/h');
   });
 
+  it('a limit posted in km/h reads as posted in km, the number the driving screen sign shows (limits travel as whole mph)', () => {
+    // 30, 70, 110 and 120 km/h are stored as 19, 43, 68 and 75 mph.
+    expect([19, 43, 68, 75].map((mph) => limitText(mph, 'km'))).toEqual(['30 km/h', '70 km/h', '110 km/h', '120 km/h']);
+    expect(whatHappens(problemSpot({ limitMph: 43 }), 'km')).toBe('Over the 70 km/h limit');
+    expect(whatHappens(problemSpot({ limitMph: 43 }), 'mi')).toBe('Over the 43 mph limit');
+  });
+
   it('progress: what clears it, then the run so far and what is left', () => {
     expect(progress(problemSpot({ cleanStreak: 0, cleanNeeded: 6 }))).toEqual({ title: 'Clears after 6 clean drives in a row here', line: null });
     expect(progress(problemSpot({ cleanStreak: 1, cleanNeeded: 6 }))).toEqual({ title: '1 clean drive in a row here', line: '5 more and it clears' });

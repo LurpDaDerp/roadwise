@@ -4,6 +4,7 @@ import { Image, Platform, StyleSheet, useColorScheme, View } from 'react-native'
 import type MapViewType from 'react-native-maps';
 import Svg, { Circle, Path } from 'react-native-svg';
 
+import { androidMapsKey } from '@/features/settings/maps';
 import { androidMapLook } from '@/features/settings/mapStyle';
 import { removeShareImage } from '@/lib/shareImages';
 import { withAlpha } from '@/ui';
@@ -129,28 +130,6 @@ export function routePath(runs: Runs, b: Bounds, w: number, h: number, max = 240
   return parts.join(' ');
 }
 
-let keyForTests: { key: string | undefined } | undefined;
-
-/** Tests: stand in for the build's Google Maps key (`{ key }`); undefined goes back to the real one. */
-export function setMapsKeyForTests(k: { key: string | undefined } | undefined): void {
-  keyForTests = k;
-}
-
-/**
- * The Google Maps key this Android build was made with, undefined when none. Read from the
- * bundle's own inlined `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY` (the same variable app.config.ts puts
- * in the manifest), never from `Constants.expoConfig.android.config.googleMaps`: Expo strips
- * `android.config` from the public config it embeds in the app and in OTA manifests, so that path
- * is always empty at runtime. Read here by name rather than through `@/lib/env`, which throws when
- * the Supabase variables are missing (the share card has no need of them); Expo inlines the name
- * only where it is spelled out literally, as it is here.
- */
-function androidMapsKey(): string | undefined {
-  if (keyForTests) return keyForTests.key;
-  const key: unknown = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY;
-  return typeof key === 'string' ? key : undefined;
-}
-
 /**
  * Whether Android offers the map backdrop at all: off. The backdrop there is Google's
  * `GoogleMap.snapshot()`, and the Maps SDK's terms say its images "must not be transmitted to your
@@ -169,8 +148,8 @@ export function setAndroidShareMapForTests(on: boolean | undefined): void {
 
 /**
  * Whether this build can draw the map backdrop: iPhone (Apple's map needs no key), or Android with
- * the backdrop turned on (`ANDROID_SHARE_MAP`) and a Google Maps key built in (without one Google
- * draws blank grey tiles), and the maps module in the build either way.
+ * the backdrop turned on (`ANDROID_SHARE_MAP`) and a Google Maps key built in (without one there is
+ * no map at all: `googleMapKeyMissing`), and the maps module in the build either way.
  */
 export function mapsAvailable(
   os: string = Platform.OS,

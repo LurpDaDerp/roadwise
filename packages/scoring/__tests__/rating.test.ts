@@ -489,6 +489,15 @@ describe('ratingAt: the 90-day, recency-weighted, per-opportunity Safety Rating'
     expect(ratingAt([drive({ ageDays: 0, miles: 10 })], AT)).toMatchObject({ rating: 87.4, ranked: true });
   });
 
+  test('ranked at exactly 10.00 mi however the floats add up, as the SQL numeric sum is', () => {
+    // In start order 0.10 + 8.04 + 1.86 is 9.999999999999998 in floats; the server's numeric(7,2) sum is 10.00.
+    const split = (miles: number[]) => miles.map((m, i) => drive({ ageDays: 3 - i, id: `m${i}`, miles: m }));
+    const ten = ratingAt(split([0.1, 8.04, 1.86]), AT);
+    expect(ten.ranked).toBe(true);
+    expect(ten.miles).toBeCloseTo(10, 9);
+    expect(ratingAt(split([0.1, 8.03, 1.86]), AT).ranked).toBe(false);
+  });
+
   test('drives in the future or 90 days old and more are left out', () => {
     const base = ratingAt([pinA], AT);
     const future = drive({ ageDays: -1 / 24, events: [ev({ type: 'hard_brake', tier: 'severe' })] });

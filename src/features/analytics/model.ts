@@ -27,7 +27,7 @@ import {
 } from '@scoring';
 
 import { isScoredDrive, type LocalDrive } from '@/data/queries/rows';
-import type { Region } from '@/features/settings/maps';
+import { MAX_LAT_DELTA, MAX_LNG_DELTA, type Region } from '@/features/settings/maps';
 import { decodeRuns } from '@/lib/polyline';
 
 // ---------------------------------------------------------------------------------------------
@@ -845,9 +845,10 @@ function quantile(sorted: ArrayLike<number>, q: number): number {
 
 /**
  * The region the trip map opens on: centred on the median point, wide enough for the 10th–90th
- * percentile span × 1.6 (at least 0.02°), so the most-driven roads sit in the middle with room
- * around them and outliers stay a pinch away. Null with no points. Every route point is sorted, so
- * the sorts are numeric typed-array sorts (a comparator sort of every point stalls the tab).
+ * percentile span × 1.6 (at least 0.02°, never wider than the whole world: `MAX_LAT_DELTA` ×
+ * `MAX_LNG_DELTA`), so the most-driven roads sit in the middle with room around them and outliers
+ * stay a pinch away. Null with no points. Every route point is sorted, so the sorts are numeric
+ * typed-array sorts (a comparator sort of every point stalls the tab).
  */
 export function fitRegion(points: readonly MapPoint[]): Region | null {
   const latBuf = new Float64Array(points.length);
@@ -866,8 +867,8 @@ export function fitRegion(points: readonly MapPoint[]): Region | null {
   return {
     latitude: quantile(lats, 0.5),
     longitude: quantile(lngs, 0.5),
-    latitudeDelta: Math.max(FIT_MIN_DELTA, (quantile(lats, 0.9) - quantile(lats, 0.1)) * FIT_SPAN_SCALE),
-    longitudeDelta: Math.max(FIT_MIN_DELTA, (quantile(lngs, 0.9) - quantile(lngs, 0.1)) * FIT_SPAN_SCALE),
+    latitudeDelta: Math.min(MAX_LAT_DELTA, Math.max(FIT_MIN_DELTA, (quantile(lats, 0.9) - quantile(lats, 0.1)) * FIT_SPAN_SCALE)),
+    longitudeDelta: Math.min(MAX_LNG_DELTA, Math.max(FIT_MIN_DELTA, (quantile(lngs, 0.9) - quantile(lngs, 0.1)) * FIT_SPAN_SCALE)),
   };
 }
 

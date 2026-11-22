@@ -140,7 +140,9 @@ export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: bool
     return () => sub.remove();
   }, [enabled, refresh, clock]);
 
-  // A weather answer that expires while RoadWise is on screen is asked again once.
+  // While RoadWise is on screen the weather is asked again each time an answer runs out, not just
+  // the first time: every new answer sets its own timer (`weatherAt`), the same weather as before
+  // included. A failed ask keeps the old answer's time, so it waits for the next return to the front.
   useEffect(() => {
     if (!enabled) return;
     const c = cache.current;
@@ -148,7 +150,7 @@ export function useSkyMood(ports: SkyPorts, { enabled = true }: { enabled?: bool
     const wait = Math.max(60_000, c.fetchedAt + WEATHER_TTL_MS - clock());
     const timer = setTimeout(() => void refresh(), Math.min(wait, MAX_SLEEP_MS));
     return () => clearTimeout(timer);
-  }, [enabled, weather, refresh, clock]);
+  }, [enabled, weather, weatherAt, refresh, clock]);
 
   // The phase is read again at its next boundary (every 10 min inside a twilight window).
   useEffect(() => {

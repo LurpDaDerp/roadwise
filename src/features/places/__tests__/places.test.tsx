@@ -11,7 +11,7 @@ import type { LearnedPlace } from '@/core/places/learn';
 import type { Db } from '@/data/db/driver';
 import { createSettingsRepo } from '@/data/db/settings';
 import { appWorld, clearQueryClients, memoryDb, tap } from '@/features/permissions/__fixtures__/harness';
-import { setMapsForTests, type MapsModule } from '@/features/settings/maps';
+import { setMapsForTests, setMapsKeyForTests, type MapsModule } from '@/features/settings/maps';
 import { mapStyleFor } from '@/features/settings/mapStyle';
 import { PRIVACY_ZONES_KEY, readZones, type PrivacyZone } from '@/features/settings/privacyZones';
 import { PrivacyZonesScreen } from '@/features/settings/PrivacyZonesScreen';
@@ -473,9 +473,11 @@ describe('the place and zone maps on Android', () => {
   let restore: (() => void)[] = [];
   beforeEach(() => {
     setMapsForTests(fakeMaps());
+    // A build with a Google Maps key: without one there are no maps on Android.
+    setMapsKeyForTests({ key: 'AIza-test' });
     const rn = jest.requireActual<typeof import('react-native')>('react-native');
     const scheme = jest.spyOn(rn, 'useColorScheme').mockReturnValue('dark');
-    restore = [jest.replaceProperty(Platform, 'OS', 'android').restore, () => scheme.mockRestore()];
+    restore = [jest.replaceProperty(Platform, 'OS', 'android').restore, () => scheme.mockRestore(), () => setMapsKeyForTests(undefined)];
   });
   afterEach(() => {
     restore.forEach((r) => r());

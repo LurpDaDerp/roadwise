@@ -4,6 +4,7 @@ import * as rn from 'react-native';
 import { Platform, processColor } from 'react-native';
 import { useState } from 'react';
 
+import { setMapsKeyForTests } from '@/features/settings/maps';
 import { ThemeProvider } from '@/ui';
 import { plainBundle } from '@/ui/sky/palette';
 
@@ -11,7 +12,7 @@ import { draw, press, ROUTE } from '../__fixtures__/drives';
 import { textsUnder } from '../__fixtures__/texts';
 import { resetMapsCache } from '../RouteMap';
 import { MAP_BAND, MAP_BOX, ShareSheet, type ShareCardData } from '../ShareCard';
-import { bandAlpha, leadPath, mapCredit, mapsAvailable, MAP_TIMEOUT_MS, routePath, setAndroidShareMapForTests, setMapsKeyForTests, shareFrame } from '../ShareMap';
+import { bandAlpha, leadPath, mapCredit, mapsAvailable, MAP_TIMEOUT_MS, routePath, setAndroidShareMapForTests, shareFrame } from '../ShareMap';
 import { meritCardStops, meritInk } from '../merit';
 
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(async () => true), shareAsync: jest.fn(async () => undefined) }));
@@ -132,6 +133,43 @@ test('the captured card image is deleted once the share sheet closes, shared or 
   await press(screen.getByTestId('share-image'));
   expect(screen.getByText("Couldn't share the image. Try again.")).toBeOnTheScreen();
   expect(mockRemove).toHaveBeenCalledWith('file:///card.png');
+});
+
+describe('a short phone (667 pt) with Show map offered', () => {
+  type HostNode = { type: unknown; props: Record<string, unknown>; parent: HostNode | null };
+  /** Whether an element sits in the sheet's scroller (rather than straight in the panel). */
+  const scrolls = (el: unknown): boolean => {
+    for (let node = el as HostNode | null; node && node.props.testID !== 'share-sheet'; node = node.parent) {
+      if (node.type === 'RCTScrollView') return true;
+    }
+    return false;
+  };
+
+  test('Share image is pinned under the scrolling column, so it never scrolls off the sheet', async () => {
+    await draw(sheet());
+    expect(scrolls(screen.getByTestId('share-image'))).toBe(false);
+    // The card, Show map and the footnote scroll above it.
+    expect(scrolls(screen.getByTestId('share-card'))).toBe(true);
+    expect(scrolls(screen.getByTestId('share-map-toggle'))).toBe(true);
+    expect(scrolls(screen.getByText('Speeds are never shown.'))).toBe(true);
+  });
+
+  test('a failed share says so right above the pinned button, on screen without a scroll', async () => {
+    await draw(sheet());
+    sharing().shareAsync.mockRejectedValueOnce(new Error('dismissed'));
+    await press(screen.getByTestId('share-image'));
+    expect(scrolls(screen.getByText("Couldn't share the image. Try again."))).toBe(false);
+  });
+
+  test("a map that couldn't load says so right above the pinned button too", async () => {
+    mockTakeSnapshot.mockImplementation(async () => {
+      throw new Error('offline');
+    });
+    await draw(sheet());
+    await fireEvent(screen.getByTestId('share-map-toggle'), 'valueChange', true);
+    await act(async () => {});
+    expect(scrolls(screen.getByTestId('share-map-error'))).toBe(false);
+  });
 });
 
 test('on Android the shared card image stays for the target app to read (the stale-image sweep takes it)', async () => {
@@ -434,10 +472,10 @@ describe('Android', () => {
   });
 
   test("Show map is off on Android (Google's snapshot may not leave the app), even with a key; iPhone keeps it", async () => {
-    expect(mapsAvailable('android', 'AIza-key')).toBe(false);
-    expect(mapsAvailable('ios', undefined)).toBe(true);
     const key = withMapsKey('AIza-key');
     try {
+      expect(mapsAvailable('android', 'AIza-key')).toBe(false);
+      expect(mapsAvailable('ios', undefined)).toBe(true);
       await draw(sheet());
       expect(screen.queryByTestId('share-map-toggle')).toBeNull();
       expect(within(screen.getByTestId('share-card')).queryByText('Map data © Google')).toBeNull();
@@ -451,11 +489,22 @@ describe('Android', () => {
     afterEach(() => setAndroidShareMapForTests(undefined));
 
     test('Show map needs a Google Maps key in the build; iPhone needs none', () => {
-      expect(mapsAvailable('android', 'AIza-key')).toBe(true);
-      expect(mapsAvailable('android', undefined)).toBe(false);
-      expect(mapsAvailable('android', '  ')).toBe(false);
-      expect(mapsAvailable('ios', undefined)).toBe(true);
-      expect(mapsAvailable('web', 'AIza-key')).toBe(false);
+      const none = withMapsKey(undefined);
+      try {
+        expect(mapsAvailable('android', undefined)).toBe(false);
+      } finally {
+        none.restore();
+      }
+      // A build with a key, so the maps themselves are there (without one Android has none at all).
+      const key = withMapsKey('AIza-key');
+      try {
+        expect(mapsAvailable('android', 'AIza-key')).toBe(true);
+        expect(mapsAvailable('android', '  ')).toBe(false);
+        expect(mapsAvailable('ios', undefined)).toBe(true);
+        expect(mapsAvailable('web', 'AIza-key')).toBe(false);
+      } finally {
+        key.restore();
+      }
     });
 
     test('with a key in a dark phone: the dark, quiet Google map is snapshotted once its tiles load, and credited to Google', async () => {

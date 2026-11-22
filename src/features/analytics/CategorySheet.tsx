@@ -68,7 +68,7 @@ export function categoryGroup(axis: AxisKey, s: WindowSums, range: Range, units:
         return [
           { key: 'eyes-off', caption: c.eyesOff, metric: countMetric(s.eyesOff) },
           { key: 'drowsy', caption: c.drowsy, metric: countMetric(s.drowsy) },
-          { key: 'watched', caption: c.watched, metric: distanceMetric(s.watchedMiles, units) },
+          { key: 'watched', caption: c.watched(units), metric: distanceMetric(s.watchedMiles, units) },
         ];
     }
   })();

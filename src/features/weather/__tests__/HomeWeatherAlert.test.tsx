@@ -174,6 +174,35 @@ describe('asked on focus and on return to the front, at most every 15 min', () =
     await foreground();
     expect(screen.queryByTestId('home-weather-alert')).toBeNull();
   });
+
+  test('a later check with no position (the last fix too old) takes the card down, and the next return to the front asks again', async () => {
+    body = FOG;
+    await show();
+    expect(screen.getByTestId('home-weather-alert-title')).toHaveTextContent('Dense fog');
+    place = null;
+    clock += HOME_WEATHER_REFRESH_MS;
+    await foreground();
+    expect(screen.queryByTestId('home-weather-alert')).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // Not counted as an ask: a position back, the very next return asks, inside the 15 min.
+    place = { lat: 47.61, lng: -122.33 };
+    await foreground();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('home-weather-alert-title')).toHaveTextContent('Dense fog');
+  });
+
+  test('a check with no position keeps a hidden alert hidden (nothing is known to have ended)', async () => {
+    body = FOG;
+    const store = memoryStore('dense_fog');
+    await show(store);
+    place = null;
+    clock += HOME_WEATHER_REFRESH_MS;
+    await foreground();
+    place = { lat: 47.61, lng: -122.33 };
+    await foreground();
+    expect(screen.queryByTestId('home-weather-alert')).toBeNull();
+    expect(store.kind).toBe('dense_fog');
+  });
 });
 
 describe('the ✕', () => {
@@ -259,6 +288,17 @@ describe('the weather now for the drive card', () => {
     body = 'fail';
     await draw(<Probe />);
     await act(async () => {});
+    expect(screen.getByTestId('probe')).toHaveTextContent('none');
+  });
+
+  test('a later check with no position empties it: an old reading is not the weather now', async () => {
+    body = { current: { weather_code: 2, temperature_2m: 21.7 } };
+    await draw(<Probe />);
+    await act(async () => {});
+    expect(screen.getByTestId('probe')).toHaveTextContent('71° F Partly cloudy');
+    place = null;
+    clock += HOME_WEATHER_REFRESH_MS;
+    await foreground();
     expect(screen.getByTestId('probe')).toHaveTextContent('none');
   });
 });

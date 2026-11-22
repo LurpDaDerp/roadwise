@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { MIN_SCORED_MILES, MIN_SCORED_S } from '@scoring';
 import { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useUnits } from '@/data/queries/units';
 import { PracticeDriveRow } from '@/features/permit/PracticeDriveRow';
@@ -109,6 +110,7 @@ export function SummaryView({
   onPracticeSupervisor,
 }: SummaryViewProps) {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
   const units = useUnits();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reporting, setReporting] = useState<string | null>(null);
@@ -254,15 +256,19 @@ export function SummaryView({
         {listed ? <SpeedChart drive={drive} events={events} units={units} /> : null}
       </ScrollView>
 
-      {/* "Wasn't driving", when it is on offer or the server said why not */}
+      {/* "Wasn't driving", when it is on offer or the server said why not. The screen adds the
+          bottom inset under it; the bar tops that up to 12 pt, so on a phone with none (a
+          Home-button iPhone) its button and note don't sit on the screen's edge. */}
       {notDrivingOk || refusal ? (
         <View
+          testID="not-driving-bar"
           style={{
             flexDirection: 'row',
             alignItems: 'center',
             gap: t.space.md,
             paddingHorizontal: t.space.lg,
             paddingTop: t.space.md,
+            paddingBottom: Math.max(0, t.space.md - insets.bottom),
             borderTopWidth: 1,
             borderTopColor: t.colors.divider,
             backgroundColor: t.colors.bg,

@@ -102,7 +102,8 @@ export const analyticsCopy = {
     range: { day: 'Last 24 hours', week: 'Last 7 days', month: 'Last 30 days', year: 'Last 365 days' },
     eyesOff: 'Eyes off road',
     drowsy: 'Drowsy',
-    watched: 'DashPal miles',
+    /** Over the distance DashPal watched, in the driver's units. */
+    watched: (units: Units) => (units === 'km' ? 'DashPal km' : 'DashPal miles'),
     /** Attention without a paired DashPal. */
     locked: {
       title: 'Attention comes from DashPal',

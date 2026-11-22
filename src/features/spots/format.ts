@@ -1,6 +1,6 @@
 /** The words a spot's row and sheet put together from its numbers. Pure. */
 import type { ProblemSpot } from '@/data/queries/spots';
-import { KMH_PER_MPH, type Units } from '@/lib/units';
+import { limitKmh, type Units } from '@/lib/units';
 
 import { DIRECTIONS, spotsCopy, type Direction } from './copy';
 
@@ -16,8 +16,8 @@ export const spotTitle = (s: Pick<ProblemSpot, 'label' | 'headingDeg'>): string 
 /** "4 of your last 6 drives here". */
 export const howOften = (s: Pick<ProblemSpot, 'recentHits' | 'recentPasses'>): string => spotsCopy.howOften(s.recentHits, s.recentPasses);
 
-/** A posted limit in the driver's units: "35 mph", "56 km/h". */
-export const limitText = (mph: number, units: Units): string => (units === 'km' ? `${Math.round(mph * KMH_PER_MPH)} km/h` : `${Math.round(mph)} mph`);
+/** A posted limit in the driver's units, the number the driving screen's sign shows: "35 mph", "56 km/h", "70 km/h". */
+export const limitText = (mph: number, units: Units): string => (units === 'km' ? `${limitKmh(mph)} km/h` : `${Math.round(mph)} mph`);
 
 /** What happens at a spot: "Over the 35 mph limit", "Braking hard". */
 export function whatHappens(s: Pick<ProblemSpot, 'kind' | 'limitMph'>, units: Units): string {

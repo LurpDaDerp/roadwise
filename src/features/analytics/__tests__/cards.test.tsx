@@ -753,6 +753,8 @@ describe('CategorySheet', () => {
       attention: ['Eyes off road', 'Drowsy', 'DashPal miles'],
       phone: ['Phone pickups', 'Time in hand'],
     });
+    // The watched distance's caption names the unit its number is in.
+    expect(categoryGroup('attention', sums, 'week', 'km').cells.map((c) => c.caption)).toEqual(['Eyes off road', 'Drowsy', 'DashPal km']);
     for (const a of AXES) {
       for (const c of categoryGroup(a.key, sums, 'month', 'km').cells) {
         expect(`${c.caption} ${c.metric.value} ${c.metric.unit} ${c.metric.spoken}`).not.toMatch(/pts|point/i);
@@ -828,8 +830,18 @@ describe('CategorySheet', () => {
     expect(screen.getByTestId('metric-eyes-off-value')).toHaveTextContent('2');
     expect(screen.getByTestId('metric-drowsy-value')).toHaveTextContent('1');
     expect(screen.getByTestId('metric-watched-value')).toHaveTextContent('12.0 mi');
+    expect(screen.getByLabelText('DashPal miles, 12.0 miles')).toBeOnTheScreen();
     expect(screen.queryByTestId('category-rate')).toBeNull();
     expect(screen.getByTestId('category-coaching-icon')).toHaveStyle({ color: light.danger });
+  });
+
+  test('in kilometres Attention captions the watched distance "DashPal km", on screen and spoken', async () => {
+    publishUnits('km');
+    await draw(<CategorySheet {...props} axis="attention" score={55} sums={{ ...sums, eyesOff: 2, drowsy: 1, watchedMiles: 12 }} />);
+    expect(screen.getByTestId('metric-watched-value')).toHaveTextContent('19.3 km');
+    expect(screen.getByText('DashPal km')).toBeOnTheScreen();
+    expect(screen.queryByText('DashPal miles')).toBeNull();
+    expect(screen.getByLabelText('DashPal km, 19.3 kilometers')).toBeOnTheScreen();
   });
 
   test('Attention without a DashPal says where it comes from and offers to set one up; with one but no watched drives, says so', async () => {

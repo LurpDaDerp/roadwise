@@ -229,3 +229,66 @@ test('turned back on within 3 h, the last answer stays on show while the new one
   expect(seen).not.toContain('day:clear');
   expect(result.current).toMatchObject({ phase: 'day', weather: { kind: 'rain' } });
 });
+
+describe('an answer that runs out while RoadWise is on screen is asked again, at every expiry', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  /** `n` minutes go by on screen, one at a time: the clock the hook reads and its timers together. */
+  async function onScreen(n: number, clock: { now: number }) {
+    for (let i = 0; i < n; i++) {
+      clock.now += 60_000;
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      await flush();
+    }
+  }
+
+  const here = async () => ({ lat: 47.6, lng: -122.3 });
+
+  test.each([
+    ['rain that stays rain', 61],
+    ['clear that stays clear (the first answer the same as the sky before it)', 0],
+  ])('%s', async (_label, code) => {
+    const clock = { now: NOON_SEATTLE };
+    const fetch = jest.fn(answer(code));
+    const ports: SkyPorts = { position: here, storage: memoryStorage(), fetch, now: () => clock.now };
+    await renderHook(() => useSkyMood(ports));
+    await flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await onScreen(31, clock);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await onScreen(31, clock);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  test('the same when turned on after mounting, as the root layout does once the look is read', async () => {
+    const clock = { now: NOON_SEATTLE };
+    const fetch = jest.fn(answer(0));
+    const ports: SkyPorts = { position: here, storage: memoryStorage(), fetch, now: () => clock.now };
+    const { rerender } = await renderHook(({ enabled }: { enabled: boolean }) => useSkyMood(ports, { enabled }), { initialProps: { enabled: false } });
+    await flush();
+    await rerender({ enabled: true });
+    await flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await onScreen(31, clock);
+    await onScreen(31, clock);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  test('a failed ask is not tried again while on screen (it waits for the next return to the front), and the answer under 3 h old stays on show', async () => {
+    const clock = { now: NOON_SEATTLE };
+    let calls = 0;
+    const failsAfterOne: FetchLike = (url, init) => (++calls === 1 ? answer61()(url, init) : Promise.resolve({ ok: false } as Response));
+    const fetch = jest.fn(failsAfterOne);
+    const ports: SkyPorts = { position: here, storage: memoryStorage(), fetch, now: () => clock.now };
+    const { result } = await renderHook(() => useSkyMood(ports));
+    await flush();
+    await onScreen(31, clock);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await onScreen(62, clock);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.current.weather.kind).toBe('rain');
+  });
+});

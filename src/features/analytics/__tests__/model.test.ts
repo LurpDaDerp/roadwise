@@ -2,6 +2,7 @@
 import { AXES as SCORING_AXES, ratingAt, speedingChargedS, type DriveEvent, type Exposure } from '@scoring';
 
 import { EMPTY_COUNTS, type LocalDrive } from '@/data/queries/rows';
+import { MAX_LAT_DELTA, MAX_LNG_DELTA } from '@/features/settings/maps';
 import { encodePolyline, encodeRuns } from '@/lib/polyline';
 
 import {
@@ -175,6 +176,10 @@ describe('axes', () => {
     // 2 × 4.995 mi: 9.99 on the phone's decimals, but 10.00 as stored: the server says ranked.
     const enough = [1, 2].map((i) => drive({ clientTripId: `e${i}`, startedAt: now - i * DAY, miles: 4.995 }));
     expect(windowRating(enough, [], now).ranked).toBe(true);
+    // 0.10 + 8.04 + 1.86 as stored: 10.00 on the server, 9.999999999999998 summed as floats; ranked all the same.
+    const drift = [0.104, 8.043, 1.855].map((miles, i) => drive({ clientTripId: `f${i}`, startedAt: now - (3 - i) * DAY, miles }));
+    expect(toRatingDrives(drift, []).map((d) => d.miles)).toEqual([0.1, 8.04, 1.86]);
+    expect(windowRating(drift, [], now).ranked).toBe(true);
     // Watched miles follow the stored miles in proportion (the server's miles × the covered share).
     const watched = toRatingDrives([drive({ miles: 4.995, watchedMiles: 4.995 / 2 })], []);
     expect(watched[0]).toMatchObject({ miles: 5 });
@@ -480,6 +485,21 @@ describe('trip map', () => {
     expect(r.longitude).toBeCloseTo(-99.4, 6);
     expect(r.latitudeDelta).toBeCloseTo(0.9 * 1.6, 6);
     expect(r.longitudeDelta).toBeCloseTo(0.9 * 1.6, 6);
+  });
+
+  test('fitRegion is never wider than the whole world, so neither map engine gets a span it rejects or wraps', () => {
+    // 85% of the points in Seattle and 15% in Seoul: 249.3° of longitude apart, 398.9° with the × 1.6.
+    const at = (latitude: number, longitude: number, n: number) => Array.from({ length: n }, () => ({ latitude, longitude }));
+    const r = fitRegion([...at(47.6, -122.3, 85), ...at(37.5, 127.0, 15)])!;
+    expect(r.latitude).toBe(47.6);
+    expect(r.longitude).toBe(-122.3);
+    expect(r.latitudeDelta).toBeCloseTo(10.1 * 1.6, 6);
+    expect(r.longitudeDelta).toBe(MAX_LNG_DELTA);
+    expect(r.longitudeDelta).toBeLessThan(360);
+    // Half the points near each pole: 130° × 1.6 = 208°, more than Apple's map takes (180°).
+    const poles = fitRegion([...at(70, 0, 50), ...at(-60, 10, 50)])!;
+    expect(poles.latitudeDelta).toBe(MAX_LAT_DELTA);
+    expect(poles.latitudeDelta).toBeLessThan(180);
   });
 
   test('fitRegion: at least 0.02° each way; null with no points', () => {

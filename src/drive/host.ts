@@ -77,7 +77,7 @@ import { worseWeather, type DriveWeather } from '@/features/weather/driveWeather
 import type { FetchLike } from '@/features/weather/openMeteo';
 import { processTimers } from '@/lib/timers';
 import { dayKey, sunIsDown } from '@/lib/time';
-import { KMH_PER_MPH, mpsToMph } from '@/lib/units';
+import { KMH_PER_MPH, limitIn, mpsToMph } from '@/lib/units';
 
 import { breakDecision, breakMarkFor, createBreakWatch, writeBreakMark, type BreakReminder, type BreakWatch } from './breakWatch';
 import { toLive, type DriveDisplay, type DriveDisplayState } from './display';
@@ -438,9 +438,12 @@ export function nextDeadline(autoEndAt: number | null, arriveAt: number | null):
 export const isAutomaticEnd = (cause: EndCause | null): boolean => cause === 'stopped' || cause === 'walking' || cause === 'limit';
 export type DisplayUnit = 'mph' | 'km/h';
 
-/** A whole speed or limit in the display's unit; null stays null. */
+/** A whole speed in the display's unit; null stays null. */
 export const inDisplayUnit = (mph: number | null, unit: DisplayUnit): number | null =>
   mph === null ? null : Math.round(unit === 'km/h' ? mph * KMH_PER_MPH : mph);
+
+/** The limit in the display's unit, the number the driving screen's sign shows (`limitIn`); null stays null. */
+export const limitInDisplayUnit = (mph: number | null, unit: DisplayUnit): number | null => limitIn(mph, unit === 'km/h' ? 'km' : 'mi');
 
 /**
  * At a launch, before any drive is recovered: a "Not driving?" the last process did not finish is
@@ -1256,7 +1259,7 @@ export function createDriveHost(deps: DriveHostDeps): DriveHost {
     const w = shownLine(shownCard());
     return {
       speed: s.speedKnown && s.speedAt !== null ? inDisplayUnit(mpsToMph(s.speedMps), displayUnit) : null,
-      limit: inDisplayUnit(s.limitMph, displayUnit),
+      limit: limitInDisplayUnit(s.limitMph, displayUnit),
       unit: displayUnit,
       points: null,
       pointsDelta: null,

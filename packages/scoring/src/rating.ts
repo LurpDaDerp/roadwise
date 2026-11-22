@@ -408,7 +408,8 @@ const driveOrder = (x: RatingDrive, y: RatingDrive): number => {
  * Phone use is null (not tracked, no score) when its O is 0: no phone seconds and no pickups in the
  * window, as on every drive recorded before phone use was tracked.
  * Attention: P = Σ w·attentionPenalty, M = Σ w·watchedMiles; categoryScore(P, M, ATTENTION_MIN_MILES) when M > 0.
- * Rating = clamp(weightedScore(scores), 0, 100) rounded half up to 1 dp; ranked = miles ≥ RANKED_MIN_MILES.
+ * Rating = clamp(weightedScore(scores), 0, 100) rounded half up to 1 dp; ranked = miles ≥ RANKED_MIN_MILES
+ * (the miles snapped to 6 dp first, so float drift never drops a 10.00 mi window under the line).
  * Drives are summed in (startedAt, id) order. Pure; the SQL `private.rating_at` matches it to the digit.
  */
 export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResult {
@@ -448,7 +449,9 @@ export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResu
   const mean = weightedScore(scores);
   return {
     rating: mean === null ? null : roundTo(clamp(mean, 0, 100), 1),
-    ranked: miles >= RANKED_MIN_MILES,
+    // Compared free of binary drift, as the SQL's exact numeric sum is: 0.10 + 8.04 + 1.86 adds up
+    // to 9.999999999999998 in floats, and the server ranks that window at 10.00 mi.
+    ranked: roundTo(miles, 6) >= RANKED_MIN_MILES,
     scores,
     miles,
   };

@@ -150,7 +150,8 @@ export function HomeScreen() {
       return;
     }
     if (shownRefusal === 'busy') {
-      router.push(DRIVE_HREF);
+      // Navigate, never push: the drive's hold (LockoutGate) may have opened the driving screen already.
+      router.navigate(DRIVE_HREF);
       return;
     }
     if (shownRefusal === 'precise' || shownRefusal === 'services') {
@@ -173,7 +174,10 @@ export function HomeScreen() {
       if (res.ok) {
         // The host clears the stored notice on a successful start.
         setDropped(null);
-        router.push(DRIVE_HREF);
+        // Navigate, never push: a car already rolling past 5 mph can have the drive's hold
+        // (LockoutGate) open the driving screen before this start resolves, and a push would open a
+        // second one on top of it.
+        router.navigate(DRIVE_HREF);
       } else setRefusal(res.reason);
     } catch {
       setRefusal('error');

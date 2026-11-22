@@ -9,8 +9,8 @@ import { createQueryClient } from '@/data/queries/client';
 import { invalidateAfterSync } from '@/data/queries/invalidate';
 import { encodeRuns } from '@/lib/polyline';
 
-import { coachWindow, windowStart } from '../model';
-import { useAnalytics, useCoaching } from '../useAnalytics';
+import { coachWindow, fitLines, routeLines, windowStart, type MapPoint } from '../model';
+import { overviewRoutes, useAnalytics, useCoaching } from '../useAnalytics';
 
 const DAY = 86_400_000;
 // A Wednesday noon, local time.
@@ -228,6 +228,54 @@ test('while the window’s events are still loading, nothing is scored: drives a
     for (const m of mounted) await act(() => m.unmount());
     spy.mockRestore();
   }
+});
+
+test("a new drive decodes only its own route: the other lines keep their arrays (the map leaves their overlays alone), drawn as before", async () => {
+  const { result } = await renderHook(() => useAnalytics('week'), { wrapper: wrapperFor(db, client, now) });
+  await waitFor(() => expect(result.current.routes).toHaveLength(4));
+  const before = result.current.routes;
+  const other = encodeRuns([
+    [
+      { lat: 47.7, lng: -122.2 },
+      { lat: 47.72, lng: -122.25 },
+    ],
+  ]);
+  await seedTrips(db, [{ client_trip_id: uuid(9), started_at: NOW - 0.1 * DAY, tz: 'UTC', status: 'scored', miles: 2, polyline: other }]);
+  await invalidateAfterSync(client);
+  await waitFor(() => expect(result.current.routes).toHaveLength(5));
+  const after = result.current.routes;
+  // The newest drive's line comes first, then the same arrays as before, in the same order.
+  expect(after[0]![0]).toEqual({ latitude: 47.7, longitude: -122.2 });
+  after.slice(1).forEach((line, i) => expect(line).toBe(before[i]));
+  // The same lines and region as decoding every route afresh.
+  const fresh = overviewRoutes([other, route, route, route, route], new Map());
+  expect(after).toEqual(fresh);
+  expect(result.current.region).toEqual(fitLines(fresh));
+});
+
+test('overviewRoutes: only lines not in the cache are decoded, and a line no longer listed leaves it', () => {
+  const other = encodeRuns([
+    [
+      { lat: 47.7, lng: -122.2 },
+      { lat: 47.72, lng: -122.25 },
+    ],
+    [
+      { lat: 47.8, lng: -122.2 },
+      { lat: 47.82, lng: -122.25 },
+    ],
+  ]);
+  const cache = new Map<string, MapPoint[][]>();
+  const first = overviewRoutes([route, other, 'not a polyline'], cache);
+  // One run for the first line, two for the second (a privacy cut), none for the malformed one.
+  expect(first).toHaveLength(3);
+  expect(first).toEqual(routeLines([route, other]));
+  expect([...cache.keys()]).toEqual([route, other, 'not a polyline']);
+  const second = overviewRoutes([other], cache);
+  expect(second[0]).toBe(first[1]);
+  expect(second[1]).toBe(first[2]);
+  expect([...cache.keys()]).toEqual([other]);
+  expect(overviewRoutes([], cache)).toEqual([]);
+  expect(cache.size).toBe(0);
 });
 
 test('a sync refreshes the analytics data', async () => {

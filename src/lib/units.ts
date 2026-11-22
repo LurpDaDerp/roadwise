@@ -15,6 +15,31 @@ export const KM_PER_MILE = 1.609344;
 /** A distance in miles, in the driver's units. */
 export const distanceIn = (miles: number, units: Units): number => (units === 'km' ? miles * KM_PER_MILE : miles);
 
+/**
+ * A posted limit in whole km/h, for every place a limit shows in kilometres (never a speed).
+ * Limits travel as whole mph, so a road posted 30 km/h arrives as 19 mph, which is 30.6 km/h:
+ * plain rounding would put 31 on a 30 sign. A whole mph that a round km/h posting is stored as
+ * shows that posting: the nearest multiple of 10 km/h when it is stored as this same mph (19 → 30,
+ * 43 → 70, 68 → 110, 75 → 120), else, for a limit that is not a multiple of 5 mph (so never a US
+ * one), the nearest multiple of 5 km/h the same way (9 → 15, 47 → 75). Anything else converts
+ * plainly (35 mph → 56). Of the US limits only 75 mph reads off its plain 121, as 120, since 120
+ * km/h is stored as 75 mph too; 65 km/h is stored as 40 mph, a common US limit, so it keeps 64.
+ */
+export function limitKmh(mph: number): number {
+  const kmh = mph * KMH_PER_MPH;
+  // How the server stores a km/h posting (supabase/functions/speed-limits/overpass.ts).
+  const storedAs = (posted: number) => Math.round(posted / KMH_PER_MPH) === mph;
+  const tens = Math.round(kmh / 10) * 10;
+  if (storedAs(tens)) return tens;
+  const fives = Math.round(kmh / 5) * 5;
+  if (mph % 5 !== 0 && storedAs(fives)) return fives;
+  return Math.round(kmh);
+}
+
+/** A posted limit in the driver's units, whole: mph rounded, km/h through `limitKmh`; null stays null. */
+export const limitIn = (mph: number | null, units: Units): number | null =>
+  mph === null ? null : units === 'km' ? limitKmh(mph) : Math.round(mph);
+
 /** "mi" / "km". */
 export const distanceUnit = (units: Units): Units => units;
 

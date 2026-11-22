@@ -127,7 +127,16 @@ export function useWeatherAlert(ports: WeatherPorts = defaultWeatherPorts, injec
     busy.current = true;
     try {
       const place = await p.position().catch(() => null);
-      if (place === null) return;
+      // No position (the phone's last fix is too old, or location was turned off) says nothing, as a
+      // failed ask does: an earlier reading is no longer the weather now. Not counted as an ask, so
+      // the next focus or return to the front tries again.
+      if (place === null) {
+        if (live.current) {
+          setAlert(null);
+          setConditions(null);
+        }
+        return;
+      }
       lastAsk.current = now;
       const reading = await fetchWeather(place.lat, place.lng, { fetch: p.fetch });
       if (!live.current) return;

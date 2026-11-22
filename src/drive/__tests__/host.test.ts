@@ -27,6 +27,7 @@ import {
   PUSH_START_WAIT_MS,
   type PushToStartOutcome,
   type PushToStartRequest,
+  UNITS_KEY,
 } from '@/drive/host';
 import { BREAK_KEY } from '@/drive/breakWatch';
 import { ROAD_EASE_MS } from '@/drive/roadHold';
@@ -338,6 +339,29 @@ describe('the Start card (Android: the capture at once; the drive records from t
     expect(await createTripsRepo(db).get(uuid(1))).toMatchObject({ status: 'pending', origin: 'manual', start_source: 'wake', started_at: T0 });
     expect(h.host.snapshot().lastFinalized).toMatchObject({ clientTripId: uuid(1), ok: true, status: 'pending', dropped: null, durationS: expect.any(Number), miles: expect.any(Number) });
     await h.host.stop({ endOpenTrip: false });
+  });
+
+  test('in km the lock screen and the drive notification show the sign’s limit: one posted in km/h as posted (70 km/h travels as 43 mph, 69.2 km/h); the speed converted plainly', async () => {
+    await createSettingsRepo(db).set(UNITS_KEY, 'km');
+    const h = build({ limits: fakeLimits(43 * 0.44704) });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(5, { speedMps: 0 }));
+    expect(h.host.snapshot()).toMatchObject({ limitMph: 43 });
+    expect(h.display.states.at(-1)).toMatchObject({ unit: 'km/h', limit: 70 });
+    // 15 m/s is 54.0 km/h.
+    await feed(h, rows(3, { t0: T0 + 5_000, speedMps: 15 }).map((r, i) => ({ ...r, lng: START.lng + (i * 15) / M_PER_DEG_LNG })));
+    expect(h.display.states.at(-1)).toMatchObject({ unit: 'km/h', speed: 54, limit: 70 });
+    await h.host.stop({ endOpenTrip: true });
+  });
+
+  test('in miles the same limit is its whole mph', async () => {
+    const h = build({ limits: fakeLimits(43 * 0.44704) });
+    await h.host.boot();
+    await h.host.start();
+    await feed(h, rows(5, { speedMps: 0 }));
+    expect(h.display.states.at(-1)).toMatchObject({ unit: 'mph', limit: 43 });
+    await h.host.stop({ endOpenTrip: true });
   });
 
   test('the wait never counts toward its 2 min: 90 s parked, then 40 s and 0.3 mi of driving, is too short and not kept', async () => {

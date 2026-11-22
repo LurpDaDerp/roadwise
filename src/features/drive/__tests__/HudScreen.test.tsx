@@ -300,6 +300,27 @@ describe('speed and limit', () => {
     expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('56');
   });
 
+  test('km: a limit posted in km/h shows its posted number, though it travels as whole mph; the speed is converted plainly', async () => {
+    mockUnits = 'km';
+    // 70 km/h is stored as 43 mph, which is 69.2 km/h: the sign says 70, a 43 mph speed 69.
+    const h = await renderHud({ speedMph: 43, limitMph: 43 });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('70');
+    expect(screen.getByTestId('hud-speed-numeral')).toHaveTextContent('69');
+    // 30, 110 and 120 km/h: 19, 68 and 75 mph.
+    await h.update({ limitMph: 19 });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('30');
+    await h.update({ limitMph: 68 });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('110');
+    await h.update({ limitMph: 75 });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('120');
+  });
+
+  test('miles: the same limits read as whole mph', async () => {
+    mockUnits = 'mi';
+    await renderHud({ limitMph: 43 });
+    expect(screen.getByTestId('hud-limit-value')).toHaveTextContent('43');
+  });
+
   test('km: an unknown limit is still "-"', async () => {
     mockUnits = 'km';
     await renderHud({ limitMph: null });

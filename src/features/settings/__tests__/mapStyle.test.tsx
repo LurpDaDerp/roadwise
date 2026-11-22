@@ -8,7 +8,7 @@ import { resetMapsCache, RouteMap } from '@/features/drives/RouteMap';
 import { RouteHeatMap } from '@/features/profile/RouteHeatMap';
 import { ThemeProvider } from '@/ui/theme';
 
-import { setMapsForTests, type MapsModule } from '../maps';
+import { setMapsForTests, setMapsKeyForTests, type MapsModule } from '../maps';
 import { androidMapLook, mapStyleFor } from '../mapStyle';
 
 const H = { includeHiddenElements: true } as const;
@@ -94,8 +94,13 @@ describe('the maps', () => {
     let restoreOS: () => void;
     beforeEach(() => {
       restoreOS = jest.replaceProperty(Platform, 'OS', 'android').restore;
+      // A build with a Google Maps key: without one there are no maps on Android (mapsKey.test).
+      setMapsKeyForTests({ key: 'AIza-test' });
     });
-    afterEach(() => restoreOS());
+    afterEach(() => {
+      restoreOS();
+      setMapsKeyForTests(undefined);
+    });
 
     test("the trip map takes the system's scheme, dark and quiet in dark mode", async () => {
       const rn = jest.requireActual<typeof import('react-native')>('react-native');

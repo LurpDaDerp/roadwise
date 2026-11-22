@@ -171,7 +171,7 @@ describe('the notice of a drive that was not kept', () => {
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
     mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
     await swipe(screen.getByTestId('start-drive'));
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
+    await waitFor(() => expect(mockRouter.navigate).toHaveBeenCalledWith('/drive'));
     expect(screen.queryByTestId('drive-dropped')).toBeNull();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
   });
@@ -181,8 +181,20 @@ test('a successful start opens the driving screen', async () => {
   mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
   await draw(<HomeScreen />);
   await swipe(screen.getByTestId('start-drive'));
-  await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
+  await waitFor(() => expect(mockRouter.navigate).toHaveBeenCalledWith('/drive'));
   expect(mockStart).toHaveBeenCalledWith();
+  // Never a push: the drive's hold may already have opened the driving screen for a rolling start.
+  expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
+});
+
+test('a drive already running: Open it goes to the driving screen without opening a second one', async () => {
+  mockStart.mockResolvedValue({ ok: false, reason: 'busy' });
+  await draw(<HomeScreen />);
+  await swipe(screen.getByTestId('start-drive'));
+  expect(await screen.findByText('A drive is already running.')).toBeOnTheScreen();
+  await press(screen.getByText('Open it'));
+  expect(mockRouter.navigate).toHaveBeenCalledWith('/drive');
+  expect(mockRouter.push).not.toHaveBeenCalled();
 });
 
 test('no location: nothing is recorded, Home says location is needed and Fix it opens Permissions', async () => {
@@ -193,7 +205,7 @@ test('no location: nothing is recorded, Home says location is needed and Fix it 
   expect(mockRouter.push).not.toHaveBeenCalled();
   await press(screen.getByText('Fix it'));
   expect(mockRouter.push).toHaveBeenCalledTimes(1);
-  expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
+  expect(mockRouter.navigate).not.toHaveBeenCalledWith('/drive');
 });
 
 test('a start that failed says so with OK, which takes the line down and opens nothing', async () => {
@@ -230,10 +242,10 @@ describe('the line Home keeps in memory', () => {
     expect(await screen.findByText('RoadWise needs location to record a drive.')).toBeOnTheScreen();
     await press(screen.getByText('Fix it'));
     expect(mockRouter.push).toHaveBeenCalledTimes(1);
-    expect(mockRouter.push).not.toHaveBeenCalledWith('/drive');
+    expect(mockRouter.navigate).not.toHaveBeenCalledWith('/drive');
     mockStart.mockResolvedValue({ ok: true, clientTripId: 'x' });
     await swipe(screen.getByTestId('start-drive'));
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith('/drive'));
+    await waitFor(() => expect(mockRouter.navigate).toHaveBeenCalledWith('/drive'));
     expect(readHomeNotice()).toBeNull();
     expect(screen.queryByTestId('start-refusal')).toBeNull();
   });

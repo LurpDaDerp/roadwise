@@ -17,6 +17,7 @@ import { NavAppPicker } from '@/features/navigation/NavAppPicker';
 import { NavPlacesPicker } from '@/features/navigation/NavPlacesPicker';
 import { useNavigationButton } from '@/features/navigation/useNavigationButton';
 import { sunIsDown } from '@/lib/time';
+import { limitIn } from '@/lib/units';
 import { fontFamilies } from '@/ui/fonts';
 import { SwipeButton } from '@/ui';
 import { useOptionalTheme, useOsReduceMotion } from '@/ui/theme';
@@ -49,7 +50,7 @@ import { useEventShake } from './useEventShake';
 import { compassHeadingOf, deviceHeadingWanted, nextHeldTrack, useDeviceHeading, type HeldTrack } from './useDeviceHeading';
 import { useAppActive, useAppBehind, useHaloBurst } from './useHaloBurst';
 import { HaloReadout } from './HaloReadout';
-import { inUnits, useHudUnits } from './useHudUnits';
+import { useHudUnits } from './useHudUnits';
 import { WaitPanel } from './WaitPanel';
 import { WeatherBanner } from './WeatherBanner';
 
@@ -697,7 +698,7 @@ export function HudScreen({ overlay = false }: HudScreenProps) {
 
       <View style={[styles.abs, styles.centred, at(layout.sign)]}>
         {/* The drive's own limit, the Live Activity's (a Start-card drive's too: it records from the tap). */}
-        <SpeedSign limit={inUnits(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
+        <SpeedSign limit={limitIn(live.limitMph, units)} palette={p} units={units} height={layout.sign.h} />
       </View>
       {showLink && layout.notDriving !== 'line' ? <View style={[styles.abs, styles.centred, at(layout.notDriving)]}>{link}</View> : null}
       <View testID="hud-end-slot" style={[styles.abs, styles.centred, at(layout.end)]}>

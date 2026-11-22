@@ -6,6 +6,7 @@ import type MapViewType from 'react-native-maps';
 
 import { useUnits } from '@/data/queries/units';
 import { PLACE_ICON, type FixedKind } from '@/features/places/model';
+import { googleMapKeyMissing } from '@/features/settings/maps';
 import { androidMapLook } from '@/features/settings/mapStyle';
 import type { LatLng } from '@/lib/geo';
 import type { Units } from '@/lib/units';
@@ -38,11 +39,14 @@ export type MapsModule = typeof import('react-native-maps');
 let cached: MapsModule | null | undefined;
 
 /**
- * The native maps module, or null when this build has none (Expo Go, Jest, an old dev build).
- * Required at render time, not imported, because the package reaches for its native module the
- * moment it is evaluated. The failure is cached too, so a build without it pays for one throw.
+ * The native maps module, or null when this build has none (Expo Go, Jest, an old dev build) or
+ * is an Android build with no Google Maps key (`googleMapKeyMissing`: Google's SDK would end the
+ * app on the first map). Required at render time, not imported, because the package reaches for
+ * its native module the moment it is evaluated. The failure is cached too, so a build without it
+ * pays for one throw.
  */
 export function loadMaps(): MapsModule | null {
+  if (googleMapKeyMissing()) return null;
   if (cached === undefined) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports

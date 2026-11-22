@@ -1,5 +1,6 @@
-import { fireEvent, screen, within } from '@testing-library/react-native';
+import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import { driveMerit } from '@scoring';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { publishUnits, resetUnitsForTests } from '@/data/queries/units';
 import { contrastRatio, SHEET_DISMISS_FALLBACK_MS, ThemeProvider } from '@/ui';
@@ -460,6 +461,24 @@ describe("Wasn't driving", () => {
   test('with none left it is not offered', async () => {
     await draw(<SummaryView {...props({ notDrivingLeft: 0 })} />);
     expect(screen.queryByTestId('not-driving')).toBeNull();
+  });
+
+  test('the bar keeps 12 pt under its button or note on a phone with no bottom inset, and adds nothing over a home indicator', async () => {
+    // The default test insets are all 0, as on a Home-button iPhone.
+    await draw(<SummaryView {...props()} />);
+    expect(screen.getByTestId('not-driving-bar')).toHaveStyle({ paddingTop: 12, paddingBottom: 12 });
+    await draw(<SummaryView {...props({ drive: drive({ syncError: 'too_old' }) })} />);
+    expect(within(screen.getByTestId('not-driving-bar')).getByTestId('not-driving-refused')).toBeOnTheScreen();
+    expect(screen.getByTestId('not-driving-bar')).toHaveStyle({ paddingBottom: 12 });
+    // A Face ID iPhone: the screen's 34 pt inset under the bar is room enough.
+    await render(
+      <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, left: 0, right: 0, bottom: 34 } }}>
+        <ThemeProvider scheme="light" reduceMotion>
+          <SummaryView {...props()} />
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    expect(screen.getByTestId('not-driving-bar')).toHaveStyle({ paddingBottom: 0 });
   });
 
   test('any drive within a day of its end, not only the latest; never after 24 h', async () => {
