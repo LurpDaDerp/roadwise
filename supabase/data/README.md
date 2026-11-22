@@ -61,6 +61,7 @@ By default the scripts target the local database, `postgresql://postgres:postgre
 
 - **Wiping and restoring.** `import-osm.sh` replaces all of `osm.ways` by default (`REPLACE=1`). On a local stack that also removes `seed.sql`'s synthetic fixture. `npx supabase db reset` restores the clean fixture state, and `supabase test db` expects that state.
 - **`REPLACE=1` also resets the on-demand fill.** `osm.ways` holds the ways the `speed-limits` function fills from Overpass as well as the imported ones (cells outside the extract, the classes the import does not load), and the truncate removes them too. The same transaction therefore empties `osm.filled_cells`, so each of those cells is claimed and filled again the next time a lookup reaches it, paced by the fill's per-user budget and queue. A refill inside the extract replaces the imported rows with Overpass's version of them.
+- **`REPLACE=0` only adds.** An OSM import with `REPLACE=0` stores the ways not stored yet and keeps every stored way as it is, whether an earlier import or the on-demand fill stored it. The fill reads a way with its own parser (a two-way road with a different limit each way becomes two one-way rows there), so overwriting a filled way would leave its rows disagreeing until the cell's 30-day refill put the fill's back. To refresh stored ways from a newer extract, use `REPLACE=1`, which empties every loaded state and the fill state: with several states loaded, re-run every state, the first with `REPLACE=1` and the rest with `REPLACE=0`.
 - **Re-runs are safe.** Each import is one transaction, so a failed run leaves the tables as they were.
 - **A failed run leaves `roadwise_stage` behind.** The next run's `stage.sql` clears it, or run `drop schema roadwise_stage cascade`.
 
@@ -109,7 +110,7 @@ REGION=north-america/us/oregon REPLACE=0 KMH_NORTH_OF= supabase/data/import-osm.
 STATE=OR STATE_CODE=41 supabase/data/import-hpms.sh
 ```
 
-- Use `REPLACE=0` for OSM whenever other states are already loaded. It upserts by way id, so a way that sits in two neighbouring extracts is stored once.
+- Use `REPLACE=0` for OSM whenever other states are already loaded. It adds only the ways not already stored, so a way that sits in two neighbouring extracts is stored once.
 - HPMS replaces only the named state's sections (`REPLACE=1`, the default).
 - `STATE_CODE` is the state's FIPS code, and the import refuses an extract whose rows carry a different one.
 - The HPMS zip is downloaded once and reused for every state.
@@ -148,5 +149,5 @@ After loading more states:
    - `sslrootcert` is relative to `supabase/data`, where the scripts run. `sslmode=require` also passes the check but does not verify the server's identity.
    - The scripts refuse a remote `DB_URL` without `sslmode=verify-full`, `verify-ca` or `require`.
    - The import holds locks while it replaces the tables, and `CLUSTER` holds an exclusive lock for a few seconds per table. Run it when no drive depends on the tables.
-   - On a project that already serves on-demand fills, prefer `REPLACE=0` for OSM: it upserts and keeps the filled ways. A `REPLACE=1` import empties `osm.filled_cells` along with `osm.ways`, so every filled area is fetched from Overpass again as drivers reach it.
+   - On a project that already serves on-demand fills, prefer `REPLACE=0` for OSM: it keeps every filled way as the fill read it and adds only the ways the fill has not stored. A `REPLACE=1` import empties `osm.filled_cells` along with `osm.ways`, so every filled area is fetched from Overpass again as drivers reach it.
 5. Check the result by running `size_report.sql` in the dashboard's SQL editor, or with `psql` and the same TLS settings.

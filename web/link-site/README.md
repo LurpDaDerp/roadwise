@@ -9,6 +9,12 @@ npm run site:build    # builds web/site-dist/ (git-ignored)
 npm run site:deploy   # builds, then `vercel deploy --prod` from web/site-dist/
 ```
 
+The deploy refuses to run unless `web/site-dist/.vercel/project.json` links the folder to the
+project `getroadwise`. That link lives in the git-ignored build folder, so on a fresh clone,
+another machine or after the folder is deleted, run `vercel link --project getroadwise` in
+`web/site-dist/` once (the build keeps `.vercel/`). Without the check, `vercel deploy --yes` in an
+unlinked folder would quietly create a new project named after it.
+
 `scripts/build-site.js` assembles it:
 
 - Everything in this folder is copied as it is, except `_pages/`, `site.json`, this README and the
@@ -23,6 +29,9 @@ npm run site:deploy   # builds, then `vercel deploy --prod` from web/site-dist/
   `www.getroadwise.app` redirected to the apex, the association files served as
   `application/json`, and a strict Content-Security-Policy (nothing loads from another host: the
   fonts are self-hosted, `fonts/OFL.txt`).
+- `robots.txt` (written by the build) blocks nothing and names `sitemap.xml`. The share page keeps
+  itself out of search with its own `noindex` tag, which a crawler can read only if it may fetch
+  the page.
 
 ## site.json (nothing in it is secret)
 

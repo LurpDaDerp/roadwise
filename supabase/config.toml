@@ -208,9 +208,11 @@ anonymous_users = 30
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
 token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
-# Covers sign-up, Resend code, Forgot password and a password change. A driver needs three or four.
-# Every per-IP limit here is a bucket of 30 that refills at this rate, so a burst of 30 goes through
-# first. Production sets the same ([remotes.production.auth.rate_limit]).
+# Auth gives each request kind its own bucket at this rate: sign-up (/signup), Resend code
+# (/resend), Forgot password (/recover) and a password change (PUT /user), each counted on its own.
+# Magic link and /otp get theirs too, but the send-email hook refuses those mails. A driver needs
+# one or two of each. Every per-IP limit here is a bucket of 30 that refills at its rate, so a burst
+# of 30 goes through first. Production sets the same ([remotes.production.auth.rate_limit]).
 sign_in_sign_ups = 20
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
 # The hosted default: a code is 8 digits, so 30 at once and then 30 every 5 minutes is no help to a
@@ -227,8 +229,8 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
-# On locally only: with Apple and Google off here, a password is the local stack's one way in (the
-# seed scripts sign in as their accounts with one). Production has it off.
+# On, locally and in production ([remotes.production.auth.email]). Locally, with Apple and Google off,
+# a password is the stack's one way in (the seed scripts sign in as their accounts with one).
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
@@ -555,7 +557,8 @@ sender_name = "RoadWise"
 # Mails the whole project may send an hour (sign-up and reset codes together). Room for a class
 # signing up at once; Resend's free plan (100 a day) binds first.
 email_sent = 60
-# Sign-ups, Resend code, Forgot password and password changes, per 5 minutes.
+# Sign-ups, Resend code, Forgot password and password changes, per 5 minutes each: Auth keeps one
+# bucket per request kind, so they never count against each other.
 sign_in_sign_ups = 20
 # Code checks per 5 minutes: a driver needs one or two; a code is 8 digits.
 token_verifications = 30

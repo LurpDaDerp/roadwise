@@ -29,13 +29,23 @@ The runtime version is the **native fingerprint** (`runtimeVersion: { policy: 'f
 from the same native code, so JS from before a native change (the drive-sense row fields, for
 example) can never reach a newer binary.
 
-- **Publish with the build's environment:** `npx eas-cli@24.7.0 update --channel <channel> --environment <the EAS environment the build used>`.
-  The config reads environment-dependent values (the Google services file, the Maps key); publishing
-  under another environment computes another fingerprint, and the update is then simply not delivered.
-- **Check once after each new build:** `npx eas-cli@24.7.0 fingerprint:compare` against the build (or
-  `npx expo-updates fingerprint:generate` locally and on the build) must report no difference. If the
-  services-file path differs between environments, add a `fingerprint.config.js` source skip for the
-  path (the file's content, not its path, is what the native build depends on).
+- **Publish every update with the build's environment:** `npx eas-cli@24.7.0 update --channel <channel> --environment <the EAS environment the build used>`.
+  The config reads environment-dependent values. The share-link domain and the Maps key come to
+  `eas update` only from the EAS environment `--environment` names: it never reads the local `.env`
+  for the update's config, nor `eas.json`'s build-profile `env`. The Google services file comes from
+  the local copy instead, since EAS CLI can't read a secret variable (Android release, step 4). Without
+  the flag the update either misses the build or reaches phones without the share-link domain; under
+  another environment it computes another fingerprint and is simply not delivered. So
+  `ROADWISE_LINK_DOMAIN` is set, to the same `getroadwise.app`, both in `eas.json`'s build profiles
+  (the builds) and as a plain-text EAS environment variable in production, preview and development
+  (the updates).
+- **Check once after each new build:** `npx eas-cli@24.7.0 fingerprint:compare --build-id <the build's id> --environment <its environment>`
+  must report no difference. It computes the local fingerprint the way `eas update` does; a bare
+  `npx expo-updates fingerprint:generate` reads `.env` and can match where the update would not. The
+  Google services file counts by its content only, never its path: a difference there means the local
+  `google-services.json` is missing or not identical to the EAS file variable (Android release, step
+  4). Edits to `.gitignore` and `.easignore` don't change the runtime (`.fingerprintignore`); edits to
+  `eas.json`, native code, the evaluated config or the dependencies do.
 - Binaries built before the fingerprint policy (runtime `2.0.0`) receive no further updates: testers
   install the new build.
 
@@ -108,14 +118,20 @@ installed straight from its build page) and a production **app bundle** (`--prof
 4. **Firebase (server pushes).** Firebase console › add an Android app `com.lurp.safedrive` (add both
    SHA-1s), download `google-services.json` and store it as an EAS file variable:
    `npx eas-cli@24.7.0 env:create --name GOOGLE_SERVICES_JSON --type file --value ./google-services.json --visibility secret`
-   for every environment, then delete the local copy (or keep it git-ignored). Upload the FCM V1
+   for every environment, and keep the git-ignored `./google-services.json`, unchanged, on every
+   machine that runs `eas build` or `eas update`. EAS CLI can't read a secret variable, so the
+   Android fingerprint it computes there counts the file from that local copy: without it the file
+   is left out, and with a different one its content differs, so the build fails with "Runtime
+   version mismatch" or Android phones never receive the updates. Upload the FCM V1
    service account key: `npx eas-cli@24.7.0 credentials -p android` › Google Service Account › Push
    notifications (FCM V1). Without the file Android builds still work, with server pushes off.
    After the next build, check a signed-in Android phone registers its token as `android` and a
    recap push arrives on the "Updates" channel.
 5. **Maps key.** Google Cloud › Maps SDK for Android › a key restricted to Android apps:
    `com.lurp.safedrive` with both SHA-1s. Set it as `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_KEY` (an EAS
-   environment variable, and in `.env`). Without it the trip map is a blank grey tile.
+   environment variable, and in `.env`). Without it Android shows no maps (each map falls back to
+   its no-map state). The app's JS reads the same variable, so set it wherever an Android bundle is
+   made: `.env` for local builds, and the EAS environment for EAS builds and `eas update`.
 6. **Google sign-in.** Google Auth Platform › Clients: one **Android** client per signing
    certificate (package `com.lurp.safedrive`, the SHA-1 of the app signing key; another with the
    upload key's SHA-1 for preview APKs). Credential Manager signs in with the **web** client id

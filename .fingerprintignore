@@ -7,6 +7,15 @@ ios/**/*
 android
 android/**/*
 
+# The ignore lists are not native inputs. EAS packs a build by .easignore (which mirrors
+# .gitignore): a native file it left out would already make EAS's fingerprint differ from the local
+# one and fail the build, so the lists themselves add nothing. Counting them made a routine edit to
+# either one move the runtime, and a later OTA update then never reached the store build. eas.json
+# still counts (its build image and settings can change the native build).
+# app/__tests__/app-config.test.ts checks these rules with the fingerprint's own matcher.
+.gitignore
+.easignore
+
 # Gradle caches inside local Expo modules (machine-specific)
 **/.gradle
 **/.gradle/**/*

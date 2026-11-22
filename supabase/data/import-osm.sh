@@ -11,8 +11,9 @@
 # REPLACE=1 (the default) empties osm.ways first, so a re-run leaves exactly the extract's ways
 # (and on a local stack it also removes seed.sql's synthetic fixture; `supabase db reset` brings it
 # back). It also clears osm.filled_cells, since the ways the speed-limits function filled from
-# Overpass go with the truncate: those areas fill again as drivers reach them. REPLACE=0 upserts by
-# way id, for loading several extracts side by side, and keeps the filled ways. CLUSTER=0 skips
+# Overpass go with the truncate: those areas fill again as drivers reach them. REPLACE=0 adds only
+# the ways not stored yet and keeps every stored way as it is (filled ones included), for loading
+# several extracts side by side or a project that fills itself. CLUSTER=0 skips
 # the table rewrite in postprocess.sql (for a database close to its size limit).
 set -euo pipefail
 DATA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

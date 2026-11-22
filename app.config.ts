@@ -121,9 +121,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
         // The Live Activity / Dynamic Island for a drive in progress (modules/live-drive +
         // targets/live-drive-widget), started locally or by RoadWise's push-to-start.
         NSSupportsLiveActivities: true,
-        // The larger update budget iOS grants a Live Activity that updates often (the speed, about
-        // once a second while RoadWise is behind or the screen is off); the driver can turn it off
-        // in Settings › RoadWise › Live Activities › More Frequent Updates.
+        // The larger update budget iOS grants a Live Activity that updates often (while RoadWise is
+        // behind or the screen is off, a new speed at most every 5 s and other changes within a
+        // second; in front, only the minute keepalive: src/drive/display.ts); the driver can turn it
+        // off in Settings › RoadWise › Live Activities › More Frequent Updates.
         NSSupportsLiveActivitiesFrequentUpdates: true,
         // The DashPal dashcam (react-native-ble-manager, no config plugin: its plugin can add
         // location permissions with a maxSdkVersion that would break drive location on Android 12+).
@@ -169,8 +170,10 @@ export default ({ config, projectRoot }: ConfigContext): ExpoConfig => {
       // comes back from the server on the next sign-in. Android 12+ moves app data to a new phone
       // whatever allowBackup says: plugins/withAndroidNoDataExtraction.js excludes everything there too.
       allowBackup: false,
-      // The trip map needs a Google Maps key at build time; without one Android draws a blank grey
-      // tile and nothing crashes. iOS uses Apple Maps and needs no key.
+      // Android's maps need a Google Maps key at build time. Without one Google's SDK would end the app
+      // on the first map, so the JS reads the same variable (src/features/settings/maps.ts
+      // googleMapKeyMissing) and that build shows no maps at all: every map falls back to its no-map
+      // state. iOS uses Apple Maps and needs no key.
       // Left out when unset or empty, so a local `.env` with a blank key and an EAS build with no key
       // produce the same config — and the same fingerprint runtime version.
       ...optional(

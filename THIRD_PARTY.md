@@ -2,11 +2,9 @@
 
 ## Linked dependencies
 
-| Package | Licence |
-|---|---|
-| `androidx.camera:*` 1.6.0 (linked by `expo-camera`) | Apache-2.0 |
-| `com.google.android.gms:play-services-location` 21.3.0 (linked by `modules/drive-sense`) | Android Software Development Kit License (Google Play Services terms) |
-| `ExpoModulesCore` | MIT |
+Every native library the app links, with its version, licence and the module that links it, is
+listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) (Native libraries), with the
+JavaScript dependencies.
 
 ## MIT licence text (applies to the MIT-licensed dependencies)
 

@@ -93,6 +93,31 @@ describe('the runtime version (release gate, C0-I1)', () => {
   test('EAS Update is configured (the policy is only meaningful with an update URL)', () => {
     expect(build().updates?.url).toMatch(/^https:\/\/u\.expo\.dev\//);
   });
+
+  // Matched the way @expo/fingerprint matches them (its own matcher, the file's lines as it reads
+  // them), so a pattern that looks right but matches nothing fails here. The ignore lists are not
+  // native inputs: counting them let a routine ignore-list edit move the runtime, and a later OTA
+  // update then never reached the store build. Native code and eas.json must still count.
+  test('.fingerprintignore leaves out the ignore lists and the generated native projects, never module native code or eas.json', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- the fingerprint's own matcher (expo depends on it)
+    const { isIgnoredPath } = require('@expo/fingerprint/build/utils/Path') as { isIgnoredPath(file: string, patterns: string[]): boolean };
+    const patterns = fs
+      .readFileSync(path.join(__dirname, '..', '..', '.fingerprintignore'), 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'));
+    for (const ignored of ['.gitignore', '.easignore', 'ios/Podfile', 'android/app/build.gradle']) {
+      expect([ignored, isIgnoredPath(ignored, patterns)]).toEqual([ignored, true]);
+    }
+    for (const counted of [
+      'eas.json',
+      'modules/drive-sense/ios/CaptureController.swift',
+      'modules/drive-sense/android/src/main/java/expo/modules/drivesense/CaptureService.kt',
+      'modules/live-drive/ios/LiveDriveController.swift',
+    ]) {
+      expect([counted, isIgnoredPath(counted, patterns)]).toEqual([counted, false]);
+    }
+  });
 });
 
 // Drives start on their own with "Always" ("Allow all the time" on Android: the drive detector),

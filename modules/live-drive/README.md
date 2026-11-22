@@ -69,10 +69,12 @@ WidgetKit + ActivityKit) in the navy/gold palette (`$widgetBackground` #001D3D, 
 - **Lock screen:** the speed (52 pt, tinted) with its unit, and the sign (56 pt tall); under them the
   weather line (its SF Symbol and text, 13 pt semibold, white at 0.9) when there is one, and
   "Not driving?" (13 pt semibold, white at 0.7, trailing) while it is available. The app's sky behind.
-- **Dynamic Island, expanded:** the speed (40) leading, the sign (44) trailing, and a bottom row with
-  the weather line and the hint, each only when present. **Compact:** the tinted speed and a mini
-  sign (a 16 × 20 plate with the number only in mph, the 20 pt round sign in km/h). **Minimal:** the
-  tinted speed.
+- **Dynamic Island, expanded:** the speed (40) leading, the island's sign (`IslandSign`, size 26)
+  trailing, and a bottom row with the weather line and the hint, each only when present.
+  **Compact:** the tinted speed (15) and a smaller island's sign (`IslandSign`, size 14).
+  **Minimal:** the tinted speed. The island's sign is the same in both units: a simplified plate,
+  the number alone in SF Pro Condensed Heavy, in a white box with an inset black outline, 1.85 ×
+  the size tall.
 - `-` for an unknown speed or limit. A tap anywhere opens `roadwise://drive`. Nothing is interactive.
 - VoiceOver: "Speed 34 miles per hour" (", over the limit" while speeding), "Speed limit 35" /
   "Speed limit unknown", the weather line as its text.

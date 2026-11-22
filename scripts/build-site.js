@@ -25,7 +25,8 @@
  *   androidCertSha256  the Play app signing and upload key SHA-256 fingerprints: writes assetlinks.json
  * Until there is a store id, the landing page says RoadWise is coming soon.
  *
- * The deploy runs the Vercel CLI in `web/site-dist/`; its `.vercel/` link survives rebuilds.
+ * The deploy runs the Vercel CLI in `web/site-dist/`; its `.vercel/` link survives rebuilds, and
+ * the deploy refuses to run without it (`vercel link --project getroadwise` in that folder, once).
  */
 
 const fs = require('fs');
@@ -40,6 +41,7 @@ const SRC = path.join(ROOT, 'web', 'link-site');
 const OUT = path.join(ROOT, 'web', 'site-dist');
 const LEGAL = path.join(ROOT, 'legal');
 const ORIGIN = 'https://getroadwise.app';
+const VERCEL_PROJECT = 'getroadwise';
 const BUNDLE_ID = 'com.lurp.safedrive';
 const PLAY_URL = `https://play.google.com/store/apps/details?id=${BUNDLE_ID}`;
 
@@ -303,6 +305,33 @@ function writeVercelConfig() {
   fs.writeFileSync(path.join(OUT, 'vercel.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
 }
 
+/**
+ * Every page may be crawled. The share page (`/w/<id>`) keeps itself out of search with its own
+ * `<meta name="robots" content="noindex">`, which a crawler reads only if it may fetch the page: a
+ * `Disallow: /w/` would hide that tag, and a blocked URL can still be indexed from links to it.
+ */
+function robotsTxt() {
+  return `User-agent: *\nAllow: /\n\nSitemap: ${ORIGIN}/sitemap.xml\n`;
+}
+
+/**
+ * Throws unless `outDir` is linked to the Vercel project `getroadwise` (`.vercel/project.json`,
+ * written by `vercel link`). The link lives in the git-ignored build folder, so a fresh clone,
+ * another machine or a deleted folder has none, and `vercel deploy --yes` would then quietly create
+ * a new project named after the folder instead of updating getroadwise.app.
+ */
+function assertVercelLink(outDir) {
+  let link = null;
+  try {
+    link = JSON.parse(fs.readFileSync(path.join(outDir, '.vercel', 'project.json'), 'utf8'));
+  } catch {
+    link = null;
+  }
+  if (link?.projectName === VERCEL_PROJECT) return;
+  const now = link ? ` (it is linked to ${link.projectName ?? link.projectId ?? 'an unnamed project'})` : '';
+  throw new Error(`${path.relative(ROOT, outDir) || outDir} is not linked to the Vercel project ${VERCEL_PROJECT}${now}: run "vercel link --project ${VERCEL_PROJECT}" in it, then npm run site:deploy again`);
+}
+
 function main() {
   const config = readConfig();
   cleanOut();
@@ -311,16 +340,19 @@ function main() {
   buildLegal();
   const notes = buildShareLinks(config);
   writeVercelConfig();
-  fs.writeFileSync(path.join(OUT, 'robots.txt'), `User-agent: *\nDisallow: /w/\n\nSitemap: ${ORIGIN}/sitemap.xml\n`, 'utf8');
+  fs.writeFileSync(path.join(OUT, 'robots.txt'), robotsTxt(), 'utf8');
   const urls = ['/', '/support', '/privacy', '/terms', '/delete-account'].map((p) => `  <url><loc>${ORIGIN}${p === '/' ? '/' : p}</loc></url>`).join('\n');
   fs.writeFileSync(path.join(OUT, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`, 'utf8');
   console.log(`built ${path.relative(ROOT, OUT)}`);
   for (const n of notes) console.log(`note: ${n}`);
 
   if (process.argv.includes('--deploy')) {
+    assertVercelLink(OUT);
     // shell: Windows runs the CLI through its .cmd shim.
     execFileSync('vercel', ['deploy', '--prod', '--yes'], { cwd: OUT, stdio: 'inherit', shell: process.platform === 'win32' });
   }
 }
 
-main();
+module.exports = { robotsTxt, assertVercelLink, VERCEL_PROJECT };
+
+if (require.main === module) main();

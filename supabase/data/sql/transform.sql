@@ -4,7 +4,9 @@
 --   source      'osm' or 'hpms'
 --   replace     1: replace what this source holds (osm: every way, and the on-demand Overpass fill
 --               state with them; hpms: this state's sections)
---               0: upsert, for adding a neighbouring extract to what is already loaded
+--               0: osm adds only the ways not stored yet and keeps every stored way as it is (a
+--               neighbouring extract beside what is loaded, or a project that fills itself);
+--               hpms upserts
 --   state_code  hpms only: the state's FIPS code (53 for Washington); every staged row must match
 --   kmh_north_of  osm only: a latitude north of which the roads are Canadian ('' for none). An
 --               extract keeps every way that crosses its edge whole, so Washington's carries some
@@ -83,17 +85,26 @@ where l.osm_id ~ '^[1-9][0-9]{0,17}$'
   and extensions.st_length(l.geom) > 0
 order by l.osm_id::bigint;
 
-insert into osm.ways (osm_id, geom, highway, maxspeed_mph, maxspeed_raw, name, oneway)
-select osm_id, geom, highway, maxspeed_mph, maxspeed_raw, name, oneway from osm_in
-on conflict (osm_id) do update
-  set geom = excluded.geom, highway = excluded.highway, maxspeed_mph = excluded.maxspeed_mph,
-      maxspeed_raw = excluded.maxspeed_raw, name = excluded.name, oneway = excluded.oneway
-  where (osm.ways.geom, osm.ways.highway, osm.ways.maxspeed_mph, osm.ways.maxspeed_raw, osm.ways.name, osm.ways.oneway)
-    is distinct from (excluded.geom, excluded.highway, excluded.maxspeed_mph, excluded.maxspeed_raw, excluded.name, excluded.oneway);
+-- Only ways not stored yet are added; a stored way is kept as it is. After REPLACE=1's truncate
+-- nothing is stored. Under REPLACE=0 a stored way may be one the speed-limits function filled from
+-- Overpass, read by its own parser (overpass.ts): a two-way road with a different limit each way is
+-- two one-way rows there (the way's id with the forward limit, and id + 2^50 with the backward one),
+-- where this import makes one two-way row with no limit. Overwriting the first would leave the
+-- backward row beside a road with no limit, and the cell's 30-day refill would then put the fill's
+-- reading back. A way in two neighbouring extracts is stored once, from the first.
+with added as (
+  insert into osm.ways (osm_id, geom, highway, maxspeed_mph, maxspeed_raw, name, oneway)
+  select osm_id, geom, highway, maxspeed_mph, maxspeed_raw, name, oneway from osm_in
+  on conflict (osm_id) do nothing
+  returning 1
+)
+select count(*) as osm_added from added \gset
 
-\echo 'osm: staged / accepted / with a limit / tagged but not a limit / dropped by the km/h guard / dropped for a differing directional limit'
+\echo 'osm: staged / accepted / added / already stored (kept as stored) / with a limit / tagged but not a limit / dropped by the km/h guard / dropped for a differing directional limit'
 select (select count(*) from roadwise_stage.osm_lines) as staged,
        (select count(*) from osm_in) as accepted,
+       :osm_added as added,
+       (select count(*) from osm_in) - :osm_added as already_stored,
        (select count(*) from osm_in where maxspeed_mph is not null) as with_limit,
        (select count(*) from osm_in where maxspeed_mph is null and maxspeed_raw is not null) as tag_not_a_limit,
        (select count(*) from osm_in where maxspeed_mph is null and parsed_alone is not null and not directional) as kmh_dropped,

@@ -6,9 +6,11 @@
 // adopted too. `start` updates a running activity instead of ending and requesting another; one the
 // driver dismissed (or iOS ended) is no longer running, so `start` requests a new one.
 // Updated by `update` or drive-sense's `setDriveDisplay` (the `roadwise.driveDisplay` notification;
-// about once a second, src/drive/display.ts), each update handed to ActivityKit as it comes, in send
-// order (`Task { @MainActor in await a.update(content) }`), and logged with a running count at
-// notice level (Console.app shows it by default: subsystem app.roadwise, category LiveDrive);
+// paced by src/drive/display.ts: with RoadWise behind, a new speed at most every 5 s and other
+// changes within a second; in front, only the minute keepalive), each update handed to ActivityKit
+// as it comes, in send order (`Task { @MainActor in await a.update(content) }`), and logged with a
+// running count at notice level (Console.app shows it by default: subsystem app.roadwise, category
+// LiveDrive);
 // ended by `end` or the drive's end. The newest display state is kept even while no activity is
 // held (a pushed one not adopted yet), and an activity adopted later shows it at once instead of its
 // older pushed state: nothing sent while waiting is lost, the newest wins. The push-to-start token
