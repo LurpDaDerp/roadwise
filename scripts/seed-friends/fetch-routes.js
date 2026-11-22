@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Builds routes.json, the road library the Julian demo seed drives on: for each route a real driving
+ * Builds routes.json, the road library the friends demo seed drives on: for each route a real driving
  * path from Valhalla (OpenStreetMap data, the FOSSGIS public server), with the posted speed limit and
  * road class of every stretch from Valhalla's trace_attributes. Run it once; routes.json is committed,
  * so the seed itself needs no network.
  *
- *   node scripts/seed-julian/fetch-routes.js
+ *   node scripts/seed-friends/fetch-routes.js
  *
  * The roads and limits are OpenStreetMap data (© OpenStreetMap contributors, ODbL), routed and matched by Valhalla.
  *

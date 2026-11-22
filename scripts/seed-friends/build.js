@@ -6,17 +6,17 @@
  * conditions of the story (`must`); among the draws that do, the one closest to the targets
  * (`penalty`) is kept.
  */
-const { JULIAN, FRIENDS, PENDING, estMinutes } = require('./people.js');
+const { ALEX, FRIENDS, PENDING, estMinutes } = require('./people.js');
 const { buildHistory } = require('./generate.js');
 const { report } = require('./report.js');
 const { localDay, localInstant } = require('./calendar.js');
 
 const HOUR = 3_600_000;
 const DRAWS = 300;
-/** A Julian draw with a penalty this low is taken without searching on. */
+/** A Alex draw with a penalty this low is taken without searching on. */
 const GOOD_ENOUGH = 8;
 
-/** Julian rode along in a friend's car yesterday: a drive he did not drive, to mark "Wasn't driving". */
+/** Alex rode along in a friend's car yesterday: a drive he did not drive, to mark "Wasn't driving". */
 function passengerTrip(now) {
   for (const back of [0, 1]) {
     const day = localDay(now, back);
@@ -33,8 +33,8 @@ function passengerTrip(now) {
 
 const outside = (v, lo, hi) => (v < lo ? lo - v : v > hi ? v - hi : 0);
 
-/** What a draw of Julian's history must be, and how far it is from the ideal: { must: [reasons it fails], penalty }. */
-function julianStory(r) {
+/** What a draw of Alex's history must be, and how far it is from the ideal: { must: [reasons it fails], penalty }. */
+function alexStory(r) {
   const must = [];
   const a = r.axes;
   const scored = ['acceleration', 'braking', 'turning', 'phone', 'speed', 'attention'].map((k) => a[k]);
@@ -94,8 +94,8 @@ const BANDS = {
 };
 
 function buildPerson(person, now) {
-  const judge = person.key === 'julian' ? julianStory : BANDS[person.key];
-  const passenger = person.key === 'julian' ? passengerTrip(now) : null;
+  const judge = person.key === 'alex' ? alexStory : BANDS[person.key];
+  const passenger = person.key === 'alex' ? passengerTrip(now) : null;
   let best = null;
   let lastWhy = 'no draw';
   for (let draw = 0; draw < DRAWS; draw += 1) {
@@ -108,17 +108,17 @@ function buildPerson(person, now) {
       continue;
     }
     if (best === null || verdict.penalty < best.penalty) best = { person, drives, report: r, draw, penalty: verdict.penalty };
-    if (person.key !== 'julian' || best.penalty <= GOOD_ENOUGH) break;
+    if (person.key !== 'alex' || best.penalty <= GOOD_ENOUGH) break;
   }
   if (best === null) throw new Error(`${person.key}: no draw in ${DRAWS} tells the story (last: ${lastWhy})`);
   return best;
 }
 
 function buildAll(now, only = null) {
-  const people = [JULIAN, ...FRIENDS, ...PENDING].filter((p) => only === null || only.includes(p.key));
+  const people = [ALEX, ...FRIENDS, ...PENDING].filter((p) => only === null || only.includes(p.key));
   return people.map((p) => buildPerson(p, now));
 }
 
-const julianFailures = (r) => julianStory(r).must;
+const alexFailures = (r) => alexStory(r).must;
 
-module.exports = { buildAll, buildPerson, julianStory, julianFailures, passengerTrip };
+module.exports = { buildAll, buildPerson, alexStory, alexFailures, passengerTrip };

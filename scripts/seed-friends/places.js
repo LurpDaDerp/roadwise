@@ -1,13 +1,13 @@
 'use strict';
 /**
- * The places and routes of the Julian demo seed (all around Seattle, WA). Coordinates are rough
+ * The places and routes of the friends demo seed (all around Seattle, WA). Coordinates are rough
  * ([lat, lng]): the router snaps each to the nearest road. `ROUTES` is what fetch-routes.js asks the
  * router for; a route id is used by the people in people.js, driven forward or (when no reverse route
  * is listed) back along the same road.
  */
 
 const PLACES = {
-  // Julian
+  // Alex
   home: [47.6598, -122.3352], // Wallingford
   school: [47.677, -122.3157],
   job: [47.6633, -122.2992], // University Village
@@ -47,7 +47,7 @@ const PLACES = {
 const R = (id, from, to, alts = 0, via = []) => ({ id, from, to, alts, via });
 
 const ROUTES = [
-  // Julian's school run and after-school job, each way on its own roads, with a second way to go
+  // Alex's school run and after-school job, each way on its own roads, with a second way to go
   R('home_school', 'home', 'school', 1),
   R('school_home', 'school', 'home', 1),
   R('home_job', 'home', 'job'),

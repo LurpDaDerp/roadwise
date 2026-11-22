@@ -35,10 +35,10 @@ interface Report {
 }
 
 /* eslint-disable @typescript-eslint/no-require-imports -- CommonJS Node scripts */
-const people = require('../seed-julian/people.js') as { JULIAN: Person; FRIENDS: Person[]; PENDING: Person[] };
-const gen = require('../seed-julian/generate.js') as { buildHistory: (p: Person, now: number, o?: object) => Drive[] };
-const build = require('../seed-julian/build.js') as { buildPerson: (p: Person, now: number) => { drives: Drive[]; report: Report; draw: number }; julianFailures: (r: Report) => string[] };
-const seed = require('../seed-julian/seed.js') as {
+const people = require('../seed-friends/people.js') as { ALEX: Person; FRIENDS: Person[]; PENDING: Person[] };
+const gen = require('../seed-friends/generate.js') as { buildHistory: (p: Person, now: number, o?: object) => Drive[] };
+const build = require('../seed-friends/build.js') as { buildPerson: (p: Person, now: number) => { drives: Drive[]; report: Report; draw: number }; alexFailures: (r: Report) => string[] };
+const seed = require('../seed-friends/seed.js') as {
   uploadProblem: (p: FinalizeTripPayloadV5) => string | null;
   toEnvelope: (userId: string, p: FinalizeTripPayloadV5, stored: Drive['stored']) => { events: { type: string; status: string; zone: string | null }[]; payload: { origin: string }; scored: boolean; reason: string | null; scoringVersion: number };
   batchSql: (userId: string, items: { payload: FinalizeTripPayloadV5; envelope: unknown }[]) => string;
@@ -50,7 +50,7 @@ jest.setTimeout(900_000);
 
 const NOW = Date.UTC(2026, 9, 22, 9, 30);
 const USER = '00000000-0000-4000-8000-000000000001';
-const ALL = [people.JULIAN, ...people.FRIENDS, ...people.PENDING];
+const ALL = [people.ALEX, ...people.FRIENDS, ...people.PENDING];
 
 const R_M = 6_371_000;
 const rad = (d: number) => (d * Math.PI) / 180;
@@ -149,14 +149,14 @@ describe.each(ALL.map((p) => [p.key, p] as const))('the history of %s', (_key, p
   });
 });
 
-const heavy = process.env.SEED_JULIAN_FULL === '1' ? describe : describe.skip;
+const heavy = process.env.SEED_FRIENDS_FULL === '1' ? describe : describe.skip;
 
-heavy('Julian', () => {
-  const built = build.buildPerson(people.JULIAN, NOW);
+heavy('Alex', () => {
+  const built = build.buildPerson(people.ALEX, NOW);
   const r = built.report;
 
   it('meets every condition of the demo story', () => {
-    expect(build.julianFailures(r)).toEqual([]);
+    expect(build.alexFailures(r)).toEqual([]);
   });
 
   it('is ranked, improving, with speeding the one bad category and every other one between 75 and 100', () => {
@@ -227,7 +227,7 @@ heavy('the friends', () => {
   }, 600_000);
 
   it('ranks Maya first of the friends board, and one friend keeps the details private', () => {
-    const ratings = [people.JULIAN, ...people.FRIENDS].map((p) => ({ key: p.key, rating: build.buildPerson(p, NOW).report.rating! })).sort((a, b) => b.rating - a.rating);
+    const ratings = [people.ALEX, ...people.FRIENDS].map((p) => ({ key: p.key, rating: build.buildPerson(p, NOW).report.rating! })).sort((a, b) => b.rating - a.rating);
     expect(ratings[0]!.key).toBe('maya');
     const marcus = people.FRIENDS.find((f) => f.key === 'marcus')!;
     expect(marcus.share).toMatchObject({ rating: true, categories: false, achievements: false, stats: false });
@@ -235,7 +235,7 @@ heavy('the friends', () => {
 });
 
 describe('the database steps', () => {
-  const drives = gen.buildHistory(people.JULIAN, NOW).slice(0, 3);
+  const drives = gen.buildHistory(people.ALEX, NOW).slice(0, 3);
 
   it('checks the server context before every apply in a batch', () => {
     const sql = seed.batchSql(

@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Seeds the demo accounts for the Congressional App Challenge video: "julian", the main demo driver
+ * Seeds the demo accounts for the Congressional App Challenge video: "alex_rivera", the main demo driver
  * with 89 days of drives on real Seattle roads, and seven more drivers who make the friends screens
  * real (five friends, one pending request each way).
  *
- *   node scripts/seed-julian/seed.js --dry                      build everything and print what the app would show; touches nothing
- *   node scripts/seed-julian/seed.js --local                    seed the local Supabase stack
- *   SUPABASE_SERVICE_ROLE_KEY=<secret key> JULIAN_PASSWORD=<password> node scripts/seed-julian/seed.js --linked
+ *   node scripts/seed-friends/seed.js --dry                      build everything and print what the app would show; touches nothing
+ *   node scripts/seed-friends/seed.js --local                    seed the local Supabase stack
+ *   SUPABASE_SERVICE_ROLE_KEY=<secret key> DEMO_DRIVER_PASSWORD=<password> node scripts/seed-friends/seed.js --linked
  *                                                               seed the linked (hosted) project
- *   node scripts/seed-julian/seed.js --linked --replace         start over: delete the demo accounts first, then seed
- *   node scripts/seed-julian/seed.js --linked --remove          delete the demo accounts and nothing else
- *   node scripts/seed-julian/seed.js --linked --remove --restore-test-name   ... and give julian_test back its old name
+ *   node scripts/seed-friends/seed.js --linked --replace         start over: delete the demo accounts first, then seed
+ *   node scripts/seed-friends/seed.js --linked --remove          delete the demo accounts and nothing else
  *
  * Only raw drives are written. Every drive goes through the path a phone upload takes: a v5 upload
  * validated against the upload contract and the integrity rules, stored as finalize-trip stores it
@@ -21,14 +20,12 @@
  * app's, computed on the phone from the restored drives. Nothing derived is written by hand.
  *
  * What else it does, and only this:
- *   * the existing "julian" account (the author's test account) is renamed "julian_test", so the demo
- *     can have the name (an UPDATE of that one profile's username, undone with --restore-test-name)
  *   * creates the demo drivers through the Auth admin API with their e-mail already confirmed (so no
  *     confirmation mail goes to the demo addresses), signs in as each with e-mail and password, as
  *     the app does, and onboards them through the app's own RPCs (claim_username,
  *     complete_onboarding, update_profile)
  *   * friendships and the two pending requests are inserted directly, dated across the last months
- *   * one drive of Julian's as a passenger is marked "Wasn't driving", and two events on drives of
+ *   * one drive of Alex's as a passenger is marked "Wasn't driving", and two events on drives of
  *     the last week are reported (a hazard brake, a phone that was mounted), through the same private
  *     functions the trip-actions function calls
  *   * every demo account is identified by its e-mail in DEMO_EMAILS; --remove and --replace touch
@@ -51,12 +48,11 @@ const scoring = require('../../packages/scoring/src/index.ts');
 const { parseFinalizeUpload } = require('../../src/data/sync/payload.ts');
 const { integrityReason } = require(path.join(__dirname, '..', '..', 'supabase', 'functions', '_shared', 'finalize_rules.ts'));
 const { buildAll } = require('./build.js');
-const { JULIAN, FRIENDS, PENDING } = require('./people.js');
+const { ALEX, FRIENDS, PENDING } = require('./people.js');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const TERMS_VERSION = '2026-10-05';
-const TEST_NAME = 'julian_test';
-const ALL = [JULIAN, ...FRIENDS, ...PENDING];
+const ALL = [ALEX, ...FRIENDS, ...PENDING];
 const DEMO_EMAILS = ALL.map((p) => p.email);
 
 // ---------------------------------------------------------------------------------------------
@@ -91,7 +87,7 @@ function parseJson(out) {
 
 /** Runs one SQL file through `supabase db query` and returns its rows (a DO block answers none). */
 function runSql(target, sql, { rows: wantRows = true } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-julian-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-friends-'));
   const file = path.join(dir, 'q.sql');
   fs.writeFileSync(file, sql, 'utf8');
   const args = ['supabase', 'db', 'query', target.flag, '--yes', '-f', file, '--output-format', 'json'].map(quote);
@@ -218,7 +214,7 @@ function batchSql(userId, items) {
     [
       `  c := ${contextCall(userId, payload)};`,
       `  if c -> 'version' <> '23'::jsonb or c -> 'phoneUse' <> 'true'::jsonb or c -> 'existing' <> 'null'::jsonb then`,
-      `    raise exception 'seed-julian: the server context for drive ${payload.clientTripId} is %, not a fresh drive', c;`,
+      `    raise exception 'seed-friends: the server context for drive ${payload.clientTripId} is %, not a fresh drive', c;`,
       '  end if;',
       `  perform private.apply_drive(${jsonLiteral(envelope)});`,
     ].join('\n')
@@ -230,17 +226,17 @@ function batchSql(userId, items) {
 // Passwords
 
 /**
- * Julian's password: the same on every run, so a re-seed does not lock the demo out. On the local
- * stack it is this fixed value; a hosted run needs JULIAN_PASSWORD set (never printed), because this
+ * Alex's password: the same on every run, so a re-seed does not lock the demo out. On the local
+ * stack it is this fixed value; a hosted run needs DEMO_DRIVER_PASSWORD set (never printed), because this
  * file is public and a fixed password here signs anyone in to the hosted account.
  */
-const LOCAL_JULIAN_PASSWORD = 'test1234';
+const LOCAL_DRIVER_PASSWORD = 'test1234';
 
-/** The password for this target: JULIAN_PASSWORD for a hosted project, else the local fixed one. */
-function julianPassword(target) {
-  if (target.flag === '--local') return process.env.JULIAN_PASSWORD || LOCAL_JULIAN_PASSWORD;
-  const own = process.env.JULIAN_PASSWORD;
-  if (!own) throw new Error('set JULIAN_PASSWORD for a hosted project (the local password in this file is public)');
+/** The password for this target: DEMO_DRIVER_PASSWORD for a hosted project, else the local fixed one. */
+function driverPassword(target) {
+  if (target.flag === '--local') return process.env.DEMO_DRIVER_PASSWORD || LOCAL_DRIVER_PASSWORD;
+  const own = process.env.DEMO_DRIVER_PASSWORD;
+  if (!own) throw new Error('set DEMO_DRIVER_PASSWORD for a hosted project (the local password in this file is public)');
   return own;
 }
 
@@ -256,29 +252,10 @@ function preflight(target) {
     `select
        (select max(version) from supabase_migrations.schema_migrations) as migration,
        (select count(*)::int from auth.users where lower(email) in (${emailList(DEMO_EMAILS)})) as accounts,
-       (select count(*)::int from public.profiles where username::text in (${ALL.filter((p) => p.key !== 'julian').map((p) => `'${p.username}'`).join(', ')}) and id not in (select id from auth.users where lower(email) in (${emailList(DEMO_EMAILS)}))) as names_taken,
+       (select count(*)::int from public.profiles where username::text in (${ALL.map((p) => `'${p.username}'`).join(', ')}) and id not in (select id from auth.users where lower(email) in (${emailList(DEMO_EMAILS)}))) as names_taken,
        (select count(*)::int from public.challenge_templates) as templates`
   );
   return row;
-}
-
-function renameTestAccount(target) {
-  const found = runSql(
-    target,
-    `select p.id, p.username::text as username, u.email, p.onboarded_at is not null as onboarded
-       from public.profiles p join auth.users u on u.id = p.id
-      where p.username::text = '${JULIAN.username}' and lower(u.email) <> '${JULIAN.email}'`,
-    { rows: true }
-  );
-  if (found.length === 0) return null;
-  if (found.length > 1) throw new Error('more than one account is named julian');
-  const [old] = found;
-  const taken = runSql(target, `select count(*)::int as n from public.profiles where username::text = '${TEST_NAME}'`);
-  if (taken[0].n > 0) throw new Error(`${TEST_NAME} is already taken`);
-  runSql(target, `update public.profiles set username = '${TEST_NAME}' where id = ${uuidLiteral(old.id)} and username::text = '${JULIAN.username}'`, { rows: false });
-  const after = runSql(target, `select username::text as username from public.profiles where id = ${uuidLiteral(old.id)}`);
-  if (after[0].username !== TEST_NAME) throw new Error('the rename did not take');
-  return { id: old.id, email: old.email };
 }
 
 function removeAccounts(target) {
@@ -366,7 +343,7 @@ function storeDrives(target, userId, drives, label) {
 
 /** Friendships and the two pending requests, dated across the last months. */
 function relate(target, ids) {
-  const j = ids.julian;
+  const j = ids.alex;
   const lines = [];
   for (const f of FRIENDS) {
     const f_id = ids[f.key];
@@ -382,19 +359,19 @@ function relate(target, ids) {
   runSql(target, `do $rel$\nbegin\n${lines.join('\n')}\nend $rel$`, { rows: false });
 }
 
-/** The ride Julian was a passenger on is marked "Wasn't driving"; two events of the last week are reported. */
-function afterwards(target, julianId, built, now) {
+/** The ride Alex was a passenger on is marked "Wasn't driving"; two events of the last week are reported. */
+function afterwards(target, alexId, built, now) {
   const mine = built.drives;
   const notes = [];
   const passenger = mine.find((d) => d.trip.kind === 'passenger');
   if (passenger) {
-    const [r] = runSql(target, `select private.mark_not_driving(${uuidLiteral(julianId)}, ${uuidLiteral(passenger.payload.clientTripId)}) as r`);
+    const [r] = runSql(target, `select private.mark_not_driving(${uuidLiteral(alexId)}, ${uuidLiteral(passenger.payload.clientTripId)}) as r`);
     notes.push(`marked the passenger drive "Wasn't driving" (${r.r.notDrivingLeft} uses left this month)`);
   }
   const d = built.report.disputable;
   for (const [reason, pick] of [['hazard', d.hazard], ['mounted', d.mounted]]) {
     if (!pick) continue;
-    const [r] = runSql(target, `select private.dispute_event(${uuidLiteral(julianId)}, ${uuidLiteral(pick.clientTripId)}, ${uuidLiteral(pick.eventId)}, '${reason}') as r`);
+    const [r] = runSql(target, `select private.dispute_event(${uuidLiteral(alexId)}, ${uuidLiteral(pick.clientTripId)}, ${uuidLiteral(pick.eventId)}, '${reason}') as r`);
     notes.push(`reported ${pick.type} (${reason}): ${r.r.status}`);
   }
   return notes;
@@ -435,7 +412,7 @@ async function verify(url, keys, people, passwords, built) {
   const { createClient } = require('@supabase/supabase-js');
   const opts = { auth: { persistSession: false, autoRefreshToken: false } };
   const client = createClient(url, keys.publishable, opts);
-  const { error } = await retrying('verify sign in', () => client.auth.signInWithPassword({ email: JULIAN.email, password: passwords.julian }));
+  const { error } = await retrying('verify sign in', () => client.auth.signInWithPassword({ email: ALEX.email, password: passwords.alex }));
   if (error) throw new Error(`verify sign in: ${error.message}`);
   const rpc = async (fn, args) => {
     const { data, error: err } = await retrying(fn, () => client.rpc(fn, args));
@@ -476,10 +453,10 @@ function printDry(builds, now) {
           .join(' ')}  clean ${r.clean}/${r.scored}`
     );
   }
-  const j = builds.find((b) => b.person.key === 'julian');
+  const j = builds.find((b) => b.person.key === 'alex');
   if (j) {
     const r = j.report;
-    console.log(`\njulian, as the app will show it (now ${new Date(now).toISOString()}):`);
+    console.log(`\nalex_rivera, as the app will show it (now ${new Date(now).toISOString()}):`);
     console.log(`  merits ${JSON.stringify(r.merits)}  events ${JSON.stringify(r.counts)}  night miles ${r.nightMiles}`);
     console.log(`  achievements ${JSON.stringify(r.achievements)}  this week's goals ${JSON.stringify(r.goals)} (${r.thisWeekDrives} drives this week)`);
     console.log(`  problem spots ${r.spots.map((s) => `${s.kind} ${s.state} ${s.hits}/${s.passes}`).join(', ')}`);
@@ -507,15 +484,11 @@ async function main() {
 
   if (has('--remove')) {
     console.log(`  removed ${removeAccounts(target)} demo accounts`);
-    if (has('--restore-test-name')) {
-      runSql(target, `update public.profiles set username = '${JULIAN.username}' where username::text = '${TEST_NAME}' and not exists (select 1 from public.profiles where username::text = '${JULIAN.username}')`, { rows: false });
-      console.log(`  ${TEST_NAME} is julian again (if it was there)`);
-    }
     return;
   }
 
-  // Before anything is written or removed: a hosted run with no JULIAN_PASSWORD stops here.
-  const julianPass = julianPassword(target);
+  // Before anything is written or removed: a hosted run with no DEMO_DRIVER_PASSWORD stops here.
+  const driverPass = driverPassword(target);
   const pre = preflight(target);
   console.log(`  migrations up to ${pre.migration}; ${pre.accounts} demo accounts already there`);
   if (!(pre.migration >= '0026')) throw new Error('the database needs migration 0026 (phone use) before the demo drives can be stored');
@@ -535,17 +508,15 @@ async function main() {
       if (problem) throw new Error(`${b.person.key}: drive ${d.payload.clientTripId} ${problem}`);
     }
   }
-  if (only !== null && !only.includes('julian')) throw new Error('--only must include julian when writing');
+  if (only !== null && !only.includes('alex')) throw new Error('--only must include alex when writing');
 
   const keys = readKeys(target);
-  const renamed = renameTestAccount(target);
-  if (renamed) console.log(`  renamed the existing "julian" (${renamed.email}) to "${TEST_NAME}"`);
 
   const ids = {};
   const passwords = {};
   for (const b of builds) {
     const person = b.person;
-    passwords[person.key] = person.key === 'julian' ? julianPass : secretPassword();
+    passwords[person.key] = person.key === 'alex' ? driverPass : secretPassword();
     const account = await createAccount(target, target.url, keys, person, passwords[person.key]);
     ids[person.key] = account.id;
     console.log(`  created @${person.username} (${account.id})`);
@@ -553,12 +524,12 @@ async function main() {
   }
   relate(target, ids);
   console.log('  friendships and the two pending requests are in');
-  const julianBuild = builds.find((b) => b.person.key === 'julian');
-  for (const note of afterwards(target, ids.julian, julianBuild, now)) console.log(`  ${note}`);
+  const alexBuild = builds.find((b) => b.person.key === 'alex');
+  for (const note of afterwards(target, ids.alex, alexBuild, now)) console.log(`  ${note}`);
 
-  const v = await verify(target.url, keys, ALL, passwords, julianBuild);
+  const v = await verify(target.url, keys, ALL, passwords, alexBuild);
   const g = v.summary.progress;
-  console.log('\nWhat the server now holds for @julian:');
+  console.log('\nWhat the server now holds for @alex_rivera:');
   console.log(`  Safety Rating ${g.safety_rating} (${g.ranked ? 'ranked' : 'unranked'}, ${g.miles_90d} mi in 90 days, ${g.rating_trend >= 0 ? '+' : ''}${g.rating_trend} against a week ago)`);
   console.log(`  the scoring package, over the drives list_my_drives returns: ${v.local.rating}  ${Object.entries(v.local.scores).map(([k, s]) => `${k.slice(0, 3)} ${s === null ? '-' : Math.round(s)}`).join(' ')}`);
   console.log(`  achievements: ${v.summary.achievements.join(', ') || 'none'}`);
@@ -570,15 +541,15 @@ async function main() {
     console.error(`\nPROBLEMS:\n  ${v.problems.join('\n  ')}`);
     process.exitCode = 1;
   }
-  const shown = target.flag === '--local' ? passwords.julian : 'JULIAN_PASSWORD';
-  console.log(`\nSign in to the app with:\n  email     ${JULIAN.email}\n  password  ${shown}\n  username  @${JULIAN.username}`);
+  const shown = target.flag === '--local' ? passwords.alex : 'DEMO_DRIVER_PASSWORD';
+  console.log(`\nSign in to the app with:\n  email     ${ALEX.email}\n  password  ${shown}\n  username  @${ALEX.username}`);
 }
 
 module.exports = { uploadProblem, toEnvelope, batchSql, parseJson, ratingFromServer };
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error(`\nseed-julian failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`\nseed-friends failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   });
 }

@@ -1,7 +1,7 @@
 'use strict';
 /**
  * The demo drivers: who they are, when and where they drive, and how their driving changes over the
- * 89 days. Julian is the main demo account; the others are his friends and the two pending requests.
+ * 89 days. Alex is the main demo account; the others are his friends and the two pending requests.
  *
  * A plan is the list of trips a person takes (a day, a local time, a route and a direction); how
  * well they drive each one is decided in generate.js from the person's `skill`.
@@ -31,7 +31,7 @@ function estMinutes(route) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Julian
+// Alex
 
 const SCHOOL_START = '2026-09-02';
 const NO_SCHOOL = new Set(['2026-09-07', '2026-11-11', '2026-11-26', '2026-11-27', '2027-01-01']);
@@ -71,7 +71,7 @@ function legs(dest, rnd) {
   return [{ route: out, reverse: false }, { route: out, reverse: true }];
 }
 
-function planJulian(now, rnd) {
+function planAlex(now, rnd) {
   const trips = [];
   const weekends = [];
   for (let back = DAYS; back >= 0; back -= 1) {
@@ -232,13 +232,13 @@ function planRoutine(cfg) {
 
 const K = (speed, braking, acceleration, turning, phone) => ({ speed, braking, acceleration, turning, phone });
 
-const JULIAN = {
-  key: 'julian',
-  username: 'julian',
-  email: 'julian.demo@getroadwise.app',
+const ALEX = {
+  key: 'alex',
+  username: 'alex_rivera',
+  email: 'alex.demo@getroadwise.app',
   state: 'WA',
   seed: 20261022,
-  plan: planJulian,
+  plan: planAlex,
   tempo: [0.9, 0.99],
   skill: {
     // speeding is the one habit that never improves: a steady, heavy rate (a score near 30); the rest get better
@@ -259,7 +259,7 @@ const JULIAN = {
     { back: 33, minutes: 18 * 60 + 10 },
     { back: 12, minutes: 12 * 60 + 15 },
   ],
-  // places Julian keeps doing the same thing: speeding down N 45th on the way to school, a firm brake
+  // places Alex keeps doing the same thing: speeding down N 45th on the way to school, a firm brake
   // at the corner by Roosevelt on the way home, and (since cleared) hard starts out of the school lot
   spots: [
     { id: 'speed45th', active: true, kind: 'speeding', route: 'home_school', reverse: false, atM: 760, over: 6.5, durationS: 17, hit: (back) => (back <= 75 ? (back > 35 ? 0.65 : back > 14 ? 0.35 : 0.25) : 0) },
@@ -362,7 +362,7 @@ const FRIENDS = [
   }),
 ];
 
-/** Two more drivers: one has asked Julian to be friends, and Julian has asked the other. */
+/** Two more drivers: one has asked Alex to be friends, and Alex has asked the other. */
 const PENDING = [
   friend({
     key: 'liam',
@@ -396,4 +396,4 @@ const PENDING = [
   }),
 ];
 
-module.exports = { JULIAN, FRIENDS, PENDING, DAYS, jit, chance, estMinutes };
+module.exports = { ALEX, FRIENDS, PENDING, DAYS, jit, chance, estMinutes };
