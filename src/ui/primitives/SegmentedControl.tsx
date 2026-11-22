@@ -87,6 +87,9 @@ export function SegmentedControl<V extends string>({
             accessibilityRole="tab"
             accessibilityLabel={s.label}
             accessibilityState={{ selected }}
+            // The track's padding above and below takes the touch too, so a segment answers over the
+            // track's whole height (44 pt at least), not 6 pt less.
+            hitSlop={{ top: pad, bottom: pad }}
             onPress={() => onChange(s.value)}
             style={{
               flex: 1,

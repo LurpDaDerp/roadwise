@@ -4,7 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import { recordPrompt, type NotificationAccess } from '@/core/permissions';
 import { requestDeviceSync } from '@/data/devices/events';
 import { markSettingsReturn } from '@/features/permissions/usePermissionHealth';
-import { Card, Text, useTheme } from '@/ui';
+import { Card, Text, useAnnounce, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -36,7 +36,9 @@ const allowed = (a: NotificationAccess | undefined) => a === 'granted' || a === 
  * channels are created before the prompt, so the system names them from the first moment, and one
  * more line says the drive notification (the Live Activity's counterpart, which needs this permission
  * there) shows the drive on the lock screen. One request on the driver's tap; a grant asks the device
- * host to register the push token. A denial still moves on.
+ * host to register the push token. A denial still moves on. On an iPhone the screen before the
+ * system alert has one button, Continue, which opens it (Apple's rule for a screen shown before its
+ * alert); Not now shows there only once a request has been made.
  */
 export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps & { deps?: NotificationsStepDeps }) {
   const th = useTheme();
@@ -46,11 +48,15 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
   const [answer, setAnswer] = useState<NotificationAccess | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** Whether this screen has made its request (answered, or failed with no alert). */
+  const [asked, setAsked] = useState(false);
   const leaving = useRef(false);
 
   const snapshot = phone.status === 'ready' ? phone.snapshot : null;
   const current = answer ?? snapshot?.notifications;
   const deniedForGood = answer === 'denied' || (snapshot?.notifications === 'denied' && !snapshot.notificationsCanAskAgain);
+  // A failed request is read out as its line appears: the screen reader stays on the button.
+  useAnnounce(failed ? copy.failed : null);
 
   const leave = () => {
     if (leaving.current) return;
@@ -77,6 +83,7 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
     } catch {
       setFailed(true);
     } finally {
+      setAsked(true);
       setBusy(false);
     }
   };
@@ -110,18 +117,22 @@ export function NotificationsStep({ ctx, onNext, onBack, deps = {} }: StepProps 
     line = { tone: 'off', text: copy.denied };
   } else {
     primary = {
-      label: copy.allow,
+      label: copy.allow[ctx.platform],
       onPress: () => void allow(),
       loading: busy,
       disabled: phone.status === 'loading',
       testID: 'notifications-allow',
     };
-    secondary = {
-      label: copy.notNow,
-      onPress: () => leave(),
-      disabled: busy,
-      testID: 'notifications-not-now',
-    };
+    // iPhone: no way past the alert before it has been asked. Once a request is made and the phone
+    // still has no answer (it failed, so no alert came), Not now keeps the step passable (D12).
+    if (ctx.platform === 'android' || asked) {
+      secondary = {
+        label: copy.notNow,
+        onPress: () => leave(),
+        disabled: busy,
+        testID: 'notifications-not-now',
+      };
+    }
   }
 
   return (

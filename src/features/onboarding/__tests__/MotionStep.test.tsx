@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
 import {
@@ -104,10 +105,54 @@ test('already allowed: no request; Continue moves on', async () => {
   expect(requests(adapter)).toEqual([]);
 });
 
-test('Not now asks nothing', async () => {
+test('Android: Not now asks nothing', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', motion: 'undetermined' }));
   const { onNext } = await renderStep('android', adapter);
-  await press(await screen.findByTestId('motion-not-now'));
+  expect(await screen.findByTestId('motion-allow')).toHaveTextContent('Allow motion access');
+  await press(screen.getByTestId('motion-not-now'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(requests(adapter)).toEqual([]);
+});
+
+test("iPhone: before the system alert, one button, Continue, which opens it; no Not now (Apple's rule)", async () => {
+  const adapter = fakeAdapter(snap({ platform: 'ios', motion: 'undetermined' }));
+  await renderStep('ios', adapter);
+  await screen.findByText(copy.body.ios);
+  await waitFor(() => expect(screen.getByTestId('motion-allow')).toBeEnabled());
+  expect(screen.getByTestId('motion-allow')).toHaveTextContent('Continue', { exact: true });
+  expect(screen.queryByTestId('motion-not-now')).toBeNull();
+  expect(screen.queryByTestId('motion-continue')).toBeNull();
+  expect(requests(adapter)).toEqual([]);
+});
+
+test('iPhone: a request that fails (no alert came) says so, offers Continue again and Not now, which moves on (D12)', async () => {
+  const say = jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions);
+  say.mockClear();
+  const adapter = fakeAdapter(snap({ platform: 'ios', motion: 'undetermined' }));
+  adapter.requestMotion = jest.fn(async () => {
+    adapter.log.push('requestMotion');
+    throw new Error('no answer');
+  });
+  const { onNext } = await renderStep('ios', adapter);
+  await press(await screen.findByTestId('motion-allow'));
+  expect(await screen.findByText(copy.failed)).toBeOnTheScreen();
+  // Read out as it appears: VoiceOver stays on the button.
+  expect(say.mock.calls).toEqual([[copy.failed, { queue: true }]]);
+  expect(screen.getByTestId('motion-allow')).toHaveTextContent('Continue', { exact: true });
+  await press(screen.getByTestId('motion-not-now'));
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(requests(adapter)).toEqual(['requestMotion']);
+});
+
+test('iPhone: back from Settings after a refusal, the screen keeps Not now beside Continue', async () => {
+  const adapter = fakeAdapter(snap({ platform: 'ios', motion: 'undetermined' }), { motion: 'denied' });
+  const { onNext } = await renderStep('ios', adapter);
+  await press(await screen.findByTestId('motion-allow'));
+  expect(await screen.findByText(copy.denied.ios)).toBeOnTheScreen();
+  await press(screen.getByTestId('motion-settings'));
+  expect(await screen.findByTestId('motion-not-now')).toBeOnTheScreen();
+  expect(screen.getByTestId('motion-allow')).toHaveTextContent('Continue', { exact: true });
+  await press(screen.getByTestId('motion-not-now'));
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(requests(adapter)).toEqual(['requestMotion', 'openAppSettings']);
 });

@@ -30,7 +30,8 @@ export type CardProps = {
   accessibilityHint?: string;
   /**
    * Extra screen-reader actions for a pressable card (VoiceOver can't reach a button nested in
-   * one), e.g. a 'dismiss' for its ✕. Include `{ name: 'activate' }` and handle it.
+   * one), e.g. a 'dismiss' for its ✕. Pass them through `withActivate` (it adds `activate` for
+   * TalkBack on Android only) and handle `activate` as the press.
    */
   accessibilityActions?: readonly AccessibilityActionInfo[];
   onAccessibilityAction?: (e: AccessibilityActionEvent) => void;

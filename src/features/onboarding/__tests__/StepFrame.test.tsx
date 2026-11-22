@@ -1,10 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
-import { View } from 'react-native';
+import { AccessibilityInfo, View } from 'react-native';
 
 import { ThemeProvider } from '@/ui/theme';
 
-import { StepCancelProvider, StepFrame, StepPositionProvider } from '../StepFrame';
+import { onboardingCopy } from '../copy';
+import { StepCancelProvider, StepFinishProvider, StepFrame, StepPositionProvider, type StepFinishState } from '../StepFrame';
 
 function renderFrame(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>);
@@ -175,6 +176,30 @@ describe('StepFrame', () => {
     expect(onPrimary).not.toHaveBeenCalled();
     expect(onSkip).not.toHaveBeenCalled();
     expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('reads a failed finish out once as it shows, and again when a retry fails the same way', async () => {
+    const say = jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions);
+    say.mockClear();
+    const frame = (finish: StepFinishState) => (
+      <ThemeProvider>
+        <StepFinishProvider value={finish}>
+          <StepFrame title="How it works" primary={{ label: 'Go to Home', onPress: () => {} }} />
+        </StepFinishProvider>
+      </ThemeProvider>
+    );
+    const failed = onboardingCopy.frame.finishFailed;
+    const { rerender } = await render(frame({ busy: true, error: null }));
+    expect(say).not.toHaveBeenCalled();
+    await rerender(frame({ busy: false, error: failed }));
+    expect(screen.getByTestId('onboarding-finish-error')).toHaveTextContent(failed);
+    expect(say).toHaveBeenCalledTimes(1);
+    expect(say).toHaveBeenCalledWith(failed, { queue: true });
+    // A re-render that leaves the line as it is says nothing more; a retry clears it first.
+    await rerender(frame({ busy: false, error: failed }));
+    await rerender(frame({ busy: true, error: null }));
+    await rerender(frame({ busy: false, error: failed }));
+    expect(say).toHaveBeenCalledTimes(2);
   });
 
   it('renders the step content between the body and the actions', async () => {

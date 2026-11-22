@@ -13,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
+import { withActivate } from '../a11y/actions';
 import { haptics } from '../haptics';
 import type { IconName } from './Button';
 
@@ -103,8 +104,9 @@ function land(x: SharedValue<number>, lag: SharedValue<number>) {
  * go while it is armed, or flicking it (800 pt/s or faster, past 40 % of the way and at least 56 pt),
  * fires `onSwipe` with a success haptic. Only letting go decides: letting go anywhere else springs the
  * knob home and does nothing, and a tap does nothing, so a knock or a brush cannot fire it. The drag
- * runs on the UI thread. A screen reader's double-tap is a deliberate act, so the
- * `activate` action fires straight away.
+ * runs on the UI thread. A screen reader's double-tap is a deliberate act, so it fires straight
+ * away: VoiceOver's arrives as `onAccessibilityTap` (a tap sent to the knob would do nothing), and
+ * TalkBack's as the `activate` action.
  *
  * Disabled, the capsule shows at half strength without its chevron and takes nothing (a drag under
  * way when it greys out springs home). While `busy` the knob stays at the end with a spinner. When `busy` clears (the action failed), or
@@ -235,9 +237,12 @@ export function SwipeButton({
         accessibilityLabel={accessibilityLabel}
         accessibilityHint={accessibilityHint}
         accessibilityState={{ disabled: inactive, busy }}
-        accessibilityActions={[{ name: 'activate' }]}
+        accessibilityActions={withActivate()}
         onAccessibilityAction={(e) => {
           if (e.nativeEvent.actionName === 'activate' && !inactive) commit();
+        }}
+        onAccessibilityTap={() => {
+          if (!inactive) commit();
         }}
         onLayout={onLayout}
         style={[

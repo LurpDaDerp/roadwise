@@ -7,7 +7,7 @@ import { useDataSource, useDb } from '@/data/queries/context';
 import { useWrappedArchive, type WrappedArchiveEntry } from '@/data/server/wrapped';
 import { wrappedMonthHref } from '@/features/social/links';
 import { deviceZone } from '@/lib/deviceZone';
-import { Card, IconButton, Text, useTheme, withAlpha } from '@/ui';
+import { Card, IconButton, Text, useTheme, withActivate, withAlpha } from '@/ui';
 
 import { ArchetypeIcon } from './ArchetypeIcon';
 import { archetypePattern, archetypeStops } from './archetypes';
@@ -28,7 +28,7 @@ export function WrappedCardView({ entry, onOpen, onDismiss }: { entry: WrappedAr
       accessibilityLabel={`${title}. ${copy.home.body}`}
       accessibilityHint={copy.home.hint}
       // VoiceOver reads the card as one button, so its ✕ is an action on it too.
-      accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.home.dismiss }]}
+      accessibilityActions={withActivate({ name: 'dismiss', label: copy.home.dismiss })}
       onAccessibilityAction={(e) => {
         if (e.nativeEvent.actionName === 'activate') onOpen();
         else if (e.nativeEvent.actionName === 'dismiss') onDismiss();

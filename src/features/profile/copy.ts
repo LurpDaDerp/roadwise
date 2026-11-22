@@ -44,7 +44,8 @@ export const profileCopy = {
     visibilityHint: 'It starts as Only me. Choose Friends and they’ll see it on your profile.',
     zones: 'Privacy zones',
     zonesSubtitle: 'Hide routes near home or school',
-    privacy: 'It never shows routes in your privacy zones or the first and last quarter mile of a drive.',
+    /** A zone trims a drive when it ends, before it uploads, so drives uploaded before it was added keep those routes. */
+    privacy: 'It never shows the first and last quarter mile of a drive, or routes inside a privacy zone on drives recorded after you added the zone.',
     noMap: "Maps aren't available in this build.",
   },
 
@@ -82,7 +83,8 @@ export const profileCopy = {
     report: 'Report',
     block: 'Block',
     blockTitle: (u: string) => `Block ${u}?`,
-    blockBody: "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Settings.",
+    /** The blocked list is a row on the Profile tab (Settings has none). */
+    blockBody: "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Profile › Blocked users.",
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',

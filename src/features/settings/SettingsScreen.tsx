@@ -196,7 +196,13 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   );
 
   // The local mirror follows the server: written only once `update_profile` has taken the change.
+  // A tap on the units already saved (or being saved) writes nothing; checked against the server's
+  // value, not the mirror, so a tap before the summary loads still saves.
   const onUnits = async (next: Units) => {
+    if (next === edit.value('units', profile?.units)) {
+      edit.clearError();
+      return;
+    }
     if (!(await edit.save('units', next))) return;
     setUnits(next);
     await writeUnits(settings, next).catch(() => {});
@@ -274,7 +280,11 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
           title={copy.heatmap}
           value={shownVisibility(edit.value('heatmap_visibility', profile?.heatmap_visibility))}
           segments={VISIBILITY_SEGMENTS}
-          onChange={(v) => void edit.save('heatmap_visibility', v)}
+          onChange={(v) => {
+            // The choice already saved writes nothing (a saved 'clan' that shows as Only me still saves).
+            if (v === edit.value('heatmap_visibility', profile?.heatmap_visibility)) edit.clearError();
+            else void edit.save('heatmap_visibility', v);
+          }}
           testID="settings-heatmap-visibility"
         />
       </Section>

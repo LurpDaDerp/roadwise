@@ -2,7 +2,8 @@
 // that discards the drive (a passenger, a bus, a train). It shows while the drive's 2-minute budget
 // lasts (time with the driving screen in front, the host's count) and is gone for good once it is
 // spent. Quiet print, not a button: it must be findable, never inviting. Its touch box reaches the
-// HUD's 64 pt through the hit slop. A touch that starts while the screen is dimmed only wakes it.
+// HUD's 64 pt through the hit slop. A touch that starts while the screen is dimmed only wakes it; a
+// screen reader's double-tap acts at once.
 import { memo, useRef } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 
@@ -45,6 +46,11 @@ function NotDrivingLinkView({
         }
         onPress();
       }}
+      // VoiceOver's double-tap: a deliberate act, never a wake, so it acts at once. Without this it
+      // comes as a touch, and the screen dims 10 s after the last touch (a screen reader's swipes
+      // send none), so that touch would only wake it. TalkBack's click skips the press-in, so it
+      // already acts at once.
+      onAccessibilityTap={onPress}
       style={({ pressed }) => [styles.box, { opacity: pressed ? 0.6 : 1 }]}
     >
       <Text allowFontScaling={false} numberOfLines={1} style={[styles.words, { color: p.inkMuted, textDecorationColor: p.inkMuted }]}>

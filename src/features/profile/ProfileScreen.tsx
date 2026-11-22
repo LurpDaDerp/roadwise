@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useStatSums } from '@/data/queries';
 import { useMySummary } from '@/data/server/summary';
+import { usePullRefresh } from '@/features/leagues/components';
 import { useFriends } from '@/features/social/api';
 import { LinkRow, Section } from '@/features/settings/parts';
 import { SETTINGS_HREFS } from '@/features/settings/routes';
@@ -41,6 +42,9 @@ export function ProfileScreen() {
   const requests = friends.data?.incoming.length ?? 0;
   // the sky behind the tabs scrolls with Profile
   const onScroll = useSkyScrollHandler();
+  // The spinner shows for the driver's own pull only, until its reads are done: a background
+  // refetch (a focus, a profile edit, a settled drive) would show it and move the page with nobody pulling.
+  const pull = usePullRefresh(() => Promise.allSettled([summary.refetch(), friends.refetch(), totals.refetch()]));
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']} testID="profile-safe-area">
@@ -51,11 +55,7 @@ export function ProfileScreen() {
         scrollEventThrottle={16}
         contentContainerStyle={{ padding: th.space.lg, gap: th.space.xl }}
         refreshControl={
-          <RefreshControl
-            refreshing={summary.isRefetching}
-            onRefresh={() => void Promise.all([summary.refetch(), friends.refetch(), totals.refetch()])}
-            tintColor={th.onSky.text}
-          />
+          <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={th.onSky.text} />
         }
       >
         <ScreenTitle onSky testID="profile-title">

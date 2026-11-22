@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { usePullRefresh } from '@/features/leagues/components';
 import { Section, TopBar } from '@/features/settings/parts';
 import { useFriends, useServerAction, type FriendsList, type PublicCard } from '@/features/social/api';
 import { profileHref } from '@/features/social/links';
@@ -30,6 +31,11 @@ export function FriendsScreen() {
   const insets = useSafeAreaInsets();
   const friends = useFriends();
   const action = useServerAction();
+  // The spinner shows for the driver's own pull only: a background refetch (a focus, an answered
+  // or cancelled request) would show it and move the page with nobody pulling.
+  const pull = usePullRefresh(friends.refetch);
+  // The busy button: a sent request's user id (Cancel), or `accept:` / `decline:` and the id, so
+  // Decline never spins Accept although both answer with the same call.
   const [busyId, setBusyId] = useState<string | null>(null);
   const data = friends.data ? named(friends.data) : undefined;
 
@@ -46,7 +52,7 @@ export function FriendsScreen() {
       testID="friends-screen"
       style={{ flex: 1, backgroundColor: th.colors.bg }}
       contentContainerStyle={{ padding: th.space.lg, paddingTop: th.space.lg + insets.top, paddingBottom: th.space.lg + insets.bottom, gap: th.space.xl }}
-      refreshControl={<RefreshControl refreshing={friends.isRefetching} onRefresh={() => void friends.refetch()} tintColor={th.colors.accent} />}
+      refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={th.colors.accent} />}
     >
       <TopBar title={copy.title} />
       <Button label={copy.add} icon="person-add" onPress={() => router.push(ADD_FRIENDS_HREF)} testID="friends-add" />
@@ -80,9 +86,9 @@ export function FriendsScreen() {
                       icon="checkmark"
                       size="sm"
                       variant="secondary"
-                      loading={busyId === c.user_id && action.pending === 'respond_friend_request'}
+                      loading={busyId === `accept:${c.user_id}`}
                       disabled={busyId !== null}
-                      onPress={() => act(c.user_id, 'respond_friend_request', { p_user_id: c.user_id, p_accept: true })}
+                      onPress={() => act(`accept:${c.user_id}`, 'respond_friend_request', { p_user_id: c.user_id, p_accept: true })}
                       accessibilityHint={copy.acceptHint(c.username)}
                       style={{ flex: 1 }}
                       testID={`accept-${c.username}`}
@@ -92,7 +98,7 @@ export function FriendsScreen() {
                       size="sm"
                       variant="ghost"
                       disabled={busyId !== null}
-                      onPress={() => act(c.user_id, 'respond_friend_request', { p_user_id: c.user_id, p_accept: false })}
+                      onPress={() => act(`decline:${c.user_id}`, 'respond_friend_request', { p_user_id: c.user_id, p_accept: false })}
                       accessibilityHint={copy.declineLabel(c.username)}
                       style={{ flex: 1 }}
                       testID={`decline-${c.username}`}

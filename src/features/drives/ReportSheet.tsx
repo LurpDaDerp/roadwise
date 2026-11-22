@@ -43,15 +43,24 @@ export function ReportSheet({
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
 
-  // A different event starts a fresh report (state adjusted during render, not in an effect).
-  const [shownFor, setShownFor] = useState(event?.id);
-  if (shownFor !== event?.id) {
-    setShownFor(event?.id);
+  // The event on show. Closing (`event` going null) keeps it: iOS fades the sheet out as it stands,
+  // so it must not empty first. Opening again, or a different event, starts a fresh report (state
+  // adjusted during render, not in an effect); a fresh copy of the same event keeps the report.
+  const [shown, setShown] = useState(event);
+  const [open, setOpen] = useState(event !== null);
+  if (event !== null && (!open || event.id !== shown?.id)) {
+    setShown(event);
+    setOpen(true);
     setReason(null);
     setState('idle');
+  } else if (event !== null && event !== shown) {
+    setShown(event);
+  } else if (event === null && open) {
+    setOpen(false);
   }
+  const body = event ?? shown;
 
-  const reasons = event ? availableReasons(event.type, allowNotDriving) : [];
+  const reasons = body ? availableReasons(body.type, allowNotDriving) : [];
 
   const send = async () => {
     if (!event || !reason) return;
@@ -70,10 +79,10 @@ export function ReportSheet({
 
   return (
     <Sheet visible={event !== null} onClose={onClose} onDismiss={onDismiss} title="Report this event" testID="report-sheet">
-      {event ? (
+      {body ? (
         <View style={{ gap: t.space.md }}>
           <Text variant="subhead" tone="muted">
-            {eventName(event.type, event.tier)} at {formatClock(event.startedAt)}
+            {eventName(body.type, body.tier)} at {formatClock(body.startedAt)}
           </Text>
           {state === 'sent' ? (
             <>

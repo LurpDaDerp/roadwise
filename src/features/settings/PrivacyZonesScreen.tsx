@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, Switch, TextInput, useColorScheme, View } from 'react-native';
 
 import { createPermissionsAdapter } from '@/core/permissions';
@@ -94,10 +94,11 @@ export interface PrivacyZonesDeps {
 }
 
 /**
- * `/settings/privacy-zones`: up to 6 places whose surroundings never show on a map. First the
- * driver's saved places (Settings › Places), each with a switch that hides it under a 300 m zone
- * centred on it (a tap on a hidden one sets its size), or a row to add places when there are none.
- * Then the other zones, each a name, a centre (current location, or a tap on the map) and a
+ * `/settings/privacy-zones`: up to 6 places whose surroundings are cut from the copy of each drive
+ * that is uploaded, so friends and the heat map never get them (the driver's own maps and share
+ * cards draw the whole route). First the driver's saved places (Settings › Places), each with a
+ * switch that hides it under a 300 m zone centred on it (a tap on a hidden one sets its size), or a
+ * row to add places when there are none. Then the other zones, each a name, a centre (current location, or a tap on the map) and a
  * 200–800 m radius set with a stepper. Everything stays on this phone.
  */
 export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
@@ -112,17 +113,22 @@ export function PrivacyZonesScreen({ deps = {} }: { deps?: PrivacyZonesDeps }) {
   const [problem, setProblem] = useState<ZoneProblem | null>(null);
   const [saveError, setSaveError] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    void readZones(settings)
-      .catch(() => [])
-      .then((z) => {
-        if (live) setZones(z);
-      });
-    return () => {
-      live = false;
-    };
-  }, [settings]);
+  // Read on every focus, not once: a second Privacy zones screen (pushed from Places, itself pushed
+  // from here) may store zones meanwhile, and every save below is built from this list, so a stale
+  // one would drop them.
+  useFocusEffect(
+    useCallback(() => {
+      let live = true;
+      void readZones(settings)
+        .catch(() => [])
+        .then((z) => {
+          if (live) setZones(z);
+        });
+      return () => {
+        live = false;
+      };
+    }, [settings])
+  );
 
   const persist = async (next: PrivacyZone[]): Promise<boolean> => {
     setSaveError(false);

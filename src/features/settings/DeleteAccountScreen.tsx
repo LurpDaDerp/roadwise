@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getSharedOnline } from '@/data/net/net';
 import { useDb } from '@/data/queries/context';
@@ -8,7 +9,7 @@ import { useSession } from '@/data/supabase/session';
 import { isBusyStatus } from '@/drive/policy';
 import { appleDeletionCode, hasAppleSignIn, type AppleDeletionCode } from '@/features/auth/appleDeletionCode';
 import { useDrive } from '@/drive/useDrive';
-import { Banner, Button, Card, Screen, Text, useTheme } from '@/ui';
+import { Banner, Button, Card, Screen, Text, useAnnounce, useTheme } from '@/ui';
 
 import { deleteMyAccount, runAccountDeletion, type DeleteResult } from './api';
 import { settingsCopy } from './copy';
@@ -17,6 +18,13 @@ import { ExportMessage, useExport, type ExportDeps } from './exportFlow';
 import { TopBar } from './parts';
 
 const copy = settingsCopy.deleteAccount;
+
+/** The words of the banner a delete that did not go through shows, by reason. */
+const FAILURE_LINE: Record<Exclude<DeleteResult, { ok: true }>['reason'], string> = {
+  offline: copy.offline,
+  failed: copy.failed,
+  session_gone: copy.sessionGone,
+};
 
 export interface DeleteAccountDeps extends ExportDeps {
   /** The server call; `appleCode` when Apple's sheet gave one. */
@@ -48,11 +56,18 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<Exclude<DeleteResult, { ok: true }>['reason'] | null>(null);
   const confirmed = typed.trim() === copy.confirmWord;
+  // A delete that did not go through is read out as its banner appears: the screen reader stays on
+  // the button, and a banner says nothing by itself.
+  useAnnounce(failure === null ? null : FAILURE_LINE[failure]);
 
   // Typing DELETE: the page lifts above the keyboard (the button with it) and scrolls the field
   // into view once the keyboard is up. On Android the lift is the Screen's own (`useKeyboardLift`:
   // the page is padded by the keyboard's overlap a moment after the keyboard reports), so the
-  // scroll to the end also follows the scroll view's shrink, when its new height lands.
+  // scroll to the end also follows the scroll view's shrink, when its new height lands. On iPhone
+  // the avoider measures itself from the Screen's content, which starts below the safe-area top,
+  // so it is offset by that inset; without it the lift comes up short and the button stays under
+  // the keyboard.
+  const insets = useSafeAreaInsets();
   const scroll = useRef<ScrollView>(null);
   const typing = useRef(false);
   useEffect(() => {
@@ -89,7 +104,12 @@ export function DeleteAccountScreen({ deps = {} }: { deps?: DeleteAccountDeps })
   return (
     <Screen testID="delete-account-screen">
       <TopBar title={copy.title} />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} testID="delete-keyboard-avoider">
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        style={{ flex: 1 }}
+        testID="delete-keyboard-avoider"
+      >
         <ScrollView
           ref={scroll}
           style={{ flex: 1 }}

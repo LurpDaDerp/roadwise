@@ -3,7 +3,7 @@ import { useRouter } from 'expo-router';
 import { useSyncExternalStore } from 'react';
 import { View } from 'react-native';
 
-import { Card, IconButton, Text, useTheme } from '@/ui';
+import { Card, IconButton, Text, useTheme, withActivate } from '@/ui';
 
 import { dashpalCopy } from '../copy';
 import type { DashcamState } from '../runtime';
@@ -52,7 +52,7 @@ export function ReaimCard({ hidden = false }: { hidden?: boolean }) {
       accessibilityLabel={`${copy.homeTitle}. ${copy.homeBody}`}
       accessibilityHint={copy.homeHint}
       // VoiceOver reads the card as one button, so its ✕ is an action on it too.
-      accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.homeNotNow }]}
+      accessibilityActions={withActivate({ name: 'dismiss', label: copy.homeNotNow })}
       onAccessibilityAction={(e) => {
         if (e.nativeEvent.actionName === 'activate') open();
         else if (e.nativeEvent.actionName === 'dismiss') setSnoozed(true);

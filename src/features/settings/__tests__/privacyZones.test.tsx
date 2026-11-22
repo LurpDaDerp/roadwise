@@ -23,7 +23,33 @@ import {
 import { PrivacyZonesScreen } from '../PrivacyZonesScreen';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }) }));
+type FocusEffect = () => void | (() => void);
+/** The focus effects of the mounted screens, each with its blur cleanup, so a test can bring a screen back into focus. */
+const mockFocused = new Map<FocusEffect, void | (() => void)>();
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }),
+    // Runs on mount, and again on `refocus()`.
+    useFocusEffect: (effect: () => void | (() => void)) =>
+      useEffect(() => {
+        mockFocused.set(effect, effect());
+        return () => {
+          const undo = mockFocused.get(effect);
+          mockFocused.delete(effect);
+          if (typeof undo === 'function') undo();
+        };
+      }, [effect]),
+  };
+});
+/** The screen loses focus and gets it back (Back from a screen pushed over it). */
+const refocus = () =>
+  act(async () => {
+    for (const [effect, undo] of mockFocused) {
+      if (typeof undo === 'function') undo();
+      mockFocused.set(effect, effect());
+    }
+  });
 const mockRecompute = jest.fn();
 jest.mock('@/features/spots/recompute', () => ({ requestSpotRecompute: () => mockRecompute() }));
 
@@ -99,7 +125,9 @@ describe('the privacy zones screen', () => {
     const locate = jest.fn(async () => ({ ok: true as const, lat: 40.75, lng: -73.99 }));
     await w.render(<PrivacyZonesScreen deps={{ locate }} />);
     expect(await screen.findByTestId('zones-empty')).toBeOnTheScreen();
+    expect(screen.getByText(settingsCopy.zones.intro)).toBeOnTheScreen();
     expect(screen.getByText(settingsCopy.zones.local)).toBeOnTheScreen();
+    expect(screen.getByText(settingsCopy.zones.trim)).toBeOnTheScreen();
 
     await tap('zones-add');
     await tap('zone-preset-Home');
@@ -115,6 +143,25 @@ describe('the privacy zones screen', () => {
     expect(await screen.findByText('Home')).toBeOnTheScreen();
     // The problem spots are worked out again: one inside the zone gives up its rank.
     expect(mockRecompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the zones again when it comes back into focus, so a zone stored meanwhile shows and is kept by the next save', async () => {
+    const w = await appWorld();
+    const locate = jest.fn(async () => ({ ok: true as const, lat: 40.75, lng: -73.99 }));
+    await w.render(<PrivacyZonesScreen deps={{ locate }} />);
+    expect(await screen.findByTestId('zones-empty')).toBeOnTheScreen();
+
+    // A second Privacy zones screen (Add your places › Places › Privacy zones) stores a zone, then Back.
+    await writeZones(w.settings, [zone({ id: 'school', name: 'School' })]);
+    await refocus();
+    expect(await screen.findByTestId('zone-school')).toBeOnTheScreen();
+
+    await tap('zones-add');
+    await tap('zone-preset-Home');
+    await tap('zone-use-location');
+    await waitFor(() => expect(screen.getByTestId('zone-center-status')).toHaveTextContent(settingsCopy.zones.centerSet));
+    await tap('zone-save');
+    await waitFor(async () => expect((await readZones(w.settings)).map((z) => z.name)).toEqual(['School', 'Home']));
   });
 
   it('says what is missing instead of saving a zone with no centre', async () => {

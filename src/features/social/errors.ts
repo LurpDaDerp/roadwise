@@ -1,8 +1,9 @@
 /**
  * Server errors in words a teen reads once and understands. The SQL raises fixed messages
  * (`supabase/migrations/0001_core.sql`, `0006_social.sql`); each known one maps to a line here.
- * Anything else is either "couldn't reach RoadWise" (no RpcError: the request never landed) or a
- * plain "try again".
+ * Anything else is either "couldn't reach RoadWise" (no RpcError, or one with an empty code: the
+ * Supabase client returns a request that got no answer as an error with code '', where every
+ * server refusal carries a Postgres or PostgREST code) or a plain "try again".
  */
 import { RpcError } from '@/data/server/rpc';
 
@@ -26,7 +27,7 @@ export const GENERIC_ERROR = 'Something went wrong. Try again.';
 
 /** The line to show for a failed server call. */
 export function friendlyError(error: unknown): string {
-  if (!(error instanceof RpcError)) return NETWORK_ERROR;
+  if (!(error instanceof RpcError) || error.code === '') return NETWORK_ERROR;
   const message = error.message.toLowerCase();
   for (const [needle, line] of KNOWN) if (message.includes(needle)) return line;
   return GENERIC_ERROR;

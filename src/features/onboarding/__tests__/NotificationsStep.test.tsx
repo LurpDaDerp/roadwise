@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
 import {
@@ -126,13 +127,44 @@ test('denied: no sync, said plainly, and Continue moves on (D12)', async () => {
   expect(onNext).toHaveBeenCalledTimes(1);
 });
 
-test('Not now asks nothing', async () => {
+test('Android: Not now asks nothing', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', notifications: 'undetermined' }));
   const { onNext, ensureChannels } = await renderStep('android', adapter);
-  await press(await screen.findByTestId('notifications-not-now'));
+  expect(await screen.findByTestId('notifications-allow')).toHaveTextContent('Allow notifications');
+  await press(screen.getByTestId('notifications-not-now'));
   expect(onNext).toHaveBeenCalledTimes(1);
   expect(adapter.requestNotifications).not.toHaveBeenCalled();
   expect(ensureChannels).not.toHaveBeenCalled();
+});
+
+test("iPhone: before the system alert, one button, Continue, which opens it; no Not now (Apple's rule)", async () => {
+  const adapter = fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' }));
+  await renderStep('ios', adapter);
+  await waitFor(() => expect(screen.getByTestId('notifications-allow')).toBeEnabled());
+  expect(screen.getByTestId('notifications-allow')).toHaveTextContent('Continue', { exact: true });
+  expect(screen.queryByTestId('notifications-not-now')).toBeNull();
+  expect(screen.queryByTestId('notifications-continue')).toBeNull();
+  expect(adapter.requestNotifications).not.toHaveBeenCalled();
+});
+
+test('iPhone: a request that fails (no alert came) says so, offers Continue again and Not now, which moves on (D12)', async () => {
+  const say = jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions);
+  say.mockClear();
+  const adapter = fakeAdapter(snap({ platform: 'ios', notifications: 'undetermined' }));
+  adapter.requestNotifications = jest.fn(async () => {
+    adapter.log.push('requestNotifications');
+    throw new Error('no answer');
+  });
+  const { onNext, requestDeviceSync } = await renderStep('ios', adapter);
+  await press(await screen.findByTestId('notifications-allow'));
+  expect(await screen.findByText(copy.failed)).toBeOnTheScreen();
+  // Read out as it appears: VoiceOver stays on the button.
+  expect(say.mock.calls).toEqual([[copy.failed, { queue: true }]]);
+  expect(screen.getByTestId('notifications-allow')).toHaveTextContent('Continue', { exact: true });
+  await press(screen.getByTestId('notifications-not-now'));
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(requestDeviceSync).not.toHaveBeenCalled();
+  expect(adapter.requestNotifications).toHaveBeenCalledTimes(1);
 });
 
 test.each(['ios', 'android'] as const)('%s: the lock-screen drive line shows only on Android (its drive notification needs this permission)', async (platform) => {

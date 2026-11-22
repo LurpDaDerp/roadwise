@@ -75,3 +75,39 @@ test('the disc sits under the current tab from the render that selects it, with 
   );
   expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 8 + 2 * 80 + 16 });
 });
+
+test('dark: the disc is centred on its icon inside the pill’s 1 pt hairline, across and down', async () => {
+  const view = await render(
+    <ThemeProvider scheme="dark" reduceMotion={false}>
+      <FloatingTabBar {...props(0).p} />
+    </ThemeProvider>
+  );
+  // A 338 pt frame: the 1 pt hairline and 8 pt padding each side leave four 80 pt tabs. The disc is
+  // placed from inside the hairline, so it sits 16 pt into its 80 pt tab and 7 pt down the 62 pt inside.
+  await fireEvent(screen.getByTestId('tab-bar'), 'layout', { nativeEvent: { layout: { width: 338 } } });
+  expect(StyleSheet.flatten(screen.getByTestId('tab-bar').props.style)).toMatchObject({ borderWidth: 1 });
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 24, top: 7 });
+  await view.rerender(
+    <ThemeProvider scheme="dark" reduceMotion={false}>
+      <FloatingTabBar {...props(3).p} />
+    </ThemeProvider>
+  );
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 8 + 3 * 80 + 16, top: 7 });
+});
+
+test('light has no hairline: the disc is 8 pt down; a switch of look moves it with no new layout', async () => {
+  const view = await render(
+    <ThemeProvider scheme="light" reduceMotion>
+      <FloatingTabBar {...props(3).p} />
+    </ThemeProvider>
+  );
+  await fireEvent(screen.getByTestId('tab-bar'), 'layout', { nativeEvent: { layout: { width: 336 } } });
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 8 + 3 * 80 + 16, top: 8 });
+  // The same 336 pt frame in dark: the hairline takes 2 pt, so each tab is 79.5 pt.
+  await view.rerender(
+    <ThemeProvider scheme="dark" reduceMotion>
+      <FloatingTabBar {...props(3).p} />
+    </ThemeProvider>
+  );
+  expect(StyleSheet.flatten(screen.getByTestId('tab-disc').props.style)).toMatchObject({ left: 8 + 3 * 79.5 + (79.5 - 48) / 2, top: 7 });
+});

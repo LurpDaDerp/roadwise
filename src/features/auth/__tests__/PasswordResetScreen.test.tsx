@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { BackHandler } from 'react-native';
+import { AccessibilityInfo, BackHandler } from 'react-native';
 
 import type { ResendResult, VerifyResult } from '@/features/auth/emailPassword';
 import { PasswordResetScreen, resetCopy } from '@/features/auth/PasswordResetScreen';
@@ -35,6 +35,7 @@ beforeEach(() => {
   mockFinish.mockReset().mockResolvedValue('ok');
   mockAbandon.mockReset().mockResolvedValue(undefined);
   onBack.mockReset();
+  jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mockClear();
   backHandlers = [];
   jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_e, fn) => {
     backHandlers.push(fn);
@@ -57,6 +58,9 @@ const mount = (initialEmail = 'ava@example.com') =>
       <PasswordResetScreen initialEmail={initialEmail} onBack={onBack} />
     </ThemeProvider>
   );
+
+/** What the screen asked VoiceOver to read out (the tests run as an iPhone), in order. */
+const spoken = () => jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mock.calls.map(([text]) => text);
 
 const SEND = { name: resetCopy.send };
 const SET = { name: resetCopy.setPassword };
@@ -116,6 +120,9 @@ test.each([
   await fireEvent.press(screen.getByRole('button', SEND));
   expect(await screen.findByRole('alert')).toHaveTextContent(words);
   expect(screen.queryByText(resetCopy.codeTitle)).toBeNull();
+  // Read out once as it appears, with no live region to say it again on Android.
+  expect(spoken()).toEqual([words]);
+  expect(screen.getByRole('alert').props.accessibilityLiveRegion).toBeUndefined();
 });
 
 test('Set new password waits for 8 digits and a new password that meets the rules, typed twice alike', async () => {
@@ -152,6 +159,7 @@ test('a wrong code says so; trying again checks again with the password as typed
   await fillCode();
   await fireEvent.press(screen.getByRole('button', SET));
   expect(await screen.findByRole('alert')).toHaveTextContent('That code is wrong or has expired. Check it, or send a new one.');
+  expect(spoken()).toEqual(['That code is wrong or has expired. Check it, or send a new one.']);
   await fillCode({ password: 'Blue7ocean river', confirm: 'Blue7ocean river' });
   await fireEvent.press(screen.getByRole('button', SET));
   expect(mockStart).toHaveBeenLastCalledWith('ava@example.com', 'Blue7ocean river', 'recovery');
@@ -181,6 +189,7 @@ test('Resend code waits the minute, then sends a fresh code and clears the old o
   expect(mockRequestReset).toHaveBeenCalledTimes(2);
   expect(await screen.findByText(resetCopy.resent)).toBeOnTheScreen();
   expect(screen.getByLabelText(resetCopy.codeLabel).props.value).toBe('');
+  expect(spoken()).toEqual([resetCopy.resent]);
 });
 
 test('"Use a different email" goes back to the email step and gives up what was held', async () => {

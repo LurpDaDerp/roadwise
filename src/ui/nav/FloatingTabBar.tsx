@@ -42,12 +42,17 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
   const t = useTheme();
   const c = t.colors;
   const light = t.scheme === 'light';
+  // Dark draws a hairline round the pill. The tabs share the space inside it, and the disc is placed
+  // from inside it, so both the slot and the disc's top leave the hairline out.
+  const border = light ? 0 : 1;
   const pill = light ? c.primary : c.surfaceRaised;
   const disc = light ? c.onPrimary : c.primary;
   const onDisc = light ? c.primary : c.onPrimary;
   const idle = light ? '#A9A9B0' : c.textMuted;
+  // The pill's width less its padding. The hairline comes off at render, so a switch of look needs no new layout.
   const [width, setWidth] = useState(0);
-  const slot = state.routes.length > 0 && width > 0 ? width / state.routes.length : 0;
+  const inner = width - 2 * border;
+  const slot = state.routes.length > 0 && inner > 0 ? inner / state.routes.length : 0;
   // The disc's place is plain layout, under the current tab from the render that selects it; the
   // spring is a layout transition from the old place. The current icon is drawn for the disc, so a
   // transition that fails to run lands the disc at once rather than leaving that icon on the pill.
@@ -71,7 +76,7 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
           borderRadius: TAB_BAR_HEIGHT / 2,
           borderCurve: 'continuous',
           backgroundColor: pill,
-          borderWidth: light ? 0 : 1,
+          borderWidth: border,
           borderColor: c.border,
           flexDirection: 'row',
           alignItems: 'center',
@@ -87,7 +92,7 @@ export function FloatingTabBar({ state, descriptors, navigation, insets }: Float
             style={{
               position: 'absolute',
               left: 8 + state.index * slot + (slot - DISC) / 2,
-              top: (TAB_BAR_HEIGHT - DISC) / 2,
+              top: (TAB_BAR_HEIGHT - 2 * border - DISC) / 2,
               width: DISC,
               height: DISC,
               borderRadius: DISC / 2,

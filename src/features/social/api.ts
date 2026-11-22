@@ -11,7 +11,7 @@ import { invalidateAfterWrite } from '@/data/server/invalidate';
 import { SERVER_SLOW_STALE_MS, useServerQuery } from '@/data/server/useServerQuery';
 import type { AxisKey, StatSums } from '@scoring';
 
-import { friendlyError } from './errors';
+import { friendlyError, isNotFound } from './errors';
 import { USERNAME_RE } from './links';
 
 /**
@@ -123,7 +123,9 @@ export interface ServerAction {
 
 /**
  * One write at a time: a second tap while one is in flight is ignored. A failure keeps the screen
- * as it was and sets `error` to friendly copy.
+ * as it was and sets `error` to friendly copy. A "not found" refusal (P0002: the request was
+ * cancelled or answered, they are not friends anymore, the driver is gone) means the screen is out
+ * of date, so it also re-reads what that write touches; the error line stays while it does.
  */
 export function useServerAction(): ServerAction {
   const qc = useQueryClient();
@@ -143,6 +145,8 @@ export function useServerAction(): ServerAction {
         return true;
       } catch (e) {
         setError(friendlyError(e));
+        // Not awaited: the button frees up now, and the re-read lands when it lands.
+        if (isNotFound(e)) void invalidateAfterWrite(qc, fn).catch(() => undefined);
         return false;
       } finally {
         busy.current = false;

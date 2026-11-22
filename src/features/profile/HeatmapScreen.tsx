@@ -39,7 +39,11 @@ export function HeatmapScreen() {
         <SegmentedControl<HeatmapVisibility>
           segments={VISIBILITY_SEGMENTS}
           value={shownVisibility(edit.value('heatmap_visibility', profile?.heatmap_visibility)) ?? 'only_me'}
-          onChange={(v) => void edit.save('heatmap_visibility', v)}
+          onChange={(v) => {
+            // The choice already saved writes nothing (a saved 'clan' that shows as Only me still saves).
+            if (v === edit.value('heatmap_visibility', profile?.heatmap_visibility)) edit.clearError();
+            else void edit.save('heatmap_visibility', v);
+          }}
           accessibilityLabel={copy.visibility}
           testID="heatmap-visibility"
         />

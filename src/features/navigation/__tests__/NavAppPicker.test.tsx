@@ -51,3 +51,10 @@ test('an iPhone SE in portrait: the list keeps a scrolling window at least a row
   const window = inner - 12 - PANEL_CAPSULE_PT; // the gap and the pinned Cancel
   expect(window).toBeGreaterThanOrEqual(NAV_ROW_MIN_PT);
 });
+
+test('in Settings the sheet scrolls the whole picker, so the picker list never takes the drag; the driving screen keeps its own scroller', async () => {
+  await renderPicker({ mode: 'settings' });
+  expect(screen.getByTestId('nav-picker-scroll').props.scrollEnabled).toBe(false);
+  await renderPicker({ mode: 'first' });
+  expect(screen.getByTestId('nav-picker-scroll').props.scrollEnabled).toBe(true);
+});

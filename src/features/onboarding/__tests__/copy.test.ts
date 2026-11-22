@@ -77,8 +77,19 @@ describe('onboarding copy', () => {
     for (const s of strings(onboardingCopy.motion)) expect(s).not.toMatch(/hard braking|detect/i);
   });
 
+  it("on an iPhone, the button before each system alert says Continue, never Allow, and no line names an alert's option (Apple's rule)", () => {
+    expect([onboardingCopy.location.ios.allow, onboardingCopy.motion.allow.ios, onboardingCopy.notifications.allow.ios]).toEqual(['Continue', 'Continue', 'Continue']);
+    for (const s of strings(onboardingCopy.location.ios)) expect(s).not.toMatch(/\bchoose\b|Allow While Using|Always Allow/i);
+    // Android keeps its own words (Google Play wants a way to decline its disclosure).
+    expect([onboardingCopy.location.android.allow, onboardingCopy.motion.allow.android, onboardingCopy.notifications.allow.android]).toEqual([
+      'Allow location',
+      'Allow motion access',
+      'Allow notifications',
+    ]);
+  });
+
   it('says why each permission is asked, in one line where it is asked', () => {
-    expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
+    expect(onboardingCopy.location.ios.steps).toBe('Your iPhone asks twice.');
     expect(onboardingCopy.location.android.body).toBe(
       'RoadWise uses your location to notice when you start driving and to record the drive, even when the app is closed. It also checks the local weather.'
     );

@@ -3,7 +3,7 @@ import { View } from 'react-native';
 
 import { recordPrompt, type Grant } from '@/core/permissions';
 import { markSettingsReturn } from '@/features/permissions/usePermissionHealth';
-import { Card, Skeleton, Text, useTheme } from '@/ui';
+import { Card, Skeleton, Text, useAnnounce, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -21,6 +21,8 @@ const copy = onboardingCopy.motion;
  * A7 · Motion & Fitness (iOS) / Physical activity (Android). One OS prompt on the driver's tap,
  * through the drive-sense port on both platforms (`requestMotion`, M3's `requestMotionPermission`).
  * A grant moves on; any other answer says what it means and the step still moves on (D12). `unavailable` makes no claim about when the phone will ask.
+ * On an iPhone the screen before the system alert has one button, Continue, which opens it (Apple's
+ * rule for a screen shown before its alert); Not now shows there only once a request has been made.
  */
 export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: PermissionStepDeps }) {
   const th = useTheme();
@@ -31,10 +33,14 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
   const [answer, setAnswer] = useState<Grant | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** Whether this screen has made its request (answered, or failed with no alert). */
+  const [asked, setAsked] = useState(false);
   const leaving = useRef(false);
 
   const current = answer !== undefined ? answer : phone.status === 'ready' ? phone.snapshot.motion : undefined;
   const isGranted = current === 'granted';
+  // A failed request is read out as its line appears: the screen reader stays on the button.
+  useAnnounce(failed ? copy.failed : null);
 
   const leave = () => {
     if (leaving.current) return;
@@ -54,6 +60,7 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
     } catch {
       setFailed(true);
     } finally {
+      setAsked(true);
       setBusy(false);
     }
   };
@@ -86,13 +93,15 @@ export function MotionStep({ ctx, onNext, onBack, deps }: StepProps & { deps?: P
   } else if (answer === undefined) {
     // Nothing asked yet on this screen: the primer, whatever the phone said before.
     primary = {
-      label: copy.allow,
+      label: copy.allow[ctx.platform],
       onPress: () => void allow(),
       loading: busy,
       disabled: phone.status === 'loading',
       testID: 'motion-allow',
     };
-    secondary = { label: copy.notNow, onPress: () => leave(), disabled: busy, testID: 'motion-not-now' };
+    // iPhone: no way past the alert before it has been asked. Once a request is made (it failed, or
+    // the driver is back from Settings), Not now keeps the step passable (D12).
+    if (ctx.platform === 'android' || asked) secondary = { label: copy.notNow, onPress: () => leave(), disabled: busy, testID: 'motion-not-now' };
   } else if (answer === 'denied' || answer === 'undetermined') {
     primary = cont;
     secondary = settingsAction;

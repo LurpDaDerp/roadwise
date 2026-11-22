@@ -19,6 +19,14 @@ describe('friendlyError', () => {
     expect(friendlyError(new TypeError('Network request failed'))).toBe(NETWORK_ERROR);
   });
 
+  it('says "connection" for the client’s no-answer error (code empty), however it was worded', () => {
+    // What callRpc throws offline: supabase-js returns the failed fetch as an error with code ''.
+    expect(friendlyError(new RpcError('TypeError: Network request failed', ''))).toBe(NETWORK_ERROR);
+    expect(friendlyError(new RpcError('AbortError: Aborted', ''))).toBe(NETWORK_ERROR);
+    // A gateway's non-JSON body has no code at all: the server answered, so it stays "try again".
+    expect(friendlyError(new RpcError('<html>bad gateway</html>', null))).toBe(GENERIC_ERROR);
+  });
+
   it('knows not found (which is also how a block looks)', () => {
     expect(isNotFound(new RpcError('profile not found', 'P0002'))).toBe(true);
     expect(isNotFound(new RpcError('too many requests', '42501'))).toBe(false);

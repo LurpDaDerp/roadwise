@@ -284,4 +284,63 @@ describe('the heat map row opens who can see it', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_heatmap_visibility: 'only_me' }));
     expect(control.getByRole('tab', { name: 'Only me' })).toBeSelected();
   });
+
+  it('a tap on the choice already saved writes nothing', async () => {
+    answerRpc(mockRpc, { get_my_summary: summary({ heatmap: 'friends' }), update_profile: {} });
+    const w = await appWorld();
+    await w.render(<HeatmapScreen />);
+    const control = within(await screen.findByTestId('heatmap-visibility'));
+    await waitFor(() => expect(control.getByRole('tab', { name: 'Friends' })).toBeSelected());
+    await act(async () => {
+      fireEvent.press(control.getByRole('tab', { name: 'Friends' }));
+    });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('update_profile');
+  });
+
+  it('the privacy note promises only what a zone does: drives recorded after it, and both ends of every drive', () => {
+    expect(profileCopy.heatmap.privacy).toBe(
+      'It never shows the first and last quarter mile of a drive, or routes inside a privacy zone on drives recorded after you added the zone.'
+    );
+  });
+});
+
+it('the block confirmation points at Blocked users on the Profile tab, where the list is', () => {
+  expect(profileCopy.public.blockBody).toBe(
+    "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Profile › Blocked users."
+  );
+  expect(profileCopy.public.blockBody).toContain(profileCopy.rows.blocked.title);
+});
+
+it('the pull spinner shows for a pull only, until its reads are done, never for a background refetch', async () => {
+  const control = () =>
+    (screen.getByTestId('profile-screen').props as { refreshControl: { props: { refreshing: boolean; onRefresh: () => void } } }).refreshControl.props;
+  let summaries = 0;
+  let land = () => {};
+  answerRpc(mockRpc, {
+    get_my_summary: () => {
+      summaries += 1;
+      // The first read answers; every later one waits until the test lets it land.
+      return summaries === 1 ? summary() : new Promise((resolve) => (land = () => resolve(summary())));
+    },
+    list_friends: NO_FRIENDS,
+  });
+  const w = await appWorld();
+  await w.render(<ProfileScreen />);
+  await screen.findByTestId('profile-card');
+  // A background refetch (a focus, a profile edit, a settled drive): no spinner, so the page doesn't move.
+  await act(async () => {
+    void w.client.invalidateQueries({ queryKey: ['server', 'me', 'summary'] });
+  });
+  await waitFor(() => expect(summaries).toBe(2));
+  // Let the screen draw the refetch in flight.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  expect(w.client.getQueryState(['server', 'me', 'summary'])?.fetchStatus).toBe('fetching');
+  expect(control().refreshing).toBe(false);
+  await act(async () => land());
+  // The driver's pull: the spinner until the summary is back.
+  await act(async () => control().onRefresh());
+  await waitFor(() => expect(summaries).toBe(3));
+  expect(control().refreshing).toBe(true);
+  await act(async () => land());
+  await waitFor(() => expect(control().refreshing).toBe(false));
 });

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { BackHandler } from 'react-native';
+import { AccessibilityInfo, BackHandler } from 'react-native';
 
 import { EmailCodeScreen, emailCodeCopy, resendWait } from '@/features/auth/EmailCodeScreen';
 import type { ResendResult, VerifyResult } from '@/features/auth/emailPassword';
@@ -24,7 +24,11 @@ beforeEach(() => {
   onFinish.mockReset().mockResolvedValue('ok');
   onResend.mockReset().mockResolvedValue('sent');
   onBack.mockReset();
+  jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mockClear();
 });
+
+/** What the screen asked VoiceOver to read out (the tests run as an iPhone), in order. */
+const spoken = () => jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mock.calls.map(([text]) => text);
 
 afterEach(() => {
   jest.useRealTimers();
@@ -98,7 +102,11 @@ test.each([
   await fireEvent.changeText(screen.getByLabelText(CODE.name), '12345678');
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent(words);
-  expect(alert.props.accessibilityLiveRegion).toBe('polite');
+  // Read out once as it appears (the screen reader is on the field), queued behind what VoiceOver
+  // is saying; on Android too, with no live region to say it again.
+  expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledTimes(1);
+  expect(AccessibilityInfo.announceForAccessibilityWithOptions).toHaveBeenCalledWith(words, { queue: true });
+  expect(alert.props.accessibilityLiveRegion).toBeUndefined();
   expect(screen.getByRole('button', CONFIRM)).toBeEnabled();
   await fireEvent.press(screen.getByRole('button', CONFIRM));
   expect(onVerify).toHaveBeenCalledTimes(2);
@@ -124,6 +132,7 @@ test('a resend clears the old code, says a new one went out, and waits another m
   expect(await screen.findByText('We sent a new code.')).toBeOnTheScreen();
   expect(screen.getByLabelText(CODE.name).props.value).toBe('');
   expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
+  expect(spoken()).toEqual(['We sent a new code.']);
 });
 
 test.each([
@@ -136,6 +145,7 @@ test.each([
   await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(words);
   expect(screen.getByRole('button', { name: button })).toBeTruthy();
+  expect(spoken()).toEqual([words]);
 });
 
 test('with no code known to have gone out, Resend code is ready at once, the reason shows, and nothing says "We sent"', async () => {
@@ -144,6 +154,8 @@ test('with no code known to have gone out, Resend code is ready at once, the rea
   expect(screen.queryByText(/We sent/)).toBeNull();
   expect(screen.getByRole('button', { name: 'Resend code' })).toBeEnabled();
   expect(screen.getByRole('alert')).toHaveTextContent("You're offline. Check your connection and try again.");
+  // The line on arrival is read out too, once.
+  expect(spoken()).toEqual(["You're offline. Check your connection and try again."]);
 });
 
 test('"Use a different email" goes back to the form', async () => {

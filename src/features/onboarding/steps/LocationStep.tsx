@@ -5,7 +5,7 @@ import { recordPrompt, type PermissionSnapshot } from '@/core/permissions';
 import { useBackgroundDisclosure } from '@/features/permissions/BackgroundDisclosure';
 import { locationIsBackground } from '@/features/permissions/registry';
 import { markSettingsReturn } from '@/features/permissions/usePermissionHealth';
-import { Banner, Card, Skeleton, Text, useTheme } from '@/ui';
+import { Banner, Card, Skeleton, Text, useAnnounce, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -29,7 +29,9 @@ type View_ = 'loading' | 'error' | 'ask' | 'denied' | 'approximate' | 'granted' 
  * null); without one there are no automatic drives, so While Using is all the step asks. On Android 9
  * and lower with the detector, allowing location allows it in the background too, so the disclosure
  * comes before the one request. A denial still moves on (D12). Approximate location is said plainly,
- * with a way to Settings, and is never asked for Always.
+ * with a way to Settings, and is never asked for Always. On an iPhone the screen before the system
+ * alert has one button, Continue, which opens it (Apple's rule for a screen shown before its alert):
+ * the alert's own Don't Allow is the way past it, and Not now shows only once a request has been made.
  */
 export function LocationStep({ ctx, onNext, onBack, deps, api = deviceAndroidApi() }: StepProps & { deps?: PermissionStepDeps; api?: number | null }) {
   const th = useTheme();
@@ -135,7 +137,9 @@ export function LocationStep({ ctx, onNext, onBack, deps, api = deviceAndroidApi
   };
 
   const copy = ios ? all.ios : all.android;
-  const cont: StepAction = { label: copy.continue, onPress: () => leave(), testID: 'location-continue' };
+  // A failed request is read out as its line appears: the screen reader stays on the button.
+  useAnnounce(failed ? copy.failed : null);
+  const cont: StepAction ={ label: copy.continue, onPress: () => leave(), testID: 'location-continue' };
   const settingsAction: StepAction = {
     label: copy.openSettings,
     onPress: () => void openSettings(),
@@ -153,7 +157,9 @@ export function LocationStep({ ctx, onNext, onBack, deps, api = deviceAndroidApi
       break;
     case 'ask':
       primary = { label: copy.allow, onPress: () => void allow(), loading: busy, testID: 'location-allow' };
-      secondary = { label: copy.notNow, onPress: () => leave(), disabled: busy, testID: 'location-not-now' };
+      // iPhone: no way past the alert before it has been asked. Once a request is made and the phone
+      // still has no answer (it failed, so no alert came), Not now keeps the step passable (D12).
+      if (!ios || answered) secondary = { label: copy.notNow, onPress: () => leave(), disabled: busy, testID: 'location-not-now' };
       break;
     case 'denied':
       primary = cont;

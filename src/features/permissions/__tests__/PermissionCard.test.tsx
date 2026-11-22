@@ -5,7 +5,7 @@
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Alert, StyleSheet, type AlertButton } from 'react-native';
+import { Alert, Platform, StyleSheet, type AlertButton } from 'react-native';
 
 import type { PermissionSnapshot } from '@/core/permissions';
 import { ThemeProvider } from '@/ui/theme';
@@ -201,14 +201,16 @@ test('a hide that could not be stored keeps the row, closes the swipe and says s
   expect(screen.getByTestId('home-permission-line')).toHaveTextContent("That didn't work. Try again.");
 });
 
-test('the row is one button with its line and action, no hint; the dismiss action and a long press open the same question; activate taps', async () => {
+test('the row is one button with its line and action, no hint; the dismiss action and a long press open the same question; a double-tap taps', async () => {
   const board = fakeBoard(read({ platform: 'ios', motion: 'denied' }));
   await draw(board);
   const row = screen.getByTestId('home-permission-motion');
   expect(row.props.accessibilityRole).toBe('button');
   expect(row.props.accessibilityLabel).toBe('Motion & Fitness is off. Drives won\'t start on their own. Open Settings.');
   expect(row.props.accessibilityHint).toBeUndefined();
-  expect(row.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: "Don't remind me again" }]);
+  // iOS lists only the dismiss action: VoiceOver's double-tap reaches the press by itself, and an
+  // unlabelled `activate` would be read out as "activate" among its actions.
+  expect(row.props.accessibilityActions).toEqual([{ name: 'dismiss', label: "Don't remind me again" }]);
   expect(LONG_PRESS_MS).toBe(500);
   await act(async () => {
     fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } });
@@ -225,9 +227,25 @@ test('the row is one button with its line and action, no hint; the dismiss actio
     lastAlert()[2][0]!.onPress?.();
   });
   await act(async () => {
-    fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
+    fireEvent.press(row);
   });
   expect(board.fix).toHaveBeenCalledWith('motion');
+});
+
+test('with TalkBack (Android): its double-tap is the activate action, listed before the dismiss action, and taps', async () => {
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    const board = fakeBoard(read({ platform: 'android', motion: 'denied' }));
+    await draw(board);
+    const row = screen.getByTestId('home-permission-motion');
+    expect(row.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: "Don't remind me again" }]);
+    await act(async () => {
+      fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
+    });
+    expect(board.fix).toHaveBeenCalledWith('motion');
+  } finally {
+    os.restore();
+  }
 });
 
 test('a tap runs the fix once; a second tap while busy does nothing and the swipe is off meanwhile', async () => {

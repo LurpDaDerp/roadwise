@@ -131,10 +131,14 @@ export const settingsCopy = {
 
   zones: {
     title: 'Privacy zones',
+    /**
+     * What a zone does: zones are applied once, when a drive ends, to the copy of it that is
+     * uploaded. The driver's own maps and share cards draw the whole route the phone recorded.
+     */
     intro:
-      'Routes inside a zone are hidden on your maps, share cards and heat map. Handy around home or school.',
+      'Routes inside a zone are cut from the copy of each drive that RoadWise uploads, so friends and the heat map never get them. A zone applies to drives recorded after you add it.',
     local: 'Zones stay on this phone. They’re never uploaded.',
-    trim: 'The first and last quarter mile of every drive is always hidden too.',
+    trim: 'The first and last quarter mile of every drive is always cut from the upload too. Your own maps and share cards show the whole route.',
     add: 'Add a zone',
     max: 'You can set up to 6 zones.',
     /** The saved places, each with a switch that hides it. */
@@ -174,7 +178,8 @@ export const settingsCopy = {
     save: 'Save zone',
     remove: 'Delete zone',
     removeTitle: (name: string) => `Delete “${name}”?`,
-    removeBody: 'Routes near this place will show on your maps again.',
+    /** Delete zone and Stop hiding {name}: drives already uploaded keep their cut routes. */
+    removeBody: 'Drives recorded after this will upload routes near this place, so friends and the heat map can get them. Drives already uploaded stay as they are.',
     cancel: 'Cancel',
     locationDenied: 'Location is off for RoadWise, so we can’t find you. Turn it on in Settings, or tap the map.',
     locationNotAsked: 'Location isn’t allowed yet, so we can’t find you. Try again, or tap the map.',

@@ -1,8 +1,9 @@
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { AppState, View } from 'react-native';
 
+import type { AppStateLike } from '@/data/foreground';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 
 import { TopBar } from '@/features/settings/parts';
@@ -18,12 +19,13 @@ const REJECT_MS = 2_500;
  * `/friends/scan`: the camera is asked for only here, when this screen opens. A code is read only
  * if it is exactly `roadwise://add/<username>`; anything else (a URL, another app's code) is
  * refused with one line and never opened. A camera that won't start says so in place of the
- * viewfinder.
+ * viewfinder. The permission is read again on every return to the front (`appState`: a test's
+ * stand-in, React Native's by default).
  */
-export function ScanScreen() {
+export function ScanScreen({ appState = AppState }: { appState?: AppStateLike }) {
   const th = useTheme();
   const router = useRouter();
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [rejected, setRejected] = useState(false);
   const [cameraFailed, setCameraFailed] = useState(false);
   const done = useRef(false);
@@ -35,6 +37,15 @@ export function ScanScreen() {
       void requestPermission();
     }
   }, [permission, requestPermission]);
+
+  // Android keeps the app running when the camera is turned on in Settings, so without a fresh read
+  // the screen would still say to turn it on. A read never prompts; a failed one keeps the last.
+  useEffect(() => {
+    const sub = appState.addEventListener('change', (state) => {
+      if (state === 'active') void getPermission().catch(() => {});
+    });
+    return () => sub.remove();
+  }, [appState, getPermission]);
 
   const onScan = (result: BarcodeScanningResult) => {
     if (done.current) return;

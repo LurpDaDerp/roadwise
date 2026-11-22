@@ -2,13 +2,15 @@
  * Home's Wrapped card: last month's Wrapped from the 1st through the 7th (local), once the driver
  * has one, until its ✕ closes it for that month; never during a drive.
  */
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 
 import { SIGN_OUT_SETTINGS } from '@/boot/device';
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
+import { ThemeProvider } from '@/ui/theme';
 
 import { archiveEntry } from '../__fixtures__/wrapped';
-import { HomeWrappedCard } from '../HomeWrappedCard';
+import { HomeWrappedCard, WrappedCardView } from '../HomeWrappedCard';
 import { WRAPPED_CARD_DISMISSED_KEY } from '../month';
 
 const mockRpc = jest.fn();
@@ -115,15 +117,35 @@ it('✕ closes it for that month (kept on the phone, wiped at sign-out); next mo
   expect(await screen.findByText('Your November Wrapped')).toBeOnTheScreen();
 });
 
-it('with VoiceOver: the card is one button whose actions open it and close it (the ✕ inside cannot be reached)', async () => {
+it('with VoiceOver: the card is one button that a double-tap opens, with Close as its action (the ✕ inside cannot be reached)', async () => {
   at(nov(2));
   const w = await appWorld();
   await w.render(<HomeWrappedCard hidden={false} />);
   const card = await screen.findByTestId('home-wrapped');
-  expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Close' }]);
-  await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } }));
+  // iOS lists only Close: VoiceOver's double-tap reaches the press by itself, and an unlabelled
+  // `activate` would be read out as "activate" among its actions.
+  expect(card.props.accessibilityActions).toEqual([{ name: 'dismiss', label: 'Close' }]);
+  await tap('home-wrapped');
   expect(mockRouter.push).toHaveBeenCalledWith('/wrapped/2026-10');
   await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'dismiss' } }));
   expect(screen.queryByTestId('home-wrapped')).toBeNull();
   await waitFor(async () => expect(await w.settings.get(WRAPPED_CARD_DISMISSED_KEY)).toBe('2026-10'));
+});
+
+it('with TalkBack (Android): its double-tap is the activate action, listed before Close, and opens the card', async () => {
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    const onOpen = jest.fn();
+    await render(
+      <ThemeProvider scheme="light" reduceMotion>
+        <WrappedCardView entry={archiveEntry({ month: '2026-10' })} onOpen={onOpen} onDismiss={jest.fn()} />
+      </ThemeProvider>
+    );
+    const card = screen.getByTestId('home-wrapped');
+    expect(card.props.accessibilityActions).toEqual([{ name: 'activate' }, { name: 'dismiss', label: 'Close' }]);
+    await act(async () => fireEvent(card, 'accessibilityAction', { nativeEvent: { actionName: 'activate' } }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  } finally {
+    os.restore();
+  }
 });

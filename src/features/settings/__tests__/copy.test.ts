@@ -38,6 +38,19 @@ describe('the rest of the settings words', () => {
     );
   });
 
+  it('Privacy zones say what a zone cuts: the uploaded copy of drives recorded after it, never your own maps or share cards', () => {
+    const z = settingsCopy.zones;
+    expect(z.intro).toBe(
+      'Routes inside a zone are cut from the copy of each drive that RoadWise uploads, so friends and the heat map never get them. A zone applies to drives recorded after you add it.'
+    );
+    expect(z.trim).toBe('The first and last quarter mile of every drive is always cut from the upload too. Your own maps and share cards show the whole route.');
+    expect(z.removeBody).toBe(
+      'Drives recorded after this will upload routes near this place, so friends and the heat map can get them. Drives already uploaded stay as they are.'
+    );
+    // Your maps and share cards draw the whole route, so nothing may say a zone hides it there.
+    for (const line of [z.intro, z.trim, z.removeBody]) expect(line).not.toMatch(/hidden on your maps|share cards and heat map|show on your maps again/i);
+  });
+
   it('Automatic drives: on, switched off, and on with what it still needs', () => {
     const a = settingsCopy.root.autoDrives;
     expect(a.on).toBe('On. RoadWise notices your drives.');

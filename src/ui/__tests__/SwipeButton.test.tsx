@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import * as Haptics from 'expo-haptics';
-import { Text } from 'react-native';
+import { Platform, Text } from 'react-native';
 import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 import { getAnimatedStyle } from 'react-native-reanimated';
@@ -319,6 +319,35 @@ test('a screen reader’s activate fires it straight away', async () => {
   await fireEvent(screen.getByRole('button', { name: 'Start drive' }), 'accessibilityAction', { nativeEvent: { actionName: 'activate' } });
   expect(onSwipe).toHaveBeenCalledTimes(1);
   expect(Haptics.notificationAsync).toHaveBeenCalledTimes(1);
+});
+
+test('VoiceOver’s double-tap (accessibilityTap on the New Architecture) fires it straight away', async () => {
+  await renderSwipe();
+  await fireEvent(screen.getByRole('button', { name: 'Start drive' }), 'accessibilityTap');
+  expect(onSwipe).toHaveBeenCalledTimes(1);
+  expect(Haptics.notificationAsync).toHaveBeenCalledTimes(1);
+});
+
+test('busy or disabled, VoiceOver’s double-tap does nothing', async () => {
+  const r = await renderSwipe({ busy: true });
+  await fireEvent(screen.getByTestId('swipe'), 'accessibilityTap');
+  await r.unmount();
+  await renderSwipe({ disabled: true });
+  await fireEvent(screen.getByTestId('swipe'), 'accessibilityTap');
+  expect(onSwipe).not.toHaveBeenCalled();
+});
+
+test('the activate action is listed for TalkBack on Android only: VoiceOver would read it out as a raw "activate" in its Actions', async () => {
+  const r = await renderSwipe();
+  expect(screen.getByTestId('swipe').props.accessibilityActions).toEqual([]);
+  await r.unmount();
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  try {
+    await renderSwipe();
+    expect(screen.getByTestId('swipe').props.accessibilityActions).toEqual([{ name: 'activate' }]);
+  } finally {
+    os.restore();
+  }
 });
 
 test('a swipe whose action never goes busy settles, and the next swipe fires again', async () => {

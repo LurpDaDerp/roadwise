@@ -87,7 +87,9 @@ export function WaitPanel({
         </Text>
       </View>
       {countdown ? (
-        <View accessible accessibilityLabel={hudCopy.countdown.spoken(seconds)} accessibilityLiveRegion="polite" style={styles.countBlock}>
+        // No live region: the panel's words are read once as it opens (above), and an Android live
+        // region would read this label again every second it changes.
+        <View accessible accessibilityLabel={hudCopy.countdown.spoken(seconds)} style={styles.countBlock}>
           <Text testID="hud-wait-countdown" allowFontScaling={false} style={[styles.count, { color: c.ink, fontSize: tall ? 48 : 32, lineHeight: tall ? 54 : 36 }]}>
             {countdownText(seconds)}
           </Text>

@@ -15,7 +15,7 @@ import { AccessibilityInfo, ActivityIndicator, Alert, Pressable, View, type Acce
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Animated, { FadeOut, LinearTransition } from 'react-native-reanimated';
 
-import { Card, Divider, Text, useTheme } from '@/ui';
+import { Card, Divider, Text, useTheme, withActivate } from '@/ui';
 
 import { useBackgroundDisclosure } from './BackgroundDisclosure';
 import { fixFor, homeCard, type BoardRow } from './board';
@@ -202,7 +202,7 @@ function PermissionRow({ board, read, row, ctx }: { board: PermissionBoard; read
           accessibilityRole="button"
           accessibilityLabel={`${line} ${action}.`}
           accessibilityState={{ busy }}
-          accessibilityActions={[{ name: 'activate' }, { name: 'dismiss', label: copy.dismissAction }]}
+          accessibilityActions={withActivate({ name: 'dismiss', label: copy.dismissAction })}
           onAccessibilityAction={onAction}
           testID={`home-permission-${row.id}`}
           style={({ pressed }) => ({

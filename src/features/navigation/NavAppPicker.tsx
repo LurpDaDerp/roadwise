@@ -46,7 +46,14 @@ export function NavAppPicker({
   const closeLabel = apps.length === 0 ? navCopy.close : navCopy.cancel;
   return (
     <View testID="nav-picker" style={styles.root}>
-      <ScrollView testID="nav-picker-scroll" style={styles.list} contentContainerStyle={styles.body}>
+      {/* In Settings the sheet scrolls the whole picker: a scroller of its own inside it would take every
+          vertical drag on iOS and only rubber-band. The driving screen's panel keeps its own bounded one. */}
+      <ScrollView
+        testID="nav-picker-scroll"
+        scrollEnabled={mode !== 'settings'}
+        style={styles.list}
+        contentContainerStyle={styles.body}
+      >
         <View style={ps.header}>
           <Text accessibilityRole="header" style={[ps.title, { color: c.ink }]}>
             {navCopy.pickerTitle}

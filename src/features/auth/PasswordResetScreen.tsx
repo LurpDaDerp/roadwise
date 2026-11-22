@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BackHandler, View } from 'react-native';
 
 import { t } from '@/i18n';
-import { Button, Screen, Text, useTheme } from '@/ui';
+import { Button, Screen, Text, useAnnounce, useTheme } from '@/ui';
 
 import { AuthField } from './AuthField';
 import { resendWait } from './EmailCodeScreen';
@@ -86,6 +86,11 @@ export function PasswordResetScreen({ initialEmail, onBack }: { initialEmail: st
   // (a second code check would give up the first while it is still out).
   const inFlight = useRef(false);
   const wait = resendWait(sentAt, now);
+
+  // The lines under the buttons (a refused send or code, a new code sent) are read out as they
+  // appear: the screen reader stays on the button the driver tapped.
+  useAnnounce(notice);
+  useAnnounce(error);
 
   // A session a right code signed in, not yet handed to the app, goes when the screen does.
   useEffect(
@@ -191,15 +196,16 @@ export function PasswordResetScreen({ initialEmail, onBack }: { initialEmail: st
 
   const onCodeChange = (text: string) => setCode(text.replace(/\D/g, '').slice(0, CODE_LENGTH));
 
+  // No live regions: `useAnnounce` reads these on Android too, and a live region as well could say them twice.
   const feedback = (
     <>
       {notice ? (
-        <Text variant="callout" tone="muted" accessibilityLiveRegion="polite">
+        <Text variant="callout" tone="muted">
           {notice}
         </Text>
       ) : null}
       {error ? (
-        <Text variant="callout" tone="danger" accessibilityRole="alert" accessibilityLiveRegion="polite">
+        <Text variant="callout" tone="danger" accessibilityRole="alert">
           {error}
         </Text>
       ) : null}

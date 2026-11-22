@@ -5,6 +5,7 @@ import { Share, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { useMySummary } from '@/data/server/summary';
+import { useSession } from '@/data/supabase/session';
 import { Section, TopBar } from '@/features/settings/parts';
 import { searchQuery, useSearchUsers } from '@/features/social/api';
 import { addLink, profileHref } from '@/features/social/links';
@@ -33,7 +34,11 @@ export function AddFriendsScreen({ debounceMs = SEARCH_DEBOUNCE_MS }: { debounce
   const th = useTheme();
   const scale = useFontScale();
   const router = useRouter();
-  const me = useMySummary().data?.profile.username ?? null;
+  const summary = useMySummary();
+  const { profile } = useSession();
+  // The session's profile (cached on the phone) has the name too, so the code shows offline and
+  // before the summary's first answer: it is only a link, and every driver here has a username.
+  const me = summary.data?.profile.username ?? profile?.username ?? null;
   const [text, setText] = useState('');
   // Usernames show as "@maya" across the app, so "@maya" searches for "maya".
   const bare = text.trim().replace(/^@/, '');

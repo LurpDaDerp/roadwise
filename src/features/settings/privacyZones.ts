@@ -1,8 +1,10 @@
 /**
  * Privacy zones (plan §1 decision 6, §10): up to 6 circles, 200–800 m, stored only on this phone
- * under `privacy.zones`. The drive pipeline trims routes and event dots inside them before anything
- * is uploaded, so the server, share cards and heat maps never see where a zone is. A zone made from
- * a saved place (`src/features/places`) carries the place's id and follows it when it moves.
+ * under `privacy.zones`. When a drive ends, the drive pipeline trims routes and event dots inside
+ * them from the copy that is uploaded, so the server, friends and heat maps never get them; the
+ * driver's own maps and share cards draw the whole route. A drive saved before a zone was added
+ * keeps the copy it was saved with. A zone made from a saved place (`src/features/places`) carries
+ * the place's id and follows it when it moves.
  */
 import type { SettingsRepo } from '@/data/db/settings';
 

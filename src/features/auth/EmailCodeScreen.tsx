@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BackHandler, TextInput, useWindowDimensions, View } from 'react-native';
 
-import { Button, Screen, Text, useTheme } from '@/ui';
+import { Button, Screen, Text, useAnnounce, useTheme } from '@/ui';
 
 import { CODE_LENGTH, RESEND_COOLDOWN_S, type ResendResult, type VerifyResult } from './emailPassword';
 
@@ -89,6 +89,11 @@ export function EmailCodeScreen({
   const wait = resendWait(sentAt, now);
   // Set in the same tick as a press, so a second event in that frame can't start a second request.
   const inFlight = useRef(false);
+
+  // The lines under the buttons (a refused code, a new code sent, a line on arrival) are read out as
+  // they appear: the screen reader stays on the field or button the driver was on.
+  useAnnounce(notice);
+  useAnnounce(error);
 
   // Android's back button goes back to the form, as "Use a different email" does, never out of the
   // app; while a code is being checked it waits, as that button does.
@@ -235,13 +240,14 @@ export function EmailCodeScreen({
         <Button label={emailCodeCopy.changeEmail} variant="ghost" onPress={onBack} disabled={busy !== null} />
       </View>
 
+      {/* No live regions: `useAnnounce` reads these on Android too, and a live region as well could say them twice. */}
       {notice ? (
-        <Text variant="callout" tone="muted" accessibilityLiveRegion="polite">
+        <Text variant="callout" tone="muted">
           {notice}
         </Text>
       ) : null}
       {error ? (
-        <Text variant="callout" tone="danger" accessibilityRole="alert" accessibilityLiveRegion="polite">
+        <Text variant="callout" tone="danger" accessibilityRole="alert">
           {error}
         </Text>
       ) : null}

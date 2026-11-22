@@ -4,6 +4,8 @@
  * in-memory table; the server, session and drive state are stand-ins.
  */
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
+import { AccessibilityInfo, Keyboard } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { resetAutoDrivesForTests } from '@/features/autoDrives/useAutoDrives';
 import { answerRpc, appWorld, clearQueryClients, tap } from '@/features/permissions/__fixtures__/harness';
@@ -386,6 +388,30 @@ describe('Settings', () => {
     await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
   });
 
+  it('a tap on the units or heat-map choice already saved writes nothing; a new choice still saves', async () => {
+    answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: {} });
+    const w = await appWorld();
+    await w.render(<SettingsScreen />);
+    const units = within(await screen.findByTestId('settings-units'));
+    const heatmap = within(screen.getByTestId('settings-heatmap-visibility'));
+    await waitFor(() => expect(units.getByRole('tab', { name: 'Miles' })).toBeSelected());
+    await waitFor(() => expect(heatmap.getByRole('tab', { name: 'Only me' })).toBeSelected());
+    // One press per act: each press is an act of its own, and two at once would overlap.
+    await act(async () => {
+      fireEvent.press(units.getByRole('tab', { name: 'Miles' }));
+    });
+    await act(async () => {
+      fireEvent.press(heatmap.getByRole('tab', { name: 'Only me' }));
+    });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('update_profile');
+    await act(async () => {
+      fireEvent.press(units.getByRole('tab', { name: 'Kilometers' }));
+    });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('update_profile', { p_units: 'km' }));
+    // Let the Kilometers save finish (the refetch, then the phone's mirror).
+    await waitFor(async () => expect(await w.settings.get(UNITS_KEY)).toBe('km'));
+  });
+
   it('a failed units change leaves the phone’s mirror alone', async () => {
     answerRpc(mockRpc, { get_my_summary: SUMMARY, update_profile: new Error('offline') });
     const w = await appWorld({ settings: { [UNITS_KEY]: 'mi' } });
@@ -648,6 +674,31 @@ describe('Delete account', () => {
     expect(wipe).not.toHaveBeenCalled();
   });
 
+  it('a delete that did not go through is read out as its banner appears, and again when a second try fails the same way', async () => {
+    const say = jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions);
+    say.mockClear();
+    let answer: (r: { ok: false; reason: 'offline' }) => void = () => {};
+    const remove = jest
+      .fn<Promise<{ ok: false; reason: 'offline' }>, []>()
+      .mockResolvedValueOnce({ ok: false, reason: 'offline' })
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const w = await appWorld();
+    await w.render(<DeleteAccountScreen deps={{ remove, wipe: async () => {} }} />);
+    await act(async () => {
+      fireEvent.changeText(await screen.findByLabelText(copy.deleteAccount.typeLabel), 'DELETE');
+    });
+    await tap('delete-confirm');
+    expect(await screen.findByTestId('delete-offline')).toBeOnTheScreen();
+    // VoiceOver stays on the button, and a banner says nothing by itself.
+    expect(say.mock.calls).toEqual([[copy.deleteAccount.offline, { queue: true }]]);
+    // The second try clears the banner while it runs, so the same words coming back are said again.
+    await tap('delete-confirm');
+    expect(screen.queryByTestId('delete-offline')).toBeNull();
+    await act(async () => answer({ ok: false, reason: 'offline' }));
+    expect(await screen.findByTestId('delete-offline')).toBeOnTheScreen();
+    expect(say.mock.calls.map(([text]) => text)).toEqual([copy.deleteAccount.offline, copy.deleteAccount.offline]);
+  });
+
   it('the keyboard never hides the field or the button: the page lifts above it and keeps taps', async () => {
     const w = await appWorld();
     await w.render(<DeleteAccountScreen deps={{ remove: async () => ({ ok: true as const }), wipe: async () => {} }} />);
@@ -656,6 +707,56 @@ describe('Delete account', () => {
     const scroll = screen.getByTestId('delete-scroll');
     expect(scroll.props.keyboardShouldPersistTaps).toBe('handled');
     expect(scroll.props.automaticallyAdjustKeyboardInsets).toBe(true);
+  });
+
+  describe('the lift with the keyboard up', () => {
+    // A Dynamic Island iPhone (iPhone 15): 852 pt tall, 59 pt top inset, 34 pt bottom, a 291 pt keyboard.
+    const ISLAND = { frame: { x: 0, y: 0, width: 393, height: 852 }, insets: { top: 59, bottom: 34, left: 0, right: 0 } };
+    const KEYBOARD_TOP = 852 - 291;
+    type KeyboardHandler = (e: { endCoordinates: { screenX: number; screenY: number; width: number; height: number } }) => void;
+    let handlers: Record<string, KeyboardHandler[]>;
+    let listen: jest.SpyInstance;
+    beforeEach(() => {
+      handlers = {};
+      listen = jest.spyOn(Keyboard, 'addListener').mockImplementation(((name: string, fn: KeyboardHandler) => {
+        (handlers[name] ??= []).push(fn);
+        return { remove: () => (handlers[name] = (handlers[name] ?? []).filter((h) => h !== fn)) };
+      }) as never);
+    });
+    afterEach(() => listen.mockRestore());
+
+    /**
+     * The page drawn on that iPhone, the avoider laid out as Screen places it: 72 pt into the
+     * content (which starts below the 59 pt top inset), its bottom 16 + 34 pt above the window's
+     * foot (802 in the window, 743 in its parent). Then the keyboard comes up.
+     */
+    const typeOn = async (show: string) => {
+      const w = await appWorld();
+      await w.render(
+        <SafeAreaProvider initialMetrics={ISLAND}>
+          <DeleteAccountScreen deps={{ remove: async () => ({ ok: true as const }), wipe: async () => {} }} />
+        </SafeAreaProvider>
+      );
+      const avoider = await screen.findByTestId('delete-keyboard-avoider');
+      await act(async () => {
+        fireEvent(avoider, 'layout', { nativeEvent: { layout: { x: 16, y: 72, width: 361, height: 671 } }, persist: () => {} });
+      });
+      await act(async () => {
+        handlers[show]?.forEach((h) => h({ endCoordinates: { screenX: 0, screenY: KEYBOARD_TOP, width: 393, height: 291 } }));
+      });
+      return screen.getByTestId('delete-keyboard-avoider');
+    };
+
+    it('iPhone: the page lifts by the whole overlap (802 − 561), so the button sits just above the keyboard', async () => {
+      expect(await typeOn('keyboardWillShow')).toHaveStyle({ paddingBottom: 802 - KEYBOARD_TOP });
+    });
+
+    describe('Android', () => {
+      runAs('android');
+      it('the avoider adds nothing: the Screen lifts the page itself', async () => {
+        expect(await typeOn('keyboardDidShow')).not.toHaveStyle({ paddingBottom: expect.any(Number) });
+      });
+    });
   });
 
   describe('an account signed in with Apple', () => {

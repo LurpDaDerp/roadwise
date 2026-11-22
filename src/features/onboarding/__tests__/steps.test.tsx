@@ -3,6 +3,7 @@
  * and the optional DashPal step, the last, whose way out finishes onboarding (through the stepper).
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo, Platform } from 'react-native';
 
 import { createDashpalSecrets } from '@/dashcam/secure';
 import { RpcError } from '@/data/server/rpc';
@@ -32,7 +33,13 @@ jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 const ctx: FlowContext = { platform: 'ios', hasUsername: false };
 const copy = onboardingCopy;
 
+/** What the step asked VoiceOver (iPhone, the tests' platform) or TalkBack to read out, in order. */
+const spoken = () => jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mock.calls.map(([text]) => text);
+const spokenAndroid = () => jest.mocked(AccessibilityInfo.announceForAccessibility).mock.calls.map(([text]) => text);
+
 beforeEach(() => {
+  jest.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+  jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mockClear();
   mockRpc.mockReset();
   mockRouter.replace.mockClear();
   mockSession.refreshProfile.mockClear();
@@ -94,10 +101,13 @@ describe('username', () => {
     expect(mockSession.refreshProfile).toHaveBeenCalled();
   });
 
-  it('a name taken at the last moment says so and stays put', async () => {
+  it.each([
+    ["the server's re-check", new RpcError('username is taken', '23505')],
+    ['another claim landing first', new RpcError('duplicate key value violates unique constraint "profiles_username_key"', '23505')],
+  ])('a name taken at the last moment (%s) reads as taken, no longer free, and Claim turns off', async (_, refusal) => {
     answerRpc(mockRpc, {
       check_username: { available: true, reason: null },
-      claim_username: new RpcError('username is taken', '23505'),
+      claim_username: refusal,
     });
     const onNext = jest.fn();
     const w = await appWorld();
@@ -105,8 +115,85 @@ describe('username', () => {
     await type('swift_fox');
     await waitFor(() => expect(screen.getByTestId('username-claim')).toBeEnabled());
     await tap('username-claim');
-    expect(await screen.findByTestId('username-claim-error')).toHaveTextContent('Someone already has that username. Try another.');
+    await waitFor(() => expect(screen.getByTestId('username-status')).toHaveTextContent(copy.username.reasons.taken));
+    expect(screen.queryByText(copy.username.available('swift_fox'))).toBeNull();
+    expect(screen.queryByTestId('username-claim-error')).toBeNull();
+    expect(screen.getByTestId('username-claim')).toBeDisabled();
     expect(onNext).not.toHaveBeenCalled();
+    expect(mockSession.refreshProfile).not.toHaveBeenCalled();
+  });
+
+  it('a "taken" that lands after the name was changed leaves the new name’s answer alone and says the claim failed', async () => {
+    let refuse: (e: unknown) => void = () => {};
+    answerRpc(mockRpc, {
+      check_username: { available: true, reason: null },
+      claim_username: () => new Promise((_, reject) => (refuse = reject)),
+    });
+    const onNext = jest.fn();
+    const w = await appWorld();
+    await w.render(<UsernameStep ctx={ctx} onNext={onNext} debounceMs={0} />);
+    await type('swift_fox');
+    await waitFor(() => expect(screen.getByTestId('username-claim')).toBeEnabled());
+    await tap('username-claim');
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('claim_username', { p: 'swift_fox' }));
+    await type('other_fox');
+    await waitFor(() => expect(screen.getByTestId('username-status')).toHaveTextContent(copy.username.available('other_fox')));
+    await act(async () => refuse(new RpcError('username is taken', '23505')));
+    expect(await screen.findByTestId('username-claim-error')).toHaveTextContent('Someone already has that username. Try another.');
+    expect(screen.getByTestId('username-status')).toHaveTextContent(copy.username.available('other_fox'));
+    expect(screen.getByTestId('username-claim')).toBeEnabled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('a claim refused for another reason says why, under the check', async () => {
+    answerRpc(mockRpc, {
+      check_username: { available: true, reason: null },
+      claim_username: new RpcError('too many requests', '42501'),
+    });
+    const onNext = jest.fn();
+    const w = await appWorld();
+    await w.render(<UsernameStep ctx={ctx} onNext={onNext} debounceMs={0} />);
+    await type('swift_fox');
+    await waitFor(() => expect(screen.getByTestId('username-claim')).toBeEnabled());
+    await tap('username-claim');
+    expect(await screen.findByTestId('username-claim-error')).toHaveTextContent("That's a lot of tries. Wait a minute, then try again.");
+    expect(onNext).not.toHaveBeenCalled();
+    // Read out as it appears, away from the field VoiceOver is on.
+    expect(spoken()).toContain("That's a lot of tries. Wait a minute, then try again.");
+  });
+
+  it('iPhone: each answer of the check is read out once as it shows, a taken name too', async () => {
+    answerRpc(mockRpc, { check_username: { available: false, reason: 'taken' } });
+    const w = await appWorld();
+    await w.render(<UsernameStep ctx={ctx} onNext={jest.fn()} debounceMs={0} />);
+    await type('ab');
+    expect(spoken()).toEqual([copy.username.reasons.length]);
+    await type('swift_fox');
+    await waitFor(() => expect(screen.getByTestId('username-status')).toHaveTextContent(copy.username.reasons.taken));
+    expect(spoken().filter((line) => line === copy.username.reasons.taken)).toHaveLength(1);
+    expect(spoken().at(-1)).toBe(copy.username.reasons.taken);
+  });
+
+  it('Android: the check’s answers are left to the status line’s live region, and a failed claim is read out', async () => {
+    const os = jest.replaceProperty(Platform, 'OS', 'android');
+    try {
+      answerRpc(mockRpc, {
+        check_username: { available: true, reason: null },
+        claim_username: new RpcError('too many requests', '42501'),
+      });
+      const w = await appWorld();
+      await w.render(<UsernameStep ctx={{ ...ctx, platform: 'android' }} onNext={jest.fn()} debounceMs={0} />);
+      await type('swift_fox');
+      await waitFor(() => expect(screen.getByTestId('username-claim')).toBeEnabled());
+      expect(screen.getByTestId('username-status').parent?.props.accessibilityLiveRegion).toBe('polite');
+      expect(spokenAndroid()).toEqual([]);
+      await tap('username-claim');
+      expect(await screen.findByTestId('username-claim-error')).toHaveTextContent("That's a lot of tries. Wait a minute, then try again.");
+      expect(spokenAndroid()).toEqual(["That's a lot of tries. Wait a minute, then try again."]);
+      expect(spoken()).toEqual([]);
+    } finally {
+      os.restore();
+    }
   });
 
   it('only the latest name’s answer is shown', async () => {

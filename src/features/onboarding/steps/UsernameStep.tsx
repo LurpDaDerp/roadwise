@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { TextInput, View } from 'react-native';
 
-import { callRpc } from '@/data/server/rpc';
+import { callRpc, RpcError } from '@/data/server/rpc';
 import { useSession } from '@/data/supabase/session';
 import { friendlyError } from '@/features/social/errors';
-import { Avatar, Text, useFontScale, useTheme } from '@/ui';
+import { Avatar, Text, useAnnounce, useFontScale, useTheme } from '@/ui';
 
 import { onboardingCopy } from '../copy';
 import type { StepProps } from '../stepRegistry';
@@ -73,6 +73,7 @@ export function UsernameStep({ onNext, debounceMs = USERNAME_DEBOUNCE_MS }: Step
 
   const claim = async () => {
     if (check.state !== 'available' || claiming) return;
+    const mine = ticket.current;
     setClaiming(true);
     setClaimError(null);
     try {
@@ -80,12 +81,24 @@ export function UsernameStep({ onNext, debounceMs = USERNAME_DEBOUNCE_MS }: Step
       await refreshProfile();
       onNext();
     } catch (e) {
-      setClaimError(friendlyError(e));
+      // Taken since the check said free (the server's own re-check, or another claim landing first on
+      // the unique index): the check's answer for this name becomes "taken", so the line, the border
+      // and Claim stop saying it is free. Only while the name typed is still this one.
+      if (e instanceof RpcError && e.code === '23505' && mine === ticket.current) {
+        setRemote({ name, check: { state: 'unavailable', reason: 'taken' } });
+      } else {
+        setClaimError(friendlyError(e));
+      }
       setClaiming(false);
     }
   };
 
   const status = statusLine(check, name);
+  // The check's answer and a failed claim are read out as they appear, away from the field the
+  // screen reader is on. On Android the status line's live region already reads each new answer
+  // (that line stays on screen as it changes), so it is announced on the iPhone only.
+  useAnnounce(status?.text, { iosOnly: true });
+  useAnnounce(claimError);
   const ink =
     status?.tone === 'ok' ? th.colors.success : status?.tone === 'bad' ? th.colors.danger : th.colors.textMuted;
   const glyph = status?.tone === 'ok' ? 'checkmark-circle' : status?.tone === 'bad' ? 'close-circle' : 'ellipsis-horizontal-circle';

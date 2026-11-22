@@ -160,18 +160,19 @@ describe('Android: the stale share-file sweep (at launch and on each return to t
   });
 });
 
-test('on Android a wipe also takes the Permit log PDFs waiting for the stale sweep; on iPhone it leaves that folder alone', () => {
-  const paths = ['file:///app/Library/Caches/Print/0b1c.pdf'];
+test('a wipe takes the Permit log PDFs on both platforms (one a killed share left on iPhone, one waiting for the stale sweep on Android) and leaves anything else in Print', () => {
+  const paths = ['file:///app/Library/Caches/Print/0b1c.pdf', 'file:///app/Library/Caches/Print/notes.txt'];
   let { fs, files } = fakeFs(paths);
   setShareFsForTests(fs);
+  expect(Platform.OS).toBe('ios');
   sweepShareImages();
-  expect([...files]).toEqual(paths);
+  expect([...files]).toEqual(['file:///app/Library/Caches/Print/notes.txt']);
   const os = jest.replaceProperty(Platform, 'OS', 'android');
   try {
     ({ fs, files } = fakeFs(paths));
     setShareFsForTests(fs);
     sweepShareImages();
-    expect([...files]).toEqual([]);
+    expect([...files]).toEqual(['file:///app/Library/Caches/Print/notes.txt']);
   } finally {
     os.restore();
   }

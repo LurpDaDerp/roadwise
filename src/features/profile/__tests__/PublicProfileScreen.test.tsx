@@ -168,6 +168,27 @@ describe('relationship buttons', () => {
     await tap('relationship-send');
     expect(await screen.findByText("You've hit the 200-friend limit. Remove someone to add someone new.")).toBeOnTheScreen();
   });
+
+  it('an answer refused because the request is gone re-reads the profile: Accept and Decline give way to Add friend, the line stays', async () => {
+    let rel: Relationship = 'incoming';
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_profile') return profile({ relationship: rel });
+      if (fn === 'respond_friend_request') throw new RpcError('no such request', 'P0002');
+      return null;
+    });
+    const w = await appWorld();
+    await w.render(<PublicProfileScreen username="Swift_Fox" />);
+    await screen.findByTestId('relationship-accept', {}, { timeout: 3000 });
+    // They cancelled the request while this profile sat in the cache.
+    rel = 'none';
+    await tap('relationship-accept');
+    expect(await screen.findByText("That request isn't there anymore.")).toBeOnTheScreen();
+    expect(await screen.findByTestId('relationship-send')).toBeOnTheScreen();
+    expect(screen.queryByTestId('relationship-accept')).toBeNull();
+    expect(screen.queryByTestId('relationship-decline')).toBeNull();
+    expect(screen.getByTestId('relationship-error')).toBeOnTheScreen();
+    expect(mockRpc.mock.calls.filter(([fn]) => fn === 'get_profile')).toHaveLength(2);
+  });
 });
 
 describe('moderation', () => {

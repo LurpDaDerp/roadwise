@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { Avatar, avatarColorIndex, avatarInitials } from '@/ui/primitives/Avatar';
@@ -112,6 +112,23 @@ test('SegmentedControl exposes tabs and reports the chosen value', async () => {
   expect(screen.getByRole('tab', { name: 'All' })).toBeSelected();
   await fireEvent.press(screen.getByRole('tab', { name: 'Clean' }));
   expect(onChange).toHaveBeenCalledWith('clean');
+});
+
+test('SegmentedControl: each segment takes touches over the track’s whole height (its 3 pt padding above and below), never sideways into its neighbour', async () => {
+  await wrap(
+    <SegmentedControl
+      accessibilityLabel="Range"
+      segments={[
+        { value: 'week', label: 'Week' },
+        { value: 'month', label: 'Month' },
+      ]}
+      value="week"
+      onChange={jest.fn()}
+      // Analytics' 44 pt track: 38 pt segments, 44 pt to touch.
+      style={{ minHeight: 44 }}
+    />
+  );
+  for (const tab of screen.getAllByRole('tab')) expect(tab.props.hitSlop).toEqual({ top: 3, bottom: 3 });
 });
 
 test('SegmentedControl: the thumb sits under the selected segment from the render that selects it', async () => {
@@ -310,6 +327,74 @@ describe('BottomSheet', () => {
     await fireEvent(handle, 'responderMove', at(260, 1300));
     await fireEvent(handle, 'responderRelease', at(260, 1320));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('content taller than the panel scrolls instead of being cut off: a scroller holds it with or without `scroll`, the footer pinned outside', async () => {
+    type HostNode = { type: unknown; props: Record<string, unknown>; parent: HostNode | null };
+    /** The scroller between an element and the panel (null when it sits straight in the panel). */
+    const scrollerOf = (el: unknown): HostNode | null => {
+      for (let node = el as HostNode | null; node && node.props.testID !== 'sheet'; node = node.parent) {
+        if (node.type === 'RCTScrollView') return node;
+      }
+      return null;
+    };
+    const sheet = (scroll: boolean) => (
+      <SafeAreaProvider>
+        <ThemeProvider scheme="light" reduceMotion>
+          <BottomSheet visible title="Report this event" onClose={jest.fn()} scroll={scroll} footer={<Button label="Done" onPress={jest.fn()} />} testID="sheet">
+            <Text testID="reasons">Reasons</Text>
+          </BottomSheet>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    const view = await render(sheet(false));
+    // Without `scroll` (a short sheet, at normal text sizes): no room added, no rubber-band while it fits.
+    const plain = scrollerOf(screen.getByTestId('reasons'));
+    expect(plain).not.toBeNull();
+    expect(plain!.props.alwaysBounceVertical).toBe(false);
+    expect(plain!.props.contentContainerStyle).toBeUndefined();
+    expect(plain!.props.keyboardShouldPersistTaps).toBe('handled');
+    expect(scrollerOf(screen.getByRole('button', { name: 'Done' }))).toBeNull();
+    // With `scroll` (a long list) it is as it was: 8 pt under the content and the pull even when it fits.
+    await view.rerender(sheet(true));
+    const long = scrollerOf(screen.getByTestId('reasons'));
+    expect(long!.props.alwaysBounceVertical).toBe(true);
+    expect(long!.props.contentContainerStyle).toEqual({ paddingBottom: 8 });
+    expect(scrollerOf(screen.getByRole('button', { name: 'Done' }))).toBeNull();
+  });
+
+  test('with neither `scroll` nor a footer, the room above the home indicator sits inside the scroller, so a shadow under the last row is not cut off', async () => {
+    // A Face ID phone: 34 pt under the panel, so 26 pt of room under the last row.
+    const metrics = { frame: { x: 0, y: 0, width: 393, height: 852 }, insets: { top: 59, left: 0, right: 0, bottom: 34 } };
+    const sheet = (props: { scroll?: boolean; footer?: ReactElement }) => (
+      <SafeAreaProvider initialMetrics={metrics}>
+        <ThemeProvider scheme="light" reduceMotion>
+          <BottomSheet visible title="Report" onClose={jest.fn()} testID="sheet" {...props}>
+            <Text testID="reasons">Reasons</Text>
+          </BottomSheet>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    );
+    type HostNode = { type: unknown; props: Record<string, unknown>; parent: HostNode | null };
+    /** The scroller that holds the content. */
+    const scroller = () => {
+      let node = screen.getByTestId('reasons') as unknown as HostNode | null;
+      while (node && node.type !== 'RCTScrollView') node = node.parent;
+      return node!;
+    };
+    const room = (style: unknown) => StyleSheet.flatten(style as StyleProp<ViewStyle>).paddingBottom;
+    const view = await render(sheet({}));
+    // Plain: the panel adds no room of its own; the scroller holds the 26 pt under the content, so the
+    // panel is as tall as before and a card's shadow spreads into that room.
+    expect(room(screen.getByTestId('sheet').props.style)).toBe(0);
+    expect(scroller().props.contentContainerStyle).toEqual({ paddingBottom: 26 });
+    // A footer, or `scroll`: the room stays under the panel, below the footer or the scroller.
+    await view.rerender(sheet({ footer: <Button label="Done" onPress={jest.fn()} /> }));
+    expect(room(screen.getByTestId('sheet').props.style)).toBe(26);
+    expect(scroller().props.contentContainerStyle).toBeUndefined();
+    await view.rerender(sheet({ scroll: true }));
+    expect(room(screen.getByTestId('sheet').props.style)).toBe(26);
+    expect(scroller().props.contentContainerStyle).toEqual({ paddingBottom: 8 });
   });
 
   test('it leaves after its exit, and the old name still works', async () => {

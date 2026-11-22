@@ -1,3 +1,5 @@
+export { withActivate } from './a11y/actions';
+export { useAnnounce, type AnnounceOptions } from './a11y/useAnnounce';
 export { contrastRatio, relativeLuminance } from './contrast';
 export { fontFamilies, useAppFonts } from './fonts';
 export { SceneScope, SkyScope, ThemeProvider, useTheme, type Theme } from './theme';

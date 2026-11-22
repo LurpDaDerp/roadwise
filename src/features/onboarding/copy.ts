@@ -76,7 +76,11 @@ export const onboardingCopy = {
     } satisfies Record<'ios' | 'android', { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[]>,
     continue: 'Sounds good',
   },
-  /** What the permission steps share. */
+  /**
+   * What the permission steps share. On an iPhone, the button that opens a system alert says
+   * Continue, never Allow, and no line names an alert's option: Apple's rule for a screen shown
+   * before its permission alert.
+   */
   permissions: {
     loadFailed: "Couldn't check this phone's permissions.",
     retry: 'Try again',
@@ -85,9 +89,10 @@ export const onboardingCopy = {
     ios: {
       title: 'Let RoadWise notice your drives',
       body: 'RoadWise uses your location to notice when you start driving and to record the drive, even when the app is closed. It also checks the local weather.',
-      steps: 'Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".',
+      steps: 'Your iPhone asks twice.',
       promise: 'Your drives stay in your RoadWise account and are never sold',
-      allow: 'Allow location',
+      /** Opens the system alert (see `permissions`). */
+      allow: 'Continue',
       notNow: 'Not now',
       continue: 'Continue',
       openSettings: 'Open Settings',
@@ -125,7 +130,8 @@ export const onboardingCopy = {
     },
     /** Under the body: phone pickups are felt, never seen. */
     phone: PHONE_PRIVACY,
-    allow: 'Allow motion access',
+    /** Opens the system alert (see `permissions`). */
+    allow: { ios: 'Continue', android: 'Allow motion access' },
     notNow: 'Not now',
     continue: 'Continue',
     openSettings: 'Open Settings',
@@ -150,7 +156,8 @@ export const onboardingCopy = {
       { id: 'weekly_recap', title: 'Your week on the road', body: '4 drives this week. Safety Rating 92, up 1. 2 of 3 weekly goals done.' },
       { id: 'friend_request', title: 'New friend request', body: 'Someone wants to add you as a friend.' },
     ],
-    allow: 'Allow notifications',
+    /** Opens the system alert (see `permissions`). */
+    allow: { ios: 'Continue', android: 'Allow notifications' },
     notNow: 'Not now',
     continue: 'Continue',
     openSettings: 'Open Settings',

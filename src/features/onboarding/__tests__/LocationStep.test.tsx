@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 
 import { PROMPTS_KEY } from '@/core/permissions';
 import {
@@ -48,21 +49,57 @@ async function renderStep(platform: 'ios' | 'android', adapter: FakeAdapter, api
   return { ...w, onNext, appState };
 }
 
-test('iPhone: the primer says why and that the phone asks twice, and nothing is asked before the tap', async () => {
+test('iPhone: the primer says why and that the phone asks twice, naming no option, and nothing is asked before the tap', async () => {
   const adapter = fakeAdapter(snap({ platform: 'ios', location: 'undetermined', precise: null }));
   await renderStep('ios', adapter);
   expect(await screen.findByText(ios.body)).toBeOnTheScreen();
   expect(screen.getByText(ios.title)).toBeOnTheScreen();
-  expect(screen.getByTestId('location-twice')).toHaveTextContent('Your iPhone asks twice. Choose "Allow While Using App", then "Change to Always Allow".');
+  expect(screen.getByTestId('location-twice')).toHaveTextContent('Your iPhone asks twice.', { exact: true });
+  expect(screen.queryByText(/Allow While Using|Always Allow|Choose/)).toBeNull();
   expect(requests(adapter)).toEqual([]);
 });
 
-test('Android: the primer says why and that the phone asks twice, in its own words, and nothing is asked before the tap', async () => {
+test.each([
+  ['undetermined', snap({ platform: 'ios', location: 'undetermined', precise: null })],
+  ['While Using, Always still to ask', snap({ platform: 'ios', location: 'foreground', precise: true, canAskAlways: true })],
+])("iPhone (%s): before the system alert, one button, Continue, which opens it; no Not now (Apple's rule)", async (_, initial) => {
+  const adapter = fakeAdapter(initial);
+  await renderStep('ios', adapter);
+  expect(await screen.findByTestId('location-allow')).toHaveTextContent('Continue', { exact: true });
+  expect(screen.queryByTestId('location-not-now')).toBeNull();
+  expect(screen.queryByTestId('location-continue')).toBeNull();
+  expect(screen.queryByText(/^Allow/)).toBeNull();
+  await press(screen.getByTestId('location-allow'));
+  expect(requests(adapter)).toContain('requestLocationAlways');
+});
+
+test('iPhone: a request that fails (no alert came) says so, offers Continue again and Not now, which asks nothing more and moves on (D12)', async () => {
+  const say = jest.mocked(AccessibilityInfo.announceForAccessibilityWithOptions);
+  say.mockClear();
+  const adapter = fakeAdapter(snap({ platform: 'ios', location: 'undetermined', precise: null }));
+  adapter.requestLocationForeground = jest.fn(async () => {
+    adapter.log.push('requestLocationForeground');
+    throw new Error('no answer');
+  });
+  const { onNext } = await renderStep('ios', adapter);
+  await press(await screen.findByTestId('location-allow'));
+  expect(await screen.findByText(ios.failed)).toBeOnTheScreen();
+  // Read out as it appears: VoiceOver stays on the button.
+  expect(say.mock.calls).toEqual([[ios.failed, { queue: true }]]);
+  expect(screen.getByTestId('location-allow')).toHaveTextContent('Continue', { exact: true });
+  await press(screen.getByTestId('location-not-now'));
+  expect(onNext).toHaveBeenCalledTimes(1);
+  expect(requests(adapter)).toEqual(['requestLocationForeground']);
+});
+
+test('Android: the primer says why and that the phone asks twice, in its own words, with Allow location and Not now, and nothing is asked before the tap', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null, canAskAlways: false }));
   await renderStep('android', adapter);
   expect(await screen.findByText(android.body)).toBeOnTheScreen();
   expect(screen.getByText(android.title)).toBeOnTheScreen();
   expect(screen.getByTestId('location-twice')).toHaveTextContent('Your phone asks twice. Choose "While using the app", then "Allow all the time".');
+  expect(screen.getByTestId('location-allow')).toHaveTextContent('Allow location');
+  expect(screen.getByTestId('location-not-now')).toHaveTextContent('Not now');
   expect(requests(adapter)).toEqual([]);
 });
 
@@ -175,7 +212,7 @@ test('a denial says so, asks no Always, and Continue still moves on (D12)', asyn
   expect(requests(adapter)).toEqual(['requestLocationForeground']);
 });
 
-test('Not now asks nothing', async () => {
+test('Android: Not now asks nothing', async () => {
   const adapter = fakeAdapter(snap({ platform: 'android', location: 'undetermined', precise: null }));
   const { onNext } = await renderStep('android', adapter);
   await press(await screen.findByTestId('location-not-now'));

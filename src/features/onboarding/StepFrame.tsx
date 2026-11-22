@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 
-import { Button, IconButton, Screen, Text, useTheme } from '@/ui';
+import { Button, IconButton, Screen, Text, useAnnounce, useTheme } from '@/ui';
 
 import { onboardingCopy } from './copy';
 import type { StepPosition } from './flow';
@@ -87,6 +87,9 @@ export function StepFrame({
   const cancel = useContext(CancelContext);
   // Leaving (finishing setup, or the sign-out Cancel leads to): nothing on the frame starts anything else.
   const leaving = finish.busy || (cancel?.busy ?? false);
+  // A failed finish is read out as it shows above the buttons: the screen reader stays on the button
+  // that was tapped, and the line's alert role says nothing by itself.
+  useAnnounce(finish.error);
 
   return (
     <Screen scroll testID={testID}>

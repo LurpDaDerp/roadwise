@@ -78,13 +78,13 @@ const IMAGE = /\.(png|jpe?g)$/i;
 
 /** Android: view-shot's card captures and the map snapshots, both straight in the cache. */
 const androidCapture = (n: string) => (n.startsWith('ReactNative-snapshot-image') || n.startsWith('AirMapSnapshot')) && IMAGE.test(n);
-/** Android: expo-print's PDFs (the Permit log), in `Print` in the cache. */
+/** expo-print's PDFs (the Permit log), in `Print` in the cache on both platforms. */
 const PRINT_DIRECTORY = 'Print';
 const PDF = /\.pdf$/i;
 
 /**
  * Deletes every share image a crash or a closed app left on the phone: card captures, map snapshots,
- * the data export's folder and, on Android, the Permit log's PDFs. Never throws.
+ * the data export's folder and the Permit log's PDFs. Never throws.
  */
 export function sweepShareImages(): void {
   const fs = loadFs();
@@ -97,8 +97,9 @@ export function sweepShareImages(): void {
   sweep(() => Paths.cache, androidCapture);
   // The data export deletes its own file (on iPhone; Android's goes with the stale sweep); one a crash left goes here.
   sweep(() => new Directory(Paths.cache, 'export'), () => true);
-  // Android: the Permit log's PDF waits for the stale sweep; a wipe takes it at once.
-  if (Platform.OS === 'android') sweep(() => new Directory(Paths.cache, PRINT_DIRECTORY), (n) => PDF.test(n));
+  // The Permit log's PDF: Android's waits for the stale sweep, and on iPhone one is left when the app
+  // is killed with its share sheet still open. A wipe takes either at once.
+  sweep(() => new Directory(Paths.cache, PRINT_DIRECTORY), (n) => PDF.test(n));
 }
 
 /**

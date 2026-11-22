@@ -13,7 +13,14 @@ import { setMapsForTests } from '../maps';
 import { locateOnce, PrivacyZonesScreen } from '../PrivacyZonesScreen';
 
 jest.mock('@/data/supabase/client', () => ({ supabase: {} }));
-jest.mock('expo-router', () => ({ useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }) }));
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => ({ back: jest.fn(), push: jest.fn(), canGoBack: () => true }),
+    // Focus effects run once on mount here.
+    useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]),
+  };
+});
 jest.mock('@/features/spots/recompute', () => ({ requestSpotRecompute: () => {} }));
 jest.mock('expo-location', () => ({
   Accuracy: { Balanced: 3 },

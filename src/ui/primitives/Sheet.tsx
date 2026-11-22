@@ -31,7 +31,10 @@ export type SheetProps = {
   /** A line under the title. */
   subtitle?: string;
   children: ReactNode;
-  /** Wrap the content in a ScrollView (long lists such as report reasons). Default false. */
+  /**
+   * A long list: 8 pt of room under the content, and a rubber-band pull even when it fits. The
+   * content scrolls without it too, once it is taller than the panel. Default false.
+   */
   scroll?: boolean;
   /**
    * Pinned under the content, above the home indicator: the sheet's one primary action (a full
@@ -59,7 +62,7 @@ export const SHEET_DISMISS_FALLBACK_MS = Platform.OS === 'ios' ? 700 : 250;
 
 /**
  * The bottom sheet: a rounded panel over a dimmed page, with a grabber, a title row with a round
- * close button, optional scrolling content and an optional pinned footer.
+ * close button, content that scrolls once it is taller than the panel, and an optional pinned footer.
  *
  * - Enter and exit: the system modal fades the scrim and panel together (no motion under Reduce
  *   Motion). The panel's resting place never depends on a JS-driven animation, so it is on screen
@@ -157,6 +160,13 @@ export function BottomSheet({
 
   const panel = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));
 
+  // The room under the last row, above the home indicator.
+  const room = Math.max(insets.bottom - t.space.sm, t.space.lg);
+  // A sheet with neither `scroll` nor a footer keeps that room inside its scroller: the scroller cuts
+  // off whatever is drawn past its edge, so a shadow under the last row (a card's) still spreads into
+  // the room, as it does under a plain column.
+  const roomInside = !scroll && !footer;
+
   const content = (
     <View style={[{ gap: t.space.lg, paddingHorizontal: t.space.xl, paddingBottom: footer ? t.space.md : 0 }, contentStyle]}>
       {children}
@@ -202,7 +212,7 @@ export function BottomSheet({
               borderCurve: 'continuous',
               borderWidth: t.scheme === 'dark' ? 1 : 0,
               borderColor: t.colors.divider,
-              paddingBottom: Math.max(insets.bottom - t.space.sm, t.space.lg),
+              paddingBottom: roomInside ? 0 : room,
               boxShadow: t.elevation.overlay,
               overflow: 'hidden',
             },
@@ -251,13 +261,16 @@ export function BottomSheet({
               )}
             </View>
           </View>
-          {scroll ? (
-            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: t.space.sm }}>
-              {content}
-            </ScrollView>
-          ) : (
-            content
-          )}
+          {/* Always a scroller, so content taller than the panel (large text, a small phone) scrolls
+              instead of running off its bottom edge, the footer with it. Without `scroll` it adds no
+              room and no rubber-band, so a sheet that fits looks and feels like a plain column. */}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            alwaysBounceVertical={scroll}
+            contentContainerStyle={scroll ? { paddingBottom: t.space.sm } : roomInside ? { paddingBottom: room } : undefined}
+          >
+            {content}
+          </ScrollView>
           {footer ? <View style={{ paddingHorizontal: t.space.xl, paddingTop: t.space.sm, gap: t.space.sm }}>{footer}</View> : null}
         </Animated.View>
       </KeyboardAvoidingView>
