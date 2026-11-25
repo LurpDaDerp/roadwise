@@ -75,16 +75,16 @@ select is(array[private.hard_event_weight('hard_brake', 'minor', '{"peakG": 0.45
     private.hard_event_weight('hard_brake', 'minor', '{"peakG": "x"}')],
   array[1.5625, (0.5::float8 / 0.4::float8) * (0.5::float8 / 0.4::float8), (0.6::float8 / 0.48::float8) * (0.6::float8 / 0.48::float8), 4, 1, 2, 1]::float8[], 'hard_event_weight: (peak / threshold)^2 between 1 and 4; the tier without a peak');
 select is(array[private.speeding_weight(1, '{"overMphS": 1}', 'minor'), private.speeding_weight(3, '{"overMphS": 4.5}', 'minor'), private.speeding_weight(5, '{"overMphS": 65}', 'severe')],
-  array[0.08944271909999159, 0.49295030175464943, 5 * (13 / 5.0)::float8 * sqrt((13 / 5.0)::float8)]::float8[],
-  'speeding_weight: no grace, one second just over the line weighs a little and five seconds count all five');
+  array[0.04000000000000001, 0.26999999999999996, 33.800000000000004]::float8[],
+  'speeding_weight: no grace, one second just over the line weighs a little and five seconds count all five (x squared since 0048)');
 select is(array[private.phone_pickup_weight(6, '{"speedMph": 22, "maxSpeedMph": 52.5}'), private.phone_pickup_weight(6, '{"speedMph": 45}'), private.phone_pickup_weight(6, '{}')],
   array[28, 24, 16]::float8[], 'phone_pickup_weight: (10 + seconds in hand) x the speed factor of its top speed, else its start speed, else 1');
 select is(array[private.attention_weight('eyes_off', 12.5, '{"source": "dashcam", "speedMph": 47.3}'), private.attention_weight('drowsy', 3, '{"source": "dashcam", "speedMph": 61}'),
     private.attention_weight('eyes_off', 2, '{"source": "dashcam"}'), private.attention_weight('drowsy', 60, '{"speedMph": 90}'), private.attention_weight('hard_brake', 2, '{}')],
-  array[157.66666666666666, 101.66666666666666, 40, 399.99999999999994, 0]::float8[], 'attention_weight: the base x the speed factor x the length over 5 s (1 to 3)');
+  array[157.66666666666666, 162.66666666666666, 40, 640, 0]::float8[], 'attention_weight: the base (eyes off 40, drowsy 80 since 0048) x the speed factor x the length over 5 s (1 to 3)');
 select is(array[private.event_weight_of('hard_brake', 'minor', 2, '{"peakG": 0.45}'), private.event_weight_of('phone_pickup', 'moderate', 6, '{"speedMph": 22, "maxSpeedMph": 52.5}'),
     private.event_weight_of('speeding', 'minor', 3, '{"overMphS": 4.5}'), private.event_weight_of('eyes_off', 'severe', 12.5, '{"speedMph": 47.3}')],
-  array[1.5625, 28, 0.49295030175464943, 0]::float8[], 'event_weight_of dispatches to the new weights; a DashPal event weighs on Attention only');
+  array[1.5625, 28, 0.26999999999999996, 0]::float8[], 'event_weight_of dispatches to the new weights; a DashPal event weighs on Attention only');
 
 -- ---------------------------------------------------------------------------
 -- pin Q (ava): one drive with every kind of event at its own severity, watched by DashPal
@@ -104,12 +104,12 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000
 select is((select row(n_events, n_speeding, clean, scoring_version)::text from public.trips where client_trip_id = 'a0000000-0000-4000-8000-0000000000aa'),
   row(7, 2, false, 9)::text, 'the 3-second speeding is an event like the rest: it is counted and breaks a clean drive');
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[69.9, 60.56350089920356, 42.384105960264904, 57.58630714983263, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
-  'pin Q: 69.9 and every category to the digit (scoring ratingAt)');
-select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 69.9, 'the stored rating is the new one');
+  array[66.3, 60.56350089920356, 42.384105960264904, 57.58630714983263, 64.35707191680784, 87.4757281553398, 87.73860574551252]::float8[],
+  'pin Q: 66.3 and every category to the digit (scoring ratingAt; Attention over 1800 watched seconds)');
+select is((select safety_rating from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), 66.3, 'the stored rating is the new one');
 -- a short episode weighs on Speed: taking it away raises the score
 update public.trip_events set status = 'removed' where client_event_id = 'a1000000-0000-4000-8000-000000000005';
-select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 87.82410285072866::float8,
+select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'speed')::float8, '>', 87.73860574551252::float8,
   'the 3-second speeding weighed on Speed');
 update public.trip_events set status = 'active' where client_event_id = 'a1000000-0000-4000-8000-000000000005';
 -- a harder brake weighs more: the same drive with the severe brake at its threshold reads higher on Braking
@@ -124,11 +124,11 @@ select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) 
 update public.trip_events set measured = '{"speedMph": 22, "maxSpeedMph": 52.5}' where client_event_id = 'a1000000-0000-4000-8000-000000000007';
 -- a shorter DashPal episode weighs less on Attention
 update public.trip_events set duration_s = 4 where client_event_id = 'a1000000-0000-4000-8000-000000000008';
-select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'attention')::float8, '>', 48.06408544726301::float8,
+select cmp_ok((private.rating_at('00000000-0000-0000-0000-000000000001', now()) -> 'scores' ->> 'attention')::float8, '>', 64.35707191680784::float8,
   'a 4-second eyes-off weighs less than a 12.5-second one');
 update public.trip_events set duration_s = 12.5 where client_event_id = 'a1000000-0000-4000-8000-000000000008';
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[69.9, 60.56350089920356, 42.384105960264904, 57.58630714983263, 48.06408544726301, 87.4757281553398, 87.82410285072866]::float8[],
+  array[66.3, 60.56350089920356, 42.384105960264904, 57.58630714983263, 64.35707191680784, 87.4757281553398, 87.73860574551252]::float8[],
   'and back as it was');
 
 -- ---------------------------------------------------------------------------

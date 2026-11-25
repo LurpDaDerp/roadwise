@@ -100,9 +100,9 @@ select is((select d - 'rating' - 'tripId' from m1), '{"eventId": "a2000000-0000-
 select is((select row(status, (select n_events from pg_temp.t('a0000000-0000-4000-8000-0000000000a2')))::text from public.trip_events where client_event_id = 'a2000000-0000-4000-8000-000000000002'),
   row('removed', 2)::text, 'the pickup is removed and the drive''s events recounted');
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000001'),
-  array[88.3, 91.9280828053141, 81.02731927681675, 89.93932012720053, null, 86.73833371909146, 90.7045529239451]::float8[],
-  'pin P: 88.3, Phone use 86.73833371909146 (each pickup weighed by its top speed since 0028) and every category to the digit (scoring ratingAt)');
-select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(88.3, true, 43.00)::text,
+  array[87.5, 91.9280828053141, 81.02731927681675, 89.93932012720053, null, 86.73833371909146, 90.79165984378409]::float8[],
+  'pin P: 87.5, Phone use 86.73833371909146 (each pickup weighed by its top speed since 0028) and every category to the digit (scoring ratingAt)');
+select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(87.5, true, 43.00)::text,
   'the stored rating counts Phone use');
 select is(private.dispute_event('00000000-0000-0000-0000-000000000001', 'a0000000-0000-4000-8000-0000000000a2', 'a2000000-0000-4000-8000-000000000002', 'mounted'), (select d from m1),
   'a repeat of the report answers what was stored');
@@ -114,7 +114,7 @@ select pg_temp.drive('00000000-0000-0000-0000-000000000002', 'b0000000-0000-4000
     {"id":"b1000000-0000-4000-8000-000000000003","type":"phone_pickup","tier":"severe","durationS":24,"at":300}]',
   pg_temp.exp(15, 15, 9, 840, 1136, 900));
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000002'),
-  array[84.2, 87.62886597938144, 72.64957264957265, 86.69623059866963, null, 83.88157894736842, 87.48261474269819]::float8[], 'pin P1: 84.2, Phone use 83.88157894736842');
+  array[83, 87.62886597938144, 72.64957264957265, 86.69623059866963, null, 83.88157894736842, 87.48261474269819]::float8[], 'pin P1: 83.0, Phone use 83.88157894736842');
 
 -- ---------------------------------------------------------------------------
 -- not tracked, no score (cat, dan)
@@ -136,8 +136,8 @@ select is(pg_temp.scores('00000000-0000-0000-0000-000000000003'),
 select pg_temp.drive('00000000-0000-0000-0000-000000000004', 'd0000000-0000-4000-8000-0000000000d1', now() - interval '1 hour', 3600, 6,
   '[{"id":"d1000000-0000-4000-8000-000000000001","type":"phone_pickup","tier":"moderate","durationS":12,"at":400}]', pg_temp.exp(15, 15, 9, 840, 1136));
 select is(pg_temp.scores('00000000-0000-0000-0000-000000000004'),
-  array[86.2, 87.62886597938144, 87.62886597938144, 86.69623059866963, null, 83.14241611828743, 87.48261474269819]::float8[],
-  'a pickup with no phone seconds still scores Phone use: 83.14241611828743, the rating 86.2');
+  array[86.1, 87.62886597938144, 87.62886597938144, 86.69623059866963, null, 83.14241611828743, 87.48261474269819]::float8[],
+  'a pickup with no phone seconds still scores Phone use: 83.14241611828743, the rating 86.1');
 -- a removed pickup on such a drive leaves nothing to judge
 select is((private.dispute_event('00000000-0000-0000-0000-000000000004', 'd0000000-0000-4000-8000-0000000000d1', 'd1000000-0000-4000-8000-000000000001', 'mounted')) ->> 'clean', 'true',
   'a mounted report on the only event makes the drive clean');

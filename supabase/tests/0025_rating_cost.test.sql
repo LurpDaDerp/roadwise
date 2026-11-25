@@ -1,19 +1,23 @@
 -- the rating's cost at scale: a driver with 3,000 back-dated drives (and about 9,000 events) in the
 -- 90-day window. private.rating_at agrees to the digit with the per-drive loop it replaced (kept
--- here as the reference, with Phone use since 0026 and the 0028 weights), get_profile reads the rating once, and
+-- here as the reference, with Phone use since 0026, the 0028 weights and scoring version 13 since
+-- 0048), get_profile reads the rating once, and
 -- get_my_summary reads the stored week-ago rating instead of computing one. The timings print as a
 -- diag line.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(9);
+select plan(10);
 -- the scores travel in jsonb: read them back exactly
 set local extra_float_digits = 1;
 
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000a1', 'perf@example.com');
 update public.profiles set username = 'perf', onboarded_at = now() where id = '00000000-0000-0000-0000-0000000000a1';
 
--- the reference: the rating as a per-drive loop with correlated sums (scoring ratingAt, drive by drive)
+-- the reference: the rating as a per-drive loop with correlated sums (scoring ratingAt, drive by
+-- drive), written apart from private.rating_at: the v13 speeding weight inline (n x x x, x = min(5,
+-- max(0, mean over) / ref), ref = limitMph / 7 or 5), Attention per watched second, and the weighted
+-- harmonic mean added term by term in radar order
 create function pg_temp.rating_at_ref(p_user uuid, p_at timestamptz) returns jsonb
 language plpgsql stable as $$
 declare
@@ -22,15 +26,16 @@ declare
   v_miles numeric := 0;
   bw float8 := 0; bo float8 := 0; aw float8 := 0; ao float8 := 0; tw float8 := 0; tow float8 := 0; sw float8 := 0; so float8 := 0;
   pw float8 := 0; po float8 := 0;
-  ap float8 := 0; am float8 := 0;
+  ap float8 := 0; aso float8 := 0;
   s_b float8; s_a float8; s_t float8; s_s float8; s_att float8; s_p float8;
-  v_num float8; v_den float8;
+  v_w float8 := 0; v_inv float8 := 0;
 begin
   for r in
     select t.miles, t.started_at, t.slowdowns, t.speedups, t.turns, t.limit_s, t.phone_s,
+      -- scoring watchedSeconds: the covered seconds held to the moving seconds
       case when t.miles > 0 and t.dashcam_moving_s > 0 and t.dashcam_covered_s > 0
-           then t.miles::float8 * least(t.dashcam_covered_s, t.dashcam_moving_s)::float8 / t.dashcam_moving_s::float8
-           else 0::float8 end as watched,
+           then least(t.dashcam_covered_s, t.dashcam_moving_s)::float8
+           else 0::float8 end as watched_s,
       coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_brake'), 0::float8) as b_w,
       (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_brake') as b_n,
@@ -40,8 +45,18 @@ begin
       coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_corner'), 0::float8) as t_w,
       (select count(*) from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'hard_corner') as t_n,
-      coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
-                from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_w,
+      -- the v13 speeding weight, inline: n = max(1, duration), the mean over from overMphS (or the
+      -- tier's legacy mean), the reference from limitMph
+      coalesce((select sum(q.n * q.x * q.x order by q.started_at, q.client_event_id)
+                from (select e.started_at, e.client_event_id, n.n,
+                        least(5::float8, greatest(0::float8,
+                          case when jsonb_typeof(e.measured -> 'overMphS') = 'number' then (e.measured ->> 'overMphS')::float8 / n.n
+                               else (case e.tier when 'severe' then 12 when 'moderate' then 6.5 else 2 end)::float8 end)
+                          / case when jsonb_typeof(e.measured -> 'limitMph') = 'number' and (e.measured ->> 'limitMph')::float8 >= 1::float8
+                                 then (e.measured ->> 'limitMph')::float8 / 7::float8 else 5::float8 end) as x
+                      from public.trip_events e
+                      cross join lateral (select greatest(1::float8, greatest(0::float8, coalesce(e.duration_s, 0)::float8)) as n) n
+                      where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding') q), 0::float8) as s_w,
       coalesce((select sum(greatest(1::float8, greatest(0::float8, e.duration_s::float8)) order by e.started_at, e.client_event_id)
                 from public.trip_events e where e.trip_id = t.id and e.status = 'active' and e.type = 'speeding'), 0::float8) as s_n,
       coalesce((select sum(private.event_weight_of(e.type, e.tier, e.duration_s, e.measured) order by e.started_at, e.client_event_id)
@@ -62,7 +77,7 @@ begin
     tw := tw + w * r.t_w;  tow := tow + w * greatest(coalesce(r.turns, 0), r.t_n)::float8;
     sw := sw + w * r.s_w;  so := so + w * greatest(coalesce(r.limit_s, 0)::float8, r.s_n);
     pw := pw + w * r.p_w;  po := po + w * greatest(coalesce(r.phone_s, 0)::float8, r.p_n);
-    ap := ap + w * r.att;  am := am + w * r.watched;
+    ap := ap + w * r.att;  aso := aso + w * r.watched_s;
   end loop;
   if v_miles <= 0 then
     return jsonb_build_object('rating', null, 'ranked', false, 'miles', 0, 'scores', jsonb_build_object(
@@ -73,11 +88,17 @@ begin
   s_t := private.rate_score((tw + 60::float8 * 0.008::float8) / (tow + 60::float8), 0.008::float8);
   s_s := private.rate_score((sw + 3600::float8 * 0.040::float8) / (so + 3600::float8), 0.040::float8);
   s_p := case when po > 0 then private.rate_score((pw + 3600::float8 * 0.040::float8) / (po + 3600::float8), 0.040::float8) end;
-  s_att := case when am > 0 then private.category_score(ap, am, 10) end;
-  v_num := 1::float8 * s_a + 1::float8 * s_b + 1::float8 * s_t + coalesce(1::float8 * s_att, 0::float8) + coalesce(2::float8 * s_p, 0::float8) + 2::float8 * s_s;
-  v_den := (1 + 1 + 1 + case when s_att is null then 0 else 1 end + case when s_p is null then 0 else 2 end + 2)::float8;
+  s_att := case when aso > 0 then private.rate_score((ap + 3600::float8 * 0.024::float8) / (aso + 3600::float8), 0.024::float8) end;
+  -- the weighted harmonic mean in radar order: acceleration 1, braking 2, turning 1, attention 3,
+  -- phone use 3, speed 3; a null or non-positive score left out of both sums
+  if s_a > 0 then v_w := v_w + 1::float8; v_inv := v_inv + 1::float8 / s_a; end if;
+  if s_b > 0 then v_w := v_w + 2::float8; v_inv := v_inv + 2::float8 / s_b; end if;
+  if s_t > 0 then v_w := v_w + 1::float8; v_inv := v_inv + 1::float8 / s_t; end if;
+  if s_att > 0 then v_w := v_w + 3::float8; v_inv := v_inv + 3::float8 / s_att; end if;
+  if s_p > 0 then v_w := v_w + 3::float8; v_inv := v_inv + 3::float8 / s_p; end if;
+  if s_s > 0 then v_w := v_w + 3::float8; v_inv := v_inv + 3::float8 / s_s; end if;
   return jsonb_build_object(
-    'rating', round(private.round_half_up(least(100::float8, greatest(0::float8, v_num / v_den)), 1)::numeric, 1),
+    'rating', case when v_w > 0 then round(private.round_half_up(least(100::float8, greatest(0::float8, v_w / v_inv)), 1)::numeric, 1) end,
     'ranked', v_miles >= 10, 'miles', v_miles,
     'scores', jsonb_build_object('acceleration', s_a, 'braking', s_b, 'turning', s_t, 'attention', s_att, 'phone', s_p, 'speed', s_s));
 end $$;
@@ -121,8 +142,9 @@ insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_d
   cross join lateral (select case when k <= 20 then now() - interval '2160 hours' - make_interval(hours => k - 1)
                                   else now() + make_interval(hours => k - 20) end as s) x;
 -- 0 to 6 events a drive, every type and tier, some removed, some starting together (event order
--- falls to client_event_id), speeding with and without a measured overMphS, hard events with and
--- without a peak, DashPal events at a speed and a length
+-- falls to client_event_id), speeding with and without a measured overMphS and with and without a
+-- posted limit (a 0 limit reads as none), hard events with and without a peak, DashPal events at a
+-- speed and a length
 insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, started_at, duration_s, measured, status)
   select t.id, md5('ev-' || g.i || '-' || k)::uuid, t.user_id,
     (array['hard_brake', 'hard_accel', 'hard_corner', 'speeding', 'phone_pickup', 'eyes_off', 'drowsy'])[1 + (g.i + k) % 7],
@@ -133,6 +155,8 @@ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, s
     case when (g.i + k) % 7 = 3 then 3.5 + (g.i * k) % 90 when (g.i + k) % 7 = 4 then 1 + (g.i * k) % 40
          when (g.i + k) % 7 >= 5 then 0.5 + (g.i * k) % 23 else 1.5 end,
     case when (g.i + k) % 7 = 3 and (g.i + k) % 4 <> 0 then jsonb_build_object('overMphS', (g.i * k) % 400 + 0.25)
+           || case (g.i * k) % 4 when 0 then jsonb_build_object('limitMph', 25 + 5 * ((g.i * k) % 9)) when 1 then '{"limitMph": 0}'::jsonb else '{}'::jsonb end
+         when (g.i + k) % 7 = 3 and (g.i * k) % 2 = 0 then jsonb_build_object('limitMph', 20 + (g.i * k) % 50)
          when (g.i + k) % 7 = 4 then jsonb_build_object('speedMph', 20 + (g.i * k) % 30, 'maxSpeedMph', 25 + (g.i * k) % 30)
          when (g.i + k) % 7 < 3 and (g.i + k) % 3 <> 0 then jsonb_build_object('peakG', 0.3 + ((g.i * k) % 37) * 0.01)
          when (g.i + k) % 7 >= 5 then jsonb_build_object('source', 'dashcam', 'speedMph', 10 + (g.i * k) % 70)
@@ -149,6 +173,15 @@ select private.refresh_rating('00000000-0000-0000-0000-0000000000a1');
 -- ---------------------------------------------------------------------------
 select is((select array[s ->> 'attention' is not null, s ->> 'phone' is not null] from (select private.rating_at('00000000-0000-0000-0000-0000000000a1', now()) -> 'scores' as s) x),
   array[true, true], 'the data scores every category, Attention and Phone use included');
+select ok((select count(*) filter (where e.measured ? 'overMphS' and (e.measured ->> 'limitMph')::float8 > 0) > 0
+      and count(*) filter (where e.measured ? 'overMphS' and (e.measured ->> 'limitMph')::float8 = 0) > 0
+      and count(*) filter (where e.measured ? 'overMphS' and not e.measured ? 'limitMph') > 0
+      and count(*) filter (where not e.measured ? 'overMphS' and e.measured ? 'limitMph') > 0
+      and count(*) filter (where not e.measured ? 'overMphS' and not e.measured ? 'limitMph') > 0
+      and count(*) filter (where (e.measured ->> 'limitMph')::float8 > 0
+                             and (e.measured ->> 'overMphS')::float8 / greatest(1, e.duration_s) > 5 * (e.measured ->> 'limitMph')::float8 / 7) > 0
+    from public.trip_events e where e.user_id = '00000000-0000-0000-0000-0000000000a1' and e.type = 'speeding' and e.status = 'active'),
+  'speeding with and without a measured mean over, each with a posted limit, a 0 limit or none, some at the cap');
 select is(private.rating_at('00000000-0000-0000-0000-0000000000a1', now()), pg_temp.rating_at_ref('00000000-0000-0000-0000-0000000000a1', now()),
   '3,000 drives: the rating and every category equal the per-drive loop, to the digit');
 select is(private.rating_at('00000000-0000-0000-0000-0000000000a1', now() - interval '7 days'), pg_temp.rating_at_ref('00000000-0000-0000-0000-0000000000a1', now() - interval '7 days'),
