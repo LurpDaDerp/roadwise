@@ -211,10 +211,12 @@ extension DriveDetector {
       guard let self = self, var r = self.rec, r.driveId == driveId, self.capture.sensing == .off else { return }
       let now = DriveDetector.now()
       guard let s = summary else {
-        // No journal: nothing to resume or hand over. The Live Activity the launch kept for it ends too.
+        // No journal: nothing to resume or hand over. The Live Activity the launch kept for it ends
+        // too, and so does its "drive started" note.
         self.settle(&r, now)
         self.save(r)
         self.capture.closeCapture()
+        DriveNotifier.remove()
         DriveDisplayBridge.postEnded()
         self.syncWakes()
         self.emitState("ended")

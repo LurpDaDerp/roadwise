@@ -9,6 +9,7 @@ import expo.modules.drivesense.CaptureEnd
 import expo.modules.drivesense.CaptureService
 import expo.modules.drivesense.DetectEventBus
 import expo.modules.drivesense.DriveSensePrefs
+import expo.modules.drivesense.DriveStartNote
 import expo.modules.drivesense.RowJournal
 import expo.modules.drivesense.RowJournalRead
 import expo.modules.drivesense.RowsPage
@@ -510,6 +511,8 @@ class DriveDetector private constructor(context: Context) {
     handler.post {
       val waiting = rec?.state == "candidate" && rec?.origin == "manual"
       if (sensing || watching || rec?.recording == true) finishSensing(holdMs = 0L)
+      // The next driver starts with the "Drive started" note on, as the app's own setting does.
+      DriveStartNote.setEnabled(app, true)
       stopClock()
       handler.removeCallbacks(restTask)
       starting = false

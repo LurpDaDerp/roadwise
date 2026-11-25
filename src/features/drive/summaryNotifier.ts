@@ -5,7 +5,8 @@
  * Tapping it opens the recap (`/drives/<id>?fresh=1`). An automatic drive that ends on its own in
  * the background posts it like any other; an automatic drive's recap (its "Not driving?" never run
  * out) carries the one action, "I wasn't driving" (`category`, `features/notifications/passenger.ts`). Each drive posts its recap once, and it stays up; a drive
- * discarded with "Not driving?", or not kept, posts nothing.
+ * discarded with "Not driving?", or not kept, posts nothing. Settings › Notifications › "Drive
+ * recaps" off posts none (`enabled`, read at each post, so a held recap follows the switch too).
  *
  * Attached before the drive host boots, so a drive the boot stores (native ended it while no
  * process ran) posts too, when it ended within the last `RECAP_MAX_AGE_MS`; an older one is only
@@ -33,6 +34,7 @@ import { formatDuration } from '@/features/drives/format';
 import { isDriveScreenFocused } from '@/features/drive/hudPresence';
 import { ensureNotificationSetup } from '@/features/notifications/categories';
 import { androidHasChannels, RECAP_CHANNEL_ID } from '@/features/notifications/channels';
+import { DRIVE_RECAPS_KEY, readSwitch } from '@/features/settings/notifications/localSwitches';
 import { formatDistance, type Units } from '@/lib/units';
 
 /** `content.data.kind` of every drive-summary request, so cancels find only ours. */
@@ -84,6 +86,8 @@ export interface SummaryNotifierDeps {
   units?: () => Promise<Units>;
   /** The recap's category for a drive (`recapCategory(db)`: an automatic drive's action); none when absent or unreadable. */
   category?: (clientTripId: string) => Promise<string | null>;
+  /** The "Drive recaps" switch (`recapsEnabled(db)`); on when absent or unreadable. */
+  enabled?: () => Promise<boolean>;
   onError?: (e: unknown, ctx: string) => void;
 }
 
@@ -153,6 +157,11 @@ export function summaryUnits(db: Db): () => Promise<Units> {
   return async () => ((await createSettingsRepo(db).get<unknown>('units')) === 'km' ? 'km' : 'mi');
 }
 
+/** The "Drive recaps" switch from the local settings, for `SummaryNotifierDeps.enabled`. */
+export function recapsEnabled(db: Db): () => Promise<boolean> {
+  return () => readSwitch(createSettingsRepo(db), DRIVE_RECAPS_KEY);
+}
+
 /** Remove every drive summary this app scheduled (the handover wipe). */
 export async function cancelDriveSummaries(port: SummaryNotificationPort = createExpoSummaryPort()): Promise<void> {
   for (const id of await port.scheduled()) await port.cancel(id).catch(() => {});
@@ -197,6 +206,8 @@ export function attachSummaryNotifier(host: Pick<DriveHost, 'subscribe' | 'snaps
     // The driving screen in front opens the recap itself. Not a held one's: that screen showed the
     // later drive's end, never this one's.
     if (due !== 'held' && appState.currentState === 'active' && screenShowsEnd()) return;
+    // Switched off in Settings › Notifications.
+    if (deps.enabled && !(await deps.enabled().catch(() => true))) return;
     if (!(await port.permissionGranted())) return;
     const body = summaryCopy.body(f.durationS, f.miles, await unitsNow());
     const category = await (deps.category?.(f.clientTripId) ?? Promise.resolve(null)).catch(() => null);

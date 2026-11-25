@@ -106,6 +106,12 @@ public final class DriveDetectModule: Module, DriveSenseEventSink {
       promise.resolve(nil)
     }.runOnQueue(.main)
 
+    // Settings › Notifications › "Drive started": whether an automatic drive's start posts the note.
+    AsyncFunction("setStartNote") { (on: Bool, promise: Promise) in
+      DriveNotifier.setEnabled(on)
+      promise.resolve(nil)
+    }.runOnQueue(.main)
+
     // The car link (round 11): the audio route's Bluetooth and CarPlay outputs, read only; the
     // paired cars live natively, so the detector reads them with no JS. Each answers the state.
     AsyncFunction("carLinkState") { (promise: Promise) in

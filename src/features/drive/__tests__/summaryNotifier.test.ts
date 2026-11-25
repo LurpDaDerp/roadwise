@@ -414,3 +414,35 @@ describe('announceStored (an orphan the launch\u2019s crash recovery stored)', (
     expect(scheduled).toEqual([]);
   });
 });
+test('"Drive recaps" switched off posts no recap, a held one included; on again, the next drive posts', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  let on = false;
+  const n = attach(host, { port: p, appState: { currentState: 'background' }, enabled: async () => on });
+  set({ status: 'idle', lastFinalized: kept('abc', 5) });
+  await n.settled();
+  expect(scheduled).toHaveLength(0);
+  // Held while another drive records, then the switch is read again when it would post.
+  on = true;
+  set({ status: 'recording', lastFinalized: kept('def', 9) });
+  await n.settled();
+  on = false;
+  set({ status: 'idle' });
+  await n.settled();
+  expect(scheduled).toHaveLength(0);
+  on = true;
+  set({ lastFinalized: kept('ghi', 12) });
+  await n.settled();
+  expect(scheduled.map((r) => r.clientTripId)).toEqual(['ghi']);
+  n.detach();
+});
+
+test('an unreadable "Drive recaps" switch counts as on', async () => {
+  const { host, set } = hostStub({});
+  const { p, scheduled } = port();
+  const n = attach(host, { port: p, appState: { currentState: 'background' }, enabled: async () => Promise.reject(new Error('db')) });
+  set({ status: 'idle', lastFinalized: kept('abc', 5) });
+  await n.settled();
+  expect(scheduled).toHaveLength(1);
+  n.detach();
+});

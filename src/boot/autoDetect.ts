@@ -14,6 +14,9 @@
 //   on its own rules (native settles off after it). The Start drive swipe works either way;
 // - `autoDetectForeground()` (each return to the front): the sync, then, with automatic drives on
 //   and armed, the `app` wake (`DriveDetect.appForeground()`; native also takes it on its own);
+// - the "Drive started" note (Settings › Notifications, `setDriveStartNote`): native posts it, so
+//   native keeps the switch too; it is handed over at every change and again at every arming, so a
+//   phone whose native copy was lost (a reinstall keeps neither) or wiped agrees with the setting;
 // - `autoDetectOff()` disarms it at every session end; the device wipes (sign-out with nothing
 //   owed, an account switch, the account's deletion) also wipe native's drive state
 //   (`DriveDetect.wipe()`: every journal, the last end, the parked spot and a rest), so nothing of
@@ -25,6 +28,7 @@ import type { CarLinkState, DetectMissing, DetectState, DriveDetectApi } from '@
 
 import { createSettingsRepo, type Db } from '@/data/db';
 import { nativeDriveDetect } from '@/drive/source';
+import { DRIVE_STARTED_KEY, readSwitch, writeSwitch } from '@/features/settings/notifications/localSwitches';
 
 /** The signed-in driver last seen onboarded on this phone (settings; the device wipes take it). */
 export const AUTO_DETECT_ONBOARDED_KEY = 'autoDetect.onboarded';
@@ -155,11 +159,34 @@ async function syncNow(opts: { onboarded?: boolean }): Promise<AutoDetectResult>
       await detect.setArmed(false, uid ?? (await ownerToDisarm(detect, null)));
       return 'off';
     }
-    return resultOf(await detect.setArmed(true, uid));
+    const armed = resultOf(await detect.setArmed(true, uid));
+    await handStartNote(detect, settings);
+    return armed;
   } catch (e) {
     report(e, 'autoDetect');
     return 'off';
   }
+}
+
+/** The "Drive started" switch as stored, handed to native (a native build without the method has no note). Never rejects. */
+async function handStartNote(detect: DriveDetectApi, settings: ReturnType<typeof createSettingsRepo>): Promise<void> {
+  if (typeof detect.setStartNote !== 'function') return;
+  try {
+    await detect.setStartNote(await readSwitch(settings, DRIVE_STARTED_KEY));
+  } catch (e) {
+    report(e, 'driveStartNote');
+  }
+}
+
+/**
+ * Settings › Notifications › "Drive started": stores the choice and hands it to native, which posts
+ * the note (off also takes a posted one down). Rejects only when the choice can't be stored.
+ */
+export async function setDriveStartNote(db: Db, on: boolean): Promise<void> {
+  const settings = createSettingsRepo(db);
+  await writeSwitch(settings, DRIVE_STARTED_KEY, on);
+  const detect = detector();
+  if (detect !== null) await handStartNote(detect, settings);
 }
 
 /**

@@ -86,7 +86,7 @@ Deno.test('a push-to-start goes to the production host with the liveactivity hea
       'content-state': { ...STATE, weatherKind: null, weatherText: null },
       'attributes-type': 'LiveDriveAttributes',
       attributes: { startedAt: STARTED },
-      alert: { title: 'Recording your drive', body: 'Select to open your drive. Not driving? Stop it there.' },
+      alert: { title: 'Recording your drive. Stay safe.', body: 'Select to open your drive. Not driving? Open it to stop recording.' },
       'input-push-token': 1,
     },
   });
@@ -164,7 +164,7 @@ Deno.test('the configuration comes from the four secrets, or is null when one is
   assertEquals((await createApnsClient(escaped, { fetch: f.fetch, now: () => NOW }).sendLiveActivityStart(TOKEN, { startedAt: STARTED, state: STATE })).ok, true);
 });
 
-Deno.test('the start payload carries the alert the fallback notification uses, word for word', () => {
+Deno.test('the start payload carries the same words as the phone’s "drive started" note', () => {
   const p = liveActivityStartPayload({ startedAt: STARTED, state: STATE, nowS: NOW / 1000 }) as { aps: { alert: unknown } };
   assertEquals(p.aps.alert, START_ALERT);
   assertEquals(/!|—/.test(JSON.stringify(START_ALERT)), false);

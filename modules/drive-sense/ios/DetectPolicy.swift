@@ -176,7 +176,6 @@ enum DetectPolicy {
   static let JOURNAL_MAX_DRIVES: Int = 4
   static let READ_ROWS_MAX: Int = 600
   static let TICK_MS: Double = 5_000
-  static let FALLBACK_NOTE_DELAY_MS: Double = 20_000
   static let EARTH_RADIUS_M: Double = 6_371_000
 
   // MARK: - Rows

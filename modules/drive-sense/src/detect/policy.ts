@@ -173,8 +173,6 @@ export const DETECT = {
   READ_ROWS_MAX: 600,
   /** The detector's clock while it senses. */
   TICK_MS: 5_000,
-  /** The "Recording your drive" note goes up only when no Live Activity runs this long after the confirmation. */
-  FALLBACK_NOTE_DELAY_MS: 20_000,
   EARTH_RADIUS_M: 6_371_000,
 } as const;
 

@@ -14,13 +14,10 @@
 // ended by `end` or the drive's end. The newest display state is kept even while no activity is
 // held (a pushed one not adopted yet), and an activity adopted later shows it at once instead of its
 // older pushed state: nothing sent while waiting is lost, the newest wins. The push-to-start token
-// is persisted and announced. Each change of the running activity is posted as
-// "roadwise.liveActivity", and an activity that runs takes the "Recording your drive" note down:
-// the driver sees one or the other. Main thread only.
+// is persisted and announced. Main thread only.
 import ActivityKit
 import Foundation
 import os
-import UserNotifications
 
 @available(iOS 16.2, *)
 final class LiveDriveController {
@@ -28,10 +25,6 @@ final class LiveDriveController {
 
   /// Posted by drive-sense's `setDriveDisplay` (DriveDisplayBridge in DriveSenseModule.swift).
   static let displayNotification = Notification.Name("roadwise.driveDisplay")
-  /// Posted here whenever the running activity changes: ["running": Bool] (drive-sense's DriveNotifier).
-  static let stateNotification = Notification.Name("roadwise.liveActivity")
-  /// drive-sense's fallback note (DriveNotifier.identifier).
-  static let recordingNoteId = "roadwise.driveRecording"
   /// drive-sense's capture-open flag: a drive records.
   static let captureOpenKey = "drivesense.captureOpen"
   static let tokenKey = "livedrive.pushToStartToken"
@@ -41,11 +34,7 @@ final class LiveDriveController {
   /// app.roadwise, category LiveDrive; notice level, so it shows without "Include Debug Messages").
   private static let log = Logger(subsystem: "app.roadwise", category: "LiveDrive")
 
-  private var activity: Activity<LiveDriveAttributes>? {
-    didSet {
-      if activity?.id != oldValue?.id { announce() }
-    }
-  }
+  private var activity: Activity<LiveDriveAttributes>?
   /// The newest display state of the drive and when it came, kept whether or not an activity is
   /// held: an activity adopted later (a pushed one) takes it at once (`applyLatest`). Each state
   /// replaces the one before; the drive's end clears it.
@@ -138,7 +127,6 @@ final class LiveDriveController {
     }
     activity = keep
     if let k = keep {
-      removeRecordingNote()
       applyLatest(to: k)
     }
   }
@@ -155,7 +143,6 @@ final class LiveDriveController {
       return
     }
     activity = a
-    removeRecordingNote()
     applyLatest(to: a)
   }
 
@@ -193,7 +180,6 @@ final class LiveDriveController {
         content: LiveDriveController.content(state),
         pushType: nil
       )
-      removeRecordingNote()
       return true
     } catch {
       activity = nil
@@ -226,15 +212,5 @@ final class LiveDriveController {
     guard let a = activity else { return }
     activity = nil
     Task { await a.end(nil, dismissalPolicy: .immediate) }
-  }
-
-  private func announce() {
-    NotificationCenter.default.post(name: LiveDriveController.stateNotification, object: nil, userInfo: ["running": activity != nil])
-  }
-
-  private func removeRecordingNote() {
-    let center = UNUserNotificationCenter.current()
-    center.removeDeliveredNotifications(withIdentifiers: [LiveDriveController.recordingNoteId])
-    center.removePendingNotificationRequests(withIdentifiers: [LiveDriveController.recordingNoteId])
   }
 }

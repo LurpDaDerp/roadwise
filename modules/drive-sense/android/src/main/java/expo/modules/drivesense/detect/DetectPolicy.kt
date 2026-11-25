@@ -187,8 +187,6 @@ object DetectPolicy {
   const val READ_ROWS_MAX = 600
   /** The detector's clock while it senses. */
   const val TICK_MS = 5_000.0
-  /** The "Recording your drive" note goes up only when no drive notification runs this long after the confirmation. */
-  const val FALLBACK_NOTE_DELAY_MS = 20_000.0
   const val EARTH_RADIUS_M = 6_371_000.0
 
   // ——— Rows ———

@@ -56,9 +56,8 @@ while waiting for the push is lost. A kept state older than the 120 s stale wind
 and `end` (or `ended`) forgets it, so the next drive never shows the last one's. Every content carries a `staleDate` 120 s out: with no update for that long (the
 app was killed) the widget shows "-" and hides the hint and the weather line (`context.isStale`).
 
-Whenever the running activity changes the controller posts `roadwise.liveActivity`
-(`["running": Bool]`), and an activity that runs takes drive-sense's "Recording your drive" note
-(`roadwise.driveRecording`) down: the driver sees the Live Activity or the note, never both.
+drive-sense's "drive started" note (`roadwise.driveRecording`) is its own: the controller never
+touches it, so an automatic drive can show the note and the Live Activity side by side.
 
 ## Widget
 

@@ -107,6 +107,12 @@ object AppVisibility : Application.ActivityLifecycleCallbacks {
       } catch (_: Exception) {
         // the notification comes back with the next capture instead
       }
+      // The "drive started" note has done its job: the driving screen shows the drive.
+      try {
+        DriveStartNote.remove(activity.applicationContext)
+      } catch (_: Exception) {
+        // it goes at the drive's end instead
+      }
       // The drive detector's foreground: a drive whose resume Android refused behind resumes now
       // (RoadWise in front may start its location service). Its own thread does the work.
       try {

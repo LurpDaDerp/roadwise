@@ -11,6 +11,7 @@ import { answerRpc, appWorld, clearQueryClients, fakeAppState, tap } from '@/fea
 
 import { prefsArgs, type NotificationPrefs } from '../api';
 import { notificationSettingsCopy as copy } from '../copy';
+import { ARE_YOU_DRIVING_KEY, DRIVE_RECAPS_KEY, DRIVE_STARTED_KEY } from '../localSwitches';
 import { NotificationSettingsScreen, type CommuteHeadsUpPort, type OsNotificationsPort } from '../NotificationSettingsScreen';
 import { QUIET_HOURS_KEY } from '../quietHours';
 import { syncNotificationPrefs, TZ_SENT_KEY } from '../sync';
@@ -253,5 +254,166 @@ describe('the zone sync and the quiet hours', () => {
     const onQuietHours = jest.fn();
     await syncNotificationPrefs('me', { db: w.db, zone: () => 'UTC', save: async () => ({ ...DEFAULTS, quiet_enabled: false }), onQuietHours });
     expect(onQuietHours).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('this phone’s own notifications and "All notifications"', () => {
+  const ALL_KINDS = { driveStarted: true, areYouDriving: true };
+
+  async function showAll(opts: { settings?: Record<string, unknown>; kinds?: { driveStarted: boolean; areYouDriving: boolean } } = {}) {
+    const headsUp = headsUpPort();
+    const driveStartNote = jest.fn(async (on: boolean) => {
+      await w.settings.set(DRIVE_STARTED_KEY, on);
+    });
+    const w = await appWorld({ settings: opts.settings });
+    await w.render(
+      <NotificationSettingsScreen
+        deps={{
+          os: os(),
+          appState: fakeAppState(),
+          zone: () => 'America/Chicago',
+          headsUp,
+          kinds: opts.kinds ?? ALL_KINDS,
+          driveStartNote,
+        }}
+      />
+    );
+    return { w, headsUp, driveStartNote };
+  }
+
+  const serverAnswering = () => {
+    let stored = { ...DEFAULTS };
+    answerRpc(mockRpc, {
+      get_notification_prefs: () => stored,
+      set_notification_prefs: (args) => {
+        stored = {
+          ...stored,
+          ...(args?.p_weekly_recap !== undefined ? { weekly_recap: args.p_weekly_recap as boolean } : {}),
+          ...(args?.p_social !== undefined ? { social: args.p_social as boolean } : {}),
+        };
+        return stored;
+      },
+    });
+  };
+
+  it('lists one switch per notification, this phone’s own first, each on until switched off', async () => {
+    serverAnswering();
+    await showAll();
+    for (const id of ['prefs-drive-started', 'prefs-drive-recaps', 'prefs-are-you-driving', 'prefs-weather-commute']) {
+      expect((await screen.findByTestId(id)).props.value).toBe(true);
+    }
+    expect(await screen.findByTestId('prefs-weekly_recap')).toBeOnTheScreen();
+    expect(screen.getByLabelText(`${copy.driveStarted.title}, ${copy.driveStarted.on}`)).toBeOnTheScreen();
+    expect(screen.getByLabelText(`${copy.driveRecaps.title}, ${copy.driveRecaps.on}`)).toBeOnTheScreen();
+    expect(screen.getByLabelText(`${copy.areYouDriving.title}, ${copy.areYouDriving.on}`)).toBeOnTheScreen();
+  });
+
+  it('offers "Drive started" only with automatic drives and "Are you driving?" only with the car link', async () => {
+    serverAnswering();
+    await showAll({ kinds: { driveStarted: false, areYouDriving: false } });
+    expect(await screen.findByTestId('prefs-drive-recaps')).toBeOnTheScreen();
+    expect(screen.queryByTestId('prefs-drive-started')).toBeNull();
+    expect(screen.queryByTestId('prefs-are-you-driving')).toBeNull();
+  });
+
+  it('"Drive started" goes to native through its setter; the others are stored on the phone and never sent', async () => {
+    serverAnswering();
+    const { w, driveStartNote } = await showAll();
+    await tap('prefs-drive-started');
+    await waitFor(() => expect(driveStartNote).toHaveBeenCalledWith(false));
+    expect(screen.getByLabelText(`${copy.driveStarted.title}, ${copy.driveStarted.off}`)).toBeOnTheScreen();
+
+    await tap('prefs-drive-recaps');
+    await waitFor(async () => expect(await w.settings.get(DRIVE_RECAPS_KEY)).toBe(false));
+    expect(screen.getByLabelText(`${copy.driveRecaps.title}, ${copy.driveRecaps.off}`)).toBeOnTheScreen();
+
+    await tap('prefs-are-you-driving');
+    await waitFor(async () => expect(await w.settings.get(ARE_YOU_DRIVING_KEY)).toBe(false));
+    expect(screen.getByLabelText(`${copy.areYouDriving.title}, ${copy.areYouDriving.off}`)).toBeOnTheScreen();
+    expect(mockRpc).not.toHaveBeenCalledWith('set_notification_prefs', expect.anything());
+  });
+
+  it('a "Drive started" change that fails goes back and says so', async () => {
+    serverAnswering();
+    const w = await appWorld();
+    await w.render(
+      <NotificationSettingsScreen
+        deps={{
+          os: os(),
+          appState: fakeAppState(),
+          zone: () => 'America/Chicago',
+          headsUp: headsUpPort(),
+          kinds: ALL_KINDS,
+          driveStartNote: async () => Promise.reject(new Error('disk full')),
+        }}
+      />
+    );
+    await tap('prefs-drive-started');
+    await waitFor(() => expect(screen.getByTestId('prefs-drive-started').props.value).toBe(true));
+    expect(screen.getByTestId('prefs-save-error')).toBeOnTheScreen();
+  });
+
+  it('shows the phone’s own switches as stored, without waiting for the server', async () => {
+    answerRpc(mockRpc, { get_notification_prefs: new RpcError('down', '500') });
+    await showAll({ settings: { [DRIVE_RECAPS_KEY]: false } });
+    expect((await screen.findByTestId('prefs-drive-recaps')).props.value).toBe(false);
+    expect(screen.getByTestId('prefs-drive-started').props.value).toBe(true);
+    // It needs the server's switches to say whether all are on.
+    expect(screen.queryByTestId('prefs-all')).toBeNull();
+  });
+
+  it('"All notifications" is on while every switch is; off turns every one off, on turns every one on', async () => {
+    serverAnswering();
+    const { w, headsUp, driveStartNote } = await showAll();
+    const all = await screen.findByTestId('prefs-all');
+    expect(all.props.value).toBe(true);
+    expect(screen.getByLabelText(`${copy.all.title}, ${copy.all.on}`)).toBeOnTheScreen();
+
+    await tap('prefs-all');
+    await waitFor(() => expect(screen.getByTestId('prefs-all').props.value).toBe(false));
+    expect(mockRpc).toHaveBeenCalledWith('set_notification_prefs', { p_weekly_recap: false, p_social: false, p_tz: 'America/Chicago' });
+    expect(driveStartNote).toHaveBeenCalledWith(false);
+    expect(await w.settings.get(DRIVE_RECAPS_KEY)).toBe(false);
+    expect(await w.settings.get(ARE_YOU_DRIVING_KEY)).toBe(false);
+    expect(await w.settings.get(COMMUTE_HEADS_UP_KEY)).toBe(false);
+    await waitFor(() => expect(headsUp.cancel).toHaveBeenCalled());
+    for (const id of ['prefs-drive-started', 'prefs-drive-recaps', 'prefs-are-you-driving', 'prefs-weather-commute', 'prefs-weekly_recap', 'prefs-social']) {
+      expect(screen.getByTestId(id).props.value).toBe(false);
+    }
+    expect(screen.getByLabelText(`${copy.all.title}, ${copy.all.off}`)).toBeOnTheScreen();
+
+    await tap('prefs-all');
+    await waitFor(() => expect(screen.getByTestId('prefs-all').props.value).toBe(true));
+    expect(mockRpc).toHaveBeenCalledWith('set_notification_prefs', { p_weekly_recap: true, p_social: true, p_tz: 'America/Chicago' });
+    expect(driveStartNote).toHaveBeenLastCalledWith(true);
+    expect(await w.settings.get(COMMUTE_HEADS_UP_KEY)).toBe(true);
+    await waitFor(() => expect(headsUp.replan).toHaveBeenCalled());
+  });
+
+  it('with some off it reads off and says so; turning it on sends only what was off', async () => {
+    serverAnswering();
+    const { driveStartNote } = await showAll({ settings: { [DRIVE_RECAPS_KEY]: false } });
+    expect((await screen.findByTestId('prefs-all')).props.value).toBe(false);
+    expect(screen.getByLabelText(`${copy.all.title}, ${copy.all.some}`)).toBeOnTheScreen();
+
+    await tap('prefs-all');
+    await waitFor(() => expect(screen.getByTestId('prefs-all').props.value).toBe(true));
+    expect(screen.getByTestId('prefs-drive-recaps').props.value).toBe(true);
+    // The server's switches were already on: nothing to send; "Drive started" was on too.
+    expect(mockRpc).not.toHaveBeenCalledWith('set_notification_prefs', expect.anything());
+    expect(driveStartNote).not.toHaveBeenCalled();
+  });
+
+  it('a server that refuses leaves every switch as it was', async () => {
+    answerRpc(mockRpc, {
+      get_notification_prefs: DEFAULTS,
+      set_notification_prefs: new RpcError('down', '500'),
+    });
+    const { w, driveStartNote } = await showAll();
+    await tap('prefs-all');
+    expect(await screen.findByTestId('prefs-save-error')).toBeOnTheScreen();
+    expect(screen.getByTestId('prefs-all').props.value).toBe(true);
+    expect(driveStartNote).not.toHaveBeenCalled();
+    expect(await w.settings.get(DRIVE_RECAPS_KEY)).toBeNull();
   });
 });

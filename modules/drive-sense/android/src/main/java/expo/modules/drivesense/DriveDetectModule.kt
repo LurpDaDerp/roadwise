@@ -189,6 +189,12 @@ class DriveDetectModule : Module() {
       promise.resolve(null)
     }
 
+    // Settings › Notifications › "Drive started": whether an automatic drive's start posts the note.
+    AsyncFunction("setStartNote") { on: Boolean, promise: Promise ->
+      DriveStartNote.setEnabled(context, on)
+      promise.resolve(null)
+    }
+
     // The car link: the connected Bluetooth audio outputs and Android Auto, read only; the paired
     // cars live natively, so the detector reads them with no JS. Each answers the state.
     AsyncFunction("carLinkState") { promise: Promise ->

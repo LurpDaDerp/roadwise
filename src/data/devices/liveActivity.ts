@@ -11,7 +11,7 @@
  *
  * Nothing here throws and nothing waits long: no token, no network, a server without the function
  * or any other failure is an outcome with its reason (`requestLiveActivityStartOutcome`), and the
- * drive's own "Recording your drive" notification stands in. `createLiveActivityStarter` is the
+ * drive's own "drive started" notification (an automatic drive, the switch on) still says it began. `createLiveActivityStarter` is the
  * retry-safe way to ask: one request per drive at a time, and none again once one was sent.
  * Nothing about the drive is stored here.
  */

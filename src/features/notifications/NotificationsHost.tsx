@@ -11,8 +11,8 @@
  * (a drive just over, the screen about to leave for its recap or Home) is held the same way and
  * replayed once the driving screen has left, so no route is ever opened over the driving screen.
  *
- * A tap on the drive's recording note (`kind: 'driveRecording'`, the iPhone's note while a drive
- * records) opens the driving screen, through `router.navigate` so it never stacks a second one, and
+ * A tap on the "drive started" note (`kind: 'driveRecording'`, the iPhone's note when an automatic
+ * drive starts; Android's opens `roadwise://drive` itself) opens the driving screen, through `router.navigate` so it never stacks a second one, and
  * only while the engine is recording (`isDriveRecording`; not while a drive only finalizes); one
  * that lands before the navigator is mounted waits for it. It is never held past the drive, never
  * replayed, and starts nothing.

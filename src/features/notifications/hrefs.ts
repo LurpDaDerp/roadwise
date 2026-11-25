@@ -3,9 +3,9 @@
  * the only links onboarding may hold and replay (`authGuard.ts`). Anchored, so a held or pushed
  * value can only ever be one of these screens. Nothing here starts a drive (plan §7).
  *
- * The driving screen is not in the list: only the drive's own recording note opens it
- * (`kind: 'driveRecording'`, posted by the iPhone while a drive records), and it is never held or
- * replayed (`drivingHrefOf`).
+ * The driving screen is not in the list: only the "drive started" note opens it (`kind:
+ * 'driveRecording'`, posted by the iPhone when an automatic drive starts; Android's note opens
+ * `roadwise://drive` itself), and it is never held or replayed (`drivingHrefOf`).
  */
 
 export const SUMMARY_HREF = /^\/drives\/([A-Za-z0-9-]{1,64})(?:\?fresh=1)?$/;
@@ -22,7 +22,7 @@ export const isAllowedHref = (url: unknown): url is string => typeof url === 'st
 export const DRIVE_HREF = '/drive';
 export const DRIVE_RECORDING_KIND = 'driveRecording';
 /**
- * `/drive` for the drive's recording note, else null: no other note, and no other path, opens the
+ * `/drive` for the "drive started" note, else null: no other note, and no other path, opens the
  * driving screen.
  */
 export function drivingHrefOf(data: unknown): typeof DRIVE_HREF | null {

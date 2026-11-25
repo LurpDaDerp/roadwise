@@ -230,6 +230,8 @@ export const DriveDetect: DriveDetectApi = {
   wipe: () => (native ? call('wipe', [], true, voidResult) : Promise.resolve()),
   // Nor a wake: nothing to wake there, nor in a native build from before the method.
   appForeground: () => (native && typeof native.appForeground === 'function' ? call('appForeground', [], true, voidResult) : Promise.resolve()),
+  setStartNote: (on) =>
+    native && typeof native.setStartNote === 'function' ? call('setStartNote', [on], typeof on === 'boolean', voidResult) : Promise.resolve(),
   carLinkState: () => call('carLinkState', [], true, carLinkStateSchema, true),
   pairCar: (uid) => call('pairCar', [uid], isCarUid(uid), carLinkStateSchema, true),
   forgetCar: (uid) => call('forgetCar', [uid], isCarUid(uid), carLinkStateSchema, true),

@@ -235,7 +235,7 @@ dropped from the buffer is still in its drive's journal, where the host's `seq` 
 
 `row` payloads must pass `parseRow` (`src/rowSchema.ts`): exactly M1's `FeatureRow` keys
 (`src/core/engine/types.ts`), finite numbers, booleans for the three phone flags, and `ts` a
-non-negative integer epoch ms — **plus the bridge-only `mock`, `call`, `steps` and (iOS) `seq`** (below). Native emits exactly those keys (pinned by
+non-negative integer epoch ms — **plus the gravity direction `gx`, `gy`, `gz` with the IMU present, and the bridge-only `mock`, `call`, `steps` and (iOS) `seq`** (below). Native emits exactly those keys (pinned by
 the native text tests and the golden vectors). On the JS side an **unknown key fails soft** (C0
 round 1): it is stripped and counted (`unknownRowKeys()`), and the row is kept, so a future native
 field can never cost an older bundle a drive's rows; a known key with a wrong type still rejects
@@ -249,23 +249,25 @@ the row. The encodings:
 | fix with unknown accuracy (platform reports negative) | `hAcc = 9999`, `gnssValid = false` |
 | platform unknowns | **Android:** `hasSpeed()` false → `speed = -1`; `hasSpeedAccuracy()` false → `speedAcc = -1`; `hasBearing()` false → `course = -1`; `hasAccuracy()` false → `hAcc = 9999`; `hasAltitude()` false → `alt` of the last fix (0 before any). Never read `getSpeed()` and the rest without the `has…()` check: they return 0.0, not −1. **iOS:** `speed`, `speedAccuracy`, `course` < 0 → −1; `horizontalAccuracy` < 0 → 9999 |
 | `gnssValid` | the window has a fix (chosen by fix timestamp, §7 "Windows") ∧ `0 ≤ hAcc ≤ GNSS_MAX_HACC_M` (50 m) ∧ age at `ts` ≤ `GNSS_MAX_AGE_S` (1.5 s) |
-| fewer than `MIN_IMU_SAMPLES` (10) IMU samples in the second, or IMU stopped (`low` rate) | **IMU absent**: `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `yawRateMax`, `jerkMax`, `gravityStability`, `orientationDelta`, `handlingScore` all `0` (M1's `finalize.ts` reads "IMU present" from the six extremes) |
+| fewer than `MIN_IMU_SAMPLES` (10) IMU samples in the second, or IMU stopped (`low` rate) | **IMU absent**: `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `yawRateMax`, `jerkMax`, `gravityStability`, `orientationDelta`, `handlingScore` all `0` (M1's `finalize.ts` reads "IMU present" from the six extremes), and no `gx`, `gy`, `gz` |
+| **`gx`, `gy`, `gz`** (IMU present) | the second's mean gravity direction `gMean` (§7 step 3): a unit vector in the device frame pointing toward the earth (face up on a table ≈ `[0, 0, −1]`), one component each. Part of the extraction (the golden vectors and the self-test pin them), emitted on every row with the IMU present and absent on an IMU-absent row. `parseRow` keeps them to 1e-3 and accepts a row without them (rows from builds before them, stored samples and traces), reading absent as no gravity reading. Phone pickups read the phone's tilt from them (`src/core/detectors/phoneUse.ts`). |
 | IMU present, frame not aligned | `aLonMax`, `aLonMin`, `aLatMax`, `aLatMin`, `jerkMax` are `0`; `yawRateMax`, `gravityStability`, `orientationDelta`, `handlingScore` are computed |
-| `locked` / `screenOn` / `appForeground` | Android: the phone state at the end of the second (§5). iOS: always `false` / `true` / `true` (nothing is read) |
+| `locked` / `screenOn` / `appForeground` | Android: the phone state at the end of the second (§5); JS reads `screenOn` (an Android phone pickup needs the screen on) and ignores the other two. iOS: always `false` / `true` / `true` (nothing is read) |
 | **`mock`** (v3, plan §6; spec "Integrity · GPS spoofing") | a boolean beside the `FeatureRow` keys: the window's fix came from a mock location provider — Android `Location.isMock()` (API 31+) / `isFromMockProvider()` (before); iOS 15+ `sourceInformation?.isSimulatedBySoftware` (false below 15). `false` when the window has no fix. It is **not** a `FeatureRow` field: native adds it at the emit site, never in the row struct's own map, so the self-test rows (§8) keep exactly the contract's keys; `parseRow` splits it off, validates it as a boolean (a wrong type rejects the row), and returns it on `DriveSenseRow.mock`. Optional on the wire: rows from older builds parse without it, and a consumer reads absent as "not known to be mocked". |
 | **`call`** (screen switches; spec "Event detection") | `"ring"` while a call rings or dials, `"live"` while one is connected, **absent** with no call, read at the emit site. **Android:** `PhoneStateReceiver.callState` from `AudioManager.getMode()`: `MODE_RINGTONE` → `ring`, `MODE_IN_CALL` → `live`, `MODE_IN_COMMUNICATION` → `live` only while `activeRecordingConfigurations` is non-empty (a VoIP call with the microphone open), no permission; the one Kotlin reading of the call state. **iOS:** `CallObserver.state()` from the capture's `CXCallObserver`: a call `hasConnected && !hasEnded` → `live`, else any `!hasEnded` → `ring`. Not a `FeatureRow` extraction field (the self-test rows and golden vectors never carry it); `parseRow` splits it off, accepts only `"ring"` / `"live"` (any other value rejects the row) and returns it on `row.call`. A call's own screen is not a screen switch (§5). |
 | **`seq`** (iOS, §11) | the row's place in its drive's journal: an integer, 1 for the drive's first row (its traced start) and up by one. Not a `FeatureRow` field; `parseRow` splits it off, accepts only a positive safe integer (anything else rejects the row) and returns it on `row.seq`. The host checks each live row is the last plus one and fetches a gap from the journal (`DriveDetect.readRows`). Android rows, plain-capture rows and stored traces have none. |
 | **`steps`** (spec "How a drive ends": the step walk) | the pedometer's count since it started for this drive, a whole number from 0, **absent** before its first count, without Motion & Fitness (Android: Physical activity) or without a step sensor. **iOS:** CMPedometer from the drive's start. **Android:** `PedometerSource`: `TYPE_STEP_COUNTER` (the hardware count since boot, batched in the hub for up to 1 s) less the drive's baseline (its first count after the capture began; a capture the `START_STICKY` restart resumes goes on from the baseline it took, same capture and same boot); a count under the baseline takes a new one (0). A phone with no step counter but a `TYPE_STEP_DETECTOR` counts its steps from the capture's start. Registered from the capture's begin to its end, at both rates. Not a `FeatureRow` extraction field; `parseRow` splits it off, accepts only a non-negative safe integer (anything else rejects the row) and returns it on `row.steps`. |
 | `exempt` | **never sent by native.** The drive host stamps `nav` / `restart` on a parsed row (the navigation button's and a restart's exemption, §5); a native `exempt` is stripped and counted as an unknown key. |
 
-Units: g for accelerations, g/s for jerk, rad/s for yaw rate, rad for `orientationDelta`,
-m and m/s for GNSS, degrees clockwise from true north for `course`.
+Units: g for accelerations, g/s for jerk, rad/s for yaw rate, rad for `orientationDelta`, a unit
+vector for `gx`/`gy`/`gz`, m and m/s for GNSS, degrees clockwise from true north for `course`.
 
 ---
 
 ## 5. Phone state
 
-Phone use is not tracked. **iOS reads no phone state:** every row carries `locked: false`,
+Phone pickups are read from motion (the gravity direction `gx`/`gy`/`gz`, §4), never from the screen
+on iPhone. **iOS reads no phone state:** every row carries `locked: false`,
 `screenOn: true`, `appForeground: true`, `getScreenState` answers `{ locked: false, on: true }`,
 the `screen` event is never emitted and `getState` reports `lockSignal: 'unreliable'`,
 `lockProof: false`, `lockDelayMs: null`. The keys stay because the row contract is shared with
@@ -280,7 +282,9 @@ activity; the module's `OnCreate` registers late, seeded from the current activi
 hook never ran. In front = at least one RoadWise activity *started* and not in split screen on a
 display whose smallest width is under 600 dp. An activity stopped with `isChangingConfigurations` (a
 rotation, a fold) is recreated and never counts as leaving; split screen is re-sampled on main after
-every row. JS ignores these values too.
+every row. JS reads `screenOn` for phone pickups (on Android a pickup needs the screen on: a phone
+moved in a pocket or a bag with its screen off is no pickup) and ignores `locked` and
+`appForeground`.
 
 ---
 
@@ -487,7 +491,7 @@ is known (≥ 0) — if `prevValidFix` exists and `fix.t > prev.t`,
 `dvG = (speed − prev.speed) / ((fix.t − prev.t)/1000) / G_MPS2` (signed, in g);
 `prevValidFix ← {fix.t, speed}`. Otherwise `prevValidFix ← null` and `dvG` is none.
 
-**2. IMU absent** (`n < MIN_IMU_SAMPLES`): IMU fields 0 (§4); `hTail ← []`, `prevLon ← null`,
+**2. IMU absent** (`n < MIN_IMU_SAMPLES`): IMU fields 0 and no `gx`/`gy`/`gz` (§4); `hTail ← []`, `prevLon ← null`,
 `lastImuT ←` the last sample's `t` if any, else unchanged; **alignment unchanged**. Done.
 
 **3. Per sample** `i = 0 … n−1`:
@@ -501,6 +505,7 @@ is known (≥ 0) — if `prevValidFix` exists and `fix.t > prev.t`,
 - `gravityStability = 1 − clamp(maxᵢ angle(ĝᵢ, gMean) / GRAVITY_STABILITY_RAD, 0, 1)` (0.2 rad)
 - `orientationDelta = Σᵢ offᵢ·dtᵢ`
 - `handlingScore = clamp((√(Σ offᵢ² / n) − HANDLING_W_FLOOR) / HANDLING_W_SPAN, 0, 1) × (gravityStability < HANDLING_STABLE_GS ? 1 : HANDLING_STABLE_FACTOR)` (0.15 rad/s, 0.6 rad/s, 0.95, 0.5)
+- `gx, gy, gz = gMean` (its three components, as computed in step 3)
 
 **5. Reset check** — the phone moved relative to the car:
 - `dev = angle(gMean, normalize(Σ gravityRing))` if the ring is non-empty, else 0
@@ -607,7 +612,7 @@ When not aligned: the five fields are 0, `prevLon ← null`, and the window stil
 | `hard-brake` | 0.45 g brake → `aLonMin ≈ −0.45` |
 | `corner-left` | 0.40 g left corner → `aLatMax ≈ +0.40`, `aLon ≈ 0` |
 | `turn-lagged-course` | a right turn with the course lagging 1 s — the frame never reads the course |
-| `phone-pickup` | pickup → `handlingScore ≥ 0.6`, orientation reset, extremes 0 |
+| `phone-pickup` | pickup → `gx`/`gy`/`gz` follow the tilt, `handlingScore ≥ 0.6`, orientation reset, extremes 0 |
 | `mount-shift` | slow sag in the mount → gravity-deviation reset in second 10 |
 | `no-imu` | IMU-absent encoding and every GNSS encoding of §4 |
 | `unaligned-start` | frame-free fields populated, frame-dependent fields 0 |
@@ -757,6 +762,7 @@ holds every rule and number, mirrored constant for constant by `ios/DetectPolicy
 | `readRows(driveId, afterSeq, limit)` | The rows after `afterSeq`, in order, at most `limit` (1-600), each a `row` payload with its `seq`; `done` when the file holds no more. Keeps its place in the file, so a drain reads it once. |
 | `discardDrive(driveId)` | Deletes the journal file (JS, once the drive is finalized); resolves when none exists; **rejects `E_BUSY` for the drive that still records**. |
 | `wipe()` | The sign-out, device and account-switch wipes: a candidate, a wait, a drive or a rest stops (no `driveEnded`: JS ends its own drive first), every journal file goes, the record starts again empty (no owner, last end, parked region, rest or drive) and the detector is `off` until JS arms it again. Resolves once the files are gone; on Android (no module) a no-op that resolves. |
+| `setStartNote(on)` | Settings › Notifications › "Drive started": whether an automatic drive that starts while RoadWise isn't in front posts the "drive started" note (below). Kept natively, so a drive that starts with no JS running reads it; on until switched off; off takes a posted note down; `wipe` turns it back on. JS hands it over at every change and every arming. Resolves; a native build without it, a no-op that resolves. |
 | `appForeground()` | RoadWise came to the front: an `app` wake (native also takes one on `didBecomeActive`), through the wake gate and the motion gate like a significant change, but past the rest an empty candidate left. Resolves; on Android, or a native build without it, a no-op that resolves. |
 | `detectState` | every transition, with its `reason` (`armed`, `wake:slc`, `wake:app`, `linger`, `confirmed`, `timeout`, `cap`, `stillClock`, `moved`, `ended`, `notDriving`, `resumed`, …). |
 | `driveStarted` | `{ driveId, origin, startedAt, startSource, startLat, startLng, continues, confirmedAt, firstSeq }` at every confirmation. |
@@ -818,8 +824,8 @@ side effects; a missing read (unreadable before the first unlock after a reboot)
 - **`recording`**: a new drive id; the journal opens with its `start` line; the rows from the
   traced start are journaled and emitted with `seq` 1, 2, … (the safety stop checks from the first
   live row on, so old buffered rows never end the drive they start), then every new row; `driveStarted`;
-  `capturing` true for `getState` (mode `auto` or `mounted`); the "Recording your drive" check is
-  scheduled (below).
+  `capturing` true for `getState` (mode `auto` or `mounted`); for an automatic drive, the "drive
+  started" note (below).
 - **`ending`**: a JS end rule is overdue (5 min without movement, fix-less car time not counting;
   a walk standing 10 s that the car has not driven since, with no fix over 3 mph in the last 15 s; 12 h; for a Start-card drive still
   waiting for driving speed, no walk, and the 5 min only once its `waitUntil` has passed). Movement again returns to
@@ -870,17 +876,26 @@ any row whose `seq` is not above the last (a `gap` moves the last to its `lastSe
 whose write failed; a failed write cuts its torn bytes off, so the next line starts clean). No file timestamps, attribute reads or disk-space
 reads (the privacy manifest declares none). `src/detect/journal.ts` reads the same format.
 
-### The Live Activity and the "Recording your drive" note
+### The Live Activity and the "drive started" note
 
 The Live Activity is `modules/live-drive`'s. drive-sense only forwards the display state and posts
-`ended` at every end. At every confirmation `DriveNotifier` schedules a check 20 s out
-(`FALLBACK_NOTE_DELAY_MS`): if no Live Activity runs by then (live-drive posts
-`roadwise.liveActivity` with `running`) and the drive still records, a quiet local notification goes
-up: identifier `roadwise.driveRecording`, title "Recording your drive", body "Tap to open it. Not
-driving? You can stop it there.", no sound, the `.active` level, thread `drive-recording`, `userInfo
-{ kind: 'driveRecording', url: '/drive' }`. An activity that starts or is adopted cancels the check
-and takes the note down (live-drive removes it too), and every end or cancel removes it. So the
-driver sees the Live Activity (a push-to-start brings its own alert) or the note, never both.
+`ended` at every end. When an automatic drive is confirmed while RoadWise isn't in front
+(`applicationState != .active`) and the "Drive started" switch is on, `DriveNotifier` posts a quiet
+local notification at once: identifier `roadwise.driveRecording`, title "Recording your drive. Stay
+safe.", body "Select to open your drive. Not driving? Open it to stop recording.", no sound, the
+`.active` level, thread `drive-recording`, `userInfo { kind: 'driveRecording', url: '/drive' }` (JS
+opens the driving screen from it). Never for a Start drive or a resumed drive. It shows beside the
+Live Activity (live-drive never touches it). It comes down when RoadWise becomes active
+(`didBecomeActive`), at every end or cancel, and when the switch goes off. The switch is
+`setStartNote(on)`, kept in `UserDefaults "drivesense.driveStartNoteOff"` (stored only when off, so
+a phone that never chose has it on); `wipe` turns it back on.
+
+**Android** (`DriveStartNote.kt`): the same rules and words, posted from `beginAutoDrive` while no
+RoadWise activity is visible (`AppVisibility.visible()`) and notifications are allowed, on its own
+channel `drive_started` "Drive started" (`IMPORTANCE_HIGH`, no sound, vibration or badge: a silent
+heads-up), id 7304, auto-cancel; a tap opens `roadwise://drive`. It comes down when a RoadWise
+activity starts, in `finishSensing` (every end or cancel) and when the switch goes off. The switch is
+`DriveSensePrefs.driveStartNoteOff` (absent is on); `wipe` turns it back on.
 
 ### Permissions and battery
 

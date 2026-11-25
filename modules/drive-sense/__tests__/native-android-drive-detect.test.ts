@@ -297,3 +297,40 @@ describe('native-android: the capture service’s detector mode', () => {
     expect(read(join(TEST_DIR, 'detect', 'DriveDetectRecordTest.kt'))).toContain('CaptureRowFate.TAKE_BACK, captureRowFate(sensing = false, starting = false, resuming = false, recording = true)');
   });
 });
+
+describe('native-android: the "drive started" note (DriveStartNote.kt)', () => {
+  const NOTE = () => kt('DriveStartNote');
+
+  it('is posted once, where an automatic drive begins, and is proven by its JVM test', () => {
+    expect(fn(det('DriveDetectorDrive'), 'internal fun DriveDetector.beginAutoDrive(')).toMatch(/DriveStartNote\.driveStarted\(app, "auto"\)/);
+    expect(fn(det('DriveDetectorDrive'), 'internal fun DriveDetector.beginDrive(')).not.toContain('DriveStartNote');
+    expect(existsSync(join(TEST_DIR, 'DriveStartNoteTest.kt'))).toBe(true);
+  });
+
+  it('only for an automatic drive, with the switch on, RoadWise not showing, and notifications allowed', () => {
+    expect(NOTE()).toMatch(/fun due\(kind: String, switchOff: Boolean, appVisible: Boolean\): Boolean = kind == "auto" && !switchOff && !appVisible/);
+    expect(NOTE()).toMatch(/if \(!due\(kind, prefs\.driveStartNoteOff, AppVisibility\.visible\(\)\)\) return/);
+    expect(NOTE()).toMatch(/if \(!NotificationManagerCompat\.from\(context\)\.areNotificationsEnabled\(\)\) return/);
+  });
+
+  it('a silent heads-up on its own channel; a tap opens the driving screen', () => {
+    expect(NOTE()).toMatch(/const val CHANNEL_ID = "drive_started"/);
+    expect(NOTE()).toMatch(/NotificationChannel\(CHANNEL_ID, CHANNEL_NAME, NotificationManager\.IMPORTANCE_HIGH\)/);
+    expect(NOTE()).toMatch(/setSound\(null, null\)\s*enableVibration\(false\)/);
+    expect(NOTE()).toMatch(/setShowBadge\(false\)/);
+    expect(NOTE()).not.toMatch(/setSilent\(/);
+    expect(NOTE()).toMatch(/\.setAutoCancel\(true\)/);
+    expect(NOTE()).toMatch(/Uri\.parse\(NotificationFactory\.DRIVE_LINK\)/);
+  });
+
+  it('the switch is kept natively (absent is on) and set from JS; off takes the note down', () => {
+    expect(kt('DriveSensePrefs')).toMatch(/var driveStartNoteOff: Boolean\s*get\(\) = p\.getBoolean\(DRIVE_START_NOTE_OFF, false\)/);
+    expect(fn(kt('DriveDetectModule'), 'AsyncFunction("setStartNote")', 4)).toMatch(/DriveStartNote\.setEnabled\(context, on\)/);
+    expect(NOTE()).toMatch(/driveStartNoteOff = !on\s*if \(!on\) remove\(context\)/);
+  });
+
+  it('comes down at every end or cancel and when RoadWise comes to the front', () => {
+    expect(fn(det('DriveDetectorDrive'), 'internal fun DriveDetector.finishSensing(')).toMatch(/DriveStartNote\.remove\(app\)/);
+    expect(kt('AppVisibility')).toMatch(/if \(wasBehind && started > 0\) \{[\s\S]*DriveStartNote\.remove\(activity\.applicationContext\)/);
+  });
+});

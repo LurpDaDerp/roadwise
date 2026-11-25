@@ -3,6 +3,7 @@ package expo.modules.drivesense.detect
 import expo.modules.drivesense.AppVisibility
 import expo.modules.drivesense.CaptureService
 import expo.modules.drivesense.DetectEventBus
+import expo.modules.drivesense.DriveStartNote
 import expo.modules.drivesense.EventBus
 import expo.modules.drivesense.FeatureRow
 import expo.modules.drivesense.JournalSummary
@@ -65,9 +66,9 @@ internal fun DriveDetector.endWaitAtDrivingSpeed() {
 /**
  * A watch confirmed: the drive begins at its traced start, its service becomes the drive's in place
  * (the drive notification replaces "Checking for a drive"; with no RoadWise screen open the
- * background JS starts to take it in), and the buffered rows from the start on are journaled and
- * handed to JS (the safety stop waits for the first live row, so an old movement replayed against
- * the clock now never ends the drive it starts).
+ * background JS starts to take it in), the "drive started" note goes up ([DriveStartNote]), and the
+ * buffered rows from the start on are journaled and handed to JS (the safety stop waits for the
+ * first live row, so an old movement replayed against the clock now never ends the drive it starts).
  */
 internal fun DriveDetector.beginAutoDrive(start: TracedStart, firstTs: Double) {
   val kept = buffer.items.filter { it.row.ts >= firstTs }
@@ -75,6 +76,8 @@ internal fun DriveDetector.beginAutoDrive(start: TracedStart, firstTs: Double) {
   clearWatch()
   beginDrive(start.startedAt, start.startSource.wire, start.startLat, start.startLng, kind = "auto", waitUntil = null)
   CaptureService.promoteWatch(app, RowJournalRead.jsMs(start.startedAt), "auto")
+  // Only once the drive really began (a detector with no record begins nothing).
+  if (rec?.recording == true) DriveStartNote.driveStarted(app, "auto")
   for (item in kept) record(item.row, item.body, evaluate = false)
 }
 
@@ -344,10 +347,11 @@ fun DriveDetector.notDriving(done: () -> Unit) {
 
 /**
  * Sensing ends: the capture stops (its notification goes; RoadWise is held [holdMs] more), or with
- * [demote] runs on as the linger's watch; the drive's clocks reset.
+ * [demote] runs on as the linger's watch; the "drive started" note goes; the drive's clocks reset.
  */
 internal fun DriveDetector.finishSensing(holdMs: Long, demote: Boolean = false) {
   if (demote) CaptureService.demoteToWatch(app) else CaptureService.stopDetector(app, holdMs)
+  DriveStartNote.remove(app)
   watching = false
   stopClock()
   sensing = false
@@ -391,8 +395,9 @@ private fun DriveDetector.settleResume(driveId: String, summary: JournalSummary?
   if (r == null || r.driveId != driveId || !r.recording || sensing) return false
   val now = DriveDetector.now()
   if (summary == null) {
-    // No journal: nothing to resume or hand over.
+    // No journal: nothing to resume or hand over; its "drive started" note goes too.
     save(settle(r, now))
+    DriveStartNote.remove(app)
     resumePending = false
     clearStaleCapture()
     CaptureService.releaseIfIdle()

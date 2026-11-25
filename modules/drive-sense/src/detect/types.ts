@@ -25,6 +25,7 @@ export const DRIVE_DETECT_METHODS = [
   'discardDrive',
   'wipe',
   'appForeground',
+  'setStartNote',
   'carLinkState',
   'pairCar',
   'forgetCar',
@@ -319,6 +320,13 @@ export interface DriveDetectApi {
    * transitions built. With no native module (or a native build without it), a no-op that resolves.
    */
   appForeground(): Promise<void>;
+  /**
+   * Settings › Notifications › "Drive started": whether an automatic drive that starts while
+   * RoadWise isn't in front posts the "drive started" note (kept natively, so a drive that starts
+   * with no JS running reads it; on until switched off). Off also takes a posted note down. With no
+   * native module (or a native build without it), a no-op that resolves.
+   */
+  setStartNote(on: boolean): Promise<void>;
   /** The car link now (the outputs read afresh). Rejects in a native build without it. */
   carLinkState(): Promise<CarLinkState>;
   /**

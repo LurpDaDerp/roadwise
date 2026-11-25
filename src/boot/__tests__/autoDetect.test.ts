@@ -16,6 +16,7 @@ import {
   readAutoDetectStatus,
   setAutoDetectEnabled,
   setAutoDetectRuntime,
+  setDriveStartNote,
 } from '@/boot/autoDetect';
 import { SIGN_OUT_SETTINGS, wipeDevice, wipeForSignOut } from '@/boot/device';
 import { createSqlJsDb } from '@/data/db/__fixtures__/sqljsDriver';
@@ -26,6 +27,7 @@ import { NOT_DRIVING_KEY } from '@/drive/notDriving';
 import { PASSENGER_ASKED_KEY } from '@/drive/passengerCheck';
 import { PARKED_KEY } from '@/features/parked/model';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
+import { ARE_YOU_DRIVING_KEY, DRIVE_RECAPS_KEY, DRIVE_STARTED_KEY } from '@/features/settings/notifications/localSwitches';
 
 jest.mock('expo-notifications', () => ({}));
 
@@ -407,5 +409,43 @@ describe('the car link (readCarLink, pairCar, forgetCar, notMyCar, onCarLink)', 
     Object.assign(detect, { carLinkState: async () => Promise.reject(new Error('busy')) });
     expect(await readCarLink()).toBeNull();
     expect(errors).toEqual(['carLink']);
+  });
+});
+
+describe('the "Drive started" note switch', () => {
+  test('each arming hands native the stored switch (on until switched off); a disarm sends nothing', async () => {
+    const detect = rig({ onboarded: true });
+    expect(await autoDetectSync()).toBe('on');
+    expect(detect.calls.filter((c) => c.startsWith('setStartNote'))).toEqual(['setStartNote:true']);
+    await createSettingsRepo(db).set(DRIVE_STARTED_KEY, false);
+    await autoDetectSync();
+    expect(detect.calls.filter((c) => c.startsWith('setStartNote'))).toEqual(['setStartNote:true', 'setStartNote:false']);
+
+    setAutoDetectRuntime(null);
+    const off = rig({ uid: null });
+    await autoDetectSync();
+    expect(off.calls.filter((c) => c.startsWith('setStartNote'))).toEqual([]);
+  });
+
+  test('a change is stored and handed to native at once', async () => {
+    const detect = rig({ onboarded: true });
+    await setDriveStartNote(db, false);
+    expect(await createSettingsRepo(db).get(DRIVE_STARTED_KEY)).toBe(false);
+    expect(detect.calls).toContain('setStartNote:false');
+    await setDriveStartNote(db, true);
+    expect(detect.calls.at(-1)).toBe('setStartNote:true');
+  });
+
+  test('a native build without the method only stores it', async () => {
+    const detect = rig({ onboarded: true });
+    const bare = { ...detect, setStartNote: undefined } as unknown as typeof detect;
+    setAutoDetectRuntime({ db, detect: bare, uid: async () => 'user-1', onboarded: () => true });
+    await setDriveStartNote(db, false);
+    expect(await autoDetectSync()).toBe('on');
+    expect(await createSettingsRepo(db).get(DRIVE_STARTED_KEY)).toBe(false);
+  });
+
+  test('the switches for the notifications the phone posts itself leave at sign-out', () => {
+    for (const key of [DRIVE_STARTED_KEY, DRIVE_RECAPS_KEY, ARE_YOU_DRIVING_KEY]) expect(SIGN_OUT_SETTINGS).toContain(key);
   });
 });

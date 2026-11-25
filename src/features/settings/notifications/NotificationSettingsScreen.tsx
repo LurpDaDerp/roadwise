@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AppState, Pressable, View } from 'react-native';
 
 import type { NotificationAccess, PermissionsAdapter } from '@/core/permissions';
@@ -9,6 +9,7 @@ import type { AppStateLike } from '@/data/foreground';
 import { useDb } from '@/data/queries/context';
 import { SERVER_SLOW_STALE_MS, serverKey, useServerQuery } from '@/data/server/useServerQuery';
 import { useSession } from '@/data/supabase/session';
+import { nativeDriveDetect } from '@/drive/source';
 import { defaultPermissionsAdapter } from '@/features/permissions/usePermissionHealth';
 import { readCommuteHeadsUp, writeCommuteHeadsUp } from '@/features/weather/commuteSetting';
 import { Banner, Card, Divider, Screen, Skeleton, Text, ToggleRow, useTheme } from '@/ui';
@@ -16,6 +17,7 @@ import { Banner, Card, Divider, Screen, Skeleton, Text, ToggleRow, useTheme } fr
 import { TopBar } from '../parts';
 import { currentZone, PREFS_KEY, savePrefs, type NotificationPrefs, type PrefsPatch } from './api';
 import { notificationSettingsCopy as copy } from './copy';
+import { ARE_YOU_DRIVING_KEY, DRIVE_RECAPS_KEY, DRIVE_STARTED_KEY, readSwitch, writeSwitch, type LocalSwitchKey } from './localSwitches';
 import { quietOf, rememberQuietHours } from './quietHours';
 
 /** The OS side: whether RoadWise may notify at all, and the two ways to fix it. */
@@ -33,11 +35,37 @@ export interface CommuteHeadsUpPort {
   replan(): void;
 }
 
+/** Which of this phone's own notifications it can post at all. */
+export interface PhoneNotificationKinds {
+  /** "Drive started": a phone with the drive detector (automatic drives). */
+  driveStarted: boolean;
+  /** "Are you driving?": a build with the car link. */
+  areYouDriving: boolean;
+}
+
 export interface NotificationSettingsDeps {
   os?: OsNotificationsPort;
   appState?: AppStateLike;
   zone?: () => string;
   headsUp?: CommuteHeadsUpPort;
+  kinds?: PhoneNotificationKinds;
+  /** Stores the "Drive started" switch and hands it to native (`setDriveStartNote`). */
+  driveStartNote?: (on: boolean) => Promise<void>;
+}
+
+/** The phone's own kinds, as its drive detector says. */
+function phoneKinds(): PhoneNotificationKinds {
+  const detect = nativeDriveDetect();
+  return { driveStarted: detect !== null, areYouDriving: detect?.carLinkAvailable === true };
+}
+
+type Settings = ReturnType<typeof createSettingsRepo>;
+
+/** The live "Drive started" setter, loaded on first use (it brings the drive detector's boot code). */
+function defaultDriveStartNote(db: Parameters<typeof createSettingsRepo>[0]): (on: boolean) => Promise<void> {
+  return (on) =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- deferred: the boot module
+    (require('@/boot/autoDetect') as typeof import('@/boot/autoDetect')).setDriveStartNote(db, on);
 }
 
 /** The live planner, loaded on first use (it brings the notifications native module). */
@@ -80,42 +108,69 @@ export function stepHour(hhmm: string, dir: -1 | 1): string {
 
 const KINDS = ['weekly_recap', 'social'] as const;
 
-/** "Weather before your commute": this phone's own switch, read and written in the local settings. */
-function useCommuteSwitch(headsUp: CommuteHeadsUpPort) {
-  const db = useDb();
-  const settings = useMemo(() => createSettingsRepo(db), [db]);
+/**
+ * One of this phone's own switches, read from the local settings. `change` shows the new value at
+ * once and resolves whether it was stored; one that wasn't goes back.
+ */
+function useLocalSwitch(read: () => Promise<boolean>, write: (on: boolean) => Promise<void>) {
   const [on, setOn] = useState<boolean | null>(null);
   useEffect(() => {
     let live = true;
-    void readCommuteHeadsUp(settings).then(
+    void read().then(
       (v) => live && setOn(v),
       () => live && setOn(true)
     );
     return () => {
       live = false;
     };
-  }, [settings]);
+  }, [read]);
   const change = useCallback(
-    (next: boolean) => {
+    async (next: boolean): Promise<boolean> => {
       setOn(next);
+      try {
+        await write(next);
+        return true;
+      } catch {
+        setOn(!next);
+        return false;
+      }
+    },
+    [write]
+  );
+  return { on, change };
+}
+
+/** A plain switch of this phone's own, stored under `key`. */
+function useStoredSwitch(settings: Settings, key: LocalSwitchKey, write?: (on: boolean) => Promise<void>) {
+  const read = useCallback(() => readSwitch(settings, key), [settings, key]);
+  const store = useCallback((on: boolean) => (write ? write(on) : writeSwitch(settings, key, on)), [settings, key, write]);
+  return useLocalSwitch(read, store);
+}
+
+/** "Weather before your commute": this phone's own switch, which also plans or takes down the heads-ups. */
+function useCommuteSwitch(settings: Settings, headsUp: CommuteHeadsUpPort) {
+  const read = useCallback(() => readCommuteHeadsUp(settings), [settings]);
+  const write = useCallback((on: boolean) => writeCommuteHeadsUp(settings, on), [settings]);
+  const sw = useLocalSwitch(read, write);
+  const { change: store } = sw;
+  const change = useCallback(
+    async (next: boolean): Promise<boolean> => {
       // Off takes them down at once, and again once stored (a plan that read the switch before it
       // changed schedules nothing after that); on plans them once the switch is stored.
       if (!next) void headsUp.cancel().catch(() => undefined);
-      void writeCommuteHeadsUp(settings, next).then(
-        () => {
-          if (next) headsUp.replan();
-          else void headsUp.cancel().catch(() => undefined);
-        },
-        () => {
-          // Not stored: the switch is as it was, and so is the plan.
-          setOn(!next);
-          if (!next) headsUp.replan();
-        }
-      );
+      const stored = await store(next);
+      if (stored) {
+        if (next) headsUp.replan();
+        else void headsUp.cancel().catch(() => undefined);
+      } else if (!next) {
+        // Not stored: the switch is as it was, and so is the plan.
+        headsUp.replan();
+      }
+      return stored;
     },
-    [settings, headsUp]
+    [store, headsUp]
   );
-  return { on, change, settings };
+  return { on: sw.on, change };
 }
 
 function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
@@ -134,9 +189,11 @@ function useOsAccess(os: OsNotificationsPort, appState: AppStateLike) {
 }
 
 /**
- * `/settings/notifications`: weekly recap and friend requests, quiet hours, and
- * what the phone itself allows. Every change saves as it is made and shows as made while it saves;
- * a failure puts it back and says so.
+ * `/settings/notifications`: one switch per notification ("Drive started", "Drive recaps", "Are you
+ * driving?" and the weather heads-up, kept on this phone; the weekly recap and friend requests, kept
+ * by the server), "All notifications" to turn them all on or off at once, quiet hours, and what the
+ * phone itself allows. Every change saves as it is made and shows as made while it saves; a failure
+ * puts it back and says so.
  */
 export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationSettingsDeps }) {
   const th = useTheme();
@@ -151,105 +208,171 @@ export function NotificationSettingsScreen({ deps = {} }: { deps?: NotificationS
   const { access, read } = useOsAccess(os, deps.appState ?? AppState);
   const zone = (deps.zone ?? currentZone)();
   const [headsUp] = useState(() => deps.headsUp ?? defaultHeadsUp());
-  const commute = useCommuteSwitch(headsUp);
+  const [kinds] = useState(() => deps.kinds ?? phoneKinds());
+  const db = useDb();
+  const settings = useMemo(() => createSettingsRepo(db), [db]);
+  const [driveStartNote] = useState(() => deps.driveStartNote ?? defaultDriveStartNote(db));
+  const commute = useCommuteSwitch(settings, headsUp);
+  const driveStarted = useStoredSwitch(settings, DRIVE_STARTED_KEY, driveStartNote);
+  const recaps = useStoredSwitch(settings, DRIVE_RECAPS_KEY);
+  const areYouDriving = useStoredSwitch(settings, ARE_YOU_DRIVING_KEY);
+  const [allPending, setAllPending] = useState(false);
   // This phone keeps a copy of the quiet hours: the heads-up it schedules itself keeps to them.
   const loaded = query.data;
   // A copy that changes plans the heads-ups again (a scheduled one may now fall in quiet hours).
   const remember = useCallback(
     (prefs: NotificationPrefs) =>
-      void rememberQuietHours(commute.settings, quietOf(prefs)).then(
+      void rememberQuietHours(settings, quietOf(prefs)).then(
         (changed) => changed && headsUp.replan(),
         () => undefined
       ),
-    [commute.settings, headsUp]
+    [settings, headsUp]
   );
   useEffect(() => {
     if (loaded) remember(loaded);
   }, [loaded, remember]);
 
-  const save = async (patch: PrefsPatch) => {
-    if (pending) return;
+  /** Resolves whether the server took the change. */
+  const save = async (patch: PrefsPatch): Promise<boolean> => {
+    if (pending) return false;
     setPending(patch);
     setSaveFailed(false);
     try {
       const next = await savePrefs(patch, zone);
       // The copy of the quiet hours follows through the loaded prefs.
       qc.setQueryData(serverKey(uid, ...PREFS_KEY), next);
+      return true;
     } catch {
       setSaveFailed(true);
+      return false;
     } finally {
       setPending(null);
     }
   };
 
   const prefs = query.data ? { ...query.data, ...pending } : null;
-  const saving = pending !== null;
-  const commuteRow =
-    commute.on === null ? null : (
-      <ToggleRow
-        testID="prefs-weather-commute"
-        title={copy.commute.title}
-        subtitle={commute.on ? copy.commute.on : copy.commute.off}
-        value={commute.on}
-        onValueChange={commute.change}
-      />
+  const saving = pending !== null || allPending;
+
+  // This phone's own switches, in order: only those the phone can post, each once it has been read.
+  const local: { id: string; title: string; on: string; off: string; sw: { on: boolean | null; change: (next: boolean) => Promise<boolean> } }[] = [];
+  if (kinds.driveStarted) local.push({ id: 'drive-started', ...copy.driveStarted, sw: driveStarted });
+  local.push({ id: 'drive-recaps', ...copy.driveRecaps, sw: recaps });
+  if (kinds.areYouDriving) local.push({ id: 'are-you-driving', ...copy.areYouDriving, sw: areYouDriving });
+  local.push({ id: 'weather-commute', ...copy.commute, sw: commute });
+  const localRead = local.every((l) => l.sw.on !== null);
+  /** One of this phone's switches: a change that isn't stored goes back and says so, as a server one does. */
+  const changeLocal = async (sw: { change: (next: boolean) => Promise<boolean> }, next: boolean): Promise<boolean> => {
+    setSaveFailed(false);
+    const stored = await sw.change(next);
+    if (!stored) setSaveFailed(true);
+    return stored;
+  };
+
+  const rows: { key: string; node: ReactNode }[] = local
+    .filter((l) => l.sw.on !== null)
+    .map((l) => ({
+      key: l.id,
+      node: (
+        <ToggleRow
+          testID={`prefs-${l.id}`}
+          title={l.title}
+          subtitle={l.sw.on ? l.on : l.off}
+          value={l.sw.on === true}
+          disabled={allPending}
+          onValueChange={(next) => void changeLocal(l.sw, next)}
+        />
+      ),
+    }));
+  if (prefs) {
+    for (const k of KINDS) {
+      rows.push({
+        key: k,
+        node: (
+          <ToggleRow
+            testID={`prefs-${k}`}
+            title={copy.kinds[k].title}
+            subtitle={prefs[k] ? copy.kinds[k].on : copy.kinds[k].off}
+            value={prefs[k]}
+            disabled={saving}
+            onValueChange={(next) => void save({ [k]: next })}
+          />
+        ),
+      });
+    }
+  }
+  const list = (testID: string) =>
+    rows.length === 0 ? null : (
+      <Card padded={false} testID={testID}>
+        {rows.map((r, i) => (
+          <View key={r.key}>
+            {i > 0 ? <Divider inset={th.space.lg} /> : null}
+            {r.node}
+          </View>
+        ))}
+      </Card>
     );
+
+  /** "All notifications": every switch under "Send me" to `next`, the server's first (nothing changes if it fails). */
+  const setAll = async (next: boolean) => {
+    if (saving || !prefs) return;
+    setAllPending(true);
+    try {
+      const patch: PrefsPatch = {};
+      for (const k of KINDS) if (prefs[k] !== next) patch[k] = next;
+      if (Object.keys(patch).length > 0 && !(await save(patch))) return;
+      // Stops at a switch that isn't stored (it goes back and the screen says so).
+      for (const l of local) if (l.sw.on !== next && !(await changeLocal(l.sw, next))) return;
+    } finally {
+      setAllPending(false);
+    }
+  };
 
   let body;
   if (!prefs) {
-    body = query.isError ? (
-      <Banner
-        testID="prefs-load-error"
-        tone="danger"
-        message={copy.loadError}
-        action={{ label: copy.retry, onPress: () => void query.refetch() }}
-      />
-    ) : (
-      <Card testID="prefs-loading">
-        <Skeleton width="45%" height={18} />
-        <Skeleton width="80%" height={14} />
-      </Card>
-    );
-    // The local switch doesn't wait for the server.
-    if (commuteRow) {
-      body = (
-        <>
-          {body}
-          <Card padded={false} testID="prefs-kinds-local">
-            {commuteRow}
-          </Card>
-        </>
-      );
-    }
-  } else {
-    const quietOff = prefs.quiet_start === prefs.quiet_end;
     body = (
       <>
+        {query.isError ? (
+          <Banner
+            testID="prefs-load-error"
+            tone="danger"
+            message={copy.loadError}
+            action={{ label: copy.retry, onPress: () => void query.refetch() }}
+          />
+        ) : (
+          <Card testID="prefs-loading">
+            <Skeleton width="45%" height={18} />
+            <Skeleton width="80%" height={14} />
+          </Card>
+        )}
+        {/* This phone's own switches don't wait for the server. */}
+        {list('prefs-kinds-local')}
+      </>
+    );
+  } else {
+    const quietOff = prefs.quiet_start === prefs.quiet_end;
+    const states = [...local.map((l) => l.sw.on === true), ...KINDS.map((k) => prefs[k])];
+    const allOn = states.every(Boolean);
+    const noneOn = !states.some(Boolean);
+    body = (
+      <>
+        {localRead ? (
+          <Card padded={false} testID="prefs-all-card">
+            <ToggleRow
+              testID="prefs-all"
+              title={copy.all.title}
+              subtitle={allOn ? copy.all.on : noneOn ? copy.all.off : copy.all.some}
+              value={allOn}
+              disabled={saving}
+              onValueChange={(next) => void setAll(next)}
+            />
+          </Card>
+        ) : null}
+
         <View style={{ gap: th.space.sm }}>
           <Text variant="headline" accessibilityRole="header">
             {copy.send}
           </Text>
-          <Card padded={false} testID="prefs-kinds">
-            {KINDS.map((k, i) => (
-              <View key={k}>
-                {i > 0 ? <Divider inset={th.space.lg} /> : null}
-                <ToggleRow
-                  testID={`prefs-${k}`}
-                  title={copy.kinds[k].title}
-                  subtitle={prefs[k] ? copy.kinds[k].on : copy.kinds[k].off}
-                  value={prefs[k]}
-                  disabled={saving}
-                  onValueChange={(next) => void save({ [k]: next })}
-                />
-              </View>
-            ))}
-            {commuteRow ? (
-              <>
-                <Divider inset={th.space.lg} />
-                {commuteRow}
-              </>
-            ) : null}
-          </Card>
+          {list('prefs-kinds')}
         </View>
 
         <View style={{ gap: th.space.sm }}>

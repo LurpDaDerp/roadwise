@@ -28,6 +28,7 @@ import { PENDING_TERMS_KEY } from '@/features/auth/pendingTermsKey';
 import { EMERGENCY_CONTACTS_KEY } from '@/features/emergency/model';
 import { PARKED_KEY } from '@/features/parked/model';
 import { PLACE_NAMES_KEY, PLACES_KEY, PROMPT_DECLINED_KEY, PROMPT_OFF_KEY } from '@/features/places/model';
+import { ARE_YOU_DRIVING_KEY, DRIVE_RECAPS_KEY, DRIVE_STARTED_KEY } from '@/features/settings/notifications/localSwitches';
 import { QUIET_HOURS_KEY } from '@/features/settings/notifications/quietHours';
 import { cancelCommuteHeadsUpsLazily } from '@/features/weather/cancelHeadsUps';
 import { COMMUTE_HEADS_UP_KEY } from '@/features/weather/commuteSetting';
@@ -113,6 +114,10 @@ export const SIGN_OUT_SETTINGS: readonly string[] = [
   // The weather heads-up switch, and this phone's copy of the driver's quiet hours.
   COMMUTE_HEADS_UP_KEY,
   QUIET_HOURS_KEY,
+  // The switches for the notifications this phone posts itself (Settings › Notifications).
+  DRIVE_STARTED_KEY,
+  DRIVE_RECAPS_KEY,
+  ARE_YOU_DRIVING_KEY,
   SPOTS_META_KEY,
   RESTORED_AT_KEY,
   RESTORE_CURSOR_KEY,

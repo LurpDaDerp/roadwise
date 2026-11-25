@@ -35,6 +35,8 @@ object DriveSensePrefs {
   private const val STEPS_BASELINE = "stepsBaseline"
   private const val STEPS_AT_CLOCK = "stepsAtClockMs"
   private const val STEPS_BOOT = "stepsBoot"
+  /** Settings › Notifications › "Drive started" switched off ([DriveStartNote]); absent is on. */
+  private const val DRIVE_START_NOTE_OFF = "driveStartNoteOff"
 
   @Volatile
   private var prefs: SharedPreferences? = null
@@ -94,6 +96,13 @@ object DriveSensePrefs {
   var motionRequested: Boolean
     get() = p.getBoolean(MOTION_REQUESTED, false)
     set(v) = p.edit().putBoolean(MOTION_REQUESTED, v).apply()
+
+  /** The "Drive started" note is switched off (JS `setStartNote(false)`); a drive may start in a new process, so commit. */
+  var driveStartNoteOff: Boolean
+    get() = p.getBoolean(DRIVE_START_NOTE_OFF, false)
+    set(v) {
+      p.edit().putBoolean(DRIVE_START_NOTE_OFF, v).commit()
+    }
 
   /** What the retired forgot-to-start reminder left on file goes (detector thread, once per process). */
   fun forgetRetired() {

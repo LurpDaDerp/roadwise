@@ -100,7 +100,7 @@ export const settingsCopy = {
       },
       footer: 'Saved on this phone only.',
     },
-    notifications: { title: 'Notifications', subtitle: 'Recaps and friends' },
+    notifications: { title: 'Notifications', subtitle: 'Drives, recaps, and friends' },
     /** The data credits at the foot of Settings (the licences ask for them). */
     credits: {
       line: 'Weather data by Open-Meteo.com (CC BY 4.0). Speed limits © OpenStreetMap contributors (ODbL) and HPMS (FHWA/BTS).',

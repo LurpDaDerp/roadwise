@@ -21,8 +21,8 @@
 // Apple's reason code (`BadDeviceToken`, `TopicDisallowed`, ...) or `timeout` / `network` /
 // `bad_key` (null when Apple gave none), and `retry` says whether trying again soon can help: the
 // claim was handed back and the failure was a passing one (no answer, Apple's 429 or 5xx). A missing
-// token or a refused push is never a 5xx: the phone's own "Recording your drive" notification and
-// its local start on the next foreground cover it.
+// token or a refused push is never a 5xx: the phone's own "drive started" notification (an automatic
+// drive, the switch on) and its local start on the next foreground cover it.
 //
 // Logs carry the request id and codes only: never the device token, a secret, a position or a name.
 import { createClient } from '@supabase/supabase-js';

@@ -60,8 +60,8 @@ extension DriveDetector {
     emitState("confirmed")
   }
 
-  /// The drive begins: recorded, journaled from its first kept row (seq 1), announced to JS, and the
-  /// "Recording your drive" check scheduled. `waitUntil`: a Start-card drive's wait for driving speed.
+  /// The drive begins: recorded, journaled from its first kept row (seq 1), announced to JS, and (an
+  /// automatic one) the "drive started" note posted. `waitUntil`: a Start-card drive's wait for driving speed.
   func beginDrive(_ start: TracedStart, kind: String, firstTs: Double, waitUntil: Double? = nil) {
     guard var r = rec else { return }
     let now = DriveDetector.now()
@@ -103,7 +103,7 @@ extension DriveDetector {
     // The buffered rows can span 30 min: the safety stop waits for the first live row, so an old
     // movement replayed against the clock now never ends the drive it starts.
     for item in kept { record(item.row, item.body, evaluate: false) }
-    DriveNotifier.scheduleFallback { [weak self] in self?.isLive(driveId) == true }
+    DriveNotifier.driveStarted(kind: kind)
     EventHub.detect.emit("driveStarted", [
       "driveId": driveId, "origin": kind, "startedAt": DetectStateRecord.ms(start.startedAt), "startSource": start.startSource,
       "startLat": start.startLat.map { $0 as Any } ?? NSNull(), "startLng": start.startLng.map { $0 as Any } ?? NSNull(),
@@ -246,6 +246,8 @@ extension DriveDetector {
   /// no drive, off. The wakes and the parked region stop. `done` on main once the files are gone.
   func wipe(done: @escaping () -> Void) {
     let waiting = rec?.state == "candidate" && rec?.origin == "manual"
+    // The next driver starts with the "Drive started" note on, as the app's own setting does.
+    DriveNotifier.setEnabled(true)
     if isRecording {
       finishSensing()
     } else if capture.sensing == .detector || capture.sensing == .suppressed {
@@ -278,7 +280,6 @@ extension DriveDetector {
     capture.endSensing()
     capture.closeCapture()
     stopClock()
-    DriveNotifier.cancel()
     DriveNotifier.remove()
     DriveDisplayBridge.postEnded()
     nextSeq = 1

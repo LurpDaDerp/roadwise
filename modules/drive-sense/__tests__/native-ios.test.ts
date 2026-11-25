@@ -198,7 +198,7 @@ describe('iOS drive-sense module (text)', () => {
     only(/launchOptions/, ['DriveDetectAppDelegate.swift']);
     only(/UNUserNotificationCenter|UNMutableNotificationContent/, ['DriveNotifier.swift']);
     only(/FileHandle|createFile/, ['RowJournal.swift', 'RowJournalRead.swift']);
-    only(/UserDefaults/, ['CaptureController.swift', 'DetectStateRecord.swift', 'DriveDetectAccess.swift', 'CarLink.swift']);
+    only(/UserDefaults/, ['CaptureController.swift', 'DetectStateRecord.swift', 'DriveDetectAccess.swift', 'CarLink.swift', 'DriveNotifier.swift']);
     only(/AVAudioSession/, ['DriveSenseModule.swift', 'CarLink.swift']);
   });
 
@@ -500,7 +500,7 @@ describe('iOS drive detector: the state machine (text)', () => {
   });
 
   it('RoadWise coming to the front is an "app" wake: on didBecomeActive and from JS appForeground, through the same gate', () => {
-    expect(code('DriveDetector.swift')).toMatch(/UIApplication\.didBecomeActiveNotification, object: nil, queue: \.main\s*\) \{ \[weak self\] _ in self\?\.appForeground\(\) \}/);
+    expect(code('DriveDetector.swift')).toMatch(/UIApplication\.didBecomeActiveNotification, object: nil, queue: \.main\s*\) \{ \[weak self\] _ in\s*DriveNotifier\.remove\(\)\s*self\?\.appForeground\(\)\s*\}/);
     expect(fn(detector(), 'func appForeground()')).toMatch(/onWake\("app"\)/);
     expect(detectCode()).toMatch(/AsyncFunction\("appForeground"\) \{ \(promise: Promise\) in\s*DriveDetector\.shared\.appForeground\(\)\s*promise\.resolve\(nil\)\s*\}\.runOnQueue\(\.main\)/);
     expect(code('DetectPolicy.swift')).toMatch(/if c\.reason != "region" && c\.reason != "app" && c\.now < c\.candidateRestUntil \{ return "resting" \}/);
@@ -624,7 +624,7 @@ describe('iOS drive detector: the state machine (text)', () => {
     expect(begin).toMatch(/nextSeq = 1/);
     expect(begin).toMatch(/let kept = buffer\.items\.filter \{ \$0\.row\.ts >= firstTs \}/);
     expect(begin).toMatch(/capture\.openCapture\(startedAt: start\.startedAt, mode: kind == "auto" \? "auto" : "mounted"\)/);
-    expect(begin).toMatch(/DriveNotifier\.scheduleFallback/);
+    expect(begin).toMatch(/DriveNotifier\.driveStarted\(kind: kind\)/);
     expect(begin.indexOf('for item in kept { record(item.row, item.body, evaluate: false) }')).toBeGreaterThan(-1);
     expect(begin.indexOf('for item in kept { record(item.row, item.body, evaluate: false) }')).toBeLessThan(begin.indexOf('EventHub.detect.emit("driveStarted"'));
     for (const k of ['"driveId"', '"origin"', '"startedAt"', '"startSource"', '"startLat"', '"startLng"', '"continues"', '"confirmedAt"', '"firstSeq"', '"nativeBuild"']) expect(begin).toContain(k);
@@ -787,22 +787,29 @@ describe('iOS drive detector: wakes and the note (text)', () => {
     expect(w).toMatch(/<= DetectPolicy\.VISIT_FRESH_MS/);
   });
 
-  it('the note: "Recording your drive", quiet, opens the driving screen, only if no Live Activity runs 20 s after the confirmation (A3)', () => {
+  it('the "drive started" note: quiet, opens the driving screen, posted at once for an automatic drive behind RoadWise with the switch on', () => {
     const n = code('DriveNotifier.swift');
     expect(n).toMatch(/static let identifier = "roadwise\.driveRecording"/);
-    expect(n).toMatch(/static let title = "Recording your drive"/);
-    expect(n).toMatch(/static let body = "Select to open your drive\. Not driving\? Stop it there\."/);
+    expect(n).toMatch(/static let title = "Recording your drive\. Stay safe\."/);
+    expect(n).toMatch(/static let body = "Select to open your drive\. Not driving\? Open it to stop recording\."/);
     expect(n).toContain('content.interruptionLevel = .active');
-    expect(n).not.toMatch(/content\.sound|timeSensitive|\.critical|UNNotificationAction|categoryIdentifier/);
+    expect(n).not.toMatch(/content\.sound|timeSensitive|\.critical|UNNotificationAction|categoryIdentifier|asyncAfter|roadwise\.liveActivity/);
     expect(n).toMatch(/content\.threadIdentifier = "drive-recording"/);
     expect(n).toMatch(/content\.userInfo = \["kind": "driveRecording", "url": "\/drive"\]/);
-    expect(n).toMatch(/asyncAfter\(wallDeadline: \.now\(\) \+ DetectPolicy\.FALLBACK_NOTE_DELAY_MS \/ 1000, execute: work\)/);
-    expect(n).toMatch(/guard stillRecording\(\), !activityRunning else \{ return \}\s*post\(\)/);
-    expect(n).toMatch(/Notification\.Name\("roadwise\.liveActivity"\)/);
-    expect(n).toMatch(/if activityRunning \{\s*cancel\(\)\s*remove\(\)/);
-    expect(allCode().match(/DriveNotifier\.scheduleFallback/g)).toHaveLength(1);
+    // only an automatic drive, only with the switch on, only while RoadWise is not in front
+    expect(n).toMatch(/guard kind == "auto", enabled, UIApplication\.shared\.applicationState != \.active else \{ return \}\s*post\(\)/);
+    // the switch: stored only when off (a phone that never chose has it on); off takes the note down
+    expect(n).toMatch(/static let offKey = "drivesense\.driveStartNoteOff"/);
+    expect(n).toMatch(/static var enabled: Bool \{ !UserDefaults\.standard\.bool\(forKey: offKey\) \}/);
+    expect(n).toMatch(/UserDefaults\.standard\.set\(true, forKey: offKey\)\s*remove\(\)/);
+    expect(code('DriveDetectModule.swift')).toMatch(/AsyncFunction\("setStartNote"\) \{ \(on: Bool, promise: Promise\) in\s*DriveNotifier\.setEnabled\(on\)/);
+    // posted from the one place a drive begins; never for a resumed drive
+    expect(allCode().match(/DriveNotifier\.driveStarted\(kind: kind\)/g)).toHaveLength(1);
+    expect(fn(code('DriveDetectorDrive.swift'), 'func beginDrive(')).toContain('DriveNotifier.driveStarted(kind: kind)');
+    // down at every end or cancel, and when RoadWise comes to the front
     const finish = fn(code('DriveDetectorDrive.swift'), 'func finishSensing()');
-    expect(finish).toMatch(/DriveNotifier\.cancel\(\)\s*DriveNotifier\.remove\(\)/);
+    expect(finish).toMatch(/DriveNotifier\.remove\(\)/);
+    expect(code('DriveDetector.swift')).toMatch(/didBecomeActiveNotification[\s\S]{0,120}DriveNotifier\.remove\(\)\s*self\?\.appForeground\(\)/);
   });
 });
 

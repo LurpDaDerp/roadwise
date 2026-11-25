@@ -1,53 +1,40 @@
-// The "Recording your drive" note (plan §3.10, A3): the fallback when no Live Activity shows a drive
-// that started on its own. At every confirmation a check is scheduled 20 s out; it posts the note
-// only if no Live Activity runs by then (push-to-start brings its own alert), so the driver sees one
-// or the other, never both. The check is cancelled and the note removed when an activity starts or
-// is adopted (modules/live-drive posts "roadwise.liveActivity"; it also removes the note itself),
-// and at every end or cancel. Quiet: no sound, the `.active` level. A tap opens the driving screen.
+// The "drive started" note (Settings › Notifications › "Drive started"): posted the moment an
+// automatic drive is confirmed while RoadWise isn't in front, so the driver knows RoadWise is
+// recording and can say "Not driving?". Never for a Start drive (the driver started it), never for a
+// drive resumed after a relaunch, and never with the switch off (`setEnabled`, kept in UserDefaults
+// so a drive that starts with no JS running reads it). It shows beside the Live Activity: the
+// activity carries the drive, the note says it began. Quiet: no sound, the `.active` level. A tap
+// opens the driving screen (`userInfo` is the route, read by NotificationsHost). It comes down when
+// RoadWise comes to the front (the driving screen shows the drive) and at every end or cancel.
 // Main thread.
 import Foundation
+import UIKit
 import UserNotifications
 
 enum DriveNotifier {
   static let identifier = "roadwise.driveRecording"
-  static let title = "Recording your drive"
-  static let body = "Select to open your drive. Not driving? Stop it there."
-  /// Posted by modules/live-drive whenever its activity starts, is adopted or ends: ["running": Bool].
-  static let liveActivityNotification = Notification.Name("roadwise.liveActivity")
+  static let title = "Recording your drive. Stay safe."
+  static let body = "Select to open your drive. Not driving? Open it to stop recording."
+  /// Stored only when switched off, so a phone that never chose has it on.
+  static let offKey = "drivesense.driveStartNoteOff"
 
-  private static var pending: DispatchWorkItem?
-  private static var activityRunning = false
-  private static var observer: NSObjectProtocol?
-
-  /// Listens for the Live Activity's state (once per process).
-  static func install() {
-    guard observer == nil else { return }
-    observer = NotificationCenter.default.addObserver(forName: liveActivityNotification, object: nil, queue: .main) { note in
-      activityRunning = note.userInfo?["running"] as? Bool ?? false
-      if activityRunning {
-        cancel()
-        remove()
-      }
+  /// The "Drive started" switch (JS `DriveDetect.setStartNote`).
+  static func setEnabled(_ on: Bool) {
+    if on {
+      UserDefaults.standard.removeObject(forKey: offKey)
+    } else {
+      UserDefaults.standard.set(true, forKey: offKey)
+      remove()
     }
   }
 
-  /// A drive was confirmed: the note goes up `FALLBACK_NOTE_DELAY_MS` from now unless a Live Activity
-  /// runs by then or the drive has ended (`stillRecording`).
-  static func scheduleFallback(stillRecording: @escaping () -> Bool) {
-    install()
-    cancel()
-    let work = DispatchWorkItem {
-      pending = nil
-      guard stillRecording(), !activityRunning else { return }
-      post()
-    }
-    pending = work
-    DispatchQueue.main.asyncAfter(wallDeadline: .now() + DetectPolicy.FALLBACK_NOTE_DELAY_MS / 1000, execute: work)
-  }
+  static var enabled: Bool { !UserDefaults.standard.bool(forKey: offKey) }
 
-  static func cancel() {
-    pending?.cancel()
-    pending = nil
+  /// A drive was confirmed: the note goes up at once for an automatic one, unless RoadWise is in
+  /// front (the driving screen already shows it) or the switch is off.
+  static func driveStarted(kind: String) {
+    guard kind == "auto", enabled, UIApplication.shared.applicationState != .active else { return }
+    post()
   }
 
   private static func post() {
@@ -62,7 +49,7 @@ enum DriveNotifier {
     UNUserNotificationCenter.current().add(request) { _ in }
   }
 
-  /// The note comes down (an end, a cancel, an activity running).
+  /// The note comes down (RoadWise in front, an end, a cancel, the switch off).
   static func remove() {
     let center = UNUserNotificationCenter.current()
     center.removeDeliveredNotifications(withIdentifiers: [identifier])

@@ -417,6 +417,10 @@ export function createFakeDriveDetect(opts: FakeDetectOptions = {}): DriveDetect
       if (available && carMotion) api.wake('app');
       return resolve(undefined);
     },
+    setStartNote(on) {
+      calls.push(`setStartNote:${String(on)}`);
+      return resolve(undefined);
+    },
     carLinkState() {
       calls.push('carLinkState');
       if (!available) return absent('carLinkState');

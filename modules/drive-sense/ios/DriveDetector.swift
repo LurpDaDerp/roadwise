@@ -67,15 +67,18 @@ final class DriveDetector {
     capture.onFix = { [weak self] fix in self?.onFix(fix) }
     ActivitySource.onLive = { [weak self] a in self?.onActivity(a) }
     CarLink.shared.onChange = { [weak self] in self?.onCarLink() }
-    DriveNotifier.install()
     // The first unlock after a reboot: the record becomes readable.
     unlockObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
     ) { [weak self] _ in self?.resumeAtLaunch() }
-    // RoadWise came to the front: an "app" wake (mid-drive, the watch opens at once).
+    // RoadWise came to the front: an "app" wake (mid-drive, the watch opens at once), and the
+    // "drive started" note comes down (the driving screen shows the drive).
     activeObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
-    ) { [weak self] _ in self?.appForeground() }
+    ) { [weak self] _ in
+      DriveNotifier.remove()
+      self?.appForeground()
+    }
   }
 
   static func now() -> Double { jsRound(TimeBase.nowEpochMs()) }

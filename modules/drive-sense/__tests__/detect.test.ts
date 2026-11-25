@@ -67,7 +67,7 @@ type Native = Record<string, jest.Mock> & { state: DetectState; listeners: Map<s
 const native = (jest.requireMock('expo-modules-core') as { __detect: Native }).__detect;
 
 describe('the contract lists', () => {
-  test('four events, sixteen methods, one error code', () => {
+  test('four events, seventeen methods, one error code', () => {
     expect([...DRIVE_DETECT_EVENTS]).toEqual(['detectState', 'driveStarted', 'driveEnded', 'carLink']);
     expect([...DRIVE_DETECT_METHODS]).toEqual([
       'setArmed',
@@ -82,6 +82,7 @@ describe('the contract lists', () => {
       'discardDrive',
       'wipe',
       'appForeground',
+      'setStartNote',
       'carLinkState',
       'pairCar',
       'forgetCar',

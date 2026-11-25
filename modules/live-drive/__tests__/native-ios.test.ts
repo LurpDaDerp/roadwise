@@ -105,7 +105,7 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toMatch(/func isRunning\(\) -> Bool \{/);
   });
 
-  it('a push-started activity is adopted for any background drive (auto or manual) unless a live one runs, and adopting it takes the 20 s note down (review I2)', () => {
+  it('a push-started activity is adopted for any background drive (auto or manual) unless a live one runs, and adopting it applies the newest state (review I2)', () => {
     const c = ctrl();
     const adopt = /private func adopt\(_ a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
     // only a LIVE held activity refuses it (a dismissed or ended one, the last drive's included, does not)
@@ -113,14 +113,10 @@ describe('live-drive: the Expo module (iOS)', () => {
     // any open drive takes it: nothing reads the drive's origin
     expect(adopt).toMatch(/guard LiveDriveController\.driveOpen else \{/);
     expect(c).not.toMatch(/captureMode|origin/);
-    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)\s*\}$/);
+    expect(adopt).toMatch(/activity = a\s*applyLatest\(to: a\)\s*\}$/);
     // every drive end clears the held activity, so the next drive's pushed one is adopted
     expect(c).toMatch(/if info\["ended"\] as\? Bool == true \{\s*self\.end\(\)/);
     expect(c).toMatch(/func end\(\) \{\s*latest = nil\s*guard let a = activity else \{ return \}\s*activity = nil/);
-    // adopting announces `running`, and drive-sense's note then cancels its 20 s check and comes down
-    expect(c).toMatch(/didSet \{\s*if activity\?\.id != oldValue\?\.id \{ announce\(\) \}/);
-    const note = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveNotifier.swift');
-    expect(note).toMatch(/activityRunning = note\.userInfo\?\["running"\] as\? Bool \?\? false\s*if activityRunning \{\s*cancel\(\)\s*remove\(\)/);
     // the controller (its activityUpdates stream) exists in every process, a background relaunch included
     expect(code(IOS_DIR, 'LiveDriveAppDelegate.swift')).toMatch(/LiveDriveController\.shared\.adoptRunning\(\)/);
   });
@@ -161,10 +157,10 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(start.indexOf('latest = (state: state, at: Date())')).toBeLessThan(start.indexOf('adoptRunning()'));
     // the two ways an activity is adopted both apply it: a pushed one (activityUpdates) and one found running
     const adopt = /private func adopt\(_ a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(adopt).toMatch(/activity = a\s*removeRecordingNote\(\)\s*applyLatest\(to: a\)/);
+    expect(adopt).toMatch(/activity = a\s*applyLatest\(to: a\)/);
     expect(adopt.indexOf('applyLatest')).toBeGreaterThan(adopt.indexOf('guard LiveDriveController.driveOpen else'));
     const running = /func adoptRunning\(\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
-    expect(running).toMatch(/activity = keep\s*if let k = keep \{\s*removeRecordingNote\(\)\s*applyLatest\(to: k\)\s*\}/);
+    expect(running).toMatch(/activity = keep\s*if let k = keep \{\s*applyLatest\(to: k\)\s*\}/);
     // applied only while fresh, with its own stale date; on the activity just adopted
     const apply = /private func applyLatest\(to a: Activity<LiveDriveAttributes>\) \{[\s\S]*?\n {2}\}/.exec(c)?.[0] ?? '';
     expect(apply).toMatch(/guard let l = latest, Date\(\)\.timeIntervalSince\(l\.at\) < LiveDriveController\.STALE_AFTER_S else \{ return \}/);
@@ -193,17 +189,12 @@ describe('live-drive: the Expo module (iOS)', () => {
     expect(c).toContain('private static let log = Logger(subsystem: "app.roadwise", category: "LiveDrive")');
   });
 
-  it('a running activity takes the "Recording your drive" note down, and every change is announced to drive-sense', () => {
+  it('leaves drive-sense’s "drive started" note alone: the note and the activity show side by side', () => {
     const c = ctrl();
-    expect(c).toMatch(/static let recordingNoteId = "roadwise\.driveRecording"/);
+    expect(c).not.toMatch(/driveRecording|UNUserNotificationCenter|roadwise\.liveActivity/);
     const note = code(path.join(ROOT, 'modules', 'drive-sense', 'ios'), 'DriveNotifier.swift');
     expect(note).toMatch(/static let identifier = "roadwise\.driveRecording"/);
-    expect(c).toMatch(/removeDeliveredNotifications\(withIdentifiers: \[LiveDriveController\.recordingNoteId\]\)/);
-    expect(c).toMatch(/static let stateNotification = Notification\.Name\("roadwise\.liveActivity"\)/);
-    expect(note).toMatch(/Notification\.Name\("roadwise\.liveActivity"\)/);
-    expect(c).toMatch(/didSet \{\s*if activity\?\.id != oldValue\?\.id \{ announce\(\) \}/);
-    expect(c).toMatch(/userInfo: \["running": activity != nil\]/);
-    expect(read(IOS_DIR, 'LiveDrive.podspec')).toContain("s.frameworks = 'UserNotifications'");
+    expect(note).not.toMatch(/roadwise\.liveActivity/);
   });
 
   it('listens for drive-sense setDriveDisplay (roadwise.driveDisplay) and maps every key to the content state', () => {

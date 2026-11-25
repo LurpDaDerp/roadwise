@@ -1,6 +1,7 @@
 // What the drive host asks of the phone for "Are you driving?" (a build with the car link, both
 // phones): the Bluetooth radio (read without ever prompting, `carRadioState`; on Android only with
-// Nearby devices allowed), the notification permission (read, never asked), and the note itself,
+// Nearby devices allowed), the notification permission (read, never asked) together with the "Are
+// you driving?" switch (Settings › Notifications; off reads as not allowed), and the note itself,
 // posted at once with no sound (Android: on its silent "Are you driving?" channel) and taken down by its
 // identifier. Every native module is loaded only when first used.
 import { Platform } from 'react-native';
@@ -10,11 +11,12 @@ import { carRadioState } from '@/core/permissions/carBluetooth';
 import { createSettingsRepo, type Db } from '@/data/db';
 import { carCopy } from '@/features/carLink/copy';
 import { PASSENGER_CHECK_KIND, passengerCheckId } from '@/features/notifications/passengerCheck';
+import { ARE_YOU_DRIVING_KEY, readSwitch } from '@/features/settings/notifications/localSwitches';
 
 export interface PassengerNotePort {
   /** The Bluetooth radio's state, or null when it cannot be read without a prompt (never creates one that prompts). */
   bluetooth(): Promise<RadioState | null>;
-  /** Notifications may show (granted or provisional). Read only. */
+  /** Notifications may show (granted or provisional) and the "Are you driving?" switch is on. Read only. */
   notificationsAllowed(): Promise<boolean>;
   post(clientTripId: string): Promise<void>;
   /** Takes the drive's note down (pending or delivered); a note never posted is no error. */
@@ -42,6 +44,7 @@ export function createPassengerNotePort(db: Db): PassengerNotePort {
       });
     },
     async notificationsAllowed() {
+      if (!(await readSwitch(createSettingsRepo(db), ARE_YOU_DRIVING_KEY))) return false;
       const n = notifications();
       const p = await n.getPermissionsAsync();
       return p.granted || p.ios?.status === n.IosAuthorizationStatus.PROVISIONAL;
