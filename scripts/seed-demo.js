@@ -344,9 +344,9 @@ function recordDrive(trip, rnd) {
  * demo reads as a decent driver: a Safety Rating around 80 and no category under 60.
  */
 function eventRates(back) {
-  if (back >= 30) return { speeding: 0.19, hard_brake: 0.02, hard_accel: 0.016, hard_corner: 0.012 };
-  if (back >= 13) return { speeding: 0.17, hard_brake: 0.012, hard_accel: 0.01, hard_corner: 0.008 };
-  return { speeding: 0.15, hard_brake: 0.008, hard_accel: 0.008, hard_corner: 0.006 };
+  if (back >= 30) return { speeding: 0.17, hard_brake: 0.018, hard_accel: 0.015, hard_corner: 0.014 };
+  if (back >= 13) return { speeding: 0.15, hard_brake: 0.012, hard_accel: 0.01, hard_corner: 0.01 };
+  return { speeding: 0.13, hard_brake: 0.008, hard_accel: 0.008, hard_corner: 0.008 };
 }
 
 /** mph-seconds over the speeding line, every over row, at a steady `over` mph past the line for `durationS` rows. */
@@ -721,7 +721,7 @@ function summarize(drives, now) {
       id: d.payload.clientTripId,
       startedAt: d.payload.startedAt,
       miles: d.payload.miles,
-      watchedMiles: d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
+      watchedS: d.payload.dashcam ? scoring.watchedSeconds(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
       exposure: scoring.clampExposure(d.payload.exposure),
       events: d.stored.kept,
     })),

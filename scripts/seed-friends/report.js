@@ -21,7 +21,7 @@ const toScoringEvent = (e) => ({ id: e.id, type: e.type, tier: e.tier, startedAt
 function driveView(d) {
   if (!d.stored.scored) return { score: null, merit: null };
   const p = d.payload;
-  const watched = p.dashcam ? scoring.watchedMiles(p.miles, p.dashcam.movingS, p.dashcam.coveredS) : 0;
+  const watched = p.dashcam ? scoring.watchedSeconds(p.miles, p.dashcam.movingS, p.dashcam.coveredS) : 0;
   const score = scoring.driveScore(d.stored.kept.map(toScoringEvent), p.miles, watched, scoring.clampExposure(p.exposure));
   return { score, merit: scoring.driveMerit(score, p.miles) };
 }
@@ -46,7 +46,7 @@ const ratingDrives = (drives) =>
       id: d.payload.clientTripId,
       startedAt: d.payload.startedAt,
       miles: d.payload.miles,
-      watchedMiles: d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
+      watchedS: d.payload.dashcam ? scoring.watchedSeconds(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
       exposure: scoring.clampExposure(d.payload.exposure),
       events: d.stored.kept,
     }));

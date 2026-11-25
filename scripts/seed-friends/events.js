@@ -65,23 +65,24 @@ const drawPhone = (rnd) => {
   return intBetween(rnd, 41, 100);
 };
 
-/** Mean weights per event, from a fixed draw, so the expected counts follow the scoring package's own arithmetic. */
+/**
+ * Mean weights per event, from a fixed draw, so the expected counts follow the scoring package's own
+ * arithmetic. A speeding event weighs more the lower its posted limit, so its mean is read at a limit
+ * (`speedAt`).
+ */
 const MEAN_WEIGHT = (() => {
   let s = 12345;
   const rnd = () => {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 4294967296;
   };
-  let speed = 0;
-  let speedHeavy = 0;
+  const draws = { plain: [], heavy: [] };
   let phone = 0;
   const hard = { hard_brake: 0, hard_accel: 0, hard_corner: 0 };
   const N = 6000;
   for (let i = 0; i < N; i += 1) {
-    const e = drawSpeeding(rnd);
-    speed += scoring.speedingWeight(e.d, e.overMphS, e.tier);
-    const h = drawSpeeding(rnd, true);
-    speedHeavy += scoring.speedingWeight(h.d, h.overMphS, h.tier);
+    draws.plain.push(drawSpeeding(rnd));
+    draws.heavy.push(drawSpeeding(rnd, true));
     phone += scoring.PHONE_PICKUP_WEIGHT_S + drawPhone(rnd);
     // each hard event weighs its peak over its threshold, squared (hardEvent's own peaks)
     for (const type of Object.keys(hard)) {
@@ -89,9 +90,15 @@ const MEAN_WEIGHT = (() => {
       hard[type] += scoring.hardEventWeight(type, tier, hardPeak(type, tier, rnd));
     }
   }
+  const memo = new Map();
+  /** The mean weight of a speeding event (a habitual speeder's when `heavy`) at a posted limit of `limitMph`. */
+  const speedAt = (limitMph, heavy = false) => {
+    const key = `${heavy ? 'h' : 'p'}${limitMph}`;
+    if (!memo.has(key)) memo.set(key, draws[heavy ? 'heavy' : 'plain'].reduce((sum, e) => sum + scoring.speedingWeight(e.d, e.overMphS, e.tier, limitMph), 0) / N);
+    return memo.get(key);
+  };
   return {
-    speed: speed / N,
-    speedHeavy: speedHeavy / N,
+    speedAt,
     phone: phone / N,
     hard: { hard_brake: hard.hard_brake / N, hard_accel: hard.hard_accel / N, hard_corner: hard.hard_corner / N },
   };
@@ -130,6 +137,20 @@ function prepare(rec) {
   const corners = turns.filter((x) => x.deg >= 60 && usable(x.i) && tr.cls[x.i] !== 'motorway').map((x) => x.i);
   rec.prep = { cruise, fast, afterStop, beforeStop, corners, usable };
   return rec.prep;
+}
+
+/**
+ * The mean weight of a random speeding event on this drive: a cruise point is picked at random and the
+ * event weighs at that point's limit, so the mean of `MEAN_WEIGHT.speedAt` over the cruise points.
+ */
+function meanSpeedWeight(rec, prep, heavy) {
+  const key = heavy ? 'speedHeavy' : 'speed';
+  prep.meanWeight ??= {};
+  if (prep.meanWeight[key] === undefined) {
+    const { cruise } = prep;
+    prep.meanWeight[key] = cruise.length > 0 ? cruise.reduce((sum, i) => sum + MEAN_WEIGHT.speedAt(rec.tr.limit[i], heavy), 0) / cruise.length : MEAN_WEIGHT.speedAt(null, heavy);
+  }
+  return prep.meanWeight[key];
 }
 
 const eventTime = (rec, i) => rec.startedAt + Math.round(rec.t[i] * 1000);
@@ -278,7 +299,7 @@ function makeEvents(rec, ctx, rnd) {
       braking: poisson(rnd, (ctx.k.braking * 0.01 * ex.slowdowns * scale) / MEAN_WEIGHT.hard.hard_brake),
       acceleration: poisson(rnd, (ctx.k.acceleration * 0.008 * ex.speedups * scale) / MEAN_WEIGHT.hard.hard_accel),
       turning: poisson(rnd, (ctx.k.turning * 0.008 * ex.turns * scale) / MEAN_WEIGHT.hard.hard_corner),
-      speed: poisson(rnd, (ctx.k.speed * 0.04 * ex.limitS * scale) / (ctx.heavySpeed ? MEAN_WEIGHT.speedHeavy : MEAN_WEIGHT.speed)),
+      speed: poisson(rnd, (ctx.k.speed * 0.04 * ex.limitS * scale) / meanSpeedWeight(rec, prep, ctx.heavySpeed)),
       phone: poisson(rnd, (ctx.k.phone * 0.04 * ex.phoneS * scale) / (MEAN_WEIGHT.phone * paceFactor(v, prep.fast))),
     };
     for (let c = 0; c < n.speed; c += 1) {

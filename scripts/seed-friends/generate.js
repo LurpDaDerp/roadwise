@@ -238,7 +238,7 @@ function buildHistory(person, now, opts = {}) {
 
 /** The score of a recorded drive with these events, as the recap computes it. */
 function roughScore(rec, events, dashcam) {
-  const watched = dashcam ? scoring.watchedMiles(rec.miles, rec.exposure.movingS, Math.round(rec.exposure.movingS * dashcam.watched)) : 0;
+  const watched = dashcam ? scoring.watchedSeconds(rec.miles, rec.exposure.movingS, Math.round(rec.exposure.movingS * dashcam.watched)) : 0;
   const kept = scoring.keepDashcamEvents(events);
   return scoring.driveScore(kept.map((e) => ({ id: e.id ?? 'x', type: e.type, tier: e.tier, startedAt: e.startedAt, durationS: e.durationS, status: 'active', measured: e.measured })), rec.miles, watched, rec.exposure) ?? 100;
 }
@@ -251,7 +251,7 @@ function summarize(drives, now) {
       id: d.payload.clientTripId,
       startedAt: d.payload.startedAt,
       miles: d.payload.miles,
-      watchedMiles: d.payload.dashcam ? scoring.watchedMiles(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
+      watchedS: d.payload.dashcam ? scoring.watchedSeconds(d.payload.miles, d.payload.dashcam.movingS, d.payload.dashcam.coveredS) : 0,
       exposure: scoring.clampExposure(d.payload.exposure),
       events: d.stored.kept,
     })),

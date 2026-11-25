@@ -401,7 +401,7 @@ function ratingFromServer(rows, now) {
       id: r.clientTripId,
       startedAt: r.startedAt,
       miles: Number(r.miles),
-      watchedMiles: scoring.watchedMiles(Number(r.miles), r.dashcamMovingS ?? 0, r.dashcamCoveredS ?? 0),
+      watchedS: scoring.watchedSeconds(Number(r.miles), r.dashcamMovingS ?? 0, r.dashcamCoveredS ?? 0),
       exposure: scoring.clampExposure({ ...r.exposure }),
       events: r.events.filter((e) => e.status !== 'removed').map((e) => ({ id: e.id, type: e.type, tier: e.tier, startedAt: e.startedAt, durationS: Number(e.durationS), status: 'active', measured: e.measured })),
     }));
