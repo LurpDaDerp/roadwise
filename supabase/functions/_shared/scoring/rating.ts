@@ -78,7 +78,11 @@ export function axisOf(type: string): AxisKey | null {
   }
 }
 
-/** Typical rate per opportunity, the prior's pseudo-opportunities, and one drive's opportunity floor. */
+/**
+ * Typical rate per opportunity, the prior's pseudo-opportunities, and one drive's opportunity floor.
+ * The floor is the prior's size: a drive is judged against at least as much driving as the rating's
+ * prior stands for, so one event on a short drive weighs no more than it would in the rating.
+ */
 export interface Baseline {
   rate: number;
   prior: number;
@@ -86,20 +90,20 @@ export interface Baseline {
 }
 export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
   /** 1 hard brake per 100 slowdowns. */
-  braking: { rate: 0.01, prior: 60, floor: 10 },
+  braking: { rate: 0.01, prior: 60, floor: 60 },
   /** 1 hard start per 125 speed-ups. */
-  acceleration: { rate: 0.008, prior: 60, floor: 10 },
+  acceleration: { rate: 0.008, prior: 60, floor: 60 },
   /** 1 sharp turn per 125 turns. */
-  turning: { rate: 0.008, prior: 60, floor: 10 },
+  turning: { rate: 0.008, prior: 60, floor: 60 },
   /** 4 weighted seconds over the line per 100 s with a limit. */
-  speed: { rate: 0.04, prior: 3600, floor: 600 },
+  speed: { rate: 0.04, prior: 3600, floor: 3600 },
   /** 4 weighted phone seconds (`PHONE_PICKUP_WEIGHT_S` + in hand, per pickup) per 100 s at driving speed. */
-  phone: { rate: 0.04, prior: 3600, floor: 600 },
+  phone: { rate: 0.04, prior: 3600, floor: 3600 },
   /**
    * 0.024 Attention weight per watched second: one 5 s eyes-off episode at 30 mph (weight 40) about
    * every 28 minutes of watched driving.
    */
-  attention: { rate: 0.024, prior: 3600, floor: 600 },
+  attention: { rate: 0.024, prior: 3600, floor: 3600 },
 };
 /** What a phone pickup weighs on top of its seconds in hand: the reach and the look away. */
 export const PHONE_PICKUP_WEIGHT_S = 10;

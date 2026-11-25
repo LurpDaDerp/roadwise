@@ -93,12 +93,12 @@ describe('categories', () => {
   test('the constants', () => {
     expect([RATING_WINDOW_DAYS, RATING_HALF_LIFE_DAYS, RANKED_MIN_MILES, TYPICAL_SCORE]).toEqual([90, 21, 10, 85]);
     expect(BASELINE).toEqual({
-      braking: { rate: 0.01, prior: 60, floor: 10 },
-      acceleration: { rate: 0.008, prior: 60, floor: 10 },
-      turning: { rate: 0.008, prior: 60, floor: 10 },
-      speed: { rate: 0.04, prior: 3600, floor: 600 },
-      phone: { rate: 0.04, prior: 3600, floor: 600 },
-      attention: { rate: 0.024, prior: 3600, floor: 600 },
+      braking: { rate: 0.01, prior: 60, floor: 60 },
+      acceleration: { rate: 0.008, prior: 60, floor: 60 },
+      turning: { rate: 0.008, prior: 60, floor: 60 },
+      speed: { rate: 0.04, prior: 3600, floor: 3600 },
+      phone: { rate: 0.04, prior: 3600, floor: 3600 },
+      attention: { rate: 0.024, prior: 3600, floor: 3600 },
     });
     expect(PHONE_PICKUP_WEIGHT_S).toBe(10);
     expect(HARD_EVENT_WEIGHT).toEqual({ minor: 1, severe: 2 });
@@ -683,14 +683,14 @@ describe('ratingAt: every event at its own severity', () => {
     expect(loads.rates.attention.weight).toBe(320.3333333333333);
   });
 
-  test('the same event marks a long drive down less than a short one', () => {
+  test('the same event marks a drive longer than the floors down less than a short one', () => {
+    // two hours: 120 slowdowns and 7200 s with a limit, past the 60 and 3600 s floors
     const sp = ev({ type: 'speeding', tier: 'moderate', durationS: 12, measured: { overMphS: 72 } });
     const short = driveScore([sp], 10, 0, exp(10, 10, 6, 1000, 1150))!;
-    const long = driveScore([sp], 60, 0, exp(60, 60, 36, 6000, 6900))!;
-    expect(long).toBeGreaterThan(short);
-    expect(short).toBeLessThan(100);
+    const long = driveScore([sp], 60, 0, exp(120, 120, 72, 7200, 8100))!;
+    expect([short, long]).toEqual([99, 100]);
     const brake = ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.31 } });
-    expect(driveScore([brake], 60, 0, exp(60, 60, 36, 6000, 6900))!).toBeGreaterThan(driveScore([brake], 10, 0, exp(10, 10, 6, 1000, 1150))!);
+    expect([driveScore([brake], 10, 0, exp(10, 10, 6, 1000, 1150)), driveScore([brake], 60, 0, exp(120, 120, 72, 7200, 8100))]).toEqual([92, 96]);
   });
 });
 
@@ -795,32 +795,55 @@ describe('ratingAt: Phone use', () => {
   });
 });
 
+// The drive floors are the priors' size: 60 slowdowns, speed-ups and turns; 3600 s for Speed, Phone use
+// and Attention. EXP6P is the 6-mile city drive watched for phone use (900 s), EXP2P the 2-mile errand (200 s).
+const EXP6P = exp(15, 15, 9, 840, 1136, 900);
+const EXP2P = exp(4, 4, 3, 240, 300, 200);
 describe('driveScore: the same curves over one drive, no prior, opportunities floored', () => {
-  test('a clean drive is 100', () => expect(driveScore([], 6, 0, EXP6)).toBe(100));
-  test('one minor hard brake on 6 mi is 75', () =>
-    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 6, 0, EXP6)).toBe(75));
-  test('a severe hard brake on 2 mi is 50', () =>
-    expect(driveScore([ev({ type: 'hard_brake', tier: 'severe' })], 2, 0, exp(4, 4, 3, 240, 300))).toBe(50));
-  test('a minute at 15 over on 6 mi is 45', () =>
-    expect(driveScore([ev({ type: 'speeding', tier: 'severe', durationS: 60, measured: { overMphS: 900 } })], 6, 0, EXP6)).toBe(45));
-  test('a drowsy on 1136 watched seconds is 87', () => expect(driveScore([ev({ type: 'drowsy', tier: 'severe' })], 5, 1136, EXP6)).toBe(87));
+  test('a clean drive is 100', () => {
+    expect(driveScore([], 6, 0, EXP6)).toBe(100);
+    expect(driveScore([], 6, 0, EXP6P)).toBe(100);
+  });
+  test('one minor hard brake (0.36 g) on the 6-mile drive is 94; 92 with no phone seconds', () => {
+    const brake = ev({ type: 'hard_brake', tier: 'minor', measured: { peakG: 0.36 } });
+    expect(driveScore([brake], 6, 0, EXP6P)).toBe(94);
+    expect(driveScore([brake], 6, 0, EXP6)).toBe(92);
+  });
+  test('one minor hard brake on 6 mi with no phone seconds is 92', () =>
+    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 6, 0, EXP6)).toBe(92));
+  test('a 0.55 g hard brake on the 2-mile errand is 88', () =>
+    expect(driveScore([ev({ type: 'hard_brake', tier: 'severe', measured: { peakG: 0.55 } })], 2, 0, EXP2P)).toBe(88));
+  test('a severe hard brake on 2 mi with no phone seconds is 86', () =>
+    expect(driveScore([ev({ type: 'hard_brake', tier: 'severe' })], 2, 0, exp(4, 4, 3, 240, 300))).toBe(86));
+  test('a minute over the line at a 35 mph limit on the 6-mile drive: 5 over is 98, 15 over is 83', () => {
+    expect(driveScore([ev({ type: 'speeding', tier: 'moderate', durationS: 60, measured: { overMphS: 300, limitMph: 35 } })], 6, 0, EXP6P)).toBe(98);
+    expect(driveScore([ev({ type: 'speeding', tier: 'severe', durationS: 60, measured: { overMphS: 900, limitMph: 35 } })], 6, 0, EXP6P)).toBe(83);
+  });
+  test('a minute at 15 over on 6 mi with no phone seconds is 78', () =>
+    expect(driveScore([ev({ type: 'speeding', tier: 'severe', durationS: 60, measured: { overMphS: 900 } })], 6, 0, EXP6)).toBe(78));
+  test('a drowsy on 1136 watched seconds reads over the 3600 s floor, 95', () => expect(driveScore([ev({ type: 'drowsy', tier: 'severe' })], 5, 1136, EXP6)).toBe(95));
   test('no miles, no score', () => expect(driveScore([], 0, 0, EXP6)).toBeNull());
-  test('the floors: a minor hard brake on 0.3 mi is 66', () =>
-    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 0.3, 0, exp(1, 1, 1, 108, 132))).toBe(66));
+  test('the floors: a minor hard brake on 0.3 mi reads over 60 slowdowns, 92 as on 6 mi', () =>
+    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 0.3, 0, exp(1, 1, 1, 108, 132))).toBe(92));
   test('a removed event changes nothing', () =>
     expect(driveScore([ev({ type: 'hard_brake', tier: 'severe', status: 'removed' })], 6, 0, EXP6)).toBe(100));
   test('Attention only on a watched drive', () => {
     expect(driveScore([ev({ type: 'drowsy', tier: 'severe' })], 5, 0, EXP6)).toBe(100);
   });
   test('a drive watched for phone use with no pickup is 100', () => expect(driveScore([], 6, 0, exp(15, 15, 9, 840, 1136, 900))).toBe(100));
-  test('a 20 s pickup on 900 s at driving speed is 96', () =>
-    expect(driveScore([ev({ type: 'phone_pickup', tier: 'severe', durationS: 20 })], 6, 0, exp(15, 15, 9, 840, 1136, 900))).toBe(96));
-  test('the floor: a 5 s pickup on 200 s at driving speed reads over 600 s, 97', () =>
-    expect(driveScore([ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5 })], 2, 0, exp(4, 4, 3, 200, 300, 200))).toBe(97));
-  test('a pickup on a drive with no phone seconds still scores Phone use (over the 600 s floor), 97', () =>
-    expect(driveScore([ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5 })], 6, 0, EXP6)).toBe(97));
+  test('a 20 s pickup on 900 s at driving speed is 99', () =>
+    expect(driveScore([ev({ type: 'phone_pickup', tier: 'severe', durationS: 20 })], 6, 0, exp(15, 15, 9, 840, 1136, 900))).toBe(99));
+  test('20 s pickups at 30 mph on the 6-mile drive: one is 99, three are 97', () => {
+    const pickup = () => ev({ type: 'phone_pickup', tier: 'severe', durationS: 20, measured: { speedMph: 30, maxSpeedMph: 30 } });
+    expect(driveScore([pickup()], 6, 0, EXP6P)).toBe(99);
+    expect(driveScore([pickup(), pickup(), pickup()], 6, 0, EXP6P)).toBe(97);
+  });
+  test('the floor: a 5 s pickup on 200 s at driving speed reads over 3600 s, 99', () =>
+    expect(driveScore([ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5 })], 2, 0, exp(4, 4, 3, 200, 300, 200))).toBe(99));
+  test('a pickup on a drive with no phone seconds still scores Phone use (over the 3600 s floor), 99', () =>
+    expect(driveScore([ev({ type: 'phone_pickup', tier: 'moderate', durationS: 5 })], 6, 0, EXP6)).toBe(99));
   test('no phone seconds and no pickup: Phone use left out', () => {
-    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 6, 0, EXP6)).toBe(75);
+    expect(driveScore([ev({ type: 'hard_brake', tier: 'minor' })], 6, 0, EXP6)).toBe(92);
     expect(driveScore([ev({ type: 'phone_pickup', tier: 'severe', durationS: 30, status: 'removed' })], 6, 0, EXP6)).toBe(100);
   });
 });
@@ -961,7 +984,7 @@ describe('scoring v13: parity pins the 0048 pgTAP stores too', () => {
   });
 
   test("pin W: each drive's score (the server's Wrapped drive score is the same)", () => {
-    expect([pinW1, pinW2, pinW3, pinW4].map(scoreOf)).toEqual([78, 70, 80, 77]);
+    expect([pinW1, pinW2, pinW3, pinW4].map(scoreOf)).toEqual([90, 81, 94, 85]);
   });
 
   test('pin W: the speeding weights against each limit', () => {
@@ -993,18 +1016,31 @@ describe('scoring v13: parity pins the 0048 pgTAP stores too', () => {
   });
 
   test('pin R: the drive scores', () => {
-    expect([pinR('r1', 'eyes_off', 1200), pinR('r2', 'drowsy', 1200), pinR('r3', 'drowsy', 0)].map(scoreOf)).toEqual([93, 87, 100]);
+    expect([pinR('r1', 'eyes_off', 1200), pinR('r2', 'drowsy', 1200), pinR('r3', 'drowsy', 0)].map(scoreOf)).toEqual([98, 95, 100]);
   });
 
-  test("pin F: one drive's Attention reads at least 600 watched seconds", () => {
+  test("pin F: one drive's Attention reads at least 3600 watched seconds", () => {
     const f = { events: [dash('eyes_off')], miles: 3, exposure: exp(6, 6, 4, 400, 500, 450) };
-    // 300 and 600 watched seconds both read over the 600 s floor; 1200 reads over its own seconds
-    expect(driveScore(f.events, f.miles, 300, f.exposure)).toBe(90);
-    expect(driveScore(f.events, f.miles, 600, f.exposure)).toBe(90);
-    expect(driveScore(f.events, f.miles, 1200, f.exposure)).toBe(95);
+    // 1800 and 3600 watched seconds both read over the 3600 s floor; 7200 reads over its own seconds
+    expect(driveScore(f.events, f.miles, 1800, f.exposure)).toBe(98);
+    expect(driveScore(f.events, f.miles, 3600, f.exposure)).toBe(98);
+    expect(driveScore(f.events, f.miles, 7200, f.exposure)).toBe(99);
     // no watched seconds: Attention left out
     expect(driveScore(f.events, f.miles, 0, f.exposure)).toBe(100);
   });
+});
+
+// The 0038 pgTAP stores these two drives and pins the same Wrapped drive scores.
+test('the 0038 Wrapped drives: one minor hard brake in 20 slowdowns is 92; a drive with every kind of event is 91', () => {
+  expect(driveScore([ev({ type: 'hard_brake', tier: 'minor', durationS: 1 })], 12, 0, exp(20, 10, 5, 600, 1000))).toBe(92);
+  const every = [
+    ev({ type: 'speeding', tier: 'moderate', durationS: 30, measured: { overMphS: 240 } }),
+    ev({ type: 'phone_pickup', tier: 'severe', durationS: 20, measured: { maxSpeedMph: 40 } }),
+    ev({ type: 'hard_accel', tier: 'severe', durationS: 1, measured: { peakG: 0.5 } }),
+    ev({ type: 'eyes_off', tier: 'severe', durationS: 6, measured: { speedMph: 30 } }),
+  ];
+  // DashPal watched 500 s, under the 3600 s floor
+  expect(driveScore(every, 10, 500, exp(15, 12, 6, 800, 1000, 900))).toBe(91);
 });
 
 test('the barrel exports the rating API and none of the old one', () => {

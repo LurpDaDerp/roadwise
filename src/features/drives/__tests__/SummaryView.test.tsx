@@ -175,10 +175,11 @@ test('the route map gets the drive’s ends: its summary names them as the “fr
 describe('the hero mirrors the share card', () => {
   test('the tier icon beside the score, then distance and time, labelled, all three in the tier ink on its wash', async () => {
     await draw(<SummaryView {...props()} />);
-    // 12 mi with one minor hard brake in 30 slowdowns: Braking 63, the rest 100, the weighted harmonic mean 86.
-    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('86');
-    const tier = driveMerit(86, 12)!;
-    expect(tier).toBe(3);
+    // 12 mi with one minor hard brake in 30 slowdowns, read over the 60-slowdown floor: Braking 77, the
+    // rest 100, the weighted harmonic mean 92.
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('92');
+    const tier = driveMerit(92, 12)!;
+    expect(tier).toBe(4);
     const wash = meritWash(tier, 'light');
     const surfaces = [light.surface, over(opaque(light.surface), wash)];
     const ink = meritInk(tier, surfaces);
@@ -189,7 +190,7 @@ describe('the hero mirrors the share card', () => {
     expect(within(screen.getByTestId('summary-facts')).getByText('score')).toBeOnTheScreen();
     expect(within(screen.getByTestId('summary-facts')).getByText('distance')).toBeOnTheScreen();
     expect(within(screen.getByTestId('summary-facts')).getByText('time')).toBeOnTheScreen();
-    expect(screen.getByTestId('summary-facts')).toHaveProp('accessibilityLabel', 'Score 86 out of 100, 12.0 miles, 24 minutes, merit 3 of 5.');
+    expect(screen.getByTestId('summary-facts')).toHaveProp('accessibilityLabel', 'Score 92 out of 100, 12.0 miles, 24 minutes, merit 4 of 5.');
   });
 
   test('the hero uses the share card type at 0.8×', async () => {
@@ -208,15 +209,15 @@ describe('the hero mirrors the share card', () => {
 
   test('the score never waits for the server: an uploading drive and one not synced yet show theirs', async () => {
     await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null }) })} />);
-    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('86');
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('92');
     expect(screen.queryByTestId('state-not-synced')).toBeNull();
     // Its upload failed once: it keeps trying, and says so.
     await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null, uploadFailed: true }) })} />);
-    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('86');
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('92');
     expect(screen.getByTestId('state-not-synced')).toHaveTextContent("Not synced yet. RoadWise will keep trying.");
     // Turned down for good: nothing will try again, and the line says what is true.
     await draw(<SummaryView {...props({ drive: drive({ status: 'failed', result: null }) })} />);
-    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('86');
+    expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('92');
     expect(screen.queryByTestId('state-not-synced')).toBeNull();
     expect(screen.getByTestId('state-sync-refused')).toHaveTextContent("Couldn't sync this drive. It stays on this phone.");
   });
@@ -238,8 +239,8 @@ describe('the hero mirrors the share card', () => {
     await draw(<SummaryView {...props()} />);
     await press(screen.getByTestId('share'));
     const card = screen.getByTestId('share-card');
-    expect(within(card).getByTestId('share-facts-score')).toHaveTextContent('86');
-    expect(within(card).getByTestId('share-facts')).toHaveProp('accessibilityLabel', 'Score 86 out of 100, 12.0 miles, 24 minutes, merit 3 of 5.');
+    expect(within(card).getByTestId('share-facts-score')).toHaveTextContent('92');
+    expect(within(card).getByTestId('share-facts')).toHaveProp('accessibilityLabel', 'Score 92 out of 100, 12.0 miles, 24 minutes, merit 4 of 5.');
     expect(within(card).queryByText(/mph/)).toBeNull();
   });
 });

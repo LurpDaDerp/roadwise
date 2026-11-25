@@ -2,7 +2,7 @@
 -- "speedingWeight", "weightedScore: the weighted harmonic mean" and "scoring v13: parity pins the
 -- 0048 pgTAP stores too"): the weighted harmonic mean, speeding weighed against its limit (x
 -- squared, capped at 5), Attention per watched second (drowsy 80, eyes off 40; the 3600 s prior at
--- 0.024 in the rating; the 600 s floor in the drive score), a full window through rating_at and each
+-- 0.024 in the rating; the 3600 s floor in the drive score), a full window through rating_at and each
 -- drive's score through wrapped_trips. category_score is gone; the new and replaced functions keep
 -- their posture.
 create extension if not exists pgtap with schema extensions;
@@ -148,7 +148,7 @@ select is(pg_temp.scores(1),
   array[78.9, 68.69727227258444, 75.91666720301164, 79.65581995980288, 69.28278917626614, 90.44662769010905, 86.31474611197726]::float8[],
   'pin W: 78.9 and every category to the digit, with speeding against its limit, DashPal events over watched seconds and pickups (scoring ratingAt)');
 select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) - 'scores', '{"miles": 71.00, "rating": 78.9, "ranked": true}'::jsonb, 'pin W: ranked over 71 mi');
-select is(pg_temp.wrapped(1), array[77, 80, 70, 78]::float8[], 'pin W: each drive''s Wrapped score is scoring driveScore''s (W4, W3, W2, W1)');
+select is(pg_temp.wrapped(1), array[85, 94, 81, 90]::float8[], 'pin W: each drive''s Wrapped score is scoring driveScore''s (W4, W3, W2, W1)');
 select private.refresh_rating('00000000-0000-0000-0000-000000000001');
 select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(78.9, true, 71.00)::text,
   'refresh_rating stores the v13 rating');
@@ -172,20 +172,20 @@ select is(pg_temp.scores(3),
 select is(pg_temp.scores(4),
   array[87.4, 87.62886597938144, 87.62886597938144, 86.69623059866963, null, null, 87.48261474269819]::float8[],
   'pin R: no watched seconds, no Attention score, even with a DashPal event; the rating leaves it out');
-select is(array[pg_temp.wrapped(2), pg_temp.wrapped(3), pg_temp.wrapped(4)], array[array[93], array[87], array[100]]::float8[],
-  'pin R: the drive scores 93, 87, 100 (scoring driveScore)');
+select is(array[pg_temp.wrapped(2), pg_temp.wrapped(3), pg_temp.wrapped(4)], array[array[98], array[95], array[100]]::float8[],
+  'pin R: the drive scores 98, 95, 100 (scoring driveScore)');
 
--- pin F (eve): one 3-mi drive with a 5 s eyes-off at 30 mph, watched 300 of 500, 600, 1200 and 0 seconds
-select pg_temp.trip(5, 21, now() - interval '4 hours', 3, 6, 6, 4, 400, 500, 450, 500, 300);
+-- pin F (eve): one 3-mi drive with a 5 s eyes-off at 30 mph, watched 1800, 3600, 7200 and 0 seconds
+select pg_temp.trip(5, 21, now() - interval '4 hours', 3, 6, 6, 4, 400, 500, 450, 1800, 1800);
 select pg_temp.ev(21, 61, 'eyes_off', 'severe', 60, 5, '{"source": "dashcam", "speedMph": 30}');
-select pg_temp.trip(5, 22, now() - interval '3 hours', 3, 6, 6, 4, 400, 500, 450, 600, 600);
+select pg_temp.trip(5, 22, now() - interval '3 hours', 3, 6, 6, 4, 400, 500, 450, 3600, 3600);
 select pg_temp.ev(22, 62, 'eyes_off', 'severe', 60, 5, '{"source": "dashcam", "speedMph": 30}');
-select pg_temp.trip(5, 23, now() - interval '2 hours', 3, 6, 6, 4, 400, 500, 450, 1200, 1200);
+select pg_temp.trip(5, 23, now() - interval '2 hours', 3, 6, 6, 4, 400, 500, 450, 7200, 7200);
 select pg_temp.ev(23, 63, 'eyes_off', 'severe', 60, 5, '{"source": "dashcam", "speedMph": 30}');
 select pg_temp.trip(5, 24, now() - interval '1 hour', 3, 6, 6, 4, 400, 500, 450);
 select pg_temp.ev(24, 64, 'eyes_off', 'severe', 60, 5, '{"source": "dashcam", "speedMph": 30}');
-select is(pg_temp.wrapped(5), array[90, 90, 95, 100]::float8[],
-  'pin F: a drive''s Attention reads at least 600 watched seconds (300 and 600 both 90, 1200 is 95); none watched leaves it out (scoring driveScore)');
+select is(pg_temp.wrapped(5), array[98, 98, 99, 100]::float8[],
+  'pin F: a drive''s Attention reads at least 3600 watched seconds (1800 and 3600 both 98, 7200 is 99); none watched leaves it out (scoring driveScore)');
 
 select * from finish();
 rollback;

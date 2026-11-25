@@ -11,7 +11,11 @@
 --   * Attention is a rate category like the others: its opportunities are the seconds DashPal
 --     watched (covered seconds held to moving seconds, on the terms that gave watched miles), the
 --     typical rate 0.024 per watched second, the prior 3600 s in the Safety Rating, the drive floor
---     600 s; a drowsy episode's base weight is 80 (eyes off 40). private.category_score goes.
+--     3600 s; a drowsy episode's base weight is 80 (eyes off 40). private.category_score goes.
+--   * The drive score (Wrapped's average score) floors each category's opportunities at the size of
+--     the rating's prior: 60 slowdowns, 60 speed-ups, 60 turns, and 3600 s for Speed, Phone use and
+--     Attention. A clean drive still scores 100; one event on a short drive weighs no more than it
+--     would in the rating.
 --
 -- Nothing a driver recorded is rewritten: trips, events, their measurements, exposure counters and
 -- DashPal seconds are read as they stand. Only derived values are rebuilt, under the new math:
@@ -220,8 +224,8 @@ end $function$
 -- ---------------------------------------------------------------------------
 -- One row per kept scored drive of the month (every driver's, or p_user's) with its active event
 -- counts and its drive score, the SQL copy of scoring driveScore: per category weight /
--- max(opportunities, floor, count) with no prior (braking, acceleration, turning 10; speed and phone
--- use 600 s; Attention 600 watched seconds, count 0), Attention only when DashPal watched, Phone use
+-- max(opportunities, floor, count) with no prior (braking, acceleration, turning 60; speed and phone
+-- use 3600 s; Attention 3600 watched seconds, count 0), Attention only when DashPal watched, Phone use
 -- only with phone seconds or a pickup; weighted_score, clamped and rounded half up to a whole
 -- number. Null with no miles.
 create or replace function private.wrapped_trips(p_month text, p_user uuid default null)
@@ -280,13 +284,13 @@ begin
   ),
   s as (
     select d.*, coalesce(ev.n_hard, 0)::int as n_hard, coalesce(ev.n_speeding, 0)::int as n_speeding, coalesce(ev.n_pickup, 0)::int as n_pickup,
-      private.rate_score(coalesce(ev.a_w, 0::float8) / greatest(d.speedups::float8, 10::float8, coalesce(ev.a_n, 0)::float8), 0.008::float8) as s_a,
-      private.rate_score(coalesce(ev.b_w, 0::float8) / greatest(d.slowdowns::float8, 10::float8, coalesce(ev.b_n, 0)::float8), 0.010::float8) as s_b,
-      private.rate_score(coalesce(ev.t_w, 0::float8) / greatest(d.turns::float8, 10::float8, coalesce(ev.t_n, 0)::float8), 0.008::float8) as s_t,
-      case when d.watched_s > 0 then private.rate_score(coalesce(ev.att, 0::float8) / greatest(d.watched_s, 600::float8, 0::float8), 0.024::float8) end as s_att,
+      private.rate_score(coalesce(ev.a_w, 0::float8) / greatest(d.speedups::float8, 60::float8, coalesce(ev.a_n, 0)::float8), 0.008::float8) as s_a,
+      private.rate_score(coalesce(ev.b_w, 0::float8) / greatest(d.slowdowns::float8, 60::float8, coalesce(ev.b_n, 0)::float8), 0.010::float8) as s_b,
+      private.rate_score(coalesce(ev.t_w, 0::float8) / greatest(d.turns::float8, 60::float8, coalesce(ev.t_n, 0)::float8), 0.008::float8) as s_t,
+      case when d.watched_s > 0 then private.rate_score(coalesce(ev.att, 0::float8) / greatest(d.watched_s, 3600::float8, 0::float8), 0.024::float8) end as s_att,
       case when d.phone_s > 0 or coalesce(ev.p_n, 0::float8) > 0
-           then private.rate_score(coalesce(ev.p_w, 0::float8) / greatest(d.phone_s::float8, 600::float8, coalesce(ev.p_n, 0::float8)), 0.040::float8) end as s_p,
-      private.rate_score(coalesce(ev.s_w, 0::float8) / greatest(d.limit_s::float8, 600::float8, coalesce(ev.s_n, 0::float8)), 0.040::float8) as s_s
+           then private.rate_score(coalesce(ev.p_w, 0::float8) / greatest(d.phone_s::float8, 3600::float8, coalesce(ev.p_n, 0::float8)), 0.040::float8) end as s_p,
+      private.rate_score(coalesce(ev.s_w, 0::float8) / greatest(d.limit_s::float8, 3600::float8, coalesce(ev.s_n, 0::float8)), 0.040::float8) as s_s
     from d left join ev on ev.trip_id = d.id
   )
   select s.user_id, s.id, s.started_at, s.tz, s.miles, s.duration_s, s.clean, s.n_hard, s.n_speeding, s.n_pickup,

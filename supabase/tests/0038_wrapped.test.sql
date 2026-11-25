@@ -137,9 +137,9 @@ select is(array[private.wrapped_eligible('00000000-0000-0000-0000-000000000001',
     private.wrapped_eligible('00000000-0000-0000-0000-000000000001', '2026-08')], array[true, true, false],
   '3 or more scored drives make a month; "Wasn''t driving" and unscored drives never count');
 select is((select array_agg(score order by started_at) from private.wrapped_trips('2026-09', '00000000-0000-0000-0000-000000000001')),
-  array[100, 80, 100, 100]::float8[], 'drive scores as scoring driveScore: clean 100, one hard brake in 20 slowdowns 80');
--- bo, June: one drive with every kind of event, DashPal watching half of it (500 s, under the 600 s
--- floor); scoring driveScore gives 67
+  array[100, 92, 100, 100]::float8[], 'drive scores as scoring driveScore: clean 100, one hard brake in 20 slowdowns (read over the 60-slowdown floor) 92');
+-- bo, June: one drive with every kind of event, DashPal watching half of it (500 s, under the 3600 s
+-- floor); scoring driveScore gives 91
 with t as (
   insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored,
       n_events, clean, slowdowns, speedups, turns, limit_s, moving_s, phone_s, dashcam_moving_s, dashcam_covered_s, scoring_version)
@@ -153,7 +153,7 @@ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, s
                   ('00000000-0000-4000-8000-000000000003', 'hard_accel', 'severe', 180, 1, '{"peakG": 0.5}'),
                   ('00000000-0000-4000-8000-000000000004', 'eyes_off', 'severe', 240, 6, '{"speedMph": 30}')) x(cid, type, tier, s, d, m);
 select is((select array_agg(array[score, n_hard, n_speeding, n_pickup]) from private.wrapped_trips('2026-06', '00000000-0000-0000-0000-000000000002')),
-  array[array[67, 1, 1, 1]]::float8[], 'the drive score matches the TypeScript on speeding, a pickup, a measured hard start and DashPal; each kind counted');
+  array[array[91, 1, 1, 1]]::float8[], 'the drive score matches the TypeScript on speeding, a pickup, a measured hard start and DashPal; each kind counted');
 select throws_ok($$ select private.wrapped_stats('00000000-0000-0000-0000-000000000001', '2026-9') $$, '22023', 'month must be YYYY-MM', 'a month is YYYY-MM');
 select is(private.wrapped_stats('00000000-0000-0000-0000-000000000001', '2026-08'), null, 'no stats for a month under 3 drives');
 
@@ -167,7 +167,7 @@ select is((select jsonb_build_object('drives', s -> 'drives', 'miles', s -> 'mil
   '{"drives": 4, "miles": 60.0, "durationS": 4800, "avgDriveMiles": 15.0, "longestDriveMiles": 30.0}'::jsonb, 'totals');
 select is((select jsonb_build_object('avgScore', s -> 'avgScore', 'cleanDrives', s -> 'cleanDrives', 'cleanShare', s -> 'cleanShare',
     'longestCleanDriveMiles', s -> 'longestCleanDriveMiles') from s),
-  '{"avgScore": 95, "cleanDrives": 3, "cleanShare": 0.750, "longestCleanDriveMiles": 30.0}'::jsonb, 'safety: the average drive score (100, 80, 100 and 100: 95) and the clean drives');
+  '{"avgScore": 98, "cleanDrives": 3, "cleanShare": 0.750, "longestCleanDriveMiles": 30.0}'::jsonb, 'safety: the average drive score (100, 92, 100 and 100: 98) and the clean drives');
 select is((select array[s ->> 'ratingStart', s ->> 'ratingChange'] from s), array[null, null]::text[],
   'unranked at the month''s start (8 mi in the 90 days): no rating then and no change');
 select is((select (s ->> 'ratingEnd')::numeric from s),
@@ -255,7 +255,7 @@ select is(array[pg_temp.arch(null, null, null, 0.5, 3, 20, 30, 0.9, 0.9, 0.9), p
 select is(private.refresh_monthly_stats('2026-09'), 30, 'September''s cohort: the 30 eligible drivers');
 select is((select array[drives::text, miles::text, avg_score::text, clean_share::text, hard_per100::text] from private.monthly_stats
     where month = '2026-09' and user_id = '00000000-0000-0000-0000-000000000003'),
-  array['3', '9.0', '93.3', '0.6667', '11.11'], 'a row: drives, miles, average drive score (80, 100 and 100), clean share, hard events per 100 mi');
+  array['3', '9.0', '97.3', '0.6667', '11.11'], 'a row: drives, miles, average drive score (92, 100 and 100), clean share, hard events per 100 mi');
 select is(private.wrapped_percentiles('00000000-0000-0000-0000-000000000001', '2026-09'),
   '{"miles": 62, "avgScore": 34, "cleanShare": 34, "hardPer100": 34, "speedingPer100": null, "pickupsPer100": null}'::jsonb,
   'others strictly worse over N - 1: 18 of 29 drove fewer miles (the 60-mile driver ties), 10 of 29 did worse on the rest; none worse on speeding or pickups');
