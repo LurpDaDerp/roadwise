@@ -7,9 +7,11 @@
  * `ratingAt`: over the last 90 days, recent weeks counting more, each category judges the driver per
  * chance to slip (hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, time over
  * the limit per second with a known limit, phone pickups and their time in hand per second at
- * driving speed, Attention per mile DashPal watched), smoothed toward a typical driver's, and the
- * rating is their weighted average with Speed and Phone use counting double. Phone use has no score
- * until a drive in the window was watched for it. The categories are shown as whole numbers, the
+ * driving speed, Attention per second DashPal watched), smoothed toward a typical driver's, and the
+ * rating is their weighted harmonic mean (Speed, Phone use and Attention weigh 3, Braking 2,
+ * Acceleration and Turning 1), so a weak category pulls it down harder than a strong one lifts it.
+ * Phone use has no score until a drive in the window was watched for it, Attention none until
+ * DashPal watched one. The categories are shown as whole numbers, the
  * rating to 1 decimal. Time of day is not scored at all
  * (a card under When you drive comments on it instead). Local data includes drives still uploading,
  * so the numbers here can lead the server's by a drive until it answers.
@@ -49,7 +51,7 @@ export const AXES: readonly { key: AxisKey; label: string }[] = SCORING_AXES.map
 
 export const AXIS_LABEL: Record<AxisKey, string> = LABELS;
 
-/** The axes the Safety Rating averages (all of them), in radar order. */
+/** The axes the Safety Rating combines (all of them), in radar order. */
 export const PENALTY_AXES: readonly AxisKey[] = AXES.map((a) => a.key);
 
 /** The axis that needs a paired DashPal: locked on the radar without one. */
@@ -59,7 +61,7 @@ export const DASHPAL_AXIS: AxisKey = SCORING_DASHPAL_AXIS;
 export const PHONE_AXIS: AxisKey = 'phone';
 
 /**
- * 0–100 per axis, whole numbers; null when the window has no miles (Attention: no watched miles;
+ * 0–100 per axis, whole numbers; null when the window has no miles (Attention: no watched seconds;
  * Phone use: no drive watched for it).
  */
 export type AxisScores = Record<AxisKey, number | null>;
@@ -69,7 +71,7 @@ export interface WindowTotals {
   drives: number;
   cleanDrives: number;
   miles: number;
-  /** Miles DashPal watched (Attention divides by them). */
+  /** Miles DashPal watched (shown beside Attention, which divides by watched seconds). */
   watchedMiles: number;
 }
 
@@ -108,9 +110,10 @@ export function storedMiles(miles: number): number {
 }
 
 /**
- * The drives as the rating reads them: each with its miles, watched miles, chances (exposure) and
- * its own events. Miles as the server stores them (`storedMiles`, watched miles in proportion), so
- * the phone's window sums the same miles and is ranked at 10 mi exactly when the server's is.
+ * The drives as the rating reads them: each with its miles, watched seconds, chances (exposure) and
+ * its own events. Miles as the server stores them (`storedMiles`), so the phone's window sums the
+ * same miles and is ranked at 10 mi exactly when the server's is. Watched seconds as stored,
+ * unscaled; 0 on a drive whose stored miles are 0, as the server gives such a drive none.
  */
 export function toRatingDrives(drives: readonly LocalDrive[], events: readonly DriveEvent[]): RatingDrive[] {
   const own = eventsByDrive(drives, events);
@@ -120,7 +123,7 @@ export function toRatingDrives(drives: readonly LocalDrive[], events: readonly D
       id: d.clientTripId,
       startedAt: d.startedAt,
       miles,
-      watchedMiles: d.miles > 0 && Number.isFinite(d.watchedMiles) ? (d.watchedMiles * miles) / d.miles : 0,
+      watchedS: miles > 0 && Number.isFinite(d.watchedS) ? d.watchedS : 0,
       exposure: d.exposure,
       events: own.get(d.clientTripId) ?? [],
     };
@@ -227,7 +230,7 @@ export const COACH_ALSO_MAX = 2;
 
 /**
  * The advice for a window. The weakest scored axis decides (ties go to the earlier axis in radar
- * order); Attention takes part only with DashPal miles. A good result is a compliment. Fewer than
+ * order); Attention takes part only with time DashPal watched. A good result is a compliment. Fewer than
  * 3 drives or 10 miles: no advice.
  */
 export function coach(scores: AxisScores, window: { drives: number; miles: number }): Coaching {
@@ -277,7 +280,7 @@ export const showsTip = (c: Coaching): boolean => c.level === 'fair' || c.level 
 
 export interface CoachWindow {
   scores: AxisScores;
-  /** The window's Safety Rating (the radar's centre): the weighted average of its categories, ranked from 10 mi. */
+  /** The window's Safety Rating (the radar's centre): the weighted harmonic mean of its categories, ranked from 10 mi. */
   rating: SafetyRating;
   totals: WindowTotals;
   coaching: Coaching;

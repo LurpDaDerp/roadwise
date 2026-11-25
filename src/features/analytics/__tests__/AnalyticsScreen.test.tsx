@@ -227,9 +227,9 @@ test('the month’s passenger rides show under the drives’ header when there a
 
 test('the radar centre is the 90-day Safety Rating of the categories around it, whole and bold', async () => {
   await draw(<AnalyticsScreen />);
-  // The fixture's axes average to 87.6 (Speed and Phone use double).
-  expect(SCORES_RATING).toBe(87.6);
-  expect(screen.getByTestId('radar-rating')).toHaveTextContent('88');
+  // The fixture's axes combine to 85.8 (weighted harmonic mean: Speed, Phone use and Attention 3, Braking 2, the rest 1).
+  expect(SCORES_RATING).toBe(85.8);
+  expect(screen.getByTestId('radar-rating')).toHaveTextContent('86');
   mockData = withRating(91.5, true);
   await draw(<AnalyticsScreen />);
   expect(screen.getByTestId('radar-rating')).toHaveTextContent('92');

@@ -21,7 +21,7 @@
  * finds due, and after the last page the server's route pool (`list_my_route_pool`, a page at a
  * time) joins the phone's, so the All trips map draws every route again.
  */
-import { clampExposure, watchedMiles, type EventType } from '@scoring';
+import { clampExposure, watchedMiles, watchedSeconds, type EventType } from '@scoring';
 import { z } from 'zod';
 
 import { archiveDue, createEventsRepo, createRoutePoolRepo, createSettingsRepo, createTripsRepo, type Db, type NewEvent, type NewTrip, type TripPatch } from '@/data/db';
@@ -189,6 +189,7 @@ export function toTripRow(d: ServerDrive, now: number = Date.now()): NewTrip {
     result_json: d.result === undefined || d.result === null ? null : JSON.stringify(d.result),
     server_id: d.tripId,
     watched_miles: watchedMiles(d.miles, d.dashcamMovingS ?? 0, d.dashcamCoveredS ?? 0),
+    watched_s: watchedSeconds(d.miles, d.dashcamMovingS ?? 0, d.dashcamCoveredS ?? 0),
     origin: d.origin,
     not_driving_expired: d.notDrivingExpired ? 1 : 0,
     ...exposureCols(d),

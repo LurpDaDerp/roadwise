@@ -22,7 +22,7 @@ export interface Archetype {
 }
 
 export type CategoryId = 'speed' | 'braking' | 'acceleration' | 'turning' | 'phone' | 'attention';
-/** The 90-day category scores at month end, whole numbers; null when unranked (phone: not tracked; attention: no DashPal miles). */
+/** The 90-day category scores at month end, whole numbers; null when unranked (phone: not tracked; attention: no time DashPal watched). */
 export type WrappedCategories = Record<CategoryId, number | null>;
 
 /** "Better than x% of drivers" (miles: "More miles than x%"), 10 to 100; null when hidden (under 25 drivers that month, or under 10). */

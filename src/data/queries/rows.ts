@@ -81,8 +81,10 @@ export interface LocalDrive {
   syncError: string | null;
   /** What ended it, on the phone that recorded it (null otherwise). */
   endCause: TripEndCause | null;
-  /** The miles DashPal watched (the radar's Attention divides by them); 0 without one. */
+  /** The miles DashPal watched (shown beside Attention); 0 without one. */
   watchedMiles: number;
+  /** The seconds DashPal watched (the radar's Attention divides by them); 0 without one. */
+  watchedS: number;
   /** How the drive started: noticed on its own, or a Start tap. */
   origin: DriveOrigin;
   /** The in-drive "Not driving?" ran out, so "Wasn't driving" is never offered for it. */
@@ -289,6 +291,7 @@ function toDrive(row: TripView, result: FinalizeTripResponse | null, speedTrace:
     syncError: row.sync_error,
     endCause: row.end_cause,
     watchedMiles: row.watched_miles,
+    watchedS: row.watched_s,
     origin: row.origin,
     notDrivingExpired: row.not_driving_expired === 1,
     startSource: row.start_source,

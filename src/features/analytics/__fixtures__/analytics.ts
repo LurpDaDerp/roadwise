@@ -11,7 +11,10 @@ export { NOW };
 
 export const SCORES: AxisScores = { speed: 88, braking: 72, acceleration: 95, turning: 100, attention: 90, phone: 84 };
 export const NO_SCORES: AxisScores = { speed: null, braking: null, acceleration: null, turning: null, attention: null, phone: null };
-/** The Safety Rating of `SCORES`: their weighted average (Speed and Phone use double), 1 decimal. 701 / 8 = 87.6. */
+/**
+ * The Safety Rating of `SCORES`: their weighted harmonic mean (Speed, Phone use and Attention 3,
+ * Braking 2, Acceleration and Turning 1), 1 decimal: 13 / Σ (w / s) ≈ 85.8, radar '86'.
+ */
 export const SCORES_RATING = Math.round(weightedScore(SCORES)! * 10) / 10;
 
 const HOUR = 3_600_000;

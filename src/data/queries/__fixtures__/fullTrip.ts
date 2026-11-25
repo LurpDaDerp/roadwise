@@ -38,6 +38,7 @@ export function fullTrip(clientTripId: string, startedAt: number, over: Partial<
     continues: 1,
     end_cause: 'walking',
     watched_miles: 9.5,
+    watched_s: 917,
     origin: 'auto',
     not_driving_expired: 1,
     finalized_at: startedAt + 1_300_000,

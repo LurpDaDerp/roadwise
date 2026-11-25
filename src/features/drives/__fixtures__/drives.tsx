@@ -56,6 +56,7 @@ export function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     syncError: null,
     endCause: null,
     watchedMiles: 0,
+    watchedS: 0,
     origin: 'manual',
     notDrivingExpired: false,
     startSource: null,

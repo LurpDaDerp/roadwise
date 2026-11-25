@@ -18,6 +18,7 @@
  * and places for 183 days only (`archive.ts`). Version 14 keeps the whole route and the exact event
  * places on the phone, for the driver's own views. Version 16 keeps a few facts of each drive for the
  * recap and the analytics: its speed over time, its time on each kind of road, and its weather.
+ * Version 17 keeps the seconds DashPal watched on each drive, Attention's opportunities.
  */
 
 /** Migration bookkeeping. Created before the version row is read, so it is not part of V1. */
@@ -486,4 +487,25 @@ export const SCHEMA_V16: readonly string[] = [
   'ALTER TABLE trips ADD COLUMN limit_buckets_json TEXT',
   "ALTER TABLE trips ADD COLUMN weather TEXT CHECK (weather IS NULL OR weather IN ('clear', 'rain', 'snow', 'ice'))",
   'ALTER TABLE trips ADD COLUMN practice_supervisor TEXT',
+];
+
+/**
+ * V17: `trips.watched_s`, the seconds DashPal watched on the drive (`watchedSeconds`: its covered
+ * seconds held to its moving seconds), Attention's opportunities. A drive this phone recorded takes
+ * it from its `dashcam_coverage` row, here and at finalize; one restored from the server, from its
+ * DashPal seconds. The backfill reads the coverage row only of a drive with watched miles (a row can
+ * exist for a drive with no paired dashcam), held to 43 200 s like every other drive second. A drive
+ * restored from the server before this version has no coverage row and keeps 0 (a restore leaves
+ * a drive the phone holds as it is), so the phone's own Analytics gives that drive no watched
+ * seconds; the server's rating reads its own copy of the seconds and is not affected. No other
+ * column changes.
+ */
+export const SCHEMA_V17: readonly string[] = [
+  'ALTER TABLE trips ADD COLUMN watched_s INTEGER NOT NULL DEFAULT 0',
+  `UPDATE trips SET watched_s = (
+     SELECT MIN(c.covered_s, c.moving_s, 43200)
+     FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id)
+   WHERE trips.watched_miles > 0 AND trips.miles > 0
+     AND EXISTS (SELECT 1 FROM dashcam_coverage c WHERE c.client_trip_id = trips.client_trip_id
+       AND c.moving_s > 0 AND c.covered_s > 0)`,
 ];

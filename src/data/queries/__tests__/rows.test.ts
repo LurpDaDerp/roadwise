@@ -53,6 +53,7 @@ const trip = (over: Partial<TripRow> = {}): TripRow => ({
   continues: 0,
   end_cause: null,
   watched_miles: 0,
+  watched_s: 0,
   origin: 'manual',
   not_driving_expired: 0,
   finalized_at: null,

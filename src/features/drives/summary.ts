@@ -77,7 +77,7 @@ export function toScoringEvent(e: LocalDriveEvent): DriveEvent {
  */
 export function driveScoreOf(d: LocalDrive, events: readonly LocalDriveEvent[]): number | null {
   if (driveKind(d).kind !== 'scorable') return null;
-  return driveScore(events.filter(isShownEvent).map(toScoringEvent), d.miles, d.watchedMiles, d.exposure);
+  return driveScore(events.filter(isShownEvent).map(toScoringEvent), d.miles, d.watchedS, d.exposure);
 }
 
 /** The score card's state: the score, or what stands in for it (a scored drive with no miles reads "Not scored"). */

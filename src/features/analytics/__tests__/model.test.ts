@@ -77,6 +77,7 @@ function drive(over: Partial<LocalDrive> = {}): LocalDrive {
     syncError: null,
     endCause: null,
     watchedMiles: 0,
+    watchedS: 0,
     origin: 'manual',
     notDrivingExpired: false,
     startSource: null,
@@ -180,10 +181,11 @@ describe('axes', () => {
     const drift = [0.104, 8.043, 1.855].map((miles, i) => drive({ clientTripId: `f${i}`, startedAt: now - (3 - i) * DAY, miles }));
     expect(toRatingDrives(drift, []).map((d) => d.miles)).toEqual([0.1, 8.04, 1.86]);
     expect(windowRating(drift, [], now).ranked).toBe(true);
-    // Watched miles follow the stored miles in proportion (the server's miles × the covered share).
-    const watched = toRatingDrives([drive({ miles: 4.995, watchedMiles: 4.995 / 2 })], []);
-    expect(watched[0]).toMatchObject({ miles: 5 });
-    expect(watched[0]!.watchedMiles).toBeCloseTo(2.5, 10);
+    // Watched seconds go to the rating as stored, unscaled; a drive whose stored miles are 0 has none (the server's terms).
+    const watched = toRatingDrives([drive({ miles: 4.995, watchedMiles: 4.995 / 2, watchedS: 600 })], []);
+    expect(watched[0]).toMatchObject({ miles: 5, watchedS: 600 });
+    expect(toRatingDrives([drive({ miles: 0.004, watchedS: 600 })], [])[0]).toMatchObject({ miles: 0, watchedS: 0 });
+    expect(toRatingDrives([drive({ miles: 3, watchedS: Number.NaN })], [])[0]!.watchedS).toBe(0);
   });
 
   test('the Safety Rating is ratingAt’s: 1 decimal, ranked from 10 mi in the 90 days', () => {
@@ -534,7 +536,7 @@ describe('trend', () => {
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(13, 8, 10) }),
       ev({ type: 'speeding', tier: 'moderate', startedAt: at(13, 17, 5), durationS: 40, measured: { overMphS: 120 } }),
       ev({ type: 'phone_pickup', tier: 'moderate', startedAt: at(13, 17, 8), durationS: 6 }),
-      // DashPal counts only over the miles it watched (none here); a removed event counts nothing.
+      // DashPal counts only over the time it watched (none here); a removed event counts nothing.
       ev({ type: 'drowsy', tier: 'severe', startedAt: at(13, 17, 12) }),
       ev({ type: 'hard_brake', tier: 'severe', startedAt: at(9, 9, 5), status: 'removed' }),
     ];
@@ -561,7 +563,7 @@ describe('trend', () => {
   });
 
   test('the latest Score point is the radar’s centre: the same 90 days, the same arithmetic', () => {
-    const list = [0.5, 3, 9, 20, 29, 60, 95].map((d, i) => drive({ startedAt: NOW - d * DAY, miles: 4 + i, watchedMiles: i % 2 === 0 ? 2 : 0 }));
+    const list = [0.5, 3, 9, 20, 29, 60, 95].map((d, i) => drive({ startedAt: NOW - d * DAY, miles: 4 + i, watchedMiles: i % 2 === 0 ? 2 : 0, watchedS: i % 2 === 0 ? 300 : 0 }));
     const events = [
       ev({ type: 'hard_brake', tier: 'severe', startedAt: NOW - 0.5 * DAY + 60_000 }),
       ev({ type: 'eyes_off', tier: 'severe', startedAt: NOW - 20 * DAY + 60_000 }),

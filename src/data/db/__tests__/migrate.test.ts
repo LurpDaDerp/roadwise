@@ -18,6 +18,7 @@ import {
   SCHEMA_V13,
   SCHEMA_V14,
   SCHEMA_V15,
+  SCHEMA_V16,
   SCHEMA_VERSION_TABLE,
 } from '@/data/db/schema';
 
@@ -57,11 +58,11 @@ test('creates every v3, v5 and v10 table and index, and nothing of v2', async ()
   expect(await names(db, 'index')).toEqual([...INDEXES].sort());
 });
 
-test('records the schema version it reached (16)', async () => {
+test('records the schema version it reached (17)', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
-  expect(CURRENT_SCHEMA_VERSION).toBe(16);
+  expect(CURRENT_SCHEMA_VERSION).toBe(17);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 16 }]);
+  expect(rows).toEqual([{ version: 17 }]);
 });
 
 test('is idempotent', async () => {
@@ -70,7 +71,7 @@ test('is idempotent', async () => {
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
   expect(await names(db, 'table')).toEqual(tables);
   const { rows } = await db.execute('SELECT version FROM schema_version');
-  expect(rows).toEqual([{ version: 16 }]);
+  expect(rows).toEqual([{ version: 17 }]);
 });
 
 test('the trips table carries the current columns (phone time among them) and none of the points or screen-switch ones', async () => {
@@ -80,10 +81,10 @@ test('the trips table carries the current columns (phone time among them) and no
     expect(cols).toContain(c);
   }
   for (const c of ['role', 'score', 'dms_on', 'dms_face_seen', 'points_net', 'estimate', 'breakdown_json', 'safe_miles']) expect(cols).not.toContain(c);
-  expect(cols.slice(-27)).toEqual([
+  expect(cols.slice(-28)).toEqual([
     'continues', 'end_cause', 'watched_miles', 'origin', 'not_driving_expired', 'continuations', 'finalized_at', 'start_source', 'last_seq',
     'slowdowns', 'speedups', 'turns', 'limit_s', 'moving_s', 'phone_s', 'archived_at', 'route_full', 'from_place', 'to_place', 'car_uid', 'car_name', 'end_lat_full', 'end_lng_full',
-    'speed_trace_json', 'limit_buckets_json', 'weather', 'practice_supervisor',
+    'speed_trace_json', 'limit_buckets_json', 'weather', 'practice_supervisor', 'watched_s',
   ]);
   const events = await columns(db, 'trip_events');
   for (const c of ['type', 'tier', 'measured_json', 'dispute_status']) expect(events).toContain(c);
@@ -373,7 +374,7 @@ test('a v12 database steps up to v13: every drive stays as it was, not archived,
 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
-  expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(before.map((r) => ({ ...r, archived_at: null, route_full: null, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null })));
+  expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(before.map((r) => ({ ...r, archived_at: null, route_full: null, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null, watched_s: 0 })));
   expect((await db.execute('SELECT lat, lng FROM trip_events')).rows).toEqual([{ lat: 47.6, lng: -122.3 }]);
   expect(await columns(db, 'route_pool')).toEqual(['polyline']);
   // No rowid: the pool is kept in the lines' order, never the order they were added.
@@ -405,7 +406,7 @@ test('a v13 database steps up to v14: every drive and event stays as it was, wit
 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
-  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, route_full: null, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null })));
+  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, route_full: null, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null, watched_s: 0 })));
   expect((await db.execute('SELECT * FROM trip_events ORDER BY id')).rows).toEqual(events.map((r) => ({ ...r, lat_full: null, lng_full: null })));
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
 });
@@ -427,7 +428,7 @@ test('a v14 database steps up to v15: every drive stays as it was, with no saved
 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
-  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null })));
+  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null, watched_s: 0 })));
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
 });
 
@@ -448,8 +449,60 @@ test('a v15 database steps up to v16: every drive stays as it was, with no speed
 
   await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
 
-  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null })));
+  expect((await db.execute('SELECT * FROM trips')).rows).toEqual(trips.map((r) => ({ ...r, speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null, watched_s: 0 })));
   expect(await names(db, 'table')).toEqual([...TABLES].sort());
+});
+
+test('a v16 database steps up to v17: a drive DashPal watched gets its watched seconds from its coverage, every other drive 0 and every other column as it was', async () => {
+  for (const statement of [
+    ...SCHEMA_V1, ...SCHEMA_V2, ...SCHEMA_V3, ...SCHEMA_V4, ...SCHEMA_V5, ...SCHEMA_V6, ...SCHEMA_V7, ...SCHEMA_V8, ...SCHEMA_V9, ...SCHEMA_V10, ...SCHEMA_V11, ...SCHEMA_V12,
+    ...SCHEMA_V13, ...SCHEMA_V14, ...SCHEMA_V15, ...SCHEMA_V16,
+  ]) {
+    await db.execute(statement);
+  }
+  await db.execute(SCHEMA_VERSION_TABLE);
+  await db.execute('INSERT INTO schema_version (version) VALUES (16)');
+  const trip = (id: string, miles: number, watchedMiles: number) =>
+    db.execute(
+      "INSERT INTO trips (client_trip_id, started_at, ended_at, tz, status, miles, watched_miles, moving_s, weather, created_at, updated_at) VALUES (?, 1, 600001, 'UTC', 'scored', ?, ?, 1150, 'rain', 1, 1)",
+      [id, miles, watchedMiles]
+    );
+  const cover = (id: string, movingS: number, coveredS: number) =>
+    db.execute('INSERT INTO dashcam_coverage (client_trip_id, moving_s, covered_s, last_synced_at_ms) VALUES (?, ?, ?, 5)', [id, movingS, coveredS]);
+  // watched: the covered seconds
+  await trip('cov', 20, 10);
+  await cover('cov', 1000, 500);
+  // covered more than it moved: held to the moving seconds
+  await trip('over', 20, 20);
+  await cover('over', 800, 900);
+  // a 13 h coverage row: held to 43 200 s
+  await trip('long', 400, 400);
+  await cover('long', 46_800, 46_800);
+  // a coverage row on a drive with no watched miles (no paired dashcam): 0
+  await trip('unpaired', 20, 0);
+  await cover('unpaired', 1000, 500);
+  // no miles, no moving seconds or no covered seconds: 0
+  await trip('nomiles', 0, 1);
+  await cover('nomiles', 1000, 500);
+  await trip('nomoving', 20, 1);
+  await cover('nomoving', 0, 500);
+  await trip('nocovered', 20, 1);
+  await cover('nocovered', 1000, 0);
+  // restored from the server (watched miles, no coverage row): 0, the accepted gap
+  await trip('restored', 20, 5);
+  const before = (await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows;
+  const coverage = (await db.execute('SELECT * FROM dashcam_coverage ORDER BY client_trip_id')).rows;
+
+  await expect(migrate(db)).resolves.toBe(CURRENT_SCHEMA_VERSION);
+
+  const watched: Record<string, number> = { cov: 500, over: 800, long: 43_200 };
+  expect((await db.execute('SELECT * FROM trips ORDER BY client_trip_id')).rows).toEqual(
+    before.map((r) => ({ ...r, watched_s: watched[String(r.client_trip_id)] ?? 0 }))
+  );
+  expect((await db.execute('SELECT * FROM dashcam_coverage ORDER BY client_trip_id')).rows).toEqual(coverage);
+  // A drive recorded after the migration takes its default.
+  await db.execute("INSERT INTO trips (client_trip_id, started_at, tz, status, created_at, updated_at) VALUES ('fresh', 1, 'UTC', 'recording', 1, 1)");
+  expect((await db.execute("SELECT watched_s FROM trips WHERE client_trip_id = 'fresh'")).rows).toEqual([{ watched_s: 0 }]);
 });
 
 test("v16 check: a drive's weather is clear, rain, snow, ice or none", async () => {

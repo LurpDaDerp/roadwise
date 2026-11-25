@@ -88,8 +88,10 @@ describe('finalizeTrip with DashPal facts', () => {
     // A DashPal event counts toward Attention only: never toward the clean check.
     expect(result.drive).toEqual({ scored: true, reason: null, activeEventCount: 0 });
     expect(result.trip).toMatchObject({ status: 'pending', clean: 1 });
-    // the miles DashPal watched, for the radar's Attention: the miles × 1100 of 1150 moving seconds
+    // the miles DashPal watched (shown beside Attention): the miles × 1100 of 1150 moving seconds
     expect(result.trip.watched_miles).toBeCloseTo((payload.miles * 1100) / 1150, 6);
+    // the seconds it watched, Attention's opportunities: 1100 covered of 1150 moving
+    expect(result.trip.watched_s).toBe(1100);
     expect(JSON.parse(result.trip.counts_json!)).toMatchObject({ drowsy: 1, eyesOff: 0 });
     expect(result.events).toEqual([expect.objectContaining({ id: cid(1), type: 'drowsy', tier: 'severe' })]);
     expect(JSON.parse(result.events[0]!.measured_json!)).toEqual({ source: 'dashcam', speedMph: 33.457 });
@@ -160,10 +162,11 @@ describe('finalizeTrip with DashPal facts', () => {
     expect(dashcamDrive(result.payload!.dashcam)).toBe(false);
   });
 
-  test('no dashcam id (nothing covered): no block, no watched miles', async () => {
+  test('no dashcam id (nothing covered): no block, no watched miles or seconds', async () => {
     const none = await finalizeTrip(session(), deps(async () => facts({ dashcamId: null, movingS: 0, coveredS: 0, synced: false })));
     expect(none.payload).not.toHaveProperty('dashcam');
     expect(none.trip.watched_miles).toBe(0);
+    expect(none.trip.watched_s).toBe(0);
   });
 
   test('events that arrived with no drive open are dropped: the stored facts give the same block and scored events as without them', async () => {

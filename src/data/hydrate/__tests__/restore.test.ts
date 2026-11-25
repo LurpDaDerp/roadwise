@@ -186,9 +186,13 @@ test('a restored removed event keeps its accepted report, so Report is not offer
   expect(rows.map((r) => r.dispute_status)).toEqual(['accepted', 'none', 'rejected']);
 });
 
-test('a restored drive takes its watched miles from its DashPal seconds (0 from a server that sends none)', () => {
-  expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 20, dashcamMovingS: 1000, dashcamCoveredS: 250 }).watched_miles).toBe(5);
-  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1))).watched_miles).toBe(0);
+test('a restored drive takes its watched miles and seconds from its DashPal seconds (0 from a server that sends none)', () => {
+  expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 20, dashcamMovingS: 1000, dashcamCoveredS: 250 })).toMatchObject({ watched_miles: 5, watched_s: 250 });
+  // covered held to moving
+  expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 20, dashcamMovingS: 800, dashcamCoveredS: 900 }).watched_s).toBe(800);
+  // no miles: none, as the server gives none
+  expect(toTripRow({ ...ServerDriveSchema.parse(serverDrive(1)), miles: 0, dashcamMovingS: 1000, dashcamCoveredS: 250 }).watched_s).toBe(0);
+  expect(toTripRow(ServerDriveSchema.parse(serverDrive(1)))).toMatchObject({ watched_miles: 0, watched_s: 0 });
 });
 
 test('an older server: no origin (a Start tap), no "Not driving?" verdict (never ran out), no counters (estimated at read)', () => {

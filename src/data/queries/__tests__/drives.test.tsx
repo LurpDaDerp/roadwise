@@ -137,7 +137,7 @@ test('row bridges: counts from events, filters on a drive view', () => {
     client_trip_id: 'x', started_at: 1, ended_at: 2, tz: 'UTC', local_day: null, miles: 1, night_miles: 0, duration_s: 1,
     start_lat: null, start_lng: null, end_lat: null, end_lng: null, polyline: null, from_label: 'Home', to_label: null, max_speed_mph: 0, integrity_json: null,
     status: 'failed', clean: null, counts_json: 'not json', reason: null, result_json: 'nope', server_id: null, sync_error: 'x', checkpoint_ts: null,
-    created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, origin: 'manual', not_driving_expired: 0, finalized_at: null,
+    created_at: 1, updated_at: 1, continues: 0, end_cause: null, watched_miles: 0, watched_s: 0, origin: 'manual', not_driving_expired: 0, finalized_at: null,
     start_source: null, last_seq: null, slowdowns: null, speedups: null, turns: null, limit_s: null, moving_s: null, phone_s: 0, archived_at: null,
     route_full: null, from_place: null, to_place: null, car_uid: null, car_name: null, end_lat_full: null, end_lng_full: null,
     speed_trace_json: null, limit_buckets_json: null, weather: null, practice_supervisor: null,

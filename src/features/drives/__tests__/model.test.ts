@@ -317,9 +317,9 @@ describe('summary', () => {
   });
 
   test('the score state and the word a row shows instead', () => {
-    expect(scoreState(drive(), [event()])).toEqual({ kind: 'score', value: 93, sync: null });
-    expect(scoreState(drive({ status: 'pending', result: null, uploadFailed: true }), [event()])).toEqual({ kind: 'score', value: 93, sync: 'retrying' });
-    expect(scoreState(drive({ status: 'failed', result: null }), [event()])).toEqual({ kind: 'score', value: 93, sync: 'refused' });
+    expect(scoreState(drive(), [event()])).toEqual({ kind: 'score', value: 86, sync: null });
+    expect(scoreState(drive({ status: 'pending', result: null, uploadFailed: true }), [event()])).toEqual({ kind: 'score', value: 86, sync: 'retrying' });
+    expect(scoreState(drive({ status: 'failed', result: null }), [event()])).toEqual({ kind: 'score', value: 86, sync: 'refused' });
     expect(scoreState(drive({ miles: 0 }), [])).toEqual({ kind: 'not_scored' });
     expect(stateWord({ kind: 'score' })).toBeNull();
     expect(stateWord({ kind: 'recording' })).toBe('Recording');
@@ -401,13 +401,14 @@ describe('summary', () => {
 
 describe('drive score', () => {
   test('each category judged per chance over this drive alone: a hard brake against its slowdowns, a whole number', () => {
-    // 12 mi, one minor hard brake in 30 slowdowns: Braking 63, the rest 100, Speed double → 93.
-    expect(driveScoreOf(drive(), [event()])).toBe(93);
+    // 12 mi, one minor hard brake in 30 slowdowns: Braking 63, the rest 100; weighted harmonic mean of
+    // Acceleration 1, Braking 2, Turning 1 and Speed 3 (no Attention, no Phone use) → 86.
+    expect(driveScoreOf(drive(), [event()])).toBe(86);
     expect(driveScoreOf(drive(), [])).toBe(100);
-    // A severe one weighs twice: Braking 46 → 89.
-    expect(driveScoreOf(drive(), [event({ tier: 'severe' })])).toBe(89);
-    // Few slowdowns floor at 10, so one hard brake never sinks a short drive to 0: Braking 36 → 87.
-    expect(driveScoreOf(drive({ exposure: { slowdowns: 2, speedups: 2, turns: 1, limitS: 60, movingS: 200, phoneS: 0 } }), [event()])).toBe(87);
+    // A severe one weighs twice: Braking 46 → 75.
+    expect(driveScoreOf(drive(), [event({ tier: 'severe' })])).toBe(75);
+    // Few slowdowns floor at 10, so one hard brake never sinks a short drive to 0: Braking 36 → 66.
+    expect(driveScoreOf(drive({ exposure: { slowdowns: 2, speedups: 2, turns: 1, limitS: 60, movingS: 200, phoneS: 0 } }), [event()])).toBe(66);
   });
 
   test('a phone pickup counts against Phone use, judged against the drive’s time at driving speed; not watched, Phone use is left out', () => {
@@ -425,7 +426,7 @@ describe('drive score', () => {
   test('an event a report took off, or one removed, no longer counts', () => {
     expect(driveScoreOf(drive(), [event({ disputeStatus: 'accepted' })])).toBe(100);
     expect(driveScoreOf(drive(), [event({ removed: true })])).toBe(100);
-    expect(driveScoreOf(drive(), [event({ disputeStatus: 'pending' })])).toBe(93);
+    expect(driveScoreOf(drive(), [event({ disputeStatus: 'pending' })])).toBe(86);
     expect(toScoringEvent(event({ removed: true }))).toMatchObject({ status: 'removed' });
   });
 
@@ -437,17 +438,20 @@ describe('drive score', () => {
     expect(toScoringEvent(speeding(10))).toMatchObject({ measured: { overMphS: 10 } });
   });
 
-  test("DashPal's events score Attention over the miles it watched, and only when it watched", () => {
+  test("DashPal's events score Attention over the seconds it watched, and only when it watched", () => {
     const eyes = event({ id: 'd', type: 'eyes_off', tier: 'severe', measured: { source: 'dashcam' } });
-    // Attention 100 / (1 + 40/6/16) = 70.6, weight 1 of 6 → 95.
-    expect(driveScoreOf(drive({ watchedMiles: 6 }), [eyes])).toBe(95);
-    expect(driveScoreOf(drive({ watchedMiles: 0 }), [eyes])).toBe(100);
+    // Attention 100 / (1 + (40 / 1200 / 0.024) × 15/85) = 80.3, weight 3 of 10 (no Phone use): harmonic mean 93.
+    expect(driveScoreOf(drive({ watchedMiles: 6, watchedS: 1200 }), [eyes])).toBe(93);
+    // Under the 600 s floor it is judged over 600 s: 100 / (1 + (40 / 600 / 0.024) × 15/85) = 67.1 → 87.
+    expect(driveScoreOf(drive({ watchedMiles: 1, watchedS: 200 }), [eyes])).toBe(87);
+    // Watched miles alone open nothing: Attention reads the seconds.
+    expect(driveScoreOf(drive({ watchedMiles: 6, watchedS: 0 }), [eyes])).toBe(100);
   });
 
   test('only for a drive with a score to show', () => {
     const e = [event()];
-    expect(driveScoreOf(drive({ status: 'pending', result: null }), e)).toBe(93);
-    expect(driveScoreOf(drive({ status: 'failed', result: null }), e)).toBe(93);
+    expect(driveScoreOf(drive({ status: 'pending', result: null }), e)).toBe(86);
+    expect(driveScoreOf(drive({ status: 'failed', result: null }), e)).toBe(86);
     expect(driveScoreOf(drive({ status: 'pending', reason: 'too_short', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'too_short', result: null }), e)).toBeNull();
     expect(driveScoreOf(drive({ status: 'unscored', reason: 'spoofed', result: null }), e)).toBeNull();
@@ -460,7 +464,8 @@ describe('drive score', () => {
     expect(meritOf(drive({ miles: 0.5 }), [])).toBe(1);
     expect(meritOf(drive({ miles: 20 }), [])).toBe(4);
     expect(meritOf(drive({ miles: 26 }), [])).toBe(5);
-    expect(meritOf(drive(), [event()])).toBe(4);
+    // 12 mi at 86: tier 4 needs 90, so tier 3.
+    expect(meritOf(drive(), [event()])).toBe(3);
     expect(meritOf(drive({ status: 'not_driving' }), [])).toBeNull();
   });
 });

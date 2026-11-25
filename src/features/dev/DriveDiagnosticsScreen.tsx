@@ -190,7 +190,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 /** The last 5 finished drives with what the scoring reads of them. */
 async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
   const { rows } = await db.execute(
-    `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s, phone_s FROM trips
+    `SELECT client_trip_id, started_at, miles, duration_s, slowdowns, speedups, turns, limit_s, moving_s, phone_s, watched_s FROM trips
       WHERE status != 'recording' ORDER BY started_at DESC LIMIT 5`
   );
   const out: DriveLoadRow[] = [];
@@ -220,7 +220,7 @@ async function lastDriveLoads(db: Db): Promise<DriveLoadRow[]> {
         measured,
       };
     });
-    out.push({ clientTripId: id, startedAt: asNumber(r, 'started_at'), miles, exposure, estimated, loads: driveLoads(events, exposure) });
+    out.push({ clientTripId: id, startedAt: asNumber(r, 'started_at'), miles, exposure, estimated, loads: driveLoads(events, exposure, num(r.watched_s) ?? 0) });
   }
   return out;
 }

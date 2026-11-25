@@ -1,7 +1,7 @@
 /**
  * The hooks the Analytics tab and Home's tip card read (plan D6): local SQLite only. The radar's
  * centre is the Safety Rating of the last 90 days, computed here with the scoring package's
- * arithmetic (the server's), so it is always the weighted average of the categories around it.
+ * arithmetic (the server's), so it is always the weighted harmonic mean of the categories around it.
  */
 import { useMemo, useState } from 'react';
 

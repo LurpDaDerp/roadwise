@@ -91,6 +91,8 @@ export interface TripRow {
   end_cause: TripEndCause | null;
   /** The miles DashPal watched (`watchedMiles`); 0 without one. */
   watched_miles: number;
+  /** The seconds DashPal watched (`watchedSeconds`), Attention's opportunities; 0 without one. */
+  watched_s: number;
   /** How the drive started. */
   origin: DriveOrigin;
   /** 1: the in-drive "Not driving?" ran out of its 2-minute budget, so "Wasn't driving" is never offered. */
