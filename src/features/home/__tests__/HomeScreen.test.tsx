@@ -501,7 +501,7 @@ describe('automatic drives and the waiting Start', () => {
   test('with automatic drives on, Start gets its quiet line and How it works says drives record themselves', async () => {
     mockAuto = { state: 'on' };
     await draw(<HomeScreen />);
-    expect(screen.getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise notices on its own.');
+    expect(screen.getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise starts recording on its own.');
     expect(screen.getByText('Drives record themselves')).toBeOnTheScreen();
   });
 

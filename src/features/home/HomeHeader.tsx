@@ -1,5 +1,5 @@
 import { RANKED_MIN_MILES } from '@scoring';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { useUnits } from '@/data/queries/units';
@@ -45,12 +45,17 @@ export function toRating(miles90d: number, units: Units): { fill: number; text: 
 /**
  * The drive card's main block: the Safety Rating big in a ring, its change this week in words with
  * an arrow, and the window it covers. Unrated, the ring fills with the distance driven toward a
- * rating and holds a dash. One tap opens Analytics.
+ * rating and holds a dash. One tap on the ring or the words opens Analytics; the screen reader
+ * hears them as one button. `aside` (the weather now) sits at the foot of the words' column,
+ * right-aligned beside the ring, the words then at its top; with no aside the words are centred on
+ * the ring. Stacked (large text) the ring is above the words and `aside` is not drawn here.
  */
-export function RatingBlock({ progress, onPress }: { progress: Progress; onPress: () => void }) {
+export function RatingBlock({ progress, onPress, aside }: { progress: Progress; onPress: () => void; aside?: ReactNode }) {
   const t = useTheme();
   const units = useUnits();
   const stacked = useFontScale() > RATING_STACK_FONT_SCALE;
+  // The ring and the words are two touch targets with one pressed look.
+  const [pressed, setPressed] = useState(false);
   const ranked = progress.ranked && progress.safety_rating !== null;
   const value = ranked ? formatRating(progress.safety_rating, true) : '—';
   const trend = ranked ? ratingTrend(progress.rating_trend) : null;
@@ -58,79 +63,101 @@ export function RatingBlock({ progress, onPress }: { progress: Progress; onPress
   const label = ranked
     ? `${homeCopy.rating.spoken(value)}.${trend ? ` ${trend.line}.` : ''}`
     : `${homeCopy.rating.none}. ${toward ? toward.spoken : homeCopy.rating.afterFirst}`;
-  return (
-    <Pressable
-      onPress={onPress}
-      testID="rating-block"
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={homeCopy.rating.hint}
-      style={({ pressed }) => ({
-        flexDirection: stacked ? 'column' : 'row',
-        alignItems: stacked ? 'flex-start' : 'center',
-        gap: t.space.lg,
-        opacity: pressed ? 0.8 : 1,
-      })}
+  const ring = (
+    <ProgressRing
+      value={ranked ? (progress.safety_rating ?? 0) / 100 : (toward?.fill ?? 0)}
+      size={RING}
+      strokeWidth={STROKE}
+      tone="accent"
+      accessibilityLabel={ranked ? homeCopy.rating.label : 'Progress toward your Safety Rating'}
     >
-      <ProgressRing
-        value={ranked ? (progress.safety_rating ?? 0) / 100 : (toward?.fill ?? 0)}
-        size={RING}
-        strokeWidth={STROKE}
-        tone="accent"
-        accessibilityLabel={ranked ? homeCopy.rating.label : 'Progress toward your Safety Rating'}
+      <Text
+        variant="hero"
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.6}
+        style={{ maxWidth: RING - 2 * STROKE - 8, textAlign: 'center' }}
+        testID="rating-value"
       >
-        <Text
-          variant="hero"
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.6}
-          style={{ maxWidth: RING - 2 * STROKE - 8, textAlign: 'center' }}
-          testID="rating-value"
-        >
-          {value}
-        </Text>
-      </ProgressRing>
-      <View style={{ flex: stacked ? undefined : 1, gap: t.space.xs }}>
-        <Text variant="label" tone="muted" testID="rating-label">
-          {homeCopy.rating.label}
-        </Text>
-        {ranked ? (
-          trend ? (
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: t.space.xs,
-              }}
-              testID="rating-trend"
-            >
-              <TrendArrow direction={trend.direction} better="up" size={16} accessible={false} />
-              <Text variant="subhead">{trend.line}</Text>
-            </View>
-          ) : null
-        ) : (
-          <>
-            <Text variant="headline" testID="rating-none">
-              {homeCopy.rating.none}
-            </Text>
-            <Text variant="subhead" tone="muted" testID="rating-to-rank">
-              {toward ? toward.text : homeCopy.rating.afterFirst}
-            </Text>
-          </>
-        )}
-        <Text variant="footnote" tone="muted">
-          {homeCopy.rating.window}
-        </Text>
+        {value}
+      </Text>
+    </ProgressRing>
+  );
+  const words = (
+    <View style={{ gap: t.space.xs }}>
+      <Text variant="label" tone="muted" testID="rating-label">
+        {homeCopy.rating.label}
+      </Text>
+      {ranked ? (
+        trend ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: t.space.xs,
+            }}
+            testID="rating-trend"
+          >
+            <TrendArrow direction={trend.direction} better="up" size={16} accessible={false} />
+            <Text variant="subhead">{trend.line}</Text>
+          </View>
+        ) : null
+      ) : (
+        <>
+          <Text variant="headline" testID="rating-none">
+            {homeCopy.rating.none}
+          </Text>
+          <Text variant="subhead" tone="muted" testID="rating-to-rank">
+            {toward ? toward.text : homeCopy.rating.afterFirst}
+          </Text>
+        </>
+      )}
+      <Text variant="footnote" tone="muted">
+        {homeCopy.rating.window}
+      </Text>
+    </View>
+  );
+  const button = { accessibilityRole: 'button' as const, accessibilityLabel: label, accessibilityHint: homeCopy.rating.hint };
+
+  if (stacked) {
+    return (
+      <Pressable
+        onPress={onPress}
+        testID="rating-block"
+        {...button}
+        style={({ pressed: down }) => ({ alignItems: 'flex-start', gap: t.space.lg, opacity: down ? 0.8 : 1 })}
+      >
+        {ring}
+        {words}
+      </Pressable>
+    );
+  }
+
+  const touch = { onPress, onPressIn: () => setPressed(true), onPressOut: () => setPressed(false) };
+  const look = { opacity: pressed ? 0.8 : 1 };
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.lg }}>
+      {/* The words' button speaks for the ring, so the ring is touch only. */}
+      <Pressable {...touch} testID="rating-ring" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={look}>
+        {ring}
+      </Pressable>
+      <View style={{ flex: 1, minHeight: RING, justifyContent: aside ? 'space-between' : 'center', gap: t.space.sm }}>
+        <Pressable {...touch} testID="rating-block" {...button} style={look}>
+          {words}
+        </Pressable>
+        {aside ? <View style={{ alignSelf: 'flex-end' }}>{aside}</View> : null}
       </View>
-    </Pressable>
+    </View>
   );
 }
 
 /**
  * Home's drive card, the screen's hero: the hour's sky with the Safety Rating big in its ring, its
- * change this week, the weather now (once known) and Start drive across its foot with, on an iPhone set up for automatic
- * drives, one quiet line under it. While progress loads or fails the card says so; Start stays in
- * it either way.
+ * change this week, the weather now (once known) at the foot of the ring's right side, and Start
+ * drive across the card's foot with, with automatic drives on, one quiet line under it. The card is
+ * as tall as what it holds. With large text (the rating stacked) or the rating failed, the weather
+ * takes its own row above Start instead. While progress loads or fails the card says so; Start
+ * stays in it either way.
  */
 export function HomeHeader({
   summary,
@@ -152,18 +179,26 @@ export function HomeHeader({
   start?: ReactNode;
   /** The muted line under Start ("Or just drive…"), only with automatic drives on. */
   caption?: string | null;
-  /** The weather now, above Start drive; absent until it is known. */
+  /** The weather now, beside the ring (or above Start drive); absent until it is known. */
   conditions?: Conditions | null;
 }) {
   const t = useTheme();
+  const stacked = useFontScale() > RATING_STACK_FONT_SCALE;
+  // The weather sits beside the ring (the rating's or its skeleton's) unless the text is stacked; otherwise it takes a row above Start.
+  const ring = !!summary || loading || !error;
+  const beside = conditions && ring && !stacked ? <WeatherReadout conditions={conditions} compact /> : null;
+  const row = conditions && !beside ? <WeatherReadout conditions={conditions} /> : null;
 
   const top = !summary ? (
     loading || !error ? (
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }} testID="home-header-loading">
+      <View style={{ flexDirection: 'row', alignItems: beside ? 'flex-start' : 'center', gap: t.space.lg }} testID="home-header-loading">
         <Skeleton width={RING} height={RING} radius={RING / 2} />
-        <View style={{ gap: t.space.sm }}>
-          <Skeleton width={120} height={14} />
-          <Skeleton width={140} height={18} />
+        <View style={beside ? { flex: 1, minHeight: RING, justifyContent: 'space-between', gap: t.space.sm } : undefined}>
+          <View style={{ gap: t.space.sm }}>
+            <Skeleton width={120} height={14} />
+            <Skeleton width={140} height={18} />
+          </View>
+          {beside ? <View style={{ alignSelf: 'flex-end' }}>{beside}</View> : null}
         </View>
       </View>
     ) : (
@@ -176,15 +211,14 @@ export function HomeHeader({
       </View>
     )
   ) : (
-    <RatingBlock progress={summary.progress} onPress={onRating} />
+    <RatingBlock progress={summary.progress} onPress={onRating} aside={beside} />
   );
 
   return (
-    <Card variant="hero" testID="home-header" style={{ minHeight: start ? 300 : 220 }}>
+    <Card variant="hero" testID="home-header">
       {top}
-      <View style={{ flex: 1, minHeight: t.space.xl }} />
-      {conditions ? <WeatherReadout conditions={conditions} /> : null}
-      {start}
+      {row}
+      {start ? <View style={{ marginTop: t.space.xs }}>{start}</View> : null}
       {start && caption ? (
         <Text variant="footnote" tone="muted" style={{ textAlign: 'center' }} testID="start-caption">
           {caption}

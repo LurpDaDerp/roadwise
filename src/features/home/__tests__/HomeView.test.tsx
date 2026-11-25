@@ -9,6 +9,16 @@ import { tokens } from '@/ui/tokens';
 import { HomeView, type HomeViewProps } from '../HomeView';
 import { dropCopy } from '../StartDrive';
 
+// Normal text unless a test sets it (React Native's own test window says 2, which stacks the rating).
+let mockFontScale = 1;
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => ({ width: 393, height: 852, scale: 3, fontScale: mockFontScale }),
+}));
+beforeEach(() => {
+  mockFontScale = 1;
+});
+
 const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   summary: summary(),
   summaryLoading: false,
@@ -50,7 +60,7 @@ describe('the full Home', () => {
     expect(within(pills).getByText('1/3 goals')).toBeOnTheScreen();
     expect(within(pills).getByLabelText('1 of 3 weekly goals done')).toBeOnTheScreen();
     const card = screen.getByTestId('home-header');
-    expect(within(card).getByTestId('rating-value')).toHaveTextContent('92');
+    expect(within(card).getByTestId('rating-value', { includeHiddenElements: true })).toHaveTextContent('92');
     expect(within(card).getByText('Safety Rating')).toBeOnTheScreen();
     expect(within(card).getByText('Up 2 this week')).toBeOnTheScreen();
     expect(within(card).getByText('Last 90 days')).toBeOnTheScreen();
@@ -83,10 +93,10 @@ describe('the full Home', () => {
   test('no rating yet: the ring fills toward 10 mi in 90 days, holds a dash, and says how far to go', async () => {
     const p = props({ summary: summary({ progress: { ranked: false, safety_rating: null, miles_90d: 4.6 } }) });
     await draw(<HomeView {...p} />);
-    expect(screen.getByTestId('rating-value')).toHaveTextContent('—');
+    expect(screen.getByTestId('rating-value', { includeHiddenElements: true })).toHaveTextContent('—');
     expect(screen.getByText('No rating yet')).toBeOnTheScreen();
     expect(screen.getByText('4 of 10 mi to your rating')).toBeOnTheScreen();
-    expect(screen.getByLabelText('Progress toward your Safety Rating')).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 40 });
+    expect(screen.getByLabelText('Progress toward your Safety Rating', { includeHiddenElements: true })).toHaveProp('accessibilityValue', { min: 0, max: 100, now: 40 });
     await press(screen.getByRole('button', { name: 'No rating yet. 4 of 10 miles to your rating' }));
     expect(p.onAnalytics).toHaveBeenCalled();
   });
@@ -162,21 +172,58 @@ describe('first run', () => {
     await draw(<HomeView {...props({ driveCount: 0, recent: [], autoDrives: true })} />);
     expect(screen.getByText("Just drive. RoadWise notices once you're moving and records the drive.")).toBeOnTheScreen();
     expect(screen.getByText('Drives record themselves')).toBeOnTheScreen();
-    expect(within(screen.getByTestId('home-header')).getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise notices on its own.');
+    expect(within(screen.getByTestId('home-header')).getByTestId('start-caption')).toHaveTextContent('Or just drive. RoadWise starts recording on its own.');
   });
 
-  test('the weather now sits on the drive card above Start: a coloured icon, "72° F" and the sky in words', async () => {
+  test('the weather now sits beside the rating ring, right-aligned at the foot of its words, above Start: an icon, "72° F" and the sky in words', async () => {
     const conditions = { tempF: 72, label: 'Partly cloudy', icon: 'partly-sunny' as const, color: '#FFC53D' };
     await draw(<HomeView {...props({ conditions })} />);
     const card = screen.getByTestId('home-header');
     const readout = within(card).getByTestId('home-conditions');
     expect(readout).toHaveProp('accessibilityLabel', '72 degrees Fahrenheit, Partly cloudy');
+    expect(readout).toHaveStyle({ alignItems: 'flex-end' });
     expect(within(readout).getByTestId('home-conditions-temp')).toHaveTextContent('72° F');
+    expect(within(readout).getByTestId('home-conditions-temp')).toHaveStyle({ fontSize: tokens.type.title3.fontSize });
     expect(within(readout).getByTestId('home-conditions-label')).toHaveTextContent('Partly cloudy');
+    expect(within(readout).getByTestId('home-conditions-label')).toHaveStyle({ textAlign: 'right' });
     expect(within(readout).getByTestId('home-conditions-icon')).toHaveStyle({ color: '#FFC53D' });
-    // above Start drive, inside the card
-    const order = (id: string) => JSON.stringify(screen.toJSON(), (k, v) => (k === 'forwardedRef' ? undefined : v)).indexOf(`"${id}"`);
-    expect(order('home-conditions')).toBeGreaterThan(-1);
+    // not part of the rating's button, after its words and before Start drive
+    expect(within(screen.getByTestId('rating-block')).queryByTestId('home-conditions')).toBeNull();
+    const order = (id: string) => treeJson().indexOf(`"${id}"`);
+    expect(order('rating-block')).toBeLessThan(order('home-conditions'));
+    expect(order('home-conditions')).toBeLessThan(order('start-drive'));
+    // the card is as tall as what it holds
+    expect(card).not.toHaveStyle({ minHeight: 300 });
+  });
+
+  test('the ring is touch only: it opens Analytics, and the words are the one button the screen reader hears', async () => {
+    const p = props();
+    await draw(<HomeView {...p} />);
+    await press(screen.getByTestId('rating-ring', { includeHiddenElements: true }));
+    expect(p.onAnalytics).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('rating-ring')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Safety Rating 92 out of 100. Up 2 this week.' })).toHaveLength(1);
+  });
+
+  test("while the rating loads, the weather sits beside the ring's skeleton", async () => {
+    const conditions = { tempF: 40, label: 'Rain', icon: 'rainy' as const, color: '#4DA3FF' };
+    await draw(<HomeView {...props({ summary: undefined, summaryLoading: true, conditions })} />);
+    expect(within(screen.getByTestId('home-header-loading')).getByTestId('home-conditions')).toHaveStyle({ alignItems: 'flex-end' });
+  });
+
+  test.each([
+    ['large text, with the rating stacked', () => {
+      mockFontScale = 1.5;
+      return props();
+    }],
+    ['the rating failed to load', () => props({ summary: undefined, summaryError: true })],
+  ])('with %s, the weather takes its own row above Start', async (_case, make) => {
+    const conditions = { tempF: 72, label: 'Partly cloudy', icon: 'partly-sunny' as const, color: '#FFC53D' };
+    await draw(<HomeView {...make()} conditions={conditions} />);
+    const readout = within(screen.getByTestId('home-header')).getByTestId('home-conditions');
+    expect(readout).toHaveStyle({ alignSelf: 'flex-start', flexDirection: 'row' });
+    expect(screen.queryByTestId('rating-ring', { includeHiddenElements: true })).toBeNull();
+    const order = (id: string) => treeJson().indexOf(`"${id}"`);
     expect(order('home-conditions')).toBeLessThan(order('start-drive'));
   });
 
@@ -458,6 +505,6 @@ describe('units and rounding', () => {
 
   test('the rating is a whole number', async () => {
     await draw(<HomeView {...props({ summary: summary({ progress: { safety_rating: 91.7, ranked: true } }) })} />);
-    expect(screen.getByTestId('rating-value')).toHaveTextContent('92');
+    expect(screen.getByTestId('rating-value', { includeHiddenElements: true })).toHaveTextContent('92');
   });
 });

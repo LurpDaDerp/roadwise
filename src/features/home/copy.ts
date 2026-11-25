@@ -29,7 +29,7 @@ export const homeCopy = {
   start: {
     label: 'Start drive',
     hint: 'Swipe right to start recording.',
-    auto: 'Or just drive. RoadWise notices on its own.',
+    auto: 'Or just drive. RoadWise starts recording on its own.',
   },
   notices: {
     notDriving: "Got it. That trip won't count.",
