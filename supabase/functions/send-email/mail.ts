@@ -34,14 +34,14 @@ const COPY: Record<CodeKind, { subject: (code: string) => string; title: string;
   signup: {
     subject: (code) => `${code} is your RoadWise code`,
     title: 'Confirm your email',
-    lead: 'Type this code into RoadWise to finish setting up your account.',
-    ignore: "Didn't sign up for RoadWise? You can ignore this email. Nothing happens unless the code is typed in.",
+    lead: 'Enter this code in RoadWise to finish setting up your account.',
+    ignore: "Didn't sign up for RoadWise? Ignore this email. Nothing happens unless someone enters the code.",
   },
   recovery: {
     subject: (code) => `${code} is your RoadWise reset code`,
     title: 'Reset your password',
-    lead: 'Type this code into RoadWise to choose a new password.',
-    ignore: "Didn't ask to reset your password? You can ignore this email. Your password stays the same unless the code is typed in.",
+    lead: 'Enter this code in RoadWise to choose a new password.',
+    ignore: "Didn't ask to reset your password? Ignore this email. Your password stays the same unless someone enters the code.",
   },
 };
 
@@ -116,8 +116,8 @@ const SIGN_IN_WITH: Record<SignInWith, { name: string; button: string }> = {
 export function signInReminderMail(signInWith: SignInWith, from: string, to: string): Mail {
   const how = SIGN_IN_WITH[signInWith];
   const title = 'How you sign in to RoadWise';
-  const lead = `You asked to reset your RoadWise password, but your account doesn't have one: you sign in with ${how.name}. Open RoadWise and tap ${how.button}.`;
-  const notes = [{ text: "Didn't ask? You can ignore this email. Nothing about your account has changed." }];
+  const lead = `You asked to reset your RoadWise password, but your account doesn't have one: you sign in with ${how.name}. Open RoadWise and select ${how.button}.`;
+  const notes = [{ text: "Didn't ask? Ignore this email. Nothing about your account has changed." }];
   const text = [title, '', lead, '', ...notes.map((n) => n.text)].join('\n');
   return { from: fromHeader(from), to, subject: title, html: page(title, lead, null, notes), text };
 }

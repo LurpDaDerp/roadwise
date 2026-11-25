@@ -86,7 +86,7 @@ export function holdsPairing(p: SetupPhase): boolean {
 
 /**
  * The DashPal setup as a bottom sheet, opened by Home's card, Settings › DashPal and onboarding's
- * Find my DashPal: `start` says on which DashPal (none: search mode), null keeps it closed. Each
+ * Find your DashPal: `start` says on which DashPal (none: search mode), null keeps it closed. Each
  * step slides in; Cancel at the top, the scrim, Android back and a swipe down on the grabber ask
  * "Stop setting up DashPal?" first, and Stop setup closes the sheet at once while the flow undoes a
  * pairing it made, on both sides. Done (no Cancel) closes it.

@@ -79,12 +79,12 @@ test('the motion lines say what motion access does on each phone', () => {
 
 test('the automatic-drive rows and notifications say what they do', () => {
   expect(rowDetail('locationAlways', { kind: 'granted' }, IOS)).toBe('RoadWise can notice your drives and record them with the app closed.');
-  expect(rowDetail('locationAlways', m('denied'), IOS)).toBe('Drives won\'t start on their own. You can still start them from Home.');
+  expect(rowDetail('locationAlways', m('denied'), IOS)).toBe('Drives won\'t start on their own. Start them from Home instead.');
   expect(rowDetail('locationAlways', { kind: 'idle' }, IOS)).toBe('Allow Location first.');
   expect(rowDetail('backgroundRefresh', { kind: 'granted' }, IOS)).toBe('iOS can wake RoadWise when a drive starts.');
   expect(rowDetail('backgroundRefresh', m('denied'), IOS)).toBe('iOS can\'t wake RoadWise, so drives won\'t start on their own.');
-  expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, your weekly and monthly recaps and friend requests can reach you.');
-  expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won\'t get drive recaps, your weekly and monthly recaps or friend requests.');
+  expect(rowDetail('notifications', { kind: 'granted' }, ANDROID)).toBe('Drive recaps, weekly and monthly recaps, and friend requests can reach you.');
+  expect(rowDetail('notifications', m('denied'), IOS)).toBe('You won\'t get drive recaps, weekly and monthly recaps, or friend requests.');
   expect(requestLabel('locationAlways', m('notYet', true))).toBe('Allow Always');
   expect(requestLabel('locationAlways', m('notYet', true), IOS)).toBe('Allow Always');
   expect(requestLabel('backgroundRefresh', m('denied'))).toBe('Open Settings');
@@ -96,7 +96,7 @@ test('Android words the automatic-drive rows in its own names', () => {
   expect(rowTitle('unusedApps', ANDROID)).toBe('Pause app activity if unused');
   expect(rowTitle('unusedApps', ANDROID_11)).toBe("Remove permissions if app isn't used");
   expect(rowDetail('locationAlways', { kind: 'granted' }, ANDROID)).toBe('RoadWise can notice your drives and record them with the app closed.');
-  expect(rowDetail('locationAlways', m('notYet', true), ANDROID)).toBe("Drives won't start on their own. You can still start them from Home.");
+  expect(rowDetail('locationAlways', m('notYet', true), ANDROID)).toBe("Drives won't start on their own. Start them from Home instead.");
   expect(rowDetail('locationAlways', { kind: 'idle' }, ANDROID)).toBe('Allow Location first.');
   expect(rowDetail('backgroundRefresh', { kind: 'granted' }, ANDROID)).toBe('Android can wake RoadWise when a drive starts.');
   expect(rowDetail('backgroundRefresh', m('denied'), ANDROID)).toBe("Battery use is set to Restricted, so drives won't start on their own.");
@@ -127,7 +127,7 @@ test('the note under the list follows the phone, and no line mentions a reminder
   expect(permissionsCopy.about.ios).toBe('With Location set to Always, RoadWise notices drives and records them even when it\'s closed. Your location is never sold.');
   expect(permissionsCopy.about.android).toBe("With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.");
   // Phone pickups need no permission: a note of their own says they are felt, never seen.
-  expect(permissionsCopy.phone).toBe('On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.');
+  expect(permissionsCopy.phone).toBe('On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.');
   for (const c of CTXS) {
     for (const id of PERMISSION_IDS) {
       for (const s of ALL_STATES) {
@@ -157,7 +157,7 @@ test('Settings details by state and platform', () => {
   expect(rowDetail('bluetooth', { kind: 'idle' }, ANDROID_11)).toBe('Uses Location on this phone.');
   expect(rowDetail('bluetooth', m('denied'), ANDROID)).toBe("Your DashPal can't connect, so it plays its alerts itself.");
   expect(rowDetail('camera', { kind: 'idle' }, IOS)).toBe('RoadWise asks when you scan a QR code.');
-  expect(rowDetail('camera', m('denied'), ANDROID)).toBe("QR codes can't be scanned. Add friends by username.");
+  expect(rowDetail('camera', m('denied'), ANDROID)).toBe("RoadWise can't scan QR codes. Add friends by username.");
   expect(rowDetail('camera', { kind: 'granted' }, IOS)).toBe('You can scan friend QR codes.');
 });
 
@@ -175,7 +175,7 @@ test('titles and the names the confirmation uses follow the platform', () => {
   expect(permissionName('motion', IOS)).toBe('Motion & Fitness');
   expect(permissionName('bluetooth', ANDROID)).toBe('Nearby devices');
   expect(permissionsCopy.home.confirmMessage('Motion & Fitness')).toBe(
-    "Home won't remind you about Motion & Fitness again. You can undo this in Profile › Settings › Permissions."
+    "Home won't remind you about Motion & Fitness again. To undo this, go to Profile › Settings › Permissions."
   );
 });
 

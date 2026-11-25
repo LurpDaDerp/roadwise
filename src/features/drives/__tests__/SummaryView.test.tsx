@@ -213,7 +213,7 @@ describe('the hero mirrors the share card', () => {
     // Its upload failed once: it keeps trying, and says so.
     await draw(<SummaryView {...props({ drive: drive({ status: 'pending', result: null, uploadFailed: true }) })} />);
     expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
-    expect(screen.getByTestId('state-not-synced')).toHaveTextContent("Not synced yet. We'll keep trying.");
+    expect(screen.getByTestId('state-not-synced')).toHaveTextContent("Not synced yet. RoadWise will keep trying.");
     // Turned down for good: nothing will try again, and the line says what is true.
     await draw(<SummaryView {...props({ drive: drive({ status: 'failed', result: null }) })} />);
     expect(screen.getByTestId('summary-facts-score')).toHaveTextContent('93');
@@ -366,7 +366,7 @@ describe('Report', () => {
     const p = await open(event({ id: 'p1', type: 'phone_pickup', tier: 'moderate', durationS: 6 }));
     expect(screen.getByText('Phone pickup at 1:09 PM')).toBeOnTheScreen();
     expect(screen.getByTestId('reason-mounted')).toHaveAccessibleName('My phone was mounted');
-    expect(screen.getByText("If your phone sat in a mount and a bump looked like a pickup, we'll take it off right away, up to 3 times a week.")).toBeOnTheScreen();
+    expect(screen.getByText("If your phone sat in a mount and a bump looked like a pickup, RoadWise takes it off right away, up to 3 times a week.")).toBeOnTheScreen();
     expect(screen.getByTestId('reason-not_driving')).toBeOnTheScreen();
     expect(screen.queryByTestId('reason-hazard')).toBeNull();
     await press(screen.getByTestId('reason-mounted'));
@@ -401,7 +401,7 @@ describe('Report', () => {
     await press(screen.getByTestId('reason-hazard'));
     await press(screen.getByTestId('report-send'));
     expect(p.onReport).toHaveBeenCalledWith('e1', 'hazard');
-    expect(await screen.findByTestId('report-sent')).toHaveTextContent(/Thanks. We'll check it and update this drive./);
+    expect(await screen.findByTestId('report-sent')).toHaveTextContent(/Thanks. RoadWise will check it and update this drive./);
   });
 
   test('"wasn\'t driving" hands over to the whole-drive confirm', async () => {

@@ -43,11 +43,11 @@ test('every style and pattern the server sends has its words', () => {
 });
 
 test('one name: the style word, then the pattern word', () => {
-  expect(archetypeName({ style: 'spotless', pattern: 'commuter' })).toBe('Spotless Commuter');
-  expect(archetypeName({ style: 'lead_footed', pattern: 'road_tripper' })).toBe('Lead-Footed Road Tripper');
-  expect(archetypeName({ style: 'phone_happy', pattern: 'weekend_cruiser' })).toBe('Phone-Happy Weekend Cruiser');
-  expect(archetypeName({ style: 'easygoing', pattern: 'city_hopper' })).toBe('Easygoing City Hopper');
-  expect(archetypeName({ style: 'rising', pattern: 'early_bird' })).toBe('Rising Early Bird');
+  expect(archetypeName({ style: 'spotless', pattern: 'commuter' })).toBe('Spotless commuter');
+  expect(archetypeName({ style: 'lead_footed', pattern: 'road_tripper' })).toBe('Lead-footed road tripper');
+  expect(archetypeName({ style: 'phone_happy', pattern: 'weekend_cruiser' })).toBe('Phone-happy weekend cruiser');
+  expect(archetypeName({ style: 'easygoing', pattern: 'city_hopper' })).toBe('Easygoing city hopper');
+  expect(archetypeName({ style: 'rising', pattern: 'early_bird' })).toBe('Rising early bird');
 });
 
 test('the description is the style line, then the pattern line; the coaching ones never scold', () => {
@@ -63,7 +63,7 @@ test('the description is the style line, then the pattern line; the coaching one
 
 test('an id this build does not know reads as Easygoing Cruiser, drawn as the car', () => {
   const odd = { style: 'zany' as StyleId, pattern: 'pilot' as PatternId };
-  expect(archetypeName(odd)).toBe('Easygoing Cruiser');
+  expect(archetypeName(odd)).toBe('Easygoing cruiser');
   expect(archetypeStops(odd)).toEqual(STYLES.easygoing.stops);
   expect(archetypePattern(odd)).toBe('cruiser');
 });

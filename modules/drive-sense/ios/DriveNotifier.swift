@@ -11,7 +11,7 @@ import UserNotifications
 enum DriveNotifier {
   static let identifier = "roadwise.driveRecording"
   static let title = "Recording your drive"
-  static let body = "Tap to open it. Not driving? You can stop it there."
+  static let body = "Select to open your drive. Not driving? Stop it there."
   /// Posted by modules/live-drive whenever its activity starts, is adopted or ends: ["running": Bool].
   static let liveActivityNotification = Notification.Name("roadwise.liveActivity")
 

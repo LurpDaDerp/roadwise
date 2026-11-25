@@ -3,7 +3,7 @@ import { MAX_CUSTOM_PLACES, PLACE_NAME_MAX, type PlaceKind, type PlaceProblem } 
 
 export const placesCopy = {
   title: 'Places',
-  intro: 'Your places name your drives and show your commute. They also give you one-tap directions on the driving screen and a heads-up when bad weather is due before you usually leave.',
+  intro: 'Your places name your drives and show your commute. They also give you quick directions on the driving screen and a heads-up when bad weather is due before you usually leave.',
   fixedTitle: 'Your places',
   otherTitle: 'Other places',
   add: 'Add a place',
@@ -19,7 +19,7 @@ export const placesCopy = {
     searchPlaceholder: 'Search for an address',
     searchLabel: 'Address',
     clear: 'Clear',
-    useLocation: 'Use my current location',
+    useLocation: 'Use current location',
     locating: 'Finding you',
     locationDenied: 'Location is off for RoadWise. Search for the address instead.',
     locationNotAsked: "Location isn't allowed yet. Try again or search instead.",
@@ -37,15 +37,15 @@ export const placesCopy = {
     inZone: (zone: string) => `Inside your “${zone}” zone`,
     name: 'Name',
     namePlaceholder: 'Name',
-    pinHint: 'Tap the map to move the pin.',
+    pinHint: 'Select a spot on the map to move the pin.',
     save: 'Save',
     changeAddress: 'Change address',
     remove: 'Remove',
     removeTitle: (name: string) => `Remove ${name}?`,
-    removeBody: 'Its privacy zone, if it has one, stays. You can delete the zone in Privacy zones.',
+    removeBody: 'Its privacy zone, if it has one, stays. To delete the zone, go to Privacy zones.',
     cancel: 'Cancel',
     problems: {
-      name_empty: 'Give the place a name.',
+      name_empty: 'Enter a name.',
       name_long: `Keep the name to ${PLACE_NAME_MAX} characters or fewer.`,
       point: 'Pick an address first.',
       too_many: `You can save up to ${MAX_CUSTOM_PLACES} other places.`,
@@ -67,6 +67,6 @@ export const placesCopy = {
   },
 
   /** Places' switch for the recap card. */
-  askAfterDrives: { title: 'Suggest after drives', subtitle: 'Offers to save a likely home, work or school' },
+  askAfterDrives: { title: 'Suggest after drives', subtitle: 'Offers to save a likely home, work, or school' },
 
 } as const;

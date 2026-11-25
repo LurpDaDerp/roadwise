@@ -69,7 +69,7 @@ describe('on Android (the same screens; Android Auto in CarPlay’s place, Nearb
     });
     const w = await appWorld();
     await w.render(<CarScreen />);
-    expect(await screen.findByText('Turn on your car and connect this phone to its Bluetooth or Android Auto, then tap Use this car.')).toBeTruthy();
+    expect(await screen.findByText('Turn on your car and connect this phone to its Bluetooth or Android Auto, and then select Use this car.')).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId('car-ask')).toHaveTextContent('Connected to Civic. Use this car?'));
     expect(mockAskNearby).not.toHaveBeenCalled();
     await tap('car-use');

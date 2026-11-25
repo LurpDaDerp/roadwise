@@ -94,7 +94,7 @@ it('iOS lists Location Always and Background App Refresh with the note about Alw
   // On both phones, the note on phone pickups.
   expect(
     within(screen.getByTestId('permissions-phone-note')).getByText(
-      'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.'
+      'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.'
     )
   ).toBeOnTheScreen();
 });
@@ -111,7 +111,7 @@ it('with Automatic drives switched off, Location Always and Background App Refre
   expect(screen.getByTestId('permissions-summary')).toHaveTextContent('Everything RoadWise needs is on');
   for (const id of ['locationAlways', 'backgroundRefresh']) {
     expect(screen.getByTestId(`permission-${id}-status`)).toHaveTextContent('Not in use');
-    expect(screen.getByTestId(`permission-${id}-detail`)).toHaveTextContent('Only needed for automatic drives, and those are turned off.');
+    expect(screen.getByTestId(`permission-${id}-detail`)).toHaveTextContent('Needed only for automatic drives, which are turned off.');
   }
   // The driver can still grant it.
   expect(screen.getByTestId('permission-locationAlways-fix')).toHaveTextContent('Allow Always');

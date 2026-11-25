@@ -936,7 +936,7 @@ describe('the dangerous-weather banner (plan D14)', () => {
     const card = within(screen.getByTestId('hud-weather-slot')).getByTestId('hud-weather');
     expect(within(card).getByTestId('hud-weather-title')).toHaveTextContent('Snowy roads', { exact: true });
     expect(card).not.toHaveTextContent(/sooner/i);
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Snowy roads. Speeding warnings come at a lower speed, and hard braking, start, and turn warnings at a lighter touch.');
     expect(screen.getByTestId('hud-limit-value', HIDDEN)).toHaveTextContent('35');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Hide weather alert' }));
@@ -2818,7 +2818,7 @@ describe('a Start-card drive waiting for driving speed (drive-fixes brief)', () 
     await h.update({ waiting: W({ phase: 'popup', deadlineAt: T + 270_000 }) });
     expect(screen.getByTestId('hud-wait')).toBeTruthy();
     expect(screen.getByText('Still planning to drive?')).toBeTruthy();
-    expect(screen.getByTestId('hud-wait-body')).toHaveTextContent("We'll stop waiting in 3 min.");
+    expect(screen.getByTestId('hud-wait-body')).toHaveTextContent("RoadWise stops waiting in 3 min.");
     expect(Haptics.impactAsync).toHaveBeenCalledTimes(1);
     await fireEvent.press(screen.getByRole('button', { name: 'Keep waiting' }));
     expect(mockControls.touchWaiting).toHaveBeenCalled();

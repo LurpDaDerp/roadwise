@@ -86,7 +86,7 @@ Deno.test('a push-to-start goes to the production host with the liveactivity hea
       'content-state': { ...STATE, weatherKind: null, weatherText: null },
       'attributes-type': 'LiveDriveAttributes',
       attributes: { startedAt: STARTED },
-      alert: { title: 'Recording your drive', body: 'Tap to open it. Not driving? You can stop it there.' },
+      alert: { title: 'Recording your drive', body: 'Select to open your drive. Not driving? Stop it there.' },
       'input-push-token': 1,
     },
   });

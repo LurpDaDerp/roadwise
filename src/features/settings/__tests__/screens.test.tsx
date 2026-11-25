@@ -306,7 +306,7 @@ describe('Settings', () => {
       expect(screen.getByText('Friends can see your Safety Rating', { includeHiddenElements: true })).toBeOnTheScreen();
       expect(screen.getByText('Friends can see your category scores', { includeHiddenElements: true })).toBeOnTheScreen();
       expect(screen.getByText('Friends can see your badges', { includeHiddenElements: true })).toBeOnTheScreen();
-      expect(screen.getByText('Friends can see your drives, distance and events', { includeHiddenElements: true })).toBeOnTheScreen();
+      expect(screen.getByText('Friends can see your drives, distance, and events', { includeHiddenElements: true })).toBeOnTheScreen();
       expect(screen.getByTestId('settings-heatmap-visibility')).toBeOnTheScreen();
     });
 
@@ -497,7 +497,7 @@ describe('Settings', () => {
       'Follows the time of day and the weather',
       'Always light',
       'Always dark',
-      "Matches your phone's Light / Dark setting",
+      "Matches your phone's light or dark setting",
     ]);
     expect(sheet.getByRole('radio', { name: 'Dark' })).toBeChecked();
     expect(sheet.getByText('Saved on this phone only.')).toBeOnTheScreen();

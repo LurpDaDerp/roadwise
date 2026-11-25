@@ -97,7 +97,7 @@ test('starts on the email, taken from the sign-in form, with Send code', async (
 test('Send code asks for a reset code, and the next step never says whether the address has an account', async () => {
   await toCodeStep();
   expect(mockRequestReset).toHaveBeenCalledWith('ava@example.com');
-  expect(screen.getByText('If ava@example.com has a RoadWise password, we sent an 8-digit code to it. If you sign in with Apple or Google, the email says so instead.')).toBeOnTheScreen();
+  expect(screen.getByText('If ava@example.com has a RoadWise password, RoadWise sent an 8-digit code to it. If you sign in with Apple or Google, the email says so instead.')).toBeOnTheScreen();
   expect(screen.getByLabelText(resetCopy.codeLabel).props.textContentType).toBe('oneTimeCode');
   expect(screen.getByLabelText(resetCopy.newPassword).props.secureTextEntry).toBe(true);
   expect(screen.getByLabelText(resetCopy.newPassword).props.textContentType).toBe('newPassword');

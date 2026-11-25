@@ -118,7 +118,7 @@ describe('RadarCard', () => {
     expect(screen.getByRole('header', { name: 'How it works' })).toBeOnTheScreen();
     const body = screen.getByTestId('radar-how-body');
     expect(body).toHaveTextContent(
-      "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one covers your last 90 days, with recent weeks counting a bit more, and compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score and move from there with every drive."
+      "Your Safety Rating is the average of your category scores, and Speed and Phone use count double. Each score covers your last 90 days, with recent weeks counting a bit more. It compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score, and each drive moves you from there."
     );
     // No em dash, no points.
     expect(String(body.props.children)).not.toMatch(/—|points?\b/i);
@@ -826,7 +826,7 @@ describe('CategorySheet', () => {
   test('Attention shows DashPal’s counts and watched distance, with no rate line', async () => {
     await draw(<CategorySheet {...props} axis="attention" score={55} sums={{ ...sums, eyesOff: 2, drowsy: 1, watchedMiles: 12 }} />);
     expect(screen.getByRole('header', { name: 'Attention · 55' })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Poor. Stay focused. Eyes on the road, and pull over when tired.')).toBeOnTheScreen();
+    expect(screen.getByLabelText("Poor. Stay focused. Keep your eyes on the road, and pull over if you're tired.")).toBeOnTheScreen();
     expect(screen.getByTestId('metric-eyes-off-value')).toHaveTextContent('2');
     expect(screen.getByTestId('metric-drowsy-value')).toHaveTextContent('1');
     expect(screen.getByTestId('metric-watched-value')).toHaveTextContent('12.0 mi');
@@ -880,14 +880,14 @@ describe('CategorySheet', () => {
     const phoneSums = { ...sums, pickups: 3, inHandS: 75, phoneS: 10_800 };
     await draw(<CategorySheet {...props} axis="phone" score={64} sums={phoneSums} />);
     expect(screen.getByRole('header', { name: 'Phone use · 64' })).toBeOnTheScreen();
-    expect(screen.getByLabelText('Fair. Phone down while driving. Put your phone away before you pull out.')).toBeOnTheScreen();
+    expect(screen.getByLabelText('Fair. Keep your phone down. Put your phone away before you pull out.')).toBeOnTheScreen();
     expect(screen.getByTestId('metric-phone-pickups-value')).toHaveTextContent('3');
     expect(screen.getByTestId('metric-phone-in-hand-value')).toHaveTextContent('1 min');
     expect(screen.getByLabelText('Time in hand, 1 minute')).toBeOnTheScreen();
     expect(screen.getByTestId('category-rate')).toHaveTextContent('1.0 pickups an hour at driving speed');
     const how = screen.getByTestId('category-phone-how');
     expect(within(how).getByText("A pickup counts once the car is going 10 mph or more. After that, every second your phone is in your hand while you're moving counts too.")).toBeOnTheScreen();
-    expect(within(how).getByText("Put it down and pick it up again within 10 s and it's still one pickup.")).toBeOnTheScreen();
+    expect(within(how).getByText("If you put it down and pick it up again within 10 s, it's still one pickup.")).toBeOnTheScreen();
     expect(screen.queryByText(/—|!|pts|points/)).toBeNull();
   });
 
@@ -1043,10 +1043,10 @@ describe('WeatherCard', () => {
     await draw(<WeatherCard sums={sums(20, 6, 60, 9)} />);
     const card = screen.getByTestId('analytics-weather');
     expect(within(card).getByText('Weather')).toBeOnTheScreen();
-    expect(screen.getByTestId('analytics-weather-text')).toHaveTextContent('In rain or snow you have 2× the events per mile. Slow down and leave more room.');
+    expect(screen.getByTestId('analytics-weather-text')).toHaveTextContent('In rain or snow, you have 2× the events per mile. Slow down and leave more room.');
     expect(screen.getByTestId('analytics-weather-detail')).toHaveTextContent('3 drives in rain or snow · 20 mi');
     expect(
-      screen.getByLabelText('Weather. In rain or snow you have 2× the events per mile. Slow down and leave more room. 3 drives in rain or snow, 20 miles.')
+      screen.getByLabelText('Weather. In rain or snow, you have 2× the events per mile. Slow down and leave more room. 3 drives in rain or snow, 20 miles.')
     ).toBeOnTheScreen();
     expect(within(card).queryByText(/pts|points|score/i)).toBeNull();
   });

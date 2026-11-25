@@ -212,7 +212,7 @@ describe('levels and coaching', () => {
     }
     expect(Object.keys(AXIS_TIP).sort()).toEqual(['acceleration', 'attention', 'braking', 'phone', 'speed', 'turning']);
     expect(AXIS_TIP.phone).toBe('Put your phone away before you pull out.');
-    expect(AXIS_TITLE.phone).toBe('Phone down while driving');
+    expect(AXIS_TITLE.phone).toBe('Keep your phone down');
   });
 
   test('Phone use coaches like any axis once scored, and stays out while it has no score', () => {

@@ -387,7 +387,7 @@ describe('the states and Next', () => {
     ['camera', 'DashPal’s camera isn’t ready. Try again in a moment.', true],
     ['memory', 'DashPal’s camera isn’t ready. Try again in a moment.', true],
     ['no_state', 'The picture stopped. Try again.', true],
-    ['mtu', 'Your phone’s Bluetooth can’t show the picture. You can go on without it.', false],
+    ['mtu', 'Your phone’s Bluetooth can’t show the picture. Continue without it.', false],
     ['not_allowed', 'Your other phone already aimed DashPal.', false],
     ['hold_ended', 'Setup ended. Try again.', false],
   ] as const)('refused %s: “%s”, Try again %s', async (reason, text, retry) => {

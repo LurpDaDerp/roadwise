@@ -791,7 +791,7 @@ describe('iOS drive detector: wakes and the note (text)', () => {
     const n = code('DriveNotifier.swift');
     expect(n).toMatch(/static let identifier = "roadwise\.driveRecording"/);
     expect(n).toMatch(/static let title = "Recording your drive"/);
-    expect(n).toMatch(/static let body = "Tap to open it\. Not driving\? You can stop it there\."/);
+    expect(n).toMatch(/static let body = "Select to open your drive\. Not driving\? Stop it there\."/);
     expect(n).toContain('content.interruptionLevel = .active');
     expect(n).not.toMatch(/content\.sound|timeSensitive|\.critical|UNNotificationAction|categoryIdentifier/);
     expect(n).toMatch(/content\.threadIdentifier = "drive-recording"/);

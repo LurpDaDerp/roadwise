@@ -1,6 +1,6 @@
 import type { MyWrapped, SharedWrapped, WrappedArchiveEntry } from '@/data/server/wrapped';
 
-/** October 2026: 14 drives, a Spotless Commuter with every number shown. */
+/** October 2026: 14 drives, a Spotless commuter with every number shown. */
 export function myWrapped(over: Partial<MyWrapped> = {}): MyWrapped {
   return {
     month: '2026-10',

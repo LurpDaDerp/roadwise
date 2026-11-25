@@ -357,7 +357,7 @@ describe('the steps', () => {
     say.mockRestore();
   });
 
-  it('done: a check mark, “DashPal is ready”, from 2 phones how many and “Not all yours?”, no Cancel; Done, back or the scrim close', async () => {
+  it('done: a check mark, “DashPal is ready”, from 2 phones how many and “If some aren’t yours”, no Cancel; Done, back or the scrim close', async () => {
     const say = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     const s = await open();
     await s.to({ kind: 'done', paired: PAIRED, phones: 1, notAllYours: false, aimedElsewhere: false });

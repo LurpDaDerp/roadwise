@@ -5,14 +5,14 @@ import { hudCopy } from '@/features/drive/hudCopy';
 import type { StepId } from './flow';
 
 /** How phone pickups are noticed, and what RoadWise never sees: the How it works row and the Motion step. */
-const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps or messages.';
-const PHONE_PRIVACY = 'RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.';
+const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps, or messages.';
+const PHONE_PRIVACY = 'RoadWise spots pickups from motion alone. It never sees your screen, apps, or messages.';
 
 /** How it works: the same five lines on both phones (drives start on their own on each). */
 const HOW_ROWS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[] = [
   { icon: 'car-sport-outline', title: 'It notices your drives', body: "Once you're on the road, RoadWise starts recording by itself." },
-  { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and tap "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
-  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns and staying near the limit all help.' },
+  { icon: 'person-outline', title: 'Just riding along?', body: `Open RoadWise and select "${hudCopy.notDriving}" on the drive screen so that trip won't count.` },
+  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns, and staying near the limit all help.' },
   { icon: 'phone-portrait-outline', title: 'Phone down', body: PHONE_ROW },
   { icon: 'people-outline', title: 'Better with friends', body: 'Build your Safety Rating and see how it compares with your friends.' },
 ];
@@ -51,12 +51,12 @@ export const onboardingCopy = {
     body: 'This is the name friends see, so leave your real name out of it.',
     label: 'Username',
     placeholder: 'Username',
-    rules: '3 to 20 letters, numbers or underscores.',
+    rules: '3 to 20 letters, numbers, or underscores.',
     checking: 'Checking…',
-    available: (name: string) => `@${name} is free. It's yours if you want it.`,
+    available: (name: string) => `@${name} is available.`,
     reasons: {
       length: 'Use 3 to 20 characters.',
-      characters: 'Only letters, numbers and underscores.',
+      characters: 'Use only letters, numbers, and underscores.',
       reserved: "That one's reserved. Try another.",
       not_allowed: "That username isn't allowed. Try another.",
       taken: 'Someone already has that one. Try another.',
@@ -96,9 +96,9 @@ export const onboardingCopy = {
       notNow: 'Not now',
       continue: 'Continue',
       openSettings: 'Open Settings',
-      always: "You're all set. RoadWise will notice your drives.",
+      always: "You're all set. RoadWise now notices your drives.",
       whileUsing: "Location is on only while RoadWise is open, so drives won't start on their own. Start them from Home, or set Location to Always in Settings.",
-      denied: "Location is off, so RoadWise can't record drives. You can turn it on later in Settings.",
+      denied: "Location is off, so RoadWise can't record drives. Turn it on later in Settings.",
       approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
       failed: "Your phone didn't answer. Try again.",
     },
@@ -113,11 +113,11 @@ export const onboardingCopy = {
       openSettings: 'Open Settings',
       /** Kept at While Using: the way to "Allow all the time" (the disclosure first, then the phone). */
       allowAlways: 'Allow all the time',
-      always: "You're all set. RoadWise will notice your drives.",
+      always: "You're all set. RoadWise now notices your drives.",
       /** A phone without the drive detector (no automatic drives): While Using is all it needs. */
       allowed: 'Location is allowed.',
       whileUsing: "Location is on only while RoadWise is in use, so drives won't start on their own. Start them from Home, or allow it all the time.",
-      denied: "Location is off, so RoadWise can't record drives. You can finish setting up and turn it on later in Settings.",
+      denied: "Location is off, so RoadWise can't record drives. Finish setting up now and turn it on later in Settings.",
       approximate: "Location is set to approximate, so drives can't record. Turn on Precise Location in Settings.",
       failed: "Your phone didn't answer. Try again.",
     },
@@ -125,8 +125,8 @@ export const onboardingCopy = {
   motion: {
     title: { ios: 'Motion & Fitness', android: 'Physical activity' },
     body: {
-      ios: 'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.',
-      android: 'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.',
+      ios: 'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. RoadWise measures speed, braking, and phone pickups either way.',
+      android: 'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. RoadWise measures speed, braking, and phone pickups either way.',
     },
     /** Under the body: phone pickups are felt, never seen. */
     phone: PHONE_PRIVACY,
@@ -140,7 +140,7 @@ export const onboardingCopy = {
       ios: "Motion & Fitness is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.",
       android: "Physical activity is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.",
     },
-    unavailable: "Your phone didn't let RoadWise ask here. You can turn it on in Settings.",
+    unavailable: "Your phone didn't let RoadWise ask here. Turn it on in Settings.",
     cantCheck: "RoadWise couldn't check motion access on this phone.",
     failed: "Your phone didn't answer. Try again.",
   },
@@ -162,8 +162,8 @@ export const onboardingCopy = {
     continue: 'Continue',
     openSettings: 'Open Settings',
     allowed: 'Notifications are allowed.',
-    quiet: 'Notifications will arrive quietly.',
-    denied: 'Notifications are off. You can turn them on later in Settings.',
+    quiet: 'Notifications arrive quietly.',
+    denied: 'Notifications are off. Turn them on later in Settings.',
     failed: "Your phone didn't answer. Try again.",
   },
 } as const;

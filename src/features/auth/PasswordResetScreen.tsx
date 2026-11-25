@@ -20,12 +20,12 @@ import {
 
 export const resetCopy = {
   title: 'Reset your password',
-  body: "Type your account's email. We'll send it an 8-digit code, and you'll choose a new password.",
+  body: "Enter your account's email. RoadWise sends it an 8-digit code, and then you choose a new password.",
   send: 'Send code',
   back: 'Back to sign in',
   codeTitle: 'Check your email',
   sentTo: (email: string) =>
-    `If ${email} has a RoadWise password, we sent an 8-digit code to it. If you sign in with Apple or Google, the email says so instead.`,
+    `If ${email} has a RoadWise password, RoadWise sent an 8-digit code to it. If you sign in with Apple or Google, the email says so instead.`,
   codeLabel: '8-digit code',
   newPassword: 'New password',
   confirmPassword: 'Confirm new password',
@@ -33,7 +33,7 @@ export const resetCopy = {
   tryAgain: 'Try again',
   resend: 'Resend code',
   resendIn: (seconds: number) => `Resend code in ${seconds} s`,
-  resent: 'We sent a new code.',
+  resent: 'A new code is on its way.',
   changeEmail: 'Use a different email',
   wrongCode: 'That code is wrong or has expired. Check it, or send a new one.',
   rateLimited: 'Too many tries. Try again later.',

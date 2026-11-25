@@ -39,7 +39,7 @@ test('End names where it comes back, in the driver units', () => {
 
 test('the words of the waiting panels', () => {
   expect(hudCopy.ask.title).toBe('Still planning to drive?');
-  expect(hudCopy.ask.body(3)).toBe("We'll stop waiting in 3 min.");
+  expect(hudCopy.ask.body(3)).toBe("RoadWise stops waiting in 3 min.");
   expect(hudCopy.countdown.spoken(27)).toBe('Stopping in 27 seconds. Touch the screen to keep waiting.');
 });
 

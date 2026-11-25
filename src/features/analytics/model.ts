@@ -191,7 +191,7 @@ export const AXIS_TIP: Record<AxisKey, string> = {
   braking: 'Leave more room so you can brake gently.',
   acceleration: 'Roll onto the gas smoothly.',
   turning: 'Slow down before the turn, not in it.',
-  attention: 'Eyes on the road, and pull over when tired.',
+  attention: "Keep your eyes on the road, and pull over if you're tired.",
   phone: 'Put your phone away before you pull out.',
 };
 
@@ -201,7 +201,7 @@ export const AXIS_TITLE: Record<AxisKey, string> = {
   acceleration: 'Ease into the gas',
   turning: 'Take turns slower',
   attention: 'Stay focused',
-  phone: 'Phone down while driving',
+  phone: 'Keep your phone down',
 };
 
 export const GOOD_TITLE = 'Driving well';
@@ -775,7 +775,7 @@ export interface TimeComment {
 export function timeComment(grid: DriveGrid, nightPct: number | null): TimeComment | null {
   const n = grid.total;
   if (n === 0) return null;
-  if (n < TIME_COMMENT_MIN_DRIVES) return { kind: 'few', text: "A few more drives and we'll see when you usually hit the road." };
+  if (n < TIME_COMMENT_MIN_DRIVES) return { kind: 'few', text: "After a few more drives, you'll see when you usually hit the road." };
   const sum = (days: readonly number[], bands: readonly number[]) =>
     days.reduce((s, d) => s + bands.reduce((t, b) => t + (grid.cells[d]?.[b] ?? 0), 0), 0);
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -788,7 +788,7 @@ export function timeComment(grid: DriveGrid, nightPct: number | null): TimeComme
     return { kind: 'dark', text: `About ${nightPct}% of your miles are after dark. Give yourself a bit more room at night.` };
   }
   if (share(sum([0, 1, 2, 3, 4], [2, 5])) >= 0.5) {
-    return { kind: 'rush', text: 'Most of your drives hit weekday rush hour. A little extra following distance makes traffic calmer.' };
+    return { kind: 'rush', text: 'Most of your drives hit weekday rush hour. Leave a little extra following distance to make traffic calmer.' };
   }
   if (share(sum([5, 6], ALL_BANDS)) >= 0.6) {
     return { kind: 'weekend', text: "You're mostly a weekend driver. Enjoy the quieter roads." };

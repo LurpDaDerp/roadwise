@@ -1,6 +1,6 @@
 /**
  * The monthly Wrapped's archetype (pure): ONE name, a style word and a pattern word
- * ("Spotless Commuter", "Lead-Footed Road Tripper"), worked out by the server from the month
+ * ("Spotless commuter", "Lead-footed road tripper"), worked out by the server from the month
  * (`private.wrapped_archetype`) and sent as ids. Each style has its own colours (the story's
  * gradient, Home's card wash, the archive's discs); each pattern has its own icon (`ArchetypeIcon`).
  * Warm, darker reds, ambers and greys for the styles that coach; cooler greens, blues and violets for
@@ -25,18 +25,18 @@ export interface PatternInfo {
 
 export const STYLES: Readonly<Record<StyleId, StyleInfo>> = {
   lead_footed: {
-    word: 'Lead-Footed',
+    word: 'Lead-footed',
     line: 'A little heavy on the gas this month. Easing off near the limit is the quickest win.',
     stops: ['#A3231B', '#6E1420', '#3A0A13'],
   },
   jumpy: {
     word: 'Jumpy',
-    line: 'Some sudden stops, starts and turns this month. A little more space ahead smooths them out.',
+    line: 'Some sudden stops, starts, and turns this month. A little more space ahead smooths them out.',
     stops: ['#8F4407', '#6B2A0F', '#3A1406'],
   },
   phone_happy: {
-    word: 'Phone-Happy',
-    line: 'Your phone came out a fair bit on the road. Setting it aside before you pull away makes it easy.',
+    word: 'Phone-happy',
+    line: 'Your phone came out a fair bit on the road. Setting it aside before you pull away helps.',
     stops: ['#9C1A7A', '#66114F', '#330828'],
   },
   bumpy: {
@@ -51,7 +51,7 @@ export const STYLES: Readonly<Record<StyleId, StyleInfo>> = {
   },
   spotless: {
     word: 'Spotless',
-    line: "Clean drive after clean drive. It doesn't get much better than that.",
+    line: 'Clean drive after clean drive, all month long.',
     stops: ['#17692A', '#105420', '#072A10'],
   },
   steady: {
@@ -61,7 +61,7 @@ export const STYLES: Readonly<Record<StyleId, StyleInfo>> = {
   },
   smooth: {
     word: 'Smooth',
-    line: 'Gentle stops, easy starts and smooth turns. Your passengers noticed.',
+    line: 'Gentle stops, easy starts, and smooth turns all month.',
     stops: ['#00676A', '#04504F', '#022B2B'],
   },
   focused: {
@@ -77,12 +77,12 @@ export const STYLES: Readonly<Record<StyleId, StyleInfo>> = {
 };
 
 export const PATTERNS: Readonly<Record<PatternId, PatternInfo>> = {
-  road_tripper: { word: 'Road Tripper', line: 'You went the distance, with long drives that covered real ground.' },
-  commuter: { word: 'Commuter', line: 'Most of your drives fit around the rush hours.' },
-  early_bird: { word: 'Early Bird', line: 'You were often on the road before 9 AM.' },
-  weekend_cruiser: { word: 'Weekend Cruiser', line: 'Weekends were your time to drive.' },
-  city_hopper: { word: 'City Hopper', line: 'Lots of short hops around town.' },
-  cruiser: { word: 'Cruiser', line: 'A good mix of drives, whenever the day called for one.' },
+  road_tripper: { word: 'road tripper', line: 'You went the distance, with long drives that covered real ground.' },
+  commuter: { word: 'commuter', line: 'Most of your drives fit around the rush hours.' },
+  early_bird: { word: 'early bird', line: 'You were often on the road before 9 AM.' },
+  weekend_cruiser: { word: 'weekend cruiser', line: 'Weekends were your time to drive.' },
+  city_hopper: { word: 'city hopper', line: 'Lots of short hops around town.' },
+  cruiser: { word: 'cruiser', line: 'A good mix of drives, whenever the day called for one.' },
 };
 
 export const STYLE_IDS = Object.keys(STYLES) as StyleId[];
@@ -98,7 +98,7 @@ export const ARCHETYPE_MIN_CONTRAST = 4.5;
 const styleOf = (a: Archetype): StyleInfo => STYLES[a.style] ?? STYLES.easygoing;
 const patternOf = (a: Archetype): PatternInfo => PATTERNS[a.pattern] ?? PATTERNS.cruiser;
 
-/** "Spotless Commuter". An id this build doesn't know reads as Easygoing or Cruiser. */
+/** "Spotless commuter". An id this build doesn't know reads as Easygoing or Cruiser. */
 export function archetypeName(a: Archetype): string {
   return `${styleOf(a).word} ${patternOf(a).word}`;
 }

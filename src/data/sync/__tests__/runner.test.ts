@@ -579,7 +579,7 @@ test('a scored drive takes the server’s clean flag when a report is accepted; 
   await db.execute('UPDATE sync_queue SET next_attempt_at = 0');
   expect(await r3.drainOnce()).toMatchObject({ done: 1 });
   await r3.stop();
-  expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: 'Weekly report limit reached.' });
+  expect(await createEventsRepo(db).get(uuid(2))).toMatchObject({ dispute_status: 'rejected', status: 'active', dispute_message: "You've reached this week's report limit." });
 });
 
 test('"wasn’t driving": optimistic locally, confirmed by the server, or put back when refused', async () => {

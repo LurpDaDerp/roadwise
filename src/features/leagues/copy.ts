@@ -11,7 +11,7 @@ export const leaguesCopy = {
     body: 'Check your connection and try again.',
     retry: 'Try again',
   },
-  refreshFailed: "Couldn't refresh. Showing the last board we loaded.",
+  refreshFailed: "Couldn't refresh. Showing the last board that loaded.",
   you: 'You',
   friends: {
     /** "128 mi in 90 days". */

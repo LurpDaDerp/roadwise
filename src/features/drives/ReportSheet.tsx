@@ -11,10 +11,10 @@ import type { LocalDriveEvent } from './model';
 import { availableReasons, REPORT_LABEL, type ReportReason } from './summary';
 
 const REASON_HELP: Record<ReportReason, string> = {
-  hazard: `Braking for something in the road was the right call. We'll take it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
-  wrong_limit: `If the posted limit didn't match, we'll fix the map and take it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
-  mounted: `If your phone sat in a mount and a bump looked like a pickup, we'll take it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
-  camera_wrong: `If DashPal flagged something that didn’t happen, we’ll take it off right away, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of your other reports.`,
+  hazard: `Braking for something in the road was the right call. RoadWise takes it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+  wrong_limit: `If the posted limit didn't match, RoadWise fixes the map and takes it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+  mounted: `If your phone sat in a mount and a bump looked like a pickup, RoadWise takes it off right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+  camera_wrong: `If DashPal flagged something that didn’t happen, RoadWise takes it off right away, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of your other reports.`,
   not_driving: 'Someone else was driving. This takes the whole drive off, not just this event.',
 };
 

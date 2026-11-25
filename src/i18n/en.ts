@@ -9,7 +9,7 @@ export const en = {
   'signIn.passwordConfirmLabel': 'Confirm password',
   'signIn.passwordRule': 'At least 8 characters, with a letter and a number.',
   'signIn.passwordTooLong': 'That password is too long. Use 72 characters or fewer.',
-  'signIn.passwordCommon': "That password is too easy to guess. Avoid common words, keyboard runs and your email's name.",
+  'signIn.passwordCommon': "That password is too easy to guess. Avoid common words, keyboard runs, and your email's name.",
   'signIn.passwordMismatch': "The passwords don't match.",
   'signIn.createAccount': 'Create account',
   'signIn.emailSignIn': 'Sign in with email',

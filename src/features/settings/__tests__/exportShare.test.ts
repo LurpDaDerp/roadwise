@@ -83,7 +83,7 @@ describe('Android: a file through the share sheet, left for the app picked (the 
     const share = jest.fn();
     const shareFile = jest.fn(async () => undefined);
     expect(await shareExport('{"a":1}', { platform: 'android', share, shareFile, loadFs: async () => f.fs, now: () => NOW })).toBe('shared');
-    expect(shareFile).toHaveBeenCalledWith('file:///cache/export/roadwise-data-2026-09-26.json', { mimeType: 'application/json', dialogTitle: 'Export my data' });
+    expect(shareFile).toHaveBeenCalledWith('file:///cache/export/roadwise-data-2026-09-26.json', { mimeType: 'application/json', dialogTitle: 'Export your data' });
     expect(share).not.toHaveBeenCalled();
     expect(f.files[0]?.content).toBe('{"a":1}');
     expect(f.files[0]?.deleted).toBe(false);

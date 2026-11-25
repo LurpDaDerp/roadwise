@@ -32,7 +32,7 @@ export const signInCopy = {
   title: 'Welcome to RoadWise',
   body: 'Build safe driving habits and see how you compare with friends.',
   attest: "I'm 13 or older and agree to the Terms and Privacy Policy",
-  needsTick: 'Check the box above first.',
+  needsTick: 'Select the checkbox above first.',
   saveFailed: "Couldn't save that. Try again.",
 } as const;
 

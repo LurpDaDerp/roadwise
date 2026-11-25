@@ -327,7 +327,7 @@ describe('the root layout', () => {
 
     await act(async () => mockController.set({ status: 'switching', runtime: null }));
     expect(screen.queryByTestId('lockout-underlay')).toBeNull();
-    expect(screen.getByText('Setting this phone up for you')).toBeTruthy();
+    expect(screen.getByText('Setting up this phone for you')).toBeTruthy();
   });
 
   test("the owner's sign-in restores their drives now, through the live runtime's foreground jobs, and sends what waited for a session", async () => {
@@ -395,11 +395,11 @@ describe('the root layout', () => {
       expect(override).toHaveBeenLastCalledWith('light');
 
       await act(async () => mockController.set({ status: 'switching', runtime: null, error: null }));
-      expect(screen.getByText('Setting this phone up for you')).toHaveStyle({ color: plainBundle('light').colors.text });
+      expect(screen.getByText('Setting up this phone for you')).toHaveStyle({ color: plainBundle('light').colors.text });
       expect(override).toHaveBeenLastCalledWith('light');
 
       await act(async () => appearance.set('dark'));
-      expect(screen.getByText('Setting this phone up for you')).toHaveStyle({ color: plainBundle('dark').colors.text });
+      expect(screen.getByText('Setting up this phone for you')).toHaveStyle({ color: plainBundle('dark').colors.text });
       expect(override).toHaveBeenLastCalledWith('dark');
 
       await act(async () => appearance.set('system'));

@@ -34,16 +34,16 @@ describe('Appearance', () => {
 describe('the rest of the settings words', () => {
   it('Privacy says who sees what, and that phone pickups are felt, never seen', () => {
     expect(settingsCopy.root.privacyFooter).toBe(
-      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise can tell when you pick up your phone on a drive, but it never sees your screen, apps or messages.'
+      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise can tell when you pick up your phone on a drive, but it never sees your screen, apps, or messages.'
     );
   });
 
   it('Privacy zones say what a zone cuts: the uploaded copy of drives recorded after it, never your own maps or share cards', () => {
     const z = settingsCopy.zones;
     expect(z.intro).toBe(
-      'Routes inside a zone are cut from the copy of each drive that RoadWise uploads, so friends and the heat map never get them. A zone applies to drives recorded after you add it.'
+      'RoadWise cuts routes inside a zone from the copy of each drive it uploads, so friends and the heat map never get them. A zone applies to drives recorded after you add it.'
     );
-    expect(z.trim).toBe('The first and last quarter mile of every drive is always cut from the upload too. Your own maps and share cards show the whole route.');
+    expect(z.trim).toBe('RoadWise also cuts the first and last quarter mile of every drive from the upload. Your own maps and share cards show the whole route.');
     expect(z.removeBody).toBe(
       'Drives recorded after this will upload routes near this place, so friends and the heat map can get them. Drives already uploaded stay as they are.'
     );
@@ -67,7 +67,7 @@ describe('the rest of the settings words', () => {
   });
 
   it('deleting the account names the Safety Rating, and no settings words mention points, streaks, freezes, levels or the global board', () => {
-    expect(settingsCopy.deleteAccount.consequences[1]).toBe('Your Safety Rating, weekly goals and achievements');
+    expect(settingsCopy.deleteAccount.consequences[1]).toBe('Your Safety Rating, weekly goals, and achievements');
     const all: string[] = [];
     const walk = (v: unknown) => {
       if (typeof v === 'string') all.push(v);

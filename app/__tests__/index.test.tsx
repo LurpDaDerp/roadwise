@@ -188,7 +188,7 @@ describe('an offline cold start (rev1: I11)', () => {
       await launch();
       expect(landed()).toBeUndefined();
       await act(async () => { jest.advanceTimersByTime(10_000); });
-      expect(screen.getByText("We couldn't load your profile")).toBeOnTheScreen();
+      expect(screen.getByText("Couldn't load your profile")).toBeOnTheScreen();
     } finally {
       jest.useRealTimers();
     }

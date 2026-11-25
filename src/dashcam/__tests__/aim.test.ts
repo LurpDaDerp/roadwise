@@ -117,7 +117,7 @@ describe('the good latch', () => {
 
 describe('the hint line', () => {
   it('every hint has its line; the picture’s left and right swap for the mirror; the camera’s sides do not', () => {
-    expect(hintText(0)).toBe('Good position. Sit as you drive, look at the road, then tap Next.');
+    expect(hintText(0)).toBe('Good position. Sit as you drive, look at the road, then select Next.');
     expect(hintText(1)).toBe('Can’t see your face. Point DashPal at your face.');
     // DashPal's EDGE_LEFT (2): the face is at the left of its picture, the right of the mirror.
     expect(hintText(2)).toBe(aim.hint[3]);

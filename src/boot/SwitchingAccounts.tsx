@@ -3,7 +3,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { Screen, Text, useTheme } from '@/ui';
 
 export const switchingCopy = {
-  title: 'Setting this phone up for you',
+  title: 'Setting up this phone for you',
   body: "Clearing the last driver's drives.",
 } as const;
 

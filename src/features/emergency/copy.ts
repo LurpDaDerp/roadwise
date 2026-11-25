@@ -27,7 +27,7 @@ export const emergencyCopy = {
     removeBody: "They won't show on the driving screen anymore.",
     cancel: 'Cancel',
     problems: {
-      name_empty: 'Add a name.',
+      name_empty: 'Enter a name.',
       name_long: `Keep the name to ${CONTACT_NAME_MAX} characters or fewer.`,
       phone: `Check the number. It needs ${PHONE_DIGITS_MIN} to ${PHONE_DIGITS_MAX} digits.`,
       too_many: `You can add up to ${MAX_CONTACTS} contacts.`,

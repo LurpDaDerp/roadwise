@@ -40,7 +40,7 @@ export const permitCopy = {
     sheetTitle: 'Your state',
     useLocation: 'Use my location',
     useLocationLine: 'RoadWise picks your state from where you are.',
-    notFound: "We couldn't find your state. Choose it from the list.",
+    notFound: "Couldn't find your state. Choose it from the list.",
   },
 
   targets: {
@@ -53,14 +53,14 @@ export const permitCopy = {
     placeholder: 'None',
     save: 'Save',
     reset: (state: string) => `Reset to ${state}'s numbers`,
-    hint: "Check these match your state's current rules. Some states change the hours with driver's ed.",
+    hint: "Check that these match your state's current rules. Some states change the hours with driver's ed.",
   },
 
   supervisor: {
     title: 'Supervisor',
     notSet: 'Not set',
     sheetTitle: 'Supervisor',
-    body: 'Who rides with you while you practice. Each new practice drive gets this name, and you can change it on any drive.',
+    body: 'The person who rides with you while you practice. Each new practice drive gets this name, and you can change it on any drive.',
     label: 'Name',
     placeholder: 'Name',
     save: 'Save',
@@ -128,7 +128,7 @@ export const permitCopy = {
     nightRule: (rule: NightRule, state: string | null) => `Night = ${NIGHT_WORDS[rule]}${state === null ? '' : ` (${state})`}`,
     signatures: ['Supervisor', 'Driver', 'Date'],
     empty: 'No practice drives yet.',
-    footer: 'Recorded by RoadWise. Some states require their own form; copy these hours onto it if so.',
+    footer: 'Recorded by RoadWise. If your state requires its own form, copy these hours onto it.',
     dialogTitle: 'Your practice log',
   },
 } as const;

@@ -42,12 +42,12 @@ export const permissionsCopy = {
     android: "With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.",
   },
   /** The second note: how phone pickups are noticed, which needs no permission. */
-  phone: 'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps or messages.',
+  phone: 'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.',
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',
   /** A Settings row's detail for an automatic drives' row (Location Always, Background App Refresh and their Android rows) while the Automatic drives switch is off. */
-  autoOff: 'Only needed for automatic drives, and those are turned off.',
+  autoOff: 'Needed only for automatic drives, which are turned off.',
   showOnHome: 'Show on Home',
   home: {
     allow: 'Allow',
@@ -58,7 +58,7 @@ export const permissionsCopy = {
     swipe: "Don't remind me",
     dismissAction: "Don't remind me again",
     confirmTitle: "Don't remind me again?",
-    confirmMessage: (name: string) => `Home won't remind you about ${name} again. You can undo this in Profile › Settings › Permissions.`,
+    confirmMessage: (name: string) => `Home won't remind you about ${name} again. To undo this, go to Profile › Settings › Permissions.`,
     cancel: 'Cancel',
     confirm: "Don't remind me",
   },
@@ -180,10 +180,10 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
       }
       return on ? 'RoadWise can measure speed and miles on your drives.' : "Without it, RoadWise can't record drives.";
     case 'precise':
-      return on ? 'Speed and distance are measured accurately.' : 'Approximate location is too rough to record a drive.';
+      return on ? 'RoadWise measures speed and distance accurately.' : 'Approximate location is too rough to record a drive.';
     case 'locationAlways':
       if (state.kind === 'idle') return 'Allow Location first.';
-      return on ? 'RoadWise can notice your drives and record them with the app closed.' : "Drives won't start on their own. You can still start them from Home.";
+      return on ? 'RoadWise can notice your drives and record them with the app closed.' : "Drives won't start on their own. Start them from Home instead.";
     case 'motion': {
       if (on) return 'RoadWise can tell driving from walking, so drives start and end on time.';
       return ios && state.kind === 'missing' && state.reason === 'denied'
@@ -202,7 +202,7 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
         ? "If RoadWise goes unopened for a few months, Android may pause it and drives won't start."
         : "If RoadWise goes unopened for months, Android may remove its permissions and drives won't start.";
     case 'notifications':
-      return on ? 'Drive recaps, your weekly and monthly recaps and friend requests can reach you.' : "You won't get drive recaps, your weekly and monthly recaps or friend requests.";
+      return on ? 'Drive recaps, weekly and monthly recaps, and friend requests can reach you.' : "You won't get drive recaps, weekly and monthly recaps, or friend requests.";
     case 'bluetooth':
       if (state.kind === 'idle') {
         // Android 11 and lower: DashPal's scans use Location; the car link needs nothing.
@@ -215,7 +215,7 @@ export function rowDetail(id: PermissionId, state: PermState, c: CopyCtx): strin
       return on ? 'Your DashPal can connect.' : "Your DashPal can't connect, so it plays its alerts itself.";
     case 'camera':
       if (state.kind === 'idle') return 'RoadWise asks when you scan a QR code.';
-      return on ? 'You can scan friend QR codes.' : "QR codes can't be scanned. Add friends by username.";
+      return on ? 'You can scan friend QR codes.' : "RoadWise can't scan QR codes. Add friends by username.";
   }
 }
 

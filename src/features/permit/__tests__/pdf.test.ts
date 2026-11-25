@@ -50,7 +50,7 @@ describe('the page', () => {
     expect(html).toContain('<td>Total</td><td>0.9 of 50 h</td>');
     expect(html).toContain('Night = 30 minutes after sunset to 30 minutes before sunrise (California)');
     for (const s of ['Supervisor', 'Driver', 'Date']) expect(html).toContain(`<div class="line"></div>${s}</div>`);
-    expect(html).toContain('Recorded by RoadWise. Some states require their own form; copy these hours onto it if so.');
+    expect(html).toContain('Recorded by RoadWise. If your state requires its own form, copy these hours onto it.');
   });
 
   test('without a night target only the total; without a state or name, none; in km; with no drives, a line saying so', () => {

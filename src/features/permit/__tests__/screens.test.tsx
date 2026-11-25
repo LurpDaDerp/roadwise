@@ -91,7 +91,7 @@ describe('Settings › Permit mode', () => {
     expect(screen.getByTestId('permit-progress-night-value')).toHaveTextContent(/of 10 h$/);
     expect(screen.getByTestId('permit-state')).toHaveTextContent(/California\ ·\ Chosen\ by\ you/);
     expect(screen.getByTestId('permit-targets')).toHaveTextContent(/50\ h\ total\ ·\ 10\ h\ at\ night/);
-    expect(screen.getByTestId('permit-targets-hint')).toHaveTextContent("Check these match your state's current rules. Some states change the hours with driver's ed.");
+    expect(screen.getByTestId('permit-targets-hint')).toHaveTextContent("Check that these match your state's current rules. Some states change the hours with driver's ed.");
     expect(screen.queryByTestId('permit-state-note')).toBeNull();
     expect(screen.getByTestId('permit-supervisor')).toHaveTextContent(/Not\ set/);
     expect(screen.getByTestId('permit-driver-name')).toHaveTextContent(/Optional/);
@@ -131,7 +131,7 @@ describe('Settings › Permit mode', () => {
     expect(screen.getByTestId('permit-state-note')).toHaveTextContent("50 hours if you pass an ODOT-approved driver's ed course.");
     await tap('permit-state');
     await tap('permit-state-auto');
-    expect(await screen.findByTestId('permit-state-not-found')).toHaveTextContent("We couldn't find your state. Choose it from the list.");
+    expect(await screen.findByTestId('permit-state-not-found')).toHaveTextContent("Couldn't find your state. Choose it from the list.");
     // The state follows the location from now on; none found yet.
     await waitFor(async () => expect((await readPermit(w.settings)).state).toEqual({ code: null, auto: true }));
     expect(screen.getByTestId('permit-state')).toHaveTextContent(/Choose your state/);

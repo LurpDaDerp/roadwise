@@ -21,7 +21,7 @@ Deno.test('the reset mail says what its code is for, and carries no address or l
   for (const body of [m.html, m.text]) {
     assertStringIncludes(body, '87654321');
     assertStringIncludes(body, 'Reset your password');
-    assertStringIncludes(body, 'Type this code into RoadWise to choose a new password.');
+    assertStringIncludes(body, 'Enter this code in RoadWise to choose a new password.');
     assertStringIncludes(body, 'It works for 10 minutes.');
     assertStringIncludes(body, 'Never share this code. RoadWise will never ask you for it.');
     assert(!body.includes('ava@example.com'));
@@ -77,7 +77,7 @@ Deno.test('the sign-in reminder names how the account signs in and carries no co
   assertEquals(m.subject, 'How you sign in to RoadWise');
   assertEquals(m.from, 'RoadWise <no-reply@mail.example.com>');
   for (const body of [m.html, m.text]) {
-    assertStringIncludes(body, 'you sign in with Google. Open RoadWise and tap Continue with Google.');
+    assertStringIncludes(body, 'you sign in with Google. Open RoadWise and select Continue with Google.');
     assert(!body.includes('ava@example.com'));
     assert(!/https?:|href=/i.test(body));
     assert(!/d{6}/.test(body));

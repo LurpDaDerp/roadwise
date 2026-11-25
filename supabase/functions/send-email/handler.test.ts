@@ -167,8 +167,8 @@ Deno.test('a signed password-reset mail goes out the same way, as a reset code, 
 
 Deno.test('Forgot password for an Apple or Google account sends no code, only how it signs in, under the same cap', async () => {
   for (const [providers, how] of [
-    [['google'], 'you sign in with Google. Open RoadWise and tap Continue with Google.'],
-    [['apple'], 'you sign in with Apple. Open RoadWise and tap Continue with Apple.'],
+    [['google'], 'you sign in with Google. Open RoadWise and select Continue with Google.'],
+    [['apple'], 'you sign in with Apple. Open RoadWise and select Continue with Apple.'],
     [['apple', 'google'], 'you sign in with Apple or Google.'],
     [[], 'you sign in with Apple or Google.'],
     // No list at all: no code (a mailbox must never become a way in the account did not have).

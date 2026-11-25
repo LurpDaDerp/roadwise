@@ -64,7 +64,7 @@ const defaultShareFile = (uri: string, options: { mimeType: string; dialogTitle:
   (require('expo-sharing') as typeof import('expo-sharing')).shareAsync(uri, options);
 
 /** The Android sheet's title: the row's own words. */
-const DIALOG_TITLE = 'Export my data';
+const DIALOG_TITLE = 'Export your data';
 
 /** Hands `json` to the platform's sheet. Never throws. */
 export async function shareExport(json: string, deps: ExportShareDeps = {}): Promise<ExportShareOutcome> {

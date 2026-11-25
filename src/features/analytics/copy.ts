@@ -92,7 +92,7 @@ export const analyticsCopy = {
       label: 'How it works',
       hint: 'Explains the Safety Rating',
       title: 'How it works',
-      body: "Your Safety Rating is the average of your category scores, with Speed and Phone use counting double. Each one covers your last 90 days, with recent weeks counting a bit more, and compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score and move from there with every drive.",
+      body: "Your Safety Rating is the average of your category scores, and Speed and Phone use count double. Each score covers your last 90 days, with recent weeks counting a bit more. It compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score, and each drive moves you from there.",
     },
   },
   category: {
@@ -116,7 +116,7 @@ export const analyticsCopy = {
     /** Phone use: how a pickup is judged, under its numbers. */
     phoneHow: (units: Units) => [
       `A pickup counts once the car is going ${speed(PHONE_PICKUP_MIN_MPH, units)} or more. After that, every second your phone is in your hand while you're moving counts too.`,
-      `Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it's still one pickup.`,
+      `If you put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s, it's still one pickup.`,
     ],
     /** Phone use before any drive was watched for it. */
     noPhone: 'No phone data yet',
@@ -176,8 +176,8 @@ export const analyticsCopy = {
       switch (v.kind) {
         case 'worse':
           return v.ratio === null
-            ? `In rain or snow you have more events per ${per}. Slow down and leave more room.`
-            : `In rain or snow you have ${times(v.ratio)} the events per ${per}. Slow down and leave more room.`;
+            ? `In rain or snow, you have more events per ${per}. Slow down and leave more room.`
+            : `In rain or snow, you have ${times(v.ratio)} the events per ${per}. Slow down and leave more room.`;
         case 'smooth':
           return 'You drive as smoothly in rain or snow as in the dry. Nice.';
         case 'bumpier':

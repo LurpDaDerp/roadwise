@@ -18,7 +18,7 @@ export const recapCopy = {
       score === null ? `No score, ${dist}, ${time}.` : `Score ${score} out of 100, ${dist}, ${time}${tier === null ? '' : `, merit ${tier} of 5`}.`,
   },
   share: 'Share',
-  notSynced: "Not synced yet. We'll keep trying.",
+  notSynced: "Not synced yet. RoadWise will keep trying.",
   /** A drive whose upload the server turned down for good. */
   syncRefused: "Couldn't sync this drive. It stays on this phone.",
   states: {
@@ -46,7 +46,7 @@ export const recapCopy = {
     label: (left: number | null) => (left === null ? "Wasn't driving" : `Wasn't driving (${left} left this month)`),
     title: "Wasn't driving?",
     body: "Use this if someone else was behind the wheel. This drive won't count toward your Safety Rating.",
-    left: (left: number | null) => (left === null ? 'You can do this 2 times a month.' : `You can do this 2 times a month. You have ${left} left.`),
+    left: (left: number | null) => (left === null ? 'Use this up to 2 times a month.' : `Use this up to 2 times a month. You have ${left} left.`),
     error: "That didn't go through. You can only mark a drive within a day of it.",
     confirm: "Yes, I wasn't driving",
     cancel: 'Cancel',
@@ -80,7 +80,7 @@ export const recapCopy = {
   /** "4 passenger rides this month": own Analytics and the profile friends see. */
   passengerRides: (n: number) => `${n} passenger ${n === 1 ? 'ride' : 'rides'} this month`,
   report: {
-    sent: "Thanks. We'll check it and update this drive.",
+    sent: "Thanks. RoadWise will check it and update this drive.",
     accepted: 'Report accepted · event removed',
   },
   history: {

@@ -294,14 +294,14 @@ describe('Settings › DashPal', () => {
     await tap('dashcam-add-phone');
     expect(rt.log).toEqual(['addPhone']);
     expect(await screen.findByTestId('add-phone-left')).toHaveTextContent(dashpalCopy.screen.addPhoneSheet.left('2:00'));
-    expect(screen.getByTestId('add-phone-body')).toHaveTextContent('On the other phone, open RoadWise › Settings › DashPal › Set up DashPal.');
+    expect(screen.getByTestId('add-phone-body')).toHaveTextContent('On the other phone, open RoadWise and go to Settings › DashPal › Set up DashPal.');
     expect(screen.queryByTestId('add-phone-qr')).toBeNull();
     expect(screen.queryByTestId('add-phone-code')).toBeNull();
     await tap('add-phone-done');
     expect(screen.queryByTestId('add-phone-left')).toBeNull();
   });
 
-  it('Add another phone after its 2 minutes: “Pairing has closed. Open it again to add a phone.”', async () => {
+  it('Add another phone after its 2 minutes: “Pairing is closed. Open it again to add a phone.”', async () => {
     const rt = createFakeDashcamRuntime({ link: { lifecycle: 'connected', paired: PAIRED, status: { state: 3, flags: 0, fpsX10: 200, tempC: 40, bondCount: 1, at: 1 } } });
     rt.addPhoneResult = { openedAt: 1000 };
     setActiveDashcam(rt);
@@ -682,7 +682,7 @@ describe('Home: the card of a DashPal ready to pair', () => {
 });
 
 describe('the onboarding step', () => {
-  it('asks nothing until "Find my DashPal"; Not now moves on', async () => {
+  it('asks nothing until "Find your DashPal"; Not now moves on', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
     const adapter = fakeAdapter();
     const onNext = jest.fn();
@@ -708,7 +708,7 @@ describe('the onboarding step', () => {
     expect(dashpalCopy.onboarding.asks(platform, api)).toBe(line);
   });
 
-  it('"Find my DashPal" opens the setup sheet in search mode (it opts in and asks there); a finished setup moves on, one closed before stays', async () => {
+  it('"Find your DashPal" opens the setup sheet in search mode (it opts in and asks there); a finished setup moves on, one closed before stays', async () => {
     setActiveDashcam(createFakeDashcamRuntime());
     const s = scriptedFlow();
     const onNext = jest.fn();

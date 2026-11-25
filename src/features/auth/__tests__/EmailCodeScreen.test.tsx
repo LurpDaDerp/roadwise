@@ -58,7 +58,7 @@ const seconds = async (n: number) => {
 test('a title, the line naming the address, and a one-time-code field iOS can fill from the mail', async () => {
   await mount();
   expect(screen.getByRole('header')).toHaveTextContent('Check your email');
-  expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+  expect(screen.getByText('RoadWise sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
   const field = screen.getByLabelText(CODE.name);
   expect(field.props.textContentType).toBe('oneTimeCode');
   expect(field.props.autoComplete).toBe('one-time-code');
@@ -129,10 +129,10 @@ test('a resend clears the old code, says a new one went out, and waits another m
   await fireEvent.changeText(screen.getByLabelText(CODE.name), '12');
   await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
   expect(onResend).toHaveBeenCalledTimes(1);
-  expect(await screen.findByText('We sent a new code.')).toBeOnTheScreen();
+  expect(await screen.findByText('A new code is on its way.')).toBeOnTheScreen();
   expect(screen.getByLabelText(CODE.name).props.value).toBe('');
   expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
-  expect(spoken()).toEqual(['We sent a new code.']);
+  expect(spoken()).toEqual(['A new code is on its way.']);
 });
 
 test.each([
@@ -250,12 +250,12 @@ test('a resend Auth refuses as too soon (one went out within the minute) waits t
   await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
   expect(await screen.findByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+  expect(screen.getByText('RoadWise sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
 });
 
 test('a sent resend turns the line into "We sent"', async () => {
   await mount({ codeSent: false });
   expect(screen.queryByText(/We sent an/)).toBeNull();
   await fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
-  expect(await screen.findByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+  expect(await screen.findByText('RoadWise sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
 });

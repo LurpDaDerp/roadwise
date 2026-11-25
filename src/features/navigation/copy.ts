@@ -12,7 +12,7 @@ export const navCopy = {
   gone: (app: string) => `${app} isn't on this phone anymore.`,
   failed: (app: string) => `${app} didn't open.`,
   empty: 'No navigation app found on this phone.',
-  footer: 'You can change it in Settings › Driving.',
+  footer: 'To change it, go to Settings › Driving.',
   cancel: 'Cancel',
   close: 'Close',
   selected: 'Selected',

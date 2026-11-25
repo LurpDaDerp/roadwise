@@ -7,14 +7,14 @@ import { CODE_LENGTH, RESEND_COOLDOWN_S, type ResendResult, type VerifyResult } 
 
 export const emailCodeCopy = {
   title: 'Check your email',
-  sentTo: (email: string) => `We sent an 8-digit code to ${email}.`,
+  sentTo: (email: string) => `RoadWise sent an 8-digit code to ${email}.`,
   noCodeYet: (email: string) => `Confirm ${email} with an 8-digit code.`,
   codeLabel: '8-digit code',
   confirm: 'Confirm',
   tryAgain: 'Try again',
   resend: 'Resend code',
   resendIn: (seconds: number) => `Resend code in ${seconds} s`,
-  resent: 'We sent a new code.',
+  resent: 'A new code is on its way.',
   changeEmail: 'Use a different email',
   wrongCode: 'That code is wrong or has expired. Check it, or send a new one.',
   rateLimited: 'Too many tries. Try again later.',

@@ -18,7 +18,7 @@ import { wrappedCopy as copy } from './copy';
 import { monthName } from './month';
 import { CARD_EXPORT } from './SummaryCard';
 
-/** "My October on RoadWise: Spotless Commuter. https://getroadwise.app/w/Ab3dEf7hJk9m" (`roadwise://w/...` in a build with no link domain). */
+/** "My October on RoadWise: Spotless commuter. https://getroadwise.app/w/Ab3dEf7hJk9m" (`roadwise://w/...` in a build with no link domain). */
 export function shareMessage(core: Pick<WrappedCore, 'month' | 'archetype'>, link: string): string {
   return copy.summary.shareMessage(monthName(core.month), archetypeName(core.archetype), link);
 }

@@ -358,7 +358,7 @@ describe('creating an account with an email and password', () => {
     await tick();
     await fill({ password: 'Password123', confirm: 'Password123' });
     expect(screen.getByRole('button', REGISTER)).toBeDisabled();
-    expect(screen.getByText("That password is too easy to guess. Avoid common words, keyboard runs and your email's name.")).toBeOnTheScreen();
+    expect(screen.getByText("That password is too easy to guess. Avoid common words, keyboard runs, and your email's name.")).toBeOnTheScreen();
     await fill({ email: 'zelda.quinn@example.com', password: 'zeldaquinn7', confirm: 'zeldaquinn7' });
     expect(screen.getByRole('button', REGISTER)).toBeDisabled();
   });
@@ -503,7 +503,7 @@ describe('confirming the address with the mailed code', () => {
 
   test('a sign-up goes to the code screen, naming the address', async () => {
     await register();
-    expect(screen.getByText('We sent an 8-digit code to Ava@Example.com.')).toBeOnTheScreen();
+    expect(screen.getByText('RoadWise sent an 8-digit code to Ava@Example.com.')).toBeOnTheScreen();
     expect(screen.getByLabelText('8-digit code').props.textContentType).toBe('oneTimeCode');
     expect(screen.getByRole('button', { name: 'Resend code in 60 s' })).toBeDisabled();
     expect(screen.queryByLabelText('Password')).toBeNull();
@@ -590,7 +590,7 @@ describe('confirming the address with the mailed code', () => {
     mockResend.mockResolvedValueOnce('too_soon');
     await signInUnconfirmed();
     expect(await screen.findByText('Check your email')).toBeOnTheScreen();
-    expect(screen.getByText('We sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
+    expect(screen.getByText('RoadWise sent an 8-digit code to ava@example.com.')).toBeOnTheScreen();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

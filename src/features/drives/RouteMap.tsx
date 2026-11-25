@@ -116,8 +116,8 @@ const SAME_TAP_MS = 400;
 const SPOKEN: Record<EventType, [string, string]> = {
   speeding: ['speeding', 'speeding'],
   hard_brake: ['hard brake', 'hard brakes'],
-  hard_accel: ['hard acceleration', 'hard accelerations'],
-  hard_corner: ['hard corner', 'hard corners'],
+  hard_accel: ['hard start', 'hard starts'],
+  hard_corner: ['sharp turn', 'sharp turns'],
   phone_pickup: ['phone pickup', 'phone pickups'],
   eyes_off: ['eyes off road', 'eyes off road'],
   drowsy: ['drowsy alert', 'drowsy alerts'],

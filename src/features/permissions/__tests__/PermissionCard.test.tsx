@@ -155,7 +155,7 @@ test('a swipe asks "Don\'t remind me again?" naming the permission; Cancel and a
   });
   const [title, message, buttons, options] = lastAlert();
   expect(title).toBe("Don't remind me again?");
-  expect(message).toBe("Home won't remind you about Motion & Fitness again. You can undo this in Profile › Settings › Permissions.");
+  expect(message).toBe("Home won't remind you about Motion & Fitness again. To undo this, go to Profile › Settings › Permissions.");
   expect(buttons.map((b) => [b.text, b.style])).toEqual([
     ['Cancel', 'cancel'],
     ["Don't remind me", 'destructive'],
@@ -341,7 +341,7 @@ test("Android: Battery Saver limiting location is its own Home row, and Don't re
   await act(async () => {
     (mockSwipeProps.onSwipeableOpen as () => void)();
   });
-  expect(lastAlert()[1]).toBe("Home won't remind you about Battery Saver again. You can undo this in Profile › Settings › Permissions.");
+  expect(lastAlert()[1]).toBe("Home won't remind you about Battery Saver again. To undo this, go to Profile › Settings › Permissions.");
   await act(async () => {
     lastAlert()[2][1]!.onPress?.();
   });

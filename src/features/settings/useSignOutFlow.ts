@@ -10,7 +10,7 @@ export const signOutCheckCopy = {
       ? "1 drive or report hasn't uploaded yet. If you sign out, it uploads next time you sign in on this phone."
       : `${n} drives or reports haven't uploaded yet. If you sign out, they upload next time you sign in on this phone.`,
   unknown:
-    "We couldn't check if everything uploaded. Anything left uploads next time you sign in on this phone.",
+    "RoadWise couldn't check if everything uploaded. Anything left uploads next time you sign in on this phone.",
   cancel: 'Cancel',
   confirm: 'Sign out',
   failedTitle: "Couldn't sign out",

@@ -251,7 +251,7 @@ describe('the road’s words', () => {
   });
 
   test('what a screen reader hears', () => {
-    expect(roadSpoken('Wet roads', { g: 'wet' })).toBe('Wet roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
+    expect(roadSpoken('Wet roads', { g: 'wet' })).toBe('Wet roads. Speeding warnings come at a lower speed, and hard braking, start, and turn warnings at a lighter touch.');
     expect(roadSpoken('Low visibility', { cap: 45 })).toBe('Low visibility. Speeding warnings come at a lower speed.');
   });
 });

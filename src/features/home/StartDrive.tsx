@@ -27,7 +27,7 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
   switch (cause) {
     case 'walking':
     case 'manual':
-      if (reason === 'no_gps') return 'There was no GPS signal, so the drive wasn’t saved.';
+      if (reason === 'no_gps') return 'The phone had no GPS signal, so the drive wasn’t saved.';
       return reason === 'not_driven' ? 'The car never reached driving speed, so the drive wasn’t saved.' : 'The car never moved, so the drive wasn’t saved.';
     case 'orphan':
       if (reason === 'no_gps') return 'RoadWise closed during a drive with no GPS signal, so it wasn’t saved.';
@@ -36,7 +36,7 @@ export function dropCopy(cause: EndCause, reason: DropReason): string {
         : 'RoadWise closed during a drive that never moved, so it wasn’t saved.';
     case 'stopped':
     case 'limit':
-      if (reason === 'no_gps') return 'Drive ended: there was no GPS signal, so it wasn’t saved.';
+      if (reason === 'no_gps') return 'Drive ended: the phone had no GPS signal, so it wasn’t saved.';
       return reason === 'not_driven'
         ? 'Drive ended: the car never reached driving speed, so it wasn’t saved.'
         : `Drive ended: the car didn’t move for ${IDLE_MIN} min, so it wasn’t saved.`;

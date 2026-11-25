@@ -257,9 +257,9 @@ describe('weatherSums and weatherView', () => {
 
   test('the copy, in either unit', () => {
     const w = analyticsCopy.weather;
-    expect(w.text({ kind: 'worse', ratio: 2 }, 'mi')).toBe('In rain or snow you have 2× the events per mile. Slow down and leave more room.');
-    expect(w.text({ kind: 'worse', ratio: 1.6 }, 'km')).toBe('In rain or snow you have 1.6× the events per kilometer. Slow down and leave more room.');
-    expect(w.text({ kind: 'worse', ratio: null }, 'mi')).toBe('In rain or snow you have more events per mile. Slow down and leave more room.');
+    expect(w.text({ kind: 'worse', ratio: 2 }, 'mi')).toBe('In rain or snow, you have 2× the events per mile. Slow down and leave more room.');
+    expect(w.text({ kind: 'worse', ratio: 1.6 }, 'km')).toBe('In rain or snow, you have 1.6× the events per kilometer. Slow down and leave more room.');
+    expect(w.text({ kind: 'worse', ratio: null }, 'mi')).toBe('In rain or snow, you have more events per mile. Slow down and leave more room.');
     expect(w.text({ kind: 'smooth', ratio: null }, 'mi')).toBe('You drive as smoothly in rain or snow as in the dry. Nice.');
     expect(w.text({ kind: 'bumpier', ratio: null }, 'km')).toBe('Rain and snow make your drives a little bumpier. Give yourself extra time.');
     expect(w.detail(1, '12 mi')).toBe('1 drive in rain or snow · 12 mi');

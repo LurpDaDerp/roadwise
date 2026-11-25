@@ -52,7 +52,7 @@ describe('while the road state moves the warning lines', () => {
     await render(<WeatherBanner alert={null} road={{ road: { g: 'wet' }, title: 'Wet roads' }} units="mi" palette={HUD.day} compact={false} onDismiss={() => {}} />);
     expect(screen.getByTestId('hud-weather-title')).toHaveTextContent('Wet roads', { exact: true });
     expect(screen.getByTestId('hud-weather')).not.toHaveTextContent(/sooner|beams|brakes|wheel|extra room|take it|stay off/i);
-    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Wet roads. Speeding warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch.');
+    expect(screen.getByRole('alert')).toHaveProp('accessibilityLabel', 'Wet roads. Speeding warnings come at a lower speed, and hard braking, start, and turn warnings at a lighter touch.');
   });
 
   test('with an alert: the alert\'s title alone; visibility alone moves only the speed', async () => {

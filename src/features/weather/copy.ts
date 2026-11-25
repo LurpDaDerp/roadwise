@@ -155,11 +155,11 @@ export function roadKind(road: RoadStamp | null | undefined): RoadKind | null {
 
 /**
  * What a screen reader hears for the card while the warning lines are moved: "Wet roads. Speeding
- * warnings come at a lower speed, and hard braking, start and turn warnings at a lighter touch."
+ * warnings come at a lower speed, and hard braking, start, and turn warnings at a lighter touch."
  * The second part only when a grip moves the hard-event lines (visibility alone moves only the
  * speed's).
  */
 export function roadSpoken(title: string, road: RoadStamp): string {
-  const touch = isRoadGrip(road.g) ? ', and hard braking, start and turn warnings at a lighter touch' : '';
+  const touch = isRoadGrip(road.g) ? ', and hard braking, start, and turn warnings at a lighter touch' : '';
   return `${title}. Speeding warnings come at a lower speed${touch}.`;
 }

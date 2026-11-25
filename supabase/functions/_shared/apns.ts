@@ -23,7 +23,7 @@ export const START_EXPIRATION_S = 600;
 export const REQUEST_TIMEOUT_MS = 8000;
 
 /** What the start push says on the lock screen while the activity appears (ActivityKit requires an alert). */
-export const START_ALERT = { title: 'Recording your drive', body: 'Tap to open it. Not driving? You can stop it there.' } as const;
+export const START_ALERT = { title: 'Recording your drive', body: 'Select to open your drive. Not driving? Stop it there.' } as const;
 
 export interface ApnsConfig {
   keyId: string;

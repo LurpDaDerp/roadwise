@@ -12,7 +12,7 @@ export const dashpalCopy = {
   screen: {
     title: 'DashPal',
     intro:
-      'DashPal is a dashcam that watches for drowsiness and eyes off the road. Once paired, its alerts play on your phone and its events count toward Attention in your Safety Rating.',
+      'DashPal is a dashcam that watches for drowsiness and eyes off the road. After you pair it, its alerts play on your phone and its events count toward Attention in your Safety Rating.',
     setUp: 'Set up DashPal',
     status: {
       connected: 'Connected',
@@ -28,12 +28,12 @@ export const dashpalCopy = {
     },
     fix: {
       notInRange: 'Your phone connects on its own when your DashPal is on and nearby.',
-      bluetoothOff: 'Turn Bluetooth on to hear DashPal alerts on your phone. Until then, DashPal beeps on its own.',
+      bluetoothOff: 'Turn on Bluetooth to hear DashPal alerts on your phone. Until then, DashPal beeps on its own.',
       notAllowed: 'Allow Bluetooth for RoadWise in Settings to connect to your DashPal.',
       needsRepair: 'Your DashPal doesn’t know this phone anymore. Set it up again.',
-      downgrade: 'This DashPal needs a firmware update. Your phone will reconnect once it’s updated.',
-      updateApp: 'This DashPal needs a newer RoadWise. Update the app and your phone will reconnect.',
-      unverified: 'Your phone can’t confirm this is your DashPal. It’ll keep trying. If this doesn’t clear up, set it up again.',
+      downgrade: 'This DashPal needs a firmware update. Your phone reconnects after the update.',
+      updateApp: 'This DashPal needs a newer version of RoadWise. Update the app to reconnect.',
+      unverified: 'Your phone can’t confirm this is your DashPal and keeps trying. If this message stays, set up DashPal again.',
       openSettings: 'Open Settings',
       setUpAgain: 'Set up again',
     },
@@ -43,22 +43,22 @@ export const dashpalCopy = {
     addPhone: 'Add another phone',
     addPhoneSheet: {
       title: 'Add another phone',
-      body: 'On the other phone, open RoadWise › Settings › DashPal › Set up DashPal.',
+      body: 'On the other phone, open RoadWise and go to Settings › DashPal › Set up DashPal.',
       left: (time: string) => `Pairing is open for ${time}`,
-      ended: 'Pairing has closed. Open it again to add a phone.',
+      ended: 'Pairing is closed. Open it again to add a phone.',
       done: 'Done',
     },
     addPhoneNeedsLink: 'Connect to your DashPal first.',
-    newPhone: 'A new phone paired with your DashPal. Not yours? Press its button 10 times in 6 seconds to clear all phones.',
+    newPhone: 'A new phone is paired with your DashPal. If it isn’t yours, press DashPal’s button 10 times in 6 seconds to clear all phones.',
     newPhoneOk: 'OK',
     /** Home's card closes with its ✕. */
     newPhoneDismiss: 'Close',
     phonesPaired: (n: number) => `Phones paired: ${n}`,
-    phonesPairedHelp: 'See a phone you don’t know? Press DashPal’s button 10 times in 6 seconds to clear all phones, then set yours up again.',
+    phonesPairedHelp: 'Don’t recognize a phone? Press DashPal’s button 10 times in 6 seconds to clear all phones, then set up your phone again.',
     forget: 'Forget DashPal',
     forgetConfirm: {
       title: 'Forget DashPal?',
-      body: 'This phone will stop connecting to it and won’t get its alerts or events.',
+      body: 'This phone stops connecting to DashPal and won’t get its alerts or events.',
       confirm: 'Forget',
       cancel: 'Cancel',
     },
@@ -68,11 +68,11 @@ export const dashpalCopy = {
     reaim: {
       needs: 'Camera needs adjusting',
       title: 'Adjust DashPal’s camera',
-      good: 'Good position. Sit as you drive, look at the road, then tap Done.',
+      good: 'Good position. Sit as you drive, look at the road, then select Done.',
       privacy: 'The picture is encrypted and goes only to this phone. It’s never saved. DashPal beeps twice, and its light blinks dash-dot while it sends.',
-      recalibrates: 'When you tap Done, DashPal relearns where the road is.',
-      offline: 'Connect to DashPal first. Turn the car on and keep RoadWise open.',
-      unsupported: 'This DashPal needs a firmware update to show its camera here. Tap Done to recalibrate it.',
+      recalibrates: 'When you select Done, DashPal relearns where the road is.',
+      offline: 'Connect to DashPal first. Turn on the car and keep RoadWise open.',
+      unsupported: 'This DashPal needs a firmware update to show its camera here. Select Done to recalibrate it.',
       refused: {
         moving: 'Stop the car to adjust the camera.',
         drive: 'Stop the car to adjust the camera.',
@@ -89,7 +89,7 @@ export const dashpalCopy = {
       tryAgain: 'Try again',
       done: 'Done',
       homeTitle: 'Adjust DashPal’s camera',
-      homeBody: 'It can’t see you well. Tap to re-aim it.',
+      homeBody: 'It can’t see you well. Select this card to re-aim it.',
       homeHint: 'Opens DashPal’s camera view',
       homeNotNow: 'Not now',
     },
@@ -98,7 +98,7 @@ export const dashpalCopy = {
   setup: {
     permission: 'RoadWise needs Bluetooth to find your DashPal.',
     denied: 'Bluetooth isn’t allowed for RoadWise. Allow it in Settings, then try again.',
-    off: 'Turn Bluetooth on, then try again.',
+    off: 'Turn on Bluetooth, then try again.',
     unavailable: 'This phone doesn’t support Bluetooth LE.',
   },
 
@@ -116,7 +116,7 @@ export const dashpalCopy = {
     step: (i: number, n: number) => `Step ${i} of ${n}`,
     search: {
       title: 'Looking for your DashPal…',
-      body: 'Turn it on. If it doesn’t show up, press its button 5 times.',
+      body: 'Turn on DashPal. If it doesn’t appear, press its button 5 times.',
       chooseTitle: 'Which DashPal is yours?',
       chooseNew: 'New',
       chooseOpen: 'Has phones paired',
@@ -142,8 +142,8 @@ export const dashpalCopy = {
       title: 'Aim DashPal at your face',
       steps: [
         'Put DashPal low in front of you, where it sees your whole face without blocking the road.',
-        'Tap Start to see what DashPal sees. Move it until the frame turns blue and says Good position. Your face doesn’t need to be centered.',
-        'Sit in your normal driving position, hands on the wheel and eyes on the road. If the frame stays blue, tap Next.',
+        'Select Start to see what DashPal sees. Move it until the frame turns blue and says Good position. Your face doesn’t need to be centered.',
+        'Sit in your normal driving position, hands on the wheel and eyes on the road. If the frame stays blue, select Next.',
       ],
       privacy: 'The picture is encrypted and goes only to this phone. It’s never saved and stops when you leave this step. DashPal’s light blinks dash-dot while it sends.',
       start: 'Start',
@@ -158,7 +158,7 @@ export const dashpalCopy = {
       good: 'Good position',
       /** By the hint DashPal sends; 2 and 3 are the picture's sides as the phone shows it (a mirror), see `aim.ts`. */
       hint: {
-        0: 'Good position. Sit as you drive, look at the road, then tap Next.',
+        0: 'Good position. Sit as you drive, look at the road, then select Next.',
         1: 'Can’t see your face. Point DashPal at your face.',
         2: 'Your face is near the left edge. Turn DashPal to center it.',
         3: 'Your face is near the right edge. Turn DashPal to center it.',
@@ -182,7 +182,7 @@ export const dashpalCopy = {
         camera: 'DashPal’s camera isn’t ready. Try again in a moment.',
         memory: 'DashPal’s camera isn’t ready. Try again in a moment.',
         no_state: 'The picture stopped. Try again.',
-        mtu: 'Your phone’s Bluetooth can’t show the picture. You can go on without it.',
+        mtu: 'Your phone’s Bluetooth can’t show the picture. Continue without it.',
         not_allowed: 'Your other phone already aimed DashPal.',
         hold_ended: 'Setup ended. Try again.',
         ok: 'The picture stopped. Try again.',
@@ -196,7 +196,7 @@ export const dashpalCopy = {
       title: 'DashPal is ready',
       body: (n: string) => `${n} connects on its own whenever it’s on and nearby.`,
       phones: (k: number) => `${k} phones are paired with this DashPal.`,
-      notAllYours: 'Not all yours? Press its button 10 times in 6 seconds to clear all phones.',
+      notAllYours: 'If some aren’t yours, press DashPal’s button 10 times in 6 seconds to clear all phones.',
       aimedElsewhere: 'Your other phone already aimed it.',
       button: 'Done',
     },
@@ -215,9 +215,9 @@ export const dashpalCopy = {
       unverified: 'Couldn’t verify this DashPal.',
       update_firmware: 'Update this DashPal’s firmware, then set it up.',
       update_app: 'Update RoadWise, then set up this DashPal.',
-      mtu: 'Couldn’t connect securely. Turn Bluetooth off and on, then try again.',
+      mtu: 'Couldn’t connect securely. Turn Bluetooth off and back on, then try again.',
       ios_forget_first:
-        'Your phone remembers an old pairing. In Settings › Bluetooth, tap ⓘ next to DashPal, choose Forget This Device, then try again.',
+        'Your phone remembers an old pairing. In Settings › Bluetooth, select ⓘ next to DashPal, select Forget This Device, and then try again.',
       lost: (n: string | null) => `Lost the connection to ${n ?? 'your DashPal'}. Try again.`,
       expired: 'Setup took too long. Try again.',
       save_failed: 'DashPal couldn’t save the pairing. Try again.',
@@ -229,7 +229,7 @@ export const dashpalCopy = {
   },
 
   onboarding: {
-    title: 'Got a DashPal dashcam?',
+    title: 'Do you have a DashPal dashcam?',
     body: 'Set it up now, or later in Settings.',
     /** What setting it up asks the phone for (Bluetooth scans use location on Android 11 and lower). */
     asks: (platform: 'ios' | 'android', androidApi: number | null): string =>
@@ -238,7 +238,7 @@ export const dashpalCopy = {
         : (androidApi ?? 31) >= 31
           ? 'Setting it up asks for Nearby devices (Bluetooth).'
           : 'Setting it up uses Location to find it.',
-    find: 'Find my DashPal',
+    find: 'Find your DashPal',
     notNow: 'Not now',
   },
 

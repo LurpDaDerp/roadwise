@@ -306,7 +306,7 @@ describe('the heat map row opens who can see it', () => {
 
 it('the block confirmation points at Blocked users on the Profile tab, where the list is', () => {
   expect(profileCopy.public.blockBody).toBe(
-    "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Profile › Blocked users."
+    "They can't find or add you, and you won't see each other on the Friends tab. To unblock them, go to Profile › Blocked users."
   );
   expect(profileCopy.public.blockBody).toContain(profileCopy.rows.blocked.title);
 });

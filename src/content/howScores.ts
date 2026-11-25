@@ -77,8 +77,8 @@ function weatherLine(): string {
   const f = SPEED_FACTOR_PCT;
   const caps = SIGHT_CAPS_MPH;
   return (
-    `In rain, snow, ice or fog RoadWise warns you sooner, because the car needs more room to stop. “${hudCopy.alert.speeding}” comes as if the limit were ${f.wet}% of the posted one on a wet road, ${f.water}% in heavy rain, ${f.snow}% on snow and ${f.ice}% on ice, and ${Math.max(...caps)} mph down to ${Math.min(...caps)} mph in fog, the less you can see the lower. ` +
-    'Hard brake, start and turn warnings come at a lighter touch on a wet road, and lighter still on snow or ice. These warnings show the weather’s icon and color, and they never change your score. The weather comes from a forecast model for where you are.'
+    `In rain, snow, ice, or fog, RoadWise warns you sooner, because the car needs more room to stop. “${hudCopy.alert.speeding}” comes as if the limit were ${f.wet}% of the posted one on a wet road, ${f.water}% in heavy rain, ${f.snow}% on snow, and ${f.ice}% on ice. In fog, it comes at ${Math.max(...caps)} mph down to ${Math.min(...caps)} mph, lower the less you can see. ` +
+    'Hard brake, start, and turn warnings come at a lighter touch on a wet road, and lighter still on snow or ice. These warnings show the weather’s icon and color, and they never change your score. The weather comes from a forecast model for where you are.'
   );
 }
 
@@ -102,7 +102,7 @@ function heavierLine(): string {
   }
   return [...groups]
     .map(([w, names]) => {
-      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
+      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')}${names.length > 2 ? ',' : ''} and ${names[names.length - 1]}` : names[0]!;
       return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${names.length > 1 ? 'count' : 'counts'} ${TIMES[w] ?? `${w} times`}.`;
     })
     .join(' ');
@@ -111,13 +111,13 @@ function heavierLine(): string {
 /** The three ideas: Home's How it works card and the top of How scores work. */
 export const howItWorks = (autoDrives: boolean): HowItem[] => [
   autoDrives
-    ? { icon: 'car-sport-outline', title: 'Drives record themselves', body: `Once you’re on the road, RoadWise starts recording. Riding along? Tap “${ND}”.` }
+    ? { icon: 'car-sport-outline', title: 'Drives record themselves', body: `Once you’re on the road, RoadWise starts recording. Riding along? Select “${ND}”.` }
     : { icon: 'car-sport-outline', title: 'Start, then drive', body: 'Swipe Start drive before you pull out. RoadWise records until you park.' },
-  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns, staying near the limit and leaving your phone alone all help.' },
+  { icon: 'speedometer-outline', title: 'Every drive gets a score', body: 'Gentle stops, smooth starts, easy turns, staying near the limit, and leaving your phone alone all help.' },
   {
     icon: 'shield-checkmark-outline',
     title: 'Grow your Safety Rating',
-    body: `It sums up your last ${RATING_WINDOW_DAYS} days. See how it compares on the Friends tab.`,
+    body: `It sums up your last ${RATING_WINDOW_DAYS} days. Go to the Friends tab to see how it compares.`,
   },
 ];
 
@@ -133,14 +133,14 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Your drive score',
     icon: 'speedometer-outline',
     lines: [
-      'Every drive gets a score from 0 to 100 for braking, starts, turns, speed and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
-      'Each one is measured against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive isn’t marked down just for having more stops.',
-      'Speed is judged by how much of your driving time with a known limit you spent over it, and by how far over.',
-      'Every event counts, and a more serious one counts more: a harder brake, start or turn, a longer or faster stretch over the limit, a longer pickup or one at a higher speed. Each is weighed against the whole drive, so one event marks a long drive down less than a short one.',
+      'Every drive gets a score from 0 to 100 for braking, starts, turns, speed, and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
+      'RoadWise measures each one against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive doesn’t score lower just for having more stops.',
+      'Speed counts how much of your driving time with a known limit you spent over it, and how far over.',
+      'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs each event against the whole drive, so one event lowers a long drive’s score less than a short one’s.',
       autoDrives
-        ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, it isn’t saved at all.`
-        : `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving isn’t saved at all.`,
-      'The score’s color and icon also weigh the drive’s length, so a short perfect drive stays modest while a long smooth drive earns the top.',
+        ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, RoadWise doesn’t save it at all.`
+        : `RoadWise doesn’t save a drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving.`,
+      'The score’s color and icon also weigh the drive’s length, so a short perfect drive gets a modest one and a long smooth drive gets the top one.',
       weatherLine(),
     ],
   },
@@ -149,9 +149,9 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Speeding',
     icon: 'speedometer-outline',
     lines: [
-      `Speeding starts a little over the posted limit, and a little further over on faster roads: about ${overAt(25)} mph over at 25 mph, ${overAt(35)} at 35, ${overAt(45)} at 45, ${overAt(55)} at 55 and ${overAt(65)} at 65.`,
-      `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and more the further over you are.`,
-      'Where the limit isn’t known, nothing counts as speeding.',
+      `Speeding starts a little over the posted limit, and a little further over on faster roads: about ${overAt(25)} mph over at 25 mph, ${overAt(35)} at 35, ${overAt(45)} at 45, ${overAt(55)} at 55, and ${overAt(65)} at 65.`,
+      `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and it counts more the further over you are.`,
+      'If RoadWise doesn’t know the limit, nothing counts as speeding.',
     ],
   },
   {
@@ -159,11 +159,11 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Phone use',
     icon: 'phone-portrait-outline',
     lines: [
-      'RoadWise notices when you pick up your phone while driving, from the phone’s motion alone. It never sees your screen, your apps or your messages.',
-      `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. Pick it up at a red light and put it down before you pull away, and it doesn’t count.`,
-      `Every second it stays in your hand while you’re moving adds to it. Put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s and it’s still one pickup.`,
-      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}), judged against your time at driving speed, so a long drive isn’t marked down for being long.`,
-      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, there’s no sound, but it’s still recorded and counts.`,
+      'RoadWise notices when you pick up your phone while driving, from the phone’s motion alone. It never sees your screen, your apps, or your messages.',
+      `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. If you pick it up at a red light and put it down before you pull away, it doesn’t count.`,
+      `Every second it stays in your hand while you’re moving adds to it. If you put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s, it’s still one pickup.`,
+      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}). RoadWise weighs pickups against your time at driving speed, so a long drive doesn’t score lower for being long.`,
+      `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, you don’t hear a sound, but the pickup is still recorded and counts.`,
     ],
   },
   {
@@ -173,9 +173,9 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     lines: [
       `Your Safety Rating rolls your last ${RATING_WINDOW_DAYS} days of drives into one score from 0 to 100.`,
       'Recent weeks count more, so better habits show up quickly and an old rough day fades.',
-      `It’s the average of your braking, starts, turns, speed, phone use and, with DashPal, attention scores. ${heavierLine()}`,
+      `It’s the average of your braking, starts, turns, speed, and phone use scores, plus attention with DashPal. ${heavierLine()}`,
       'New drivers start from a typical driver’s score, so one rough drive early on won’t sink you.',
-      'It’s fair to city and highway drivers alike, because each part is judged against your chances, not your miles.',
+      'It’s fair to city and highway drivers alike, because RoadWise judges each part against your chances, not your miles.',
       `You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`,
       'The time of day and how far you drive don’t change it.',
     ],
@@ -187,8 +187,8 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         icon: 'car-sport-outline',
         lines: [
           `Once you’re over ${n.autoMinMph} mph, RoadWise starts recording after about ${n.autoMaxHoldS} s, ${n.autoStepS} s sooner for every ${n.autoStepMph} mph faster, and right away from ${n.autoInstantMph} mph. Short stops in traffic don’t reset it, and the drive counts from the moment you set off.`,
-          `It ends once you park and walk away, or after ${IDLE_MIN} min parked.`,
-          `Riding along? Open RoadWise and tap “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
+          `The drive ends when you park and walk away, or after ${IDLE_MIN} min parked.`,
+          `Riding along? Open RoadWise and select “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
           `Want to get set before you leave? Swipe Start drive on Home. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
         ],
       }
@@ -199,7 +199,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
         lines: [
           `Swipe Start drive on Home before you pull out. RoadWise waits up to ${n.waitMin} min for you to get moving.`,
           `It records until you swipe End drive, park and walk away, or stay parked for ${IDLE_MIN} min.`,
-          `Riding along? Tap “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
+          `Riding along? Select “${ND}” on the drive screen. It appears once the car reaches driving speed and stays for your first ${n.notDrivingMin} minutes on that screen.`,
         ],
       },
   {
@@ -210,7 +210,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'With a DashPal, eyes off the road and drowsiness count toward Attention, but only on the miles it watched.',
       `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.`,
       'DashPal may sound an alarm at lower speeds, even when you’re stopped. Those alarms don’t count.',
-      'Without a DashPal, Attention is left out and your rating comes from the rest.',
+      'Without a DashPal, your rating leaves out Attention and comes from the other categories.',
     ],
   },
   {
@@ -218,8 +218,8 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Weekly goals and badges',
     icon: 'ribbon-outline',
     lines: [
-      'Each week brings three goals: no speeding, smooth driving and clean drives. They’re just for fun and never change your scores.',
-      'Badges mark milestones like First Drive, Clean 100, Clean 1,000 and Rain or Shine.',
+      'Each week brings three goals: no speeding, smooth driving, and clean drives. They’re just for fun and never change your scores.',
+      'Badges mark milestones like First Drive, Clean 100, Clean 1,000, and Rain or Shine.',
     ],
   },
   {
@@ -228,18 +228,18 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'people-outline',
     lines: [
       'The Friends tab ranks you and your friends by Safety Rating.',
-      'Friends see your Safety Rating. Your category scores, badges, driving stats and heat map stay private until you share them in Settings › Privacy.',
+      'Friends see your Safety Rating. Your category scores, badges, driving stats, and heat map stay private until you share them in Settings › Privacy.',
     ],
   },
   {
     id: 'mistakes',
-    title: 'If we got it wrong',
+    title: 'If RoadWise got it wrong',
     icon: 'flag-outline',
     lines: [
       'Every event on a drive has a Report link.',
-      `“Braked for a hazard”, “wrong speed limit” and “phone was mounted” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
+      `“Braked for a hazard”, “wrong speed limit”, and “phone was mounted” are accepted right away, up to ${DISPUTE_AUTO_PER_WEEK} times a week.`,
       `“DashPal got it wrong” is accepted right away too, up to ${CAMERA_DISPUTE_AUTO_PER_WEEK} times a week, on top of those.`,
-      `If someone else drove, “Wasn’t driving” takes the whole drive off. You can use it ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” hadn’t run out on that drive.`,
+      `If someone else drove, “Wasn’t driving” takes the whole drive off. It works ${NOT_DRIVING_PER_MONTH} times a month, within a day of the drive, as long as “${ND}” hadn’t run out on that drive.`,
       'Recorded drives can’t be deleted, so nobody can hide a rough drive.',
     ],
   },

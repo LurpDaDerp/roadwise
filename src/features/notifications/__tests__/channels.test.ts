@@ -63,7 +63,7 @@ describe('the channels', () => {
     expect(f.log).toEqual(['create:recaps', 'create:pushes', 'create:weather', 'create:drive_alerts', 'delete:trips', 'delete:updates']);
     expect(f.options).toEqual({
       recaps: { name: 'Drive recaps', description: 'Your recap when a drive ends.', importance: 4, showBadge: false, sound: null, enableVibrate: false },
-      pushes: { name: 'Updates', description: 'Your weekly recap, your monthly Wrapped and friend requests.', importance: 3, showBadge: false },
+      pushes: { name: 'Updates', description: 'Your weekly recap, your monthly Wrapped, and friend requests.', importance: 3, showBadge: false },
       weather: { name: 'Weather before your commute', description: 'A heads-up when bad weather is due around the time you usually leave.', importance: 3, showBadge: false, sound: null, enableVibrate: false },
       drive_alerts: { name: 'Are you driving?', description: 'Asks during a drive when your car isn’t connected, in case you’re a passenger.', importance: 3, showBadge: false, sound: null, enableVibrate: false },
     });

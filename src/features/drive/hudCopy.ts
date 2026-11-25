@@ -36,7 +36,7 @@ export const hudCopy = {
   /** The panel at 2:00 of waiting. */
   ask: {
     title: 'Still planning to drive?',
-    body: (min: number) => `We'll stop waiting in ${min} min.`,
+    body: (min: number) => `RoadWise stops waiting in ${min} min.`,
     keep: 'Keep waiting',
     cancel: 'Cancel',
   },
@@ -74,7 +74,7 @@ export const hudCopy = {
   crashed: {
     title: 'Something went wrong',
     retry: 'Try again',
-    spoken: "The driving screen hit a problem. If you're on a drive, it's still recording.",
+    spoken: "The driving screen stopped working. If you're on a drive, it's still recording.",
     retryHint: 'Reloads the driving screen.',
   },
   /**

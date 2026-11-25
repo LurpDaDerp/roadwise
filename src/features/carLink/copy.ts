@@ -24,7 +24,7 @@ export const carCopy = {
   screen: {
     title: 'Your car',
     get intro(): string {
-      return `Turn on your car and connect ${thisPhone()} to its Bluetooth or ${carScreen()}, then tap Use this car.`;
+      return `Turn on your car and connect ${thisPhone()} to its Bluetooth or ${carScreen()}, and then select Use this car.`;
     },
     now: 'Connected now',
     nothing: 'Nothing connected',
@@ -41,13 +41,13 @@ export const carCopy = {
     connected: 'Connected',
     forget: 'Forget car',
     forgetLabel: (name: string) => `Forget ${name}`,
-    note: 'Pairing your car starts and ends drives on time, helps RoadWise tell when you’re riding as a passenger, and remembers where you parked. RoadWise only checks what’s connected and never changes your audio.',
+    note: 'With your car paired, RoadWise starts and ends drives on time, tells when you’re riding as a passenger, and remembers where you parked. It only checks what’s connected and never changes your audio.',
     failed: 'That didn’t work. Try again.',
   },
   /** "Are you driving?": the note on an automatic drive whose route never held the car (`src/drive/passengerCheck.ts`). */
   passenger: {
     title: 'Are you driving?',
-    body: 'Your car isn’t connected. If you’re a passenger, tap to stop this drive.',
+    body: 'Your car isn’t connected. If you’re a passenger, select this to stop the drive.',
   },
   card: {
     dismiss: 'Close',

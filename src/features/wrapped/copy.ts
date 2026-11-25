@@ -37,7 +37,7 @@ export const wrappedCopy = {
   },
   smoothness: {
     title: 'Smoothness',
-    hard: 'Hard brakes, starts and turns',
+    hard: 'Hard brakes, starts, and turns',
     best: 'Best category',
   },
   phoneSpeed: {

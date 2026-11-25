@@ -32,14 +32,14 @@ export const profileCopy = {
     wrapped: { title: 'Wrapped', subtitle: 'Your monthly recaps' },
     heatmap: { title: 'Heat map', subtitle: 'Who can see your routes' },
     how: { title: 'How scores work', subtitle: 'Drive scores and your Safety Rating' },
-    settings: { title: 'Settings', subtitle: 'Privacy, alerts, notifications' },
-    account: { title: 'Account', subtitle: 'Sign out, export or delete' },
+    settings: { title: 'Settings', subtitle: 'Privacy, alerts, and notifications' },
+    account: { title: 'Account', subtitle: 'Sign out, export, or delete' },
     blocked: { title: 'Blocked users', subtitle: 'See and unblock' },
   },
 
   heatmap: {
     title: 'Heat map',
-    intro: 'To see the roads you drive most, open All trips in Analytics.',
+    intro: 'To see the roads you drive most, go to All trips in Analytics.',
     visibility: 'Who can see it',
     visibilityHint: 'It starts as Only me. Choose Friends and they’ll see it on your profile.',
     zones: 'Privacy zones',
@@ -84,7 +84,7 @@ export const profileCopy = {
     block: 'Block',
     blockTitle: (u: string) => `Block ${u}?`,
     /** The blocked list is a row on the Profile tab (Settings has none). */
-    blockBody: "They can't find or add you, and you won't see each other on the Friends tab. You can unblock them in Profile › Blocked users.",
+    blockBody: "They can't find or add you, and you won't see each other on the Friends tab. To unblock them, go to Profile › Blocked users.",
     cancel: 'Cancel',
     stats: 'Last 30 days',
     statsEmpty: 'No drives in the last 30 days.',
@@ -97,6 +97,6 @@ export const profileCopy = {
       impersonation: 'Pretending to be someone else',
       other: 'Something else',
     },
-    reported: "Thanks. We'll take a look.",
+    reported: "Thanks. RoadWise will look into it.",
   },
 } as const;

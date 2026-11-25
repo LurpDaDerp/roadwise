@@ -44,7 +44,7 @@ describe('onboarding copy', () => {
   it('tells an iPhone passenger to open RoadWise, then tap Not driving? on the drive screen', () => {
     const row = onboardingCopy.how.rows.ios[1]!;
     expect(row.title).toBe('Just riding along?');
-    expect(row.body).toBe(`Open RoadWise and tap "Not driving?" on the drive screen so that trip won't count.`);
+    expect(row.body).toBe(`Open RoadWise and select "Not driving?" on the drive screen so that trip won't count.`);
     expect(onboardingCopy.how.rows.android[1]).toEqual(row);
   });
 
@@ -60,18 +60,18 @@ describe('onboarding copy', () => {
       expect(rows[3]).toEqual({
         icon: 'phone-portrait-outline',
         title: 'Phone down',
-        body: 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps or messages.',
+        body: 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps, or messages.',
       });
     }
-    expect(onboardingCopy.motion.phone).toBe('RoadWise spots pickups from motion alone. It never sees your screen, apps or messages.');
+    expect(onboardingCopy.motion.phone).toBe('RoadWise spots pickups from motion alone. It never sees your screen, apps, or messages.');
   });
 
   it('says what motion access is for on each phone, and that speed, braking and phone pickups need none', () => {
     expect(onboardingCopy.motion.body.ios).toBe(
-      'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.'
+      'Motion & Fitness lets RoadWise tell driving from walking, so your drives start and end at the right time. RoadWise measures speed, braking, and phone pickups either way.'
     );
     expect(onboardingCopy.motion.body.android).toBe(
-      'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. Speed, braking and phone pickups are measured either way.'
+      'Physical activity lets RoadWise tell driving from walking, so your drives start and end at the right time. RoadWise measures speed, braking, and phone pickups either way.'
     );
     expect(onboardingCopy.motion.denied.android).toBe("Physical activity is off, so drives won't start on their own. Start them from Home, or turn it on in Settings.");
     for (const s of strings(onboardingCopy.motion)) expect(s).not.toMatch(/hard braking|detect/i);

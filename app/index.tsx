@@ -11,7 +11,7 @@ import { Banner, Button, Screen, Skeleton, Text } from '@/ui';
 
 export const launchCopy = {
   loading: 'Loading RoadWise',
-  failed: "We couldn't load your profile",
+  failed: "Couldn't load your profile",
   // True whatever the cause: there is no cached profile, and one read has to succeed first.
   failedBody: 'RoadWise needs to load your profile once before it can work offline.',
 } as const;

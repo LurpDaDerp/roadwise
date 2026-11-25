@@ -124,14 +124,14 @@ describe('the own story', () => {
     expect(screen.getByTestId('wrapped-goals')).toHaveTextContent('5 weekly goals done');
 
     await next();
-    expect(screen.getByTestId('wrapped-archetype-name')).toHaveTextContent('Spotless Commuter');
+    expect(screen.getByTestId('wrapped-archetype-name')).toHaveTextContent('Spotless commuter');
     expect(screen.getByTestId('wrapped-archetype-line')).toHaveTextContent(/^Clean drive after clean drive/);
 
     await next();
     expect(showing()).toBe('summary');
     const card = within(screen.getByTestId('wrapped-card'));
     expect(card.getByTestId('wrapped-card-month')).toHaveTextContent('October 2026');
-    expect(card.getByTestId('wrapped-card-name')).toHaveTextContent('Spotless Commuter');
+    expect(card.getByTestId('wrapped-card-name')).toHaveTextContent('Spotless commuter');
     expect(card.getByTestId('wrapped-card-miles')).toHaveTextContent(/212 mi/);
     expect(card.getByTestId('wrapped-card-cleanShare-chip')).toHaveTextContent('Better than 81% of drivers');
     expect(card.getByTestId('wrapped-card-hardPer100')).toHaveTextContent(/1\.4.*Hard events per 100 mi/);
@@ -162,7 +162,7 @@ describe('the own story', () => {
     const r = PixelRatio.get();
     expect(captureRef).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ format: 'png', width: 1080 / r, height: 1920 / r }));
     expect(mockRpc).toHaveBeenCalledWith('create_wrapped_share', { p_month: '2026-10' });
-    expect(shareSpy).toHaveBeenCalledWith({ url: 'file:///wrapped.png', message: 'My October on RoadWise: Spotless Commuter. roadwise://w/Ab3dEf7hJk9m' });
+    expect(shareSpy).toHaveBeenCalledWith({ url: 'file:///wrapped.png', message: 'My October on RoadWise: Spotless commuter. roadwise://w/Ab3dEf7hJk9m' });
     // Once shared, it can be stopped.
     answerRpc(mockRpc, { get_my_wrapped: myWrapped(), delete_wrapped_share: true });
     await tap('wrapped-stop-sharing');
@@ -289,8 +289,8 @@ describe('the archive', () => {
     answerRpc(mockRpc, { list_my_wrapped: [archiveEntry(), archiveEntry({ month: '2026-08', miles: 98, archetype: { style: 'lead_footed', pattern: 'road_tripper' } })] });
     const w = await appWorld();
     await w.render(<WrappedArchiveScreen />);
-    expect(await screen.findByLabelText('October 2026, Spotless Commuter')).toBeOnTheScreen();
-    expect(screen.getByLabelText('August 2026, Lead-Footed Road Tripper')).toBeOnTheScreen();
+    expect(await screen.findByLabelText('October 2026, Spotless commuter')).toBeOnTheScreen();
+    expect(screen.getByLabelText('August 2026, Lead-footed road tripper')).toBeOnTheScreen();
     await tap('wrapped-archive-2026-08');
     expect(mockRouter.push).toHaveBeenCalledWith('/wrapped/2026-08');
   });

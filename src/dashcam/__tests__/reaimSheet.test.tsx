@@ -57,7 +57,7 @@ afterEach(async () => {
   setSecureDialogsModuleForTests(undefined);
 });
 
-test('the live picture: the image as a mirror, a good aim says tap Done; screenshots are blocked; Done stops the picture without Recalibrate', async () => {
+test('the live picture: the image as a mirror, a good aim says select Done; screenshots are blocked; Done stops the picture without Recalibrate', async () => {
   const { rt, view } = connected();
   const onClose = jest.fn();
   await renderSheet(onClose);

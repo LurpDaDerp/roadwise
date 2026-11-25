@@ -253,7 +253,7 @@ export interface DisputeOutcome {
 export async function applyDisputeResult(tx: Db, action: Extract<TripAction, { action: 'dispute' }>, result: DisputeOutcome, now: number): Promise<void> {
   const events = createEventsRepo(tx);
   const trips = createTripsRepo(tx);
-  const message = result.status === 'accepted' ? null : result.rejectReason === 'quota' ? 'Weekly report limit reached.' : null;
+  const message = result.status === 'accepted' ? null : result.rejectReason === 'quota' ? "You've reached this week's report limit." : null;
   await events.update(action.eventId, { dispute_status: result.status, dispute_message: message, ...(result.status === 'accepted' ? { status: 'removed' as const } : {}) }, tx);
   if (result.status !== 'accepted') return;
   const trip = await trips.get(action.clientTripId, tx);
