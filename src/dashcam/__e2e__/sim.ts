@@ -1,4 +1,4 @@
-// The firmware's BLE link simulator (`deployment-stack/firmware/host/ble_sim.c`, its docs/BLE_PROTOCOL.md
+// The firmware's BLE link simulator (`dashpal/firmware/host/ble_sim.c`, its docs/BLE_PROTOCOL.md
 // §9) as a child process: the real `ble_link.c`, `ble_auth.c` and `ble_proto.c` (with mbedTLS) behind a
 // line protocol, run in WSL.
 //
@@ -37,7 +37,7 @@ declare const process: { env: Record<string, string | undefined>; platform: stri
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- Node's module, typed locally (see above)
 const cp = require('child_process') as ChildProcessModule;
 
-export const FW_REPO = process.env.DASHPAL_FW_REPO ?? '/mnt/c/Users/lurpd/Documents/dev/deployment-stack';
+export const FW_REPO = process.env.DASHPAL_FW_REPO ?? '/home/lurpd/dev/dashpal';
 export const SIM_PATH = process.env.DASHPAL_BLE_SIM ?? `${FW_REPO}/firmware/host/build/ble_sim`;
 
 /** The simulator command line: `wsl -e <binary>` on Windows, the binary itself elsewhere. */
