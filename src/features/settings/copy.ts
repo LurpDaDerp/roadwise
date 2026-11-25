@@ -77,7 +77,7 @@ export const settingsCopy = {
       categories: {
         title: 'Category scores',
         subtitle: 'Friends can see your category scores',
-        /** In the subtitle's place while Safety Rating is off: the scores average to the rating, so they wait on it. */
+        /** In the subtitle's place while Safety Rating is off: the scores make up the rating, so they wait on it. */
         needsRating: 'Turn on Safety Rating to share these.',
       },
       achievements: { title: 'Achievements', subtitle: 'Friends can see your badges' },

@@ -63,12 +63,19 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
     'Speeding starts a little over the posted limit, and a little further over on faster roads: about 3 mph over at 25 mph, 5 at 35, 6 at 45, 8 at 55, and 10 at 65.'
   );
   expect(all(true).join(' ')).not.toMatch(/school|construction|zone/);
-  expect(section(true, 'speeding')[1]).toBe('You hear a chime and see “Slow down” when you cross that line. Every second over it counts, and it counts more the further over you are.');
+  expect(section(true, 'speeding')[1]).toBe(
+    'You hear a chime and see “Slow down” when you cross that line. Every second over it counts, and it counts more the further over you are. The same amount over counts more on a slow street than on a highway.'
+  );
+  // How far over is judged against the road's limit (the speed weight's reference is the limit / 7).
+  expect(section(true, 'drive-score')[2]).toBe('Speed counts how much of your driving time with a known limit you spent over it, and how far over you went for that road.');
   // Every event counts, weighed by how serious it was and against the whole drive.
   expect(section(true, 'drive-score')[3]).toBe(
     'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs each event against the whole drive, so one event lowers a long drive’s score less than a short one’s.'
   );
   expect(all(true).join(' ')).not.toMatch(/Ease off within/);
+  // Attention is judged per second DashPal watched, not per mile.
+  expect(section(true, 'dashpal')[0]).toBe('With a DashPal, eyes off the road and drowsiness count toward Attention, but only for the time it watched.');
+  expect(all(true).join(' ')).not.toMatch(/miles it watched/);
   expect(section(true, 'dashpal')[1]).toBe('They count only at 10 mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.');
   expect(section(true, 'rating')).toContain(`You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`);
   expect(section(true, 'mistakes').join(' ')).toContain(`up to ${DISPUTE_AUTO_PER_WEEK} times a week`);
@@ -86,11 +93,13 @@ test('Phone use: felt from motion alone, never the screen; every number from the
   ]);
   expect(section(false, 'phone')).toEqual(section(true, 'phone'));
   expect(rules(true, N).find((s) => s.id === 'phone')).toMatchObject({ title: 'Phone use', icon: 'phone-portrait-outline' });
-  // The categories that count double come from the weights.
-  expect(AXIS_WEIGHT.phone).toBe(2);
+  // The weights come from AXIS_WEIGHT, heaviest first, against the categories that weigh one; the total is a
+  // weighted harmonic mean, so a low score pulls it down more than a high one lifts it.
+  expect(AXIS_WEIGHT).toEqual({ speed: 3, phone: 3, attention: 3, braking: 2, acceleration: 1, turning: 1 });
   expect(section(true, 'rating')).toContain(
-    'It’s the average of your braking, starts, turns, speed, and phone use scores, plus attention with DashPal. Phone use and speed count double.'
+    'It combines your braking, starts, turns, speed, and phone use scores, plus attention with DashPal. Speed, phone use, and attention count three times as much as starts and turns, and braking counts twice as much. A low score pulls your rating down more than a high score lifts it.'
   );
+  expect(section(true, 'rating').join(' ')).not.toMatch(/average|double|triple/);
   expect(section(true, 'drive-score')[0]).toMatch(/speed, and phone use/);
   expect(howItWorks(true)[1]!.body).toBe('Gentle stops, smooth starts, easy turns, staying near the limit, and leaving your phone alone all help.');
   expect(section(true, 'mistakes').join(' ')).toContain('“phone was mounted”');

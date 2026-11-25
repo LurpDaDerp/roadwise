@@ -7,7 +7,6 @@ import type { Ionicons } from '@expo/vector-icons';
 
 import { hudCopy } from '@/features/drive/hudCopy';
 import {
-  AXES,
   AXIS_WEIGHT,
   CAMERA_DISPUTE_AUTO_PER_WEEK,
   DASHCAM_MIN_MPH,
@@ -91,21 +90,32 @@ const AXIS_WORD: Record<AxisKey, string> = {
   phone: 'phone use',
   speed: 'speed',
 };
-const TIMES: Record<number, string> = { 2: 'double', 3: 'triple' };
+/** The order a sentence names the categories in: the weightiest first, as `AXIS_WEIGHT` lists them. */
+const SAY_ORDER: readonly AxisKey[] = ['speed', 'phone', 'attention', 'braking', 'acceleration', 'turning'];
+const TIMES: Record<number, string> = { 2: 'twice', 3: 'three times' };
 
-/** "Speed and phone use count double.": the categories that weigh more than one, from `AXIS_WEIGHT`. */
+/** "speed, phone use, and attention": a list in plain words, with the serial comma from three on. */
+const listOf = (names: string[]): string =>
+  names.length > 1 ? `${names.slice(0, -1).join(', ')}${names.length > 2 ? ',' : ''} and ${names[names.length - 1]}` : names[0]!;
+
+/**
+ * "Speed, phone use, and attention count three times as much as starts and turns, and braking counts
+ * twice as much.": the categories that weigh more than one, heaviest first, against those that weigh
+ * one, all from `AXIS_WEIGHT`.
+ */
 function heavierLine(): string {
   const groups = new Map<number, string[]>();
-  for (const a of AXES) {
-    const w = AXIS_WEIGHT[a];
-    if (w > 1) groups.set(w, [...(groups.get(w) ?? []), AXIS_WORD[a]]);
-  }
-  return [...groups]
-    .map(([w, names]) => {
-      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')}${names.length > 2 ? ',' : ''} and ${names[names.length - 1]}` : names[0]!;
-      return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${names.length > 1 ? 'count' : 'counts'} ${TIMES[w] ?? `${w} times`}.`;
-    })
-    .join(' ');
+  for (const a of SAY_ORDER) groups.set(AXIS_WEIGHT[a], [...(groups.get(AXIS_WEIGHT[a]) ?? []), AXIS_WORD[a]]);
+  const base = groups.get(1) ?? [];
+  const heavier = [...groups].filter(([w]) => w > 1).sort(([a], [b]) => b - a);
+  if (heavier.length === 0) return '';
+  const parts = heavier.map(([w, names], i) => {
+    const verb = names.length > 1 ? 'count' : 'counts';
+    const than = i === 0 && base.length > 0 ? ` as ${listOf(base)}` : '';
+    return `${listOf(names)} ${verb} ${TIMES[w] ?? `${w} times`} as much${than}`;
+  });
+  const line = parts.length > 1 ? `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}` : parts[0]!;
+  return `${line.charAt(0).toUpperCase()}${line.slice(1)}.`;
 }
 
 /** The three ideas: Home's How it works card and the top of How scores work. */
@@ -135,7 +145,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     lines: [
       'Every drive gets a score from 0 to 100 for braking, starts, turns, speed, and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
       'RoadWise measures each one against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive doesn’t score lower just for having more stops.',
-      'Speed counts how much of your driving time with a known limit you spent over it, and how far over.',
+      'Speed counts how much of your driving time with a known limit you spent over it, and how far over you went for that road.',
       'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs each event against the whole drive, so one event lowers a long drive’s score less than a short one’s.',
       autoDrives
         ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, RoadWise doesn’t save it at all.`
@@ -150,7 +160,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     icon: 'speedometer-outline',
     lines: [
       `Speeding starts a little over the posted limit, and a little further over on faster roads: about ${overAt(25)} mph over at 25 mph, ${overAt(35)} at 35, ${overAt(45)} at 45, ${overAt(55)} at 55, and ${overAt(65)} at 65.`,
-      `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and it counts more the further over you are.`,
+      `You hear a chime and see “${hudCopy.alert.speeding}” when you cross that line. Every second over it counts, and it counts more the further over you are. The same amount over counts more on a slow street than on a highway.`,
       'If RoadWise doesn’t know the limit, nothing counts as speeding.',
     ],
   },
@@ -173,7 +183,9 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     lines: [
       `Your Safety Rating rolls your last ${RATING_WINDOW_DAYS} days of drives into one score from 0 to 100.`,
       'Recent weeks count more, so better habits show up quickly and an old rough day fades.',
-      `It’s the average of your braking, starts, turns, speed, and phone use scores, plus attention with DashPal. ${heavierLine()}`,
+      ['It combines your braking, starts, turns, speed, and phone use scores, plus attention with DashPal.', heavierLine(), 'A low score pulls your rating down more than a high score lifts it.']
+        .filter(Boolean)
+        .join(' '),
       'New drivers start from a typical driver’s score, so one rough drive early on won’t sink you.',
       'It’s fair to city and highway drivers alike, because RoadWise judges each part against your chances, not your miles.',
       `You get a rating once you’ve driven ${RANKED_MIN_MILES} mi in the last ${RATING_WINDOW_DAYS} days.`,
@@ -207,7 +219,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'DashPal dashcam',
     icon: 'videocam-outline',
     lines: [
-      'With a DashPal, eyes off the road and drowsiness count toward Attention, but only on the miles it watched.',
+      'With a DashPal, eyes off the road and drowsiness count toward Attention, but only for the time it watched.',
       `They count only at ${DASHCAM_MIN_MPH} mph or more with good GPS. Each one counts more the faster you were going and the longer it lasted.`,
       'DashPal may sound an alarm at lower speeds, even when you’re stopped. Those alarms don’t count.',
       'Without a DashPal, your rating leaves out Attention and comes from the other categories.',

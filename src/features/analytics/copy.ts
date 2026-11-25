@@ -92,7 +92,7 @@ export const analyticsCopy = {
       label: 'How it works',
       hint: 'Explains the Safety Rating',
       title: 'How it works',
-      body: "Your Safety Rating is the average of your category scores, and Speed and Phone use count double. Each score covers your last 90 days, with recent weeks counting a bit more. It compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, and how often you pick up your phone at driving speed and how long you hold it while you're moving. You start at a typical driver's score, and each drive moves you from there.",
+      body: "Your Safety Rating combines your category scores. Speed, Phone use, and Attention count three times as much as Acceleration and Turning, and Braking counts twice as much. A low score pulls your rating down more than a high score lifts it. Each score covers your last 90 days, with recent weeks counting a bit more. It compares your slips to your chances to slip: hard brakes per slowdown, hard starts per speed-up, sharp turns per turn, how much of your driving is over the limit, how often you pick up your phone at driving speed and how long you hold it while you're moving, and with a DashPal, how often your eyes leave the road or you get drowsy in the time it watched. You start at a typical driver's score, and each drive moves you from there.",
     },
   },
   category: {

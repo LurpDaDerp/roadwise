@@ -227,7 +227,7 @@ export function SettingsScreen({ deps = {} }: { deps?: { appearance?: Appearance
   const dashcam = useDashcamSelector(dashcamStatus);
 
   const shownUnits = edit.value('units', profile?.units) ?? units;
-  // The category scores average to the Safety Rating, so friends get them only with the rating: while
+  // The category scores make up the Safety Rating, so friends get them only with the rating: while
   // the rating is not shared, Category scores is greyed with the reason, its own setting kept as is.
   const ratingOff = profile !== undefined && edit.value('share_rating', profile.share_rating) === false;
 
