@@ -146,7 +146,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'Every drive gets a score from 0 to 100 for braking, starts, turns, speed, and phone use, plus attention when DashPal rides along. A drive with no events scores 100.',
       'RoadWise measures each one against your chances: hard brakes against the times you slowed down, hard starts against the times you sped up, and sharp turns against the real turns you made. A busy city drive doesn’t score lower just for having more stops.',
       'Speed counts how much of your driving time with a known limit you spent over it, and how far over you went for that road.',
-      'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs each event against the whole drive, so one event lowers a long drive’s score less than a short one’s.',
+      'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs most events against the whole drive, so one hard brake lowers a long drive’s score less than a short one’s. A pickup costs the same however long the drive is.',
       autoDrives
         ? `A drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving gets no score. If you started it with Start drive, RoadWise doesn’t save it at all.`
         : `RoadWise doesn’t save a drive under ${MIN_SCORED_MILES} mi with under ${MIN_SCORED_S / 60} min of driving.`,
@@ -172,7 +172,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
       'RoadWise notices when you pick up your phone while driving, from how your phone moves. It never sees what’s on your screen, your apps, or your messages.',
       `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. If you pick it up at a red light and put it down before you pull away, it doesn’t count.`,
       `Every second it stays in your hand while you’re moving adds to it. If you put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s, it’s still one pickup.`,
-      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}). RoadWise weighs pickups against your time at driving speed, so a long drive doesn’t score lower for being long.`,
+      `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}). On a drive, each pickup costs the same however long the drive is. Your Safety Rating weighs pickups against your time at driving speed, so it stays fair however much you drive.`,
       `With the drive screen open, you hear a tone and see “${hudCopy.alert.phone_pickup}”. With RoadWise in the background, you don’t hear a sound, but the pickup is still recorded and counts.`,
     ],
   },

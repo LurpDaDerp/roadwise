@@ -70,7 +70,7 @@ test('every number comes from the rules: the trigger, the wait, the budget and t
   expect(section(true, 'drive-score')[2]).toBe('Speed counts how much of your driving time with a known limit you spent over it, and how far over you went for that road.');
   // Every event counts, weighed by how serious it was and against the whole drive.
   expect(section(true, 'drive-score')[3]).toBe(
-    'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs each event against the whole drive, so one event lowers a long drive’s score less than a short one’s.'
+    'Every event counts, and a more serious one counts more. That includes a harder brake, start, or turn, a longer or faster stretch over the limit, and a pickup that’s longer or at a higher speed. RoadWise weighs most events against the whole drive, so one hard brake lowers a long drive’s score less than a short one’s. A pickup costs the same however long the drive is.'
   );
   expect(all(true).join(' ')).not.toMatch(/Ease off within/);
   // Attention is judged per second DashPal watched, not per mile.
@@ -88,7 +88,7 @@ test('Phone use: felt from how the phone moves, never what is on the screen; eve
     'RoadWise notices when you pick up your phone while driving, from how your phone moves. It never sees what’s on your screen, your apps, or your messages.',
     `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. If you pick it up at a red light and put it down before you pull away, it doesn’t count.`,
     `Every second it stays in your hand while you’re moving adds to it. If you put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s, it’s still one pickup.`,
-    `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at 60 mph as at 30). RoadWise weighs pickups against your time at driving speed, so a long drive doesn’t score lower for being long.`,
+    `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at 60 mph as at 30). On a drive, each pickup costs the same however long the drive is. Your Safety Rating weighs pickups against your time at driving speed, so it stays fair however much you drive.`,
     'With the drive screen open, you hear a tone and see “Phone down”. With RoadWise in the background, you don’t hear a sound, but the pickup is still recorded and counts.',
   ]);
   expect(section(false, 'phone')).toEqual(section(true, 'phone'));

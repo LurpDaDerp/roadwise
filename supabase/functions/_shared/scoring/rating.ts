@@ -78,17 +78,22 @@ export function axisOf(type: string): AxisKey | null {
   }
 }
 
-/**
- * Typical rate per opportunity, the prior's pseudo-opportunities, and one drive's opportunity floor.
- * The floor is the prior's size: a drive is judged against at least as much driving as the rating's
- * prior stands for, so one event on a short drive weighs no more than it would in the rating.
- */
+/** Typical rate per opportunity and the prior's pseudo-opportunities, as the Safety Rating reads them. */
 export interface Baseline {
   rate: number;
   prior: number;
+}
+/**
+ * A category a drive judges per chance to slip: its Baseline plus one drive's opportunity floor.
+ * The floor is the prior's size: a drive is judged against at least as much driving as the rating's
+ * prior stands for, so one event on a short drive weighs no more than it would in the rating.
+ */
+export interface FlooredBaseline extends Baseline {
   floor: number;
 }
-export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
+/** The categories a drive judges per chance to slip (every one but Phone use: `PHONE_DRIVE_REF_S`). */
+export type FlooredAxis = Exclude<RateAxis, 'phone'>;
+export const BASELINE: Readonly<Record<FlooredAxis, FlooredBaseline> & Record<'phone', Baseline>> = {
   /** 1 hard brake per 100 slowdowns. */
   braking: { rate: 0.01, prior: 60, floor: 60 },
   /** 1 hard start per 125 speed-ups. */
@@ -98,7 +103,7 @@ export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
   /** 4 weighted seconds over the line per 100 s with a limit. */
   speed: { rate: 0.04, prior: 3600, floor: 3600 },
   /** 4 weighted phone seconds (`PHONE_PICKUP_WEIGHT_S` + in hand, per pickup) per 100 s at driving speed. */
-  phone: { rate: 0.04, prior: 3600, floor: 3600 },
+  phone: { rate: 0.04, prior: 3600 },
   /**
    * 0.024 Attention weight per watched second: one 5 s eyes-off episode at 30 mph (weight 40) about
    * every 28 minutes of watched driving.
@@ -107,6 +112,17 @@ export const BASELINE: Readonly<Record<RateAxis, Baseline>> = {
 };
 /** What a phone pickup weighs on top of its seconds in hand: the reach and the look away. */
 export const PHONE_PICKUP_WEIGHT_S = 10;
+/**
+ * The fixed reference (s) a drive's Phone use is judged against: rate = Σ pickup weight / 240,
+ * whatever the drive's phone seconds or seconds in hand. This is a deliberate exception to "judged
+ * per chance to slip": every other category on a drive divides by max(its opportunities, its floor,
+ * count), but a pickup is a choice, not something more driving makes more likely, so it costs the
+ * same on a 10-minute drive and a 2-hour one. There is no count term on purpose: with
+ * max(240, seconds in hand) a drive past 4 minutes in hand would switch to weight per second in
+ * hand, and adding a long or slow pickup would raise the score. Fixed (never 0), every pickup can
+ * only lower it. The Safety Rating still judges Phone use per second at driving speed.
+ */
+export const PHONE_DRIVE_REF_S = 240;
 /**
  * The speed a phone pickup's or a DashPal event's weight is judged at: `speedFactor` is the speed
  * over `refMph` (30 mph weighs 1), read between `minMph` and `maxMph` (so 1/3 to 8/3). The faster the
@@ -481,7 +497,8 @@ export function ratingAt(drives: readonly RatingDrive[], at: number): RatingResu
 
 /**
  * One drive's score out of 100: per category r = weight / max(opportunities, floor, count) (no
- * prior), Attention only when DashPal watched (`watchedS` > 0), Phone use only when the drive has
+ * prior), except Phone use, r = weight / `PHONE_DRIVE_REF_S` (a fixed reference, on purpose: see
+ * there); Attention only when DashPal watched (`watchedS` > 0), Phone use only when the drive has
  * phone seconds or a pickup; the weighted harmonic mean (`weightedScore`), a whole number. Null with
  * no miles. Shown on the recap and the share card.
  */
@@ -490,6 +507,8 @@ export function driveScore(events: readonly DriveEvent[], miles: number, watched
   const loads = driveLoads(events, clampExposure(exposure), watchedS);
   const rateOf = (axis: RateAxis): number => {
     const l = loads.rates[axis];
+    // Phone use: a fixed reference, not per chance to slip (PHONE_DRIVE_REF_S says why). Don't floor it.
+    if (axis === 'phone') return rateScore(l.weight / PHONE_DRIVE_REF_S, BASELINE.phone.rate);
     const b = BASELINE[axis];
     return rateScore(l.weight / Math.max(l.opportunities, b.floor, l.count), b.rate);
   };

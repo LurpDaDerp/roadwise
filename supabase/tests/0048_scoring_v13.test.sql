@@ -2,13 +2,13 @@
 -- "speedingWeight", "weightedScore: the weighted harmonic mean" and "scoring v13: parity pins the
 -- 0048 pgTAP stores too"): the weighted harmonic mean, speeding weighed against its limit (x
 -- squared, capped at 5), Attention per watched second (drowsy 80, eyes off 40; the 3600 s prior at
--- 0.024 in the rating; the 3600 s floor in the drive score), a full window through rating_at and each
--- drive's score through wrapped_trips. category_score is gone; the new and replaced functions keep
+-- 0.024 in the rating; the 3600 s floor in the drive score), Phone use on a drive over a fixed 240 s,
+-- a full window through rating_at and each drive's score through wrapped_trips. category_score is gone; the new and replaced functions keep
 -- their posture.
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(28);
+select plan(29);
 -- the scores travel in jsonb: read them back exactly (the test runner's session prints 15 digits)
 set local extra_float_digits = 1;
 
@@ -85,10 +85,10 @@ select is(array[private.attention_weight('drowsy', 5, '{"speedMph": 30}'), priva
   array[80, 40, 60.8, 297.6]::float8[], 'attention_weight: a 5 s drowsy at 30 mph weighs 80, an eyes-off 40; pin W''s episodes');
 
 -- ---------------------------------------------------------------------------
--- the drives: ava (01) pin W, ben (02) / cat (03) / dan (04) pin R, eve (05) pin F
+-- the drives: ava (01) pin W, ben (02) / cat (03) / dan (04) pin R, eve (05) pin F, fay (06) pin P3
 -- ---------------------------------------------------------------------------
 insert into auth.users (id, email)
-  select ('00000000-0000-0000-0000-00000000000' || g)::uuid, 'u' || g || '@example.com' from generate_series(1, 5) g;
+  select ('00000000-0000-0000-0000-00000000000' || g)::uuid, 'u' || g || '@example.com' from generate_series(1, 6) g;
 
 -- a scored drive an hour long, stored as it stands: p_start, its miles, counters, phone seconds and
 -- DashPal seconds (moving, covered); its local day in September 2026 for wrapped_trips
@@ -148,7 +148,7 @@ select is(pg_temp.scores(1),
   array[78.9, 68.69727227258444, 75.91666720301164, 79.65581995980288, 69.28278917626614, 90.44662769010905, 86.31474611197726]::float8[],
   'pin W: 78.9 and every category to the digit, with speeding against its limit, DashPal events over watched seconds and pickups (scoring ratingAt)');
 select is(private.rating_at('00000000-0000-0000-0000-000000000001', now()) - 'scores', '{"miles": 71.00, "rating": 78.9, "ranked": true}'::jsonb, 'pin W: ranked over 71 mi');
-select is(pg_temp.wrapped(1), array[85, 94, 81, 90]::float8[], 'pin W: each drive''s Wrapped score is scoring driveScore''s (W4, W3, W2, W1)');
+select is(pg_temp.wrapped(1), array[85, 74, 81, 84]::float8[], 'pin W: each drive''s Wrapped score is scoring driveScore''s (W4, W3, W2, W1)');
 select private.refresh_rating('00000000-0000-0000-0000-000000000001');
 select is((select row(safety_rating, ranked, miles_90d)::text from public.progress where user_id = '00000000-0000-0000-0000-000000000001'), row(78.9, true, 71.00)::text,
   'refresh_rating stores the v13 rating');
@@ -186,6 +186,29 @@ select pg_temp.trip(5, 24, now() - interval '1 hour', 3, 6, 6, 4, 400, 500, 450)
 select pg_temp.ev(24, 64, 'eyes_off', 'severe', 60, 5, '{"source": "dashcam", "speedMph": 30}');
 select is(pg_temp.wrapped(5), array[98, 98, 99, 100]::float8[],
   'pin F: a drive''s Attention reads at least 3600 watched seconds (1800 and 3600 both 98, 7200 is 99); none watched leaves it out (scoring driveScore)');
+
+-- pin P3 (fay): Phone use on a drive reads a fixed 240 s (scoring PHONE_DRIVE_REF_S), whatever the
+-- drive's phone seconds or seconds in hand. 20-minute drives (1200 s at driving speed) unless noted:
+-- one 20 s pickup at 30 mph; three; 300 s in hand; one 20 s pickup on an hour (3600 s); a 5 s pickup
+-- with no speed on a drive with no phone seconds; 240 s at 30 mph plus 600 s at 10 mph (no count term,
+-- so the slow extra pickup lowers the score)
+select pg_temp.trip(6, 5, now() - interval '6 hours', 10, 25, 25, 15, 1100, 1200, 1200);
+select pg_temp.ev(5, 70, 'phone_pickup', 'severe', 60, 20, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.trip(6, 6, now() - interval '5 hours', 10, 25, 25, 15, 1100, 1200, 1200);
+select pg_temp.ev(6, 71, 'phone_pickup', 'severe', 60, 20, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.ev(6, 72, 'phone_pickup', 'severe', 300, 20, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.ev(6, 73, 'phone_pickup', 'severe', 600, 20, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.trip(6, 7, now() - interval '4 hours', 10, 25, 25, 15, 1100, 1200, 1200);
+select pg_temp.ev(7, 74, 'phone_pickup', 'severe', 60, 300, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.trip(6, 8, now() - interval '3 hours', 30, 75, 75, 45, 3300, 3600, 3600);
+select pg_temp.ev(8, 75, 'phone_pickup', 'severe', 60, 20, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.trip(6, 9, now() - interval '2 hours', 10, 25, 25, 15, 1100, 1200, 0);
+select pg_temp.ev(9, 76, 'phone_pickup', 'moderate', 60, 5, '{}');
+select pg_temp.trip(6, 10, now() - interval '1 hour', 10, 25, 25, 15, 1100, 1200, 1200);
+select pg_temp.ev(10, 77, 'phone_pickup', 'severe', 60, 240, '{"speedMph": 30, "maxSpeedMph": 30}');
+select pg_temp.ev(10, 78, 'phone_pickup', 'severe', 600, 600, '{"speedMph": 10, "maxSpeedMph": 10}');
+select is(pg_temp.wrapped(6), array[86, 67, 37, 86, 92, 29]::float8[],
+  'pin P3: Phone use on a drive is the pickups'' weight over a fixed 240 s, no floor and no count term (scoring driveScore)');
 
 select * from finish();
 rollback;
