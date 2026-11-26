@@ -139,7 +139,7 @@ select is(array[private.wrapped_eligible('00000000-0000-0000-0000-000000000001',
 select is((select array_agg(score order by started_at) from private.wrapped_trips('2026-09', '00000000-0000-0000-0000-000000000001')),
   array[100, 92, 100, 100]::float8[], 'drive scores as scoring driveScore: clean 100, one hard brake in 20 slowdowns (read over the 60-slowdown floor) 92');
 -- bo, June: one drive with every kind of event, DashPal watching half of it (500 s, under the 3600 s
--- floor); scoring driveScore gives 79
+-- floor); scoring driveScore gives 82
 with t as (
   insert into public.trips (user_id, client_trip_id, started_at, ended_at, local_day, league_week, tz, miles, night_miles, duration_s, scored,
       n_events, clean, slowdowns, speedups, turns, limit_s, moving_s, phone_s, dashcam_moving_s, dashcam_covered_s, scoring_version)
@@ -153,7 +153,7 @@ insert into public.trip_events (trip_id, client_event_id, user_id, type, tier, s
                   ('00000000-0000-4000-8000-000000000003', 'hard_accel', 'severe', 180, 1, '{"peakG": 0.5}'),
                   ('00000000-0000-4000-8000-000000000004', 'eyes_off', 'severe', 240, 6, '{"speedMph": 30}')) x(cid, type, tier, s, d, m);
 select is((select array_agg(array[score, n_hard, n_speeding, n_pickup]) from private.wrapped_trips('2026-06', '00000000-0000-0000-0000-000000000002')),
-  array[array[79, 1, 1, 1]]::float8[], 'the drive score matches the TypeScript on speeding, a pickup, a measured hard start and DashPal; each kind counted');
+  array[array[82, 1, 1, 1]]::float8[], 'the drive score matches the TypeScript on speeding, a pickup, a measured hard start and DashPal; each kind counted');
 select throws_ok($$ select private.wrapped_stats('00000000-0000-0000-0000-000000000001', '2026-9') $$, '22023', 'month must be YYYY-MM', 'a month is YYYY-MM');
 select is(private.wrapped_stats('00000000-0000-0000-0000-000000000001', '2026-08'), null, 'no stats for a month under 3 drives');
 

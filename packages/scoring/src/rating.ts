@@ -113,16 +113,16 @@ export const BASELINE: Readonly<Record<FlooredAxis, FlooredBaseline> & Record<'p
 /** What a phone pickup weighs on top of its seconds in hand: the reach and the look away. */
 export const PHONE_PICKUP_WEIGHT_S = 10;
 /**
- * The fixed reference (s) a drive's Phone use is judged against: rate = Σ pickup weight / 240,
+ * The fixed reference (s) a drive's Phone use is judged against: rate = Σ pickup weight / 300,
  * whatever the drive's phone seconds or seconds in hand. This is a deliberate exception to "judged
  * per chance to slip": every other category on a drive divides by max(its opportunities, its floor,
  * count), but a pickup is a choice, not something more driving makes more likely, so it costs the
  * same on a 10-minute drive and a 2-hour one. There is no count term on purpose: with
- * max(240, seconds in hand) a drive past 4 minutes in hand would switch to weight per second in
+ * max(300, seconds in hand) a drive past 5 minutes in hand would switch to weight per second in
  * hand, and adding a long or slow pickup would raise the score. Fixed (never 0), every pickup can
  * only lower it. The Safety Rating still judges Phone use per second at driving speed.
  */
-export const PHONE_DRIVE_REF_S = 240;
+export const PHONE_DRIVE_REF_S = 300;
 /**
  * The speed a phone pickup's or a DashPal event's weight is judged at: `speedFactor` is the speed
  * over `refMph` (30 mph weighs 1), read between `minMph` and `maxMph` (so 1/3 to 8/3). The faster the

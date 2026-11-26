@@ -16,9 +16,9 @@
 --     the rating's prior: 60 slowdowns, 60 speed-ups, 60 turns, and 3600 s for Speed and Attention.
 --     A clean drive still scores 100; one event on a short drive weighs no more than it would in the
 --     rating. Phone use on a drive is the deliberate exception to "judged per chance to slip": its
---     rate is the pickups' weight over a fixed 240 s, whatever the drive's phone seconds or seconds
+--     rate is the pickups' weight over a fixed 300 s, whatever the drive's phone seconds or seconds
 --     in hand, because a pickup is a choice, not something more driving makes more likely. No count
---     term on purpose: max(240, seconds in hand) would let a long or slow pickup raise the score.
+--     term on purpose: max(300, seconds in hand) would let a long or slow pickup raise the score.
 --     The Safety Rating still judges Phone use per second at driving speed.
 --
 -- Nothing a driver recorded is rewritten: trips, events, their measurements, exposure counters and
@@ -230,7 +230,7 @@ end $function$
 -- counts and its drive score, the SQL copy of scoring driveScore: per category weight /
 -- max(opportunities, floor, count) with no prior (braking, acceleration, turning 60; speed 3600 s;
 -- Attention 3600 watched seconds, count 0), Attention only when DashPal watched; Phone use, only with
--- phone seconds or a pickup, is the pickups' weight over a fixed 240 s (scoring PHONE_DRIVE_REF_S: a
+-- phone seconds or a pickup, is the pickups' weight over a fixed 300 s (scoring PHONE_DRIVE_REF_S: a
 -- deliberate exception to per chance to slip, with no floor and no count term); weighted_score,
 -- clamped and rounded half up to a whole number. Null with no miles.
 create or replace function private.wrapped_trips(p_month text, p_user uuid default null)
@@ -294,7 +294,7 @@ begin
       private.rate_score(coalesce(ev.t_w, 0::float8) / greatest(d.turns::float8, 60::float8, coalesce(ev.t_n, 0)::float8), 0.008::float8) as s_t,
       case when d.watched_s > 0 then private.rate_score(coalesce(ev.att, 0::float8) / greatest(d.watched_s, 3600::float8, 0::float8), 0.024::float8) end as s_att,
       case when d.phone_s > 0 or coalesce(ev.p_n, 0::float8) > 0
-           then private.rate_score(coalesce(ev.p_w, 0::float8) / 240::float8, 0.040::float8) end as s_p,
+           then private.rate_score(coalesce(ev.p_w, 0::float8) / 300::float8, 0.040::float8) end as s_p,
       private.rate_score(coalesce(ev.s_w, 0::float8) / greatest(d.limit_s::float8, 3600::float8, coalesce(ev.s_n, 0::float8)), 0.040::float8) as s_s
     from d left join ev on ev.trip_id = d.id
   )
