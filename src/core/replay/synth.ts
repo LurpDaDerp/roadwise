@@ -18,6 +18,23 @@ const START = { lat: 47.6062, lng: -122.3321 };
 const M_PER_DEG_LAT = 111_194.93;
 const M_PER_DEG_LNG = M_PER_DEG_LAT * Math.cos((START.lat * Math.PI) / 180);
 
+const RAD = Math.PI / 180;
+const r3 = (v: number): number => {
+  const out = Math.round(v * 1000) / 1000;
+  return out === 0 ? 0 : out;
+};
+
+/**
+ * The gravity direction (`gx`, `gy`, `gz`: toward the earth, to 3 decimals like a bridged row) of a
+ * phone with its screen tilted `tiltDeg` up from lying flat face up (90 upright), its top turned
+ * `rollDeg` from straight up within the screen.
+ */
+export function gravity(tiltDeg: number, rollDeg = 0): Pick<FeatureRow, 'gx' | 'gy' | 'gz'> {
+  const t = tiltDeg * RAD;
+  const r = rollDeg * RAD;
+  return { gx: r3(-Math.sin(t) * Math.sin(r)), gy: r3(-Math.sin(t) * Math.cos(r)), gz: r3(-Math.cos(t)) };
+}
+
 export const ROW_DEFAULTS: Omit<FeatureRow, 'ts' | 'lat' | 'lng' | 'speed'> = {
   hAcc: 5,
   speedAcc: 0.5,
@@ -33,6 +50,8 @@ export const ROW_DEFAULTS: Omit<FeatureRow, 'ts' | 'lat' | 'lng' | 'speed'> = {
   gravityStability: 0.99,
   orientationDelta: 0.01,
   handlingScore: 0,
+  // Upright in a mount, leaning back 5°: the resting tilt of every trace (not held to look at).
+  ...gravity(85),
   locked: true,
   screenOn: false,
   appForeground: true,
@@ -70,8 +89,11 @@ const posted = (limitMph: number, fromTs = T0) => ({ fromTs, limitMps: limitMph 
 const unknown = (fromTs: number) => ({ fromTs, limitMps: null, source: 'unknown' as const, matchConfidence: 0, parallelRoads: false });
 
 const at = (i: number): number => T0 + i * 1000;
-/** A second of the phone in the hand: handled, its gravity vector unsteady. */
-const HANDLED = { handlingScore: 0.9, gravityStability: 0.6 } as const;
+/**
+ * A second of the phone in the hand, held to be looked at: the screen tilted 41° or 49° up (40° or
+ * more from the resting tilt), alternating row by row so each second moves, the IMU busy.
+ */
+const handled = (i: number): Partial<FeatureRow> => ({ ...gravity(i % 2 === 0 ? 41 : 49), handlingScore: 0.9, gravityStability: 0.6 });
 const between = (i: number, a: number, b: number): boolean => i >= a && i < b;
 
 export const TRACE_BUILDERS: Record<string, () => Trace> = {
@@ -272,7 +294,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** Handled for 8 s at 35 mph: one moderate pickup, 8 s in hand. */
   'phone-pickup': () => ({
     name: 'phone-pickup',
-    rows: drive(200, (i) => ({ ...(between(i, 100, 108) ? HANDLED : {}) })),
+    rows: drive(200, (i) => ({ ...(between(i, 100, 108) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'moderate', durationMin: 8, durationMax: 8 }],
   }),
@@ -280,9 +302,42 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** Handled for 40 s at 35 mph: one severe pickup of 40 s in hand, never a second one. */
   'phone-handling-long': () => ({
     name: 'phone-handling-long',
-    rows: drive(240, (i) => ({ ...(between(i, 100, 140) ? HANDLED : {}) })),
+    rows: drive(240, (i) => ({ ...(between(i, 100, 140) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), tier: 'severe', durationMin: 40, durationMax: 40 }],
+  }),
+
+  /**
+   * The phone rattling in its holder on a rough road for 2 minutes: the IMU busy every second (the
+   * old shake score at its top), the tilt never moving by a degree. Shaking is not a pickup: nothing.
+   */
+  'phone-rough-road': () => ({
+    name: 'phone-rough-road',
+    rows: drive(260, (i) => ({
+      ...(between(i, 60, 180) ? { ...gravity(85 + (i % 3) * 0.3, (i % 2) * 0.4), handlingScore: 1, gravityStability: 0.6, orientationDelta: 0.4, yawRateMax: 0.8 } : {}),
+    })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(60), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Moved by hand into a tilted charger it is then held to look at (2 moving seconds), and left there: nothing. */
+  'phone-moved-to-charger': () => ({
+    name: 'phone-moved-to-charger',
+    rows: drive(240, (i) => ({ ...(i === 100 ? handled(100) : i > 100 ? { ...gravity(49), handlingScore: 0, gravityStability: 0.99 } : {}) })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
+    noEvents: true,
+  }),
+
+  /** Lifted, then held dead steady to be read for 8 s, then put back: one moderate pickup of 9 s. */
+  'phone-pickup-steady': () => ({
+    name: 'phone-pickup-steady',
+    rows: drive(200, (i) => ({
+      ...(i === 100 ? handled(100) : between(i, 101, 109) ? { ...gravity(45), handlingScore: 0, gravityStability: 0.95, orientationDelta: 0.01 } : {}),
+    })),
+    limits: [posted(35)],
+    expected: [{ type: 'phone_pickup', startsNear: at(100), toleranceS: 0, tier: 'moderate', durationMin: 9, durationMax: 9 }],
   }),
 
   /** A 2-s tap on a mounted, stable phone: not a pickup. */
@@ -297,7 +352,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** Handled for 10 s at a red light mid-drive and put down before the car moves off: never a pickup. */
   'phone-stopped-in-traffic': () => ({
     name: 'phone-stopped-in-traffic',
-    rows: drive(240, (i) => ({ speedMph: between(i, 90, 130) ? 0 : 35, ...(between(i, 100, 110) ? HANDLED : {}) })),
+    rows: drive(240, (i) => ({ speedMph: between(i, 90, 130) ? 0 : 35, ...(between(i, 100, 110) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
     noEvents: true,
@@ -309,7 +364,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
    */
   'phone-red-light-drive-off': () => ({
     name: 'phone-red-light-drive-off',
-    rows: drive(240, (i) => ({ speedMph: between(i, 90, 120) ? 0 : 35, ...(between(i, 100, 135) ? HANDLED : {}) })),
+    rows: drive(240, (i) => ({ speedMph: between(i, 90, 120) ? 0 : 35, ...(between(i, 100, 135) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(120), toleranceS: 0, tier: 'moderate', durationMin: 15, durationMax: 15 }],
   }),
@@ -317,7 +372,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   /** Handled before the car has ever moved (parked at the start): parking-lot use, nothing. */
   'phone-parked-start': () => ({
     name: 'phone-parked-start',
-    rows: drive(200, (i) => ({ speedMph: i < 80 ? 0 : 35, ...(between(i, 40, 60) ? HANDLED : {}) })),
+    rows: drive(200, (i) => ({ speedMph: i < 80 ? 0 : 35, ...(between(i, 40, 60) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(40), absent: true }],
     noEvents: true,
@@ -327,7 +382,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   'phone-hands-free-call': () => ({
     name: 'phone-hands-free-call',
     platform: 'ios',
-    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? HANDLED : {}) })),
+    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
     noEvents: true,
@@ -337,7 +392,7 @@ export const TRACE_BUILDERS: Record<string, () => Trace> = {
   'phone-call-android': () => ({
     name: 'phone-call-android',
     platform: 'android',
-    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? HANDLED : {}) })),
+    rows: drive(200, (i) => ({ ...(between(i, 95, 115) ? { call: 'live' as const } : {}), ...(between(i, 100, 110) ? handled(i) : {}) })),
     limits: [posted(35)],
     expected: [{ type: 'phone_pickup', startsNear: at(100), absent: true }],
     noEvents: true,

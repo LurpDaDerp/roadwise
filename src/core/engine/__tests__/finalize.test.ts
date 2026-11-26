@@ -1,7 +1,7 @@
 /** @jest-environment node */
 import { classifyDrive } from '@scoring';
 
-import { T0 } from '@/core/detectors/__fixtures__/rows';
+import { inHand, T0 } from '@/core/detectors/__fixtures__/rows';
 import { brakeEvent, closedSession, rows, speedingEvent, TZ, uuid } from '@/core/engine/__fixtures__/drives';
 import type { TripSession } from '@/core/engine/engine.types';
 import {
@@ -458,10 +458,10 @@ describe('a phone pickup always passes the server’s own checks (a refused uplo
   test('a pickup the detector made, still in hand past the cut at the last movement, goes up whole and inside the drive', async () => {
     const s = createSession({ clientTripId: '55555555-5555-4555-8555-555555555555', startedAt: T0, origin: 'manual' });
     const det = createDetectors(() => uuid(70));
-    const drive = rows(600, { over: (i) => (i >= 580 ? { handlingScore: 0.9, gravityStability: 0.6 } : {}) });
+    const drive = rows(600, { over: (i) => (i >= 580 ? inHand(i) : {}) });
     const end = drive.at(-1)!;
     // Parked with the phone still in hand: jittering at 1 mph (under 5: no time in hand).
-    const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5, over: (i) => (i < 30 ? { handlingScore: 0.9, gravityStability: 0.6 } : {}) }).map((r, i) => ({
+    const parked = rows(300, { t0: T0 + 600_000, speedMps: 0.5, over: (i) => (i < 30 ? inHand(i) : {}) }).map((r, i) => ({
       ...r,
       lng: end.lng + (i % 2 === 0 ? 10 : 0) / 75_000,
     }));

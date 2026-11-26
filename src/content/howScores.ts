@@ -169,7 +169,7 @@ export const rules = (autoDrives: boolean, n: DriveNumbers): RuleSection[] => [
     title: 'Phone use',
     icon: 'phone-portrait-outline',
     lines: [
-      'RoadWise notices when you pick up your phone while driving, from the phone’s motion alone. It never sees your screen, your apps, or your messages.',
+      'RoadWise notices when you pick up your phone while driving, from how your phone moves. It never sees what’s on your screen, your apps, or your messages.',
       `A pickup counts once the car is going ${PHONE_PICKUP_MIN_MPH} mph or more. If you pick it up at a red light and put it down before you pull away, it doesn’t count.`,
       `Every second it stays in your hand while you’re moving adds to it. If you put it down and pick it up again within ${PHONE_PUTDOWN_QUIET_S} s, it’s still one pickup.`,
       `Each pickup weighs ${PHONE_PICKUP_WEIGHT_S} s plus its time in hand, and more the faster you were going (twice as much at ${2 * SPEED_FACTOR.refMph} mph as at ${SPEED_FACTOR.refMph}). RoadWise weighs pickups against your time at driving speed, so a long drive doesn’t score lower for being long.`,

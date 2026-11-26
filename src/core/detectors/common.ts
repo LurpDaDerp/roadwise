@@ -52,11 +52,52 @@ export function atDrivingSpeed(row: FeatureRow): boolean {
 
 /**
  * A second a phone pickup could have been seen in (phone plan P1, P2): the motion sensors reported
- * (not `imuAbsent`), and no call was on. iOS cannot tell hands-free from handheld, so a call row is
- * never phone use, and Android reads a call row the same way so both phones score a drive alike.
+ * (not `imuAbsent`) with a gravity reading (`gravityOf`), and no call was on. iOS cannot tell
+ * hands-free from handheld, so a call row is never phone use, and Android reads a call row the same
+ * way so both phones score a drive alike.
  */
 export function phoneWatchable(row: FeatureRow): boolean {
-  return !imuAbsent(row) && row.call === undefined;
+  return !imuAbsent(row) && row.call === undefined && gravityOf(row) !== null;
+}
+
+/** A direction in the device frame (x right, y toward the top of the screen, z out of the screen). */
+export type Direction = readonly [number, number, number];
+
+/** A gravity reading this short (after the row's 3-decimal rounding a unit vector reads 0.998 to 1.002) is no reading. */
+const GRAVITY_MIN_NORM = 0.5;
+
+/**
+ * The row's gravity direction (`gx`, `gy`, `gz`: toward the earth, device frame), as a unit vector,
+ * or null for a second with no gravity reading: the keys absent (the IMU absent, or a native build
+ * that predates them), a number not finite, or a vector too short to be a direction.
+ */
+export function gravityOf(row: FeatureRow): Direction | null {
+  const { gx, gy, gz } = row;
+  if (gx === undefined || gy === undefined || gz === undefined) return null;
+  const n = Math.hypot(gx, gy, gz);
+  if (!Number.isFinite(n) || n < GRAVITY_MIN_NORM) return null;
+  return [gx / n, gy / n, gz / n];
+}
+
+const DEG_PER_RAD = 180 / Math.PI;
+
+/** The angle between two unit vectors, in degrees (as atan2(|a × b|, a · b): exact near 0° and 180°). */
+export function angleDeg(a: Direction, b: Direction): number {
+  const cx = a[1] * b[2] - a[2] * b[1];
+  const cy = a[2] * b[0] - a[0] * b[2];
+  const cz = a[0] * b[1] - a[1] * b[0];
+  return Math.atan2(Math.hypot(cx, cy, cz), a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) * DEG_PER_RAD;
+}
+
+/**
+ * How the phone sits, from a gravity direction: `tilt`, the screen's tilt up from lying flat face up
+ * (0° flat face up, 90° upright, 180° face down), and `roll`, how far its top is turned from straight
+ * up within the screen (0° upright, 90° on its side, 180° upside down; meaningless near flat).
+ */
+export function phonePose(g: Direction): { tilt: number; roll: number } {
+  const tilt = Math.acos(Math.min(1, Math.max(-1, -g[2]))) * DEG_PER_RAD;
+  const roll = Math.abs(Math.atan2(-g[0], -g[1])) * DEG_PER_RAD;
+  return { tilt, roll };
 }
 
 /** The IMU-absent encoding (drive-sense README §4): all nine IMU fields 0. Evidence of nothing. */

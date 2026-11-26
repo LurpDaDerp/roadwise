@@ -5,8 +5,8 @@ import { hudCopy } from '@/features/drive/hudCopy';
 import type { StepId } from './flow';
 
 /** How phone pickups are noticed, and what RoadWise never sees: the How it works row and the Motion step. */
-const PHONE_ROW = 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps, or messages.';
-const PHONE_PRIVACY = 'RoadWise spots pickups from motion alone. It never sees your screen, apps, or messages.';
+const PHONE_ROW = "Picking up your phone while you drive counts against your score. RoadWise can tell from how your phone moves and never sees what's on your screen, your apps, or your messages.";
+const PHONE_PRIVACY = "RoadWise spots pickups from how your phone moves. It never sees what's on your screen, your apps, or your messages.";
 
 /** How it works: the same five lines on both phones (drives start on their own on each). */
 const HOW_ROWS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[] = [

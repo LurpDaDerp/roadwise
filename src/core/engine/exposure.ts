@@ -32,10 +32,11 @@ export interface ExposureState {
   readonly limitS: number;
   /**
    * Phone use's opportunities, the seconds a pickup could have been seen: rows at driving speed
-   * (`atDrivingSpeed`: a known, trusted GPS speed of 10 mph or more) on which a use row was possible
-   * (`phoneWatchable`: the motion sensors reported, and no call), one second each. The
-   * warm-up's rows count: at 10 mph they are rare (a drive that starts moving has none), and the
-   * counter stays a reducer of the row alone.
+   * (`atDrivingSpeed`: a known, trusted GPS speed of 10 mph or more) on which a pickup was possible
+   * (`phoneWatchable`: the motion sensors reported the phone's tilt, and no call), one second each.
+   * Android's screen-off seconds count too (a pickup turns the screen on). The warm-up's rows count:
+   * at 10 mph they are rare (a drive that starts moving has none), and the counter stays a reducer
+   * of the row alone.
    */
   readonly phoneS: number;
   /** Speed swings: the phase and its running extremes (mph); `peak`/`trough` null before the first trusted speed. */

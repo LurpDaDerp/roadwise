@@ -85,7 +85,7 @@ export const settingsCopy = {
     },
     heatmap: 'Heat map',
     privacyFooter:
-      'Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise can tell when you pick up your phone on a drive, but it never sees your screen, apps, or messages.',
+      "Only your friends can see what you share here. The heat map shows the roads you drive most. RoadWise can tell when you pick up your phone on a drive, but it never sees what's on your screen, your apps, or your messages.",
     you: 'You',
     units: 'Units',
     appearance: {

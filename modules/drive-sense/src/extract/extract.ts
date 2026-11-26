@@ -217,6 +217,9 @@ export function extractSecond(
       gravityStability: free.gravityStability,
       orientationDelta: free.orientationDelta,
       handlingScore: free.handlingScore,
+      gx: gMean[0],
+      gy: gMean[1],
+      gz: gMean[2],
       ...phoneFields,
     },
     state: {

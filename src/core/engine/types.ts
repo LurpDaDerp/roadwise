@@ -9,8 +9,8 @@ import type { RoadCondition, RoadGrip, RoadStamp } from '@/core/road';
  * phone-state signals. Accelerations are in g, speeds in m/s, angles in radians unless noted.
  *
  * The field list is the native row contract (frozen on Android), so every field stays; nothing in
- * JS reads `locked`, `screenOn`, `appForeground` or `exempt` (phone use is motion only); the phone
- * detector reads `call` on both phones.
+ * JS reads `locked`, `appForeground` or `exempt`. The phone detector reads the gravity direction
+ * (`gx`, `gy`, `gz`) and `call` on both phones, and `screenOn` on Android.
  */
 export interface FeatureRow {
   /**
@@ -42,11 +42,21 @@ export interface FeatureRow {
   gravityStability: number;
   /** rad — how far the phone's orientation moved over the second */
   orientationDelta: number;
-  /** 0..1 — how much the second looked like the phone being handled */
+  /** 0..1 — how fast the phone turned over the second (rotation off the gravity axis); not phone use */
   handlingScore: number;
+  /**
+   * The second's mean gravity direction (a unit vector in the device frame, pointing toward the
+   * earth: face up on a table ≈ [0, 0, −1]; device frame x right, y toward the top of the screen, z
+   * out of the screen), one component each, to 3 decimals. Phone pickups read the phone's tilt from
+   * it (`detectors/phoneUse.ts`). Absent on a row with the IMU absent and on rows from a native build
+   * that predates the keys: either is a second with no gravity reading.
+   */
+  gx?: number;
+  gy?: number;
+  gz?: number;
   /** Row contract only; read nowhere in JS. */
   locked: boolean;
-  /** Row contract only; read nowhere in JS. */
+  /** Android: the screen was on (`PowerManager.isInteractive`) at the end of the second; a phone pickup on Android needs it. iOS: always true (nothing is read). */
   screenOn: boolean;
   /** RoadWise is in front, as native saw it. Row contract only; read nowhere in JS. */
   appForeground: boolean;

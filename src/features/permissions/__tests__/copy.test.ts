@@ -127,7 +127,7 @@ test('the note under the list follows the phone, and no line mentions a reminder
   expect(permissionsCopy.about.ios).toBe('With Location set to Always, RoadWise notices drives and records them even when it\'s closed. Your location is never sold.');
   expect(permissionsCopy.about.android).toBe("With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.");
   // Phone pickups need no permission: a note of their own says they are felt, never seen.
-  expect(permissionsCopy.phone).toBe('On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.');
+  expect(permissionsCopy.phone).toBe("On a drive, RoadWise can tell from how your phone moves when you pick it up. It never sees what's on your screen, your apps, or your messages.");
   for (const c of CTXS) {
     for (const id of PERMISSION_IDS) {
       for (const s of ALL_STATES) {

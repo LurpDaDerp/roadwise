@@ -11,13 +11,16 @@ import { VECTOR_BUILDERS, VECTOR_NAMES, serializeVector } from '../scripts/scena
 /**
  * What the bridge must return for a golden row (ruling D2 concern 1), written out rather than
  * calling `roundTo`: each rounded field is `round(x · 10^d) / 10^d` and lies within half a step of
- * the input; every other field is the input exactly.
+ * the input; every other field is the input exactly. An optional field the row lacks (the gravity
+ * direction on an IMU-absent row) stays absent.
  */
 function bridged(row: FeatureRow): FeatureRow {
   const out = { ...row };
   for (const [key, decimals] of Object.entries(ROW_DECIMALS) as [keyof typeof ROW_DECIMALS, number][]) {
-    const value = Math.round(row[key] * 10 ** decimals) / 10 ** decimals;
-    expect(Math.abs(value - row[key])).toBeLessThanOrEqual(0.5 * 10 ** -decimals + 1e-12);
+    const input = row[key];
+    if (input === undefined) continue;
+    const value = Math.round(input * 10 ** decimals) / 10 ** decimals;
+    expect(Math.abs(value - input)).toBeLessThanOrEqual(0.5 * 10 ** -decimals + 1e-12);
     out[key] = value === 0 ? 0 : value;
   }
   return out;

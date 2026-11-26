@@ -8,7 +8,8 @@ import { sampleRows } from '../scripts/sampleRows';
 const rounded = (row: FeatureRow): FeatureRow => {
   const out = { ...row };
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
-    out[key] = roundTo(out[key], ROW_DECIMALS[key]);
+    const v = out[key];
+    if (v !== undefined) out[key] = roundTo(v, ROW_DECIMALS[key]);
   }
   return out;
 };
@@ -43,6 +44,9 @@ describe('rounding (ruling D2 concern 1)', () => {
       gravityStability: 3,
       orientationDelta: 3,
       handlingScore: 3,
+      gx: 3,
+      gy: 3,
+      gz: 3,
     });
   });
 
@@ -64,6 +68,9 @@ describe('rounding (ruling D2 concern 1)', () => {
     ['gravityStability', 0.99951, 1],
     ['orientationDelta', 0.0123456, 0.012],
     ['handlingScore', 0.3333333, 0.333],
+    ['gx', 0.0123456, 0.012],
+    ['gy', -0.93969262, -0.94],
+    ['gz', -0.34202014, -0.342],
   ] as const)('%s is kept to its precision', (key, raw, expected) => {
     const out = parseRow({ ...good, [key]: raw });
     expect(out?.[key]).toBe(expected);
@@ -128,6 +135,16 @@ test.each([
 test('rejects a missing key', () => {
   const { handlingScore: _dropped, ...missing } = good;
   expect(parseRow(missing)).toBeNull();
+});
+
+test('the gravity direction is optional (an IMU-absent row and an older build send none), and a wrong type rejects the row', () => {
+  expect(good).toEqual(expect.objectContaining({ gx: expect.any(Number), gy: expect.any(Number), gz: expect.any(Number) }));
+  const { gx: _x, gy: _y, gz: _z, ...none } = good;
+  const out = parseRow(none)!;
+  expect(out).toEqual(none);
+  expect('gx' in out || 'gy' in out || 'gz' in out).toBe(false);
+  expect(parseRow({ ...good, gz: '-1' })).toBeNull();
+  expect(parseRow({ ...good, gx: Number.NaN })).toBeNull();
 });
 
 // C0 round 1 (review-C0 C0-m1): unknown keys fail soft. A future native build that adds a field must

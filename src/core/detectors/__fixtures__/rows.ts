@@ -9,6 +9,40 @@ export const mph = (v: number): number => v * 0.44704;
 
 type Overrides = Partial<FeatureRow> | ((i: number) => Partial<FeatureRow>);
 
+const RAD = Math.PI / 180;
+const r3 = (v: number): number => {
+  const out = Math.round(v * 1000) / 1000;
+  return out === 0 ? 0 : out;
+};
+
+/**
+ * The gravity direction (`gx`, `gy`, `gz`, toward the earth, to 3 decimals like a bridged row) of a
+ * phone whose screen is tilted `tiltDeg` up from lying flat face up (90 upright, 180 face down), its
+ * top turned `rollDeg` from straight up within the screen (90 on its side).
+ */
+export function gravity(tiltDeg: number, rollDeg = 0): Pick<FeatureRow, 'gx' | 'gy' | 'gz'> {
+  const t = tiltDeg * RAD;
+  const r = rollDeg * RAD;
+  return { gx: r3(-Math.sin(t) * Math.sin(r)), gy: r3(-Math.sin(t) * Math.cos(r)), gz: r3(-Math.cos(t)) };
+}
+
+/** Every row's default: a phone resting upright in a cup holder, leaning back 5° (not held to look at). */
+export const RESTING = gravity(85);
+
+/**
+ * A second of the phone in the hand, held to be looked at: the screen tilted 41° or 49° up (40° or
+ * more from `RESTING`), alternating each row so every second moves (an 8° step), the IMU busy.
+ */
+export const inHand = (i: number): Partial<FeatureRow> => ({
+  ...gravity(i % 2 === 0 ? 41 : 49),
+  handlingScore: 0.9,
+  gravityStability: 0.6,
+  orientationDelta: 0.2,
+});
+
+/** A second of the phone held perfectly steady in the hand (45°, still against the second before). */
+export const heldSteady: Partial<FeatureRow> = { ...gravity(45), handlingScore: 0, gravityStability: 0.95, orientationDelta: 0.01 };
+
 /** One feature row with the brief's defaults; `i` is the 1 Hz row index that fixes `ts`. */
 export function row(overrides: Partial<FeatureRow> = {}, i = 0): FeatureRow {
   return {
@@ -30,6 +64,7 @@ export function row(overrides: Partial<FeatureRow> = {}, i = 0): FeatureRow {
     gravityStability: 1,
     orientationDelta: 0,
     handlingScore: 0,
+    ...RESTING,
     locked: true,
     screenOn: false,
     appForeground: true,

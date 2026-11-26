@@ -13,18 +13,33 @@ export const HARD_CORNER_G = { minor: 0.48, severe: 0.7 } as const;
 /** The car counts as moving at or above this speed (mph): moving time, harsh-event gates. */
 export const MOVING_MIN_MPH = 5;
 
+// Phone pickups (read from motion) go by the phone's tilt from each second's gravity direction, the way
+// Android's tilt sensor and driving-distraction telematics do: shaking, rattling and vibration move
+// the phone a lot but leave its tilt where it was; a pickup tilts it far from where it rested.
 /**
- * Phone use (motion only): a row whose handling score is at least this reads as the phone in the
- * driver's hand (a use row).
+ * A second is still when the phone's gravity direction moved no more than this (degrees) from the
+ * reading before (at most 2 s before), and moving when it moved more; a shake within the second that
+ * leaves the tilt where it was is still.
  */
-export const PHONE_HANDLING_MIN_SCORE = 0.6;
-/** Driving speed for phone use (mph, a known, trusted GPS speed): a pickup counts only once one of its use rows is this fast. */
+export const PHONE_STILL_STEP_DEG = 3;
+/**
+ * This many still seconds in a row make the phone's resting tilt (their mean direction), which then
+ * follows slow drift. A pickup still open when the phone comes to rest was put down where the rest began.
+ */
+export const PHONE_SETTLE_S = 10;
+/** A second counts toward a pickup only with the phone tilted at least this far (degrees) from its resting tilt… */
+export const PHONE_TILT_MIN_DEG = 30;
+/** …and held the way a phone is held to be looked at: its screen tilted up from lying flat by this much (degrees)… */
+export const PHONE_VIEW_TILT_DEG = { min: 15, max: 80 } as const;
+/** …with its top turned no further than this (degrees) from straight up within the screen (on its side is 90, upside down 180). */
+export const PHONE_VIEW_ROLL_MAX_DEG = 120;
+/** Driving speed for phone use (mph, a known, trusted GPS speed): a pickup counts only once the phone is away at this speed. */
 export const PHONE_PICKUP_MIN_MPH = 10;
-/** A pickup needs at least this many use rows. */
+/** A pickup needs at least this many use seconds (moving seconds with the phone away, and steady ones that count). */
 export const PHONE_PICKUP_MIN_ROWS = 3;
 /**
- * The phone is put down once this many seconds of row clock pass after the last use row with no new
- * one; a use row within them continues the same pickup (never a second one).
+ * The phone is put down once this many seconds of row clock pass after the last second it was away
+ * with no new one; a second away within them continues the same pickup (never a second one).
  */
 export const PHONE_PUTDOWN_QUIET_S = 10;
 /** A pickup in hand up to this many seconds is moderate; longer is severe. */

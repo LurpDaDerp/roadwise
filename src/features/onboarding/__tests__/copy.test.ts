@@ -60,10 +60,10 @@ describe('onboarding copy', () => {
       expect(rows[3]).toEqual({
         icon: 'phone-portrait-outline',
         title: 'Phone down',
-        body: 'Picking up your phone while you drive counts against your score. RoadWise can tell from motion alone and never sees your screen, apps, or messages.',
+        body: "Picking up your phone while you drive counts against your score. RoadWise can tell from how your phone moves and never sees what's on your screen, your apps, or your messages.",
       });
     }
-    expect(onboardingCopy.motion.phone).toBe('RoadWise spots pickups from motion alone. It never sees your screen, apps, or messages.');
+    expect(onboardingCopy.motion.phone).toBe("RoadWise spots pickups from how your phone moves. It never sees what's on your screen, your apps, or your messages.");
   });
 
   it('says what motion access is for on each phone, and that speed, braking and phone pickups need none', () => {

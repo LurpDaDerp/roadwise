@@ -5,7 +5,7 @@ import { IDLE_END_S } from '@scoring';
 import type { AlertDecision } from '@/core/alerts/types';
 import type { AlertPlayer } from '@/core/alerts/player';
 import { createDetectors } from '@/core/detectors';
-import { T0 } from '@/core/detectors/__fixtures__/rows';
+import { inHand, T0 } from '@/core/detectors/__fixtures__/rows';
 import { rows, START, TZ } from '@/core/engine/__fixtures__/drives';
 import { appendRow, createSession } from '@/core/engine/session';
 import type { FeatureRow, LimitSample } from '@/core/engine/types';
@@ -684,10 +684,10 @@ async function confirm(h: I, list: readonly FeatureRow[], extra: Partial<Paramet
 }
 
 describe('a phone pickup (phone plan P4)', () => {
-  /** A second of the phone in the hand. */
-  const handled = { handlingScore: 0.9, gravityStability: 0.6 };
+  /** Row `i`'s second of the phone in the hand, held to be looked at, its screen on. */
+  const handled = (i: number) => ({ ...inHand(i), screenOn: true });
   /** 40 s of driving (the wait confirms on the 16th row; the rest are live), then `n` rows from T0 + 40 s, handled from `from` to `to`. */
-  const pickupRows = (n: number, from = 0, to = n, t0 = T0 + 40_000) => rows(n, { t0, speedMps: 15, over: (i) => (i >= from && i < to ? handled : {}) });
+  const pickupRows = (n: number, from = 0, to = n, t0 = T0 + 40_000) => rows(n, { t0, speedMps: 15, over: (i) => (i >= from && i < to ? handled(i) : {}) });
   const phoneDecisions = (h: H) => h.player.delivered.filter((d) => d.kind === 'phone_pickup');
 
   test('with the driving screen showing (focused, RoadWise active) the pickup plays: the urgent tone, "Phone down", the haptic, shown and shaken; at 15 s in hand a repeat, tone and haptic only', async () => {
@@ -753,10 +753,13 @@ describe('a phone pickup (phone plan P4)', () => {
     await drive(h, rows(40, { speedMps: 15 }));
     await feed(h, pickupRows(20, 0, 5));
     h.appState.set('background');
+    // Driving on between the pickups, so every row follows the one before.
+    await feed(h, rows(40, { t0: T0 + 60_000, speedMps: 15 }));
     await feed(h, pickupRows(20, 0, 5, T0 + 100_000));
     h.appState.set('active');
     expect(h.host.snapshot().lastAlert).toMatchObject({ type: 'phone_pickup', at: T0 + 42_000 });
     expect(h.host.snapshot().lastShake).toMatchObject({ at: T0 + 42_000 });
+    await feed(h, rows(20, { t0: T0 + 120_000, speedMps: 15 }));
     await feed(h, pickupRows(20, 0, 5, T0 + 140_000));
     const [front, behind, again, ...more] = phoneDecisions(h);
     expect(more).toEqual([]);
@@ -801,8 +804,8 @@ describe('a phone pickup (phone plan P4)', () => {
     h.host.setHudVisible(true);
     await h.detect.setArmed(true, 'user-1');
     h.detect.wake();
-    // Handled from the second row to the eighth: the pickup confirms (and is put down) in the journal.
-    await confirm(h, rows(40, { speedMps: 15, over: (i) => (i >= 1 && i < 8 ? handled : {}) }));
+    // At rest for 11 rows (the phone's resting tilt), then handled from the 12th row to the 19th: the pickup confirms (and is put down) in the journal.
+    await confirm(h, rows(40, { speedMps: 15, over: (i) => (i >= 11 && i < 19 ? handled(i) : {}) }));
     const [replayed, ...rest] = phoneDecisions(h);
     expect(rest).toEqual([]);
     expect(replayed!.ts).toBeLessThan(T0 + 15_000);
@@ -832,7 +835,7 @@ describe('a phone pickup (phone plan P4)', () => {
       const h = build({ platform });
       await h.host.boot();
       await drive(h, rows(40, { speedMps: 15 }));
-      await feed(h, rows(30, { t0: T0 + 40_000, speedMps: 15, over: (i) => (i < 20 ? { ...handled, call: 'live' as const } : {}) }));
+      await feed(h, rows(30, { t0: T0 + 40_000, speedMps: 15, over: (i) => (i < 20 ? { ...handled(i), call: 'live' as const } : {}) }));
       const id = h.host.snapshot().clientTripId!;
       await h.host.end();
       expect((await createEventsRepo(db).listByTrip(id)).filter((e) => e.type === 'phone_pickup')).toHaveLength(count);

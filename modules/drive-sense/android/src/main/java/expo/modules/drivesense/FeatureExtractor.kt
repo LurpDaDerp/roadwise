@@ -238,7 +238,8 @@ object FeatureExtractor {
         gravityStability = free.gravityStability,
         orientationDelta = free.orientationDelta,
         handlingScore = free.handlingScore,
-        locked = phone.locked, screenOn = phone.screenOn, appForeground = phone.appForeground
+        locked = phone.locked, screenOn = phone.screenOn, appForeground = phone.appForeground,
+        gx = gMean.x, gy = gMean.y, gz = gMean.z
       ),
       state = ExtractState(
         lastFix = g.lastFix,

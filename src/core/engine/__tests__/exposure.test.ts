@@ -180,6 +180,18 @@ describe('phone time (phone plan P2): the seconds a pickup could have been seen'
     expect(run(list).phoneS).toBe(2);
   });
 
+  test('a row with no gravity reading is no phone time (a pickup is read from the tilt); the screen being off is (a pickup would turn it on)', () => {
+    const list = speeds(hold(30, 6)).map((r, i) => {
+      if (i === 1) {
+        const { gx: _x, gy: _y, gz: _z, ...bare } = r;
+        return bare;
+      }
+      return i === 2 ? { ...r, gx: 0, gy: 0, gz: 0 } : r;
+    });
+    expect(run(list).phoneS).toBe(4);
+    expect(run(speeds(hold(30, 6)).map((r) => ({ ...r, screenOn: false })), () => false, 'android').phoneS).toBe(6);
+  });
+
   test('a call row is no phone time (it can never be phone use), on iPhone and Android alike', () => {
     const list = speeds(hold(30, 6)).map((r, i) => (i >= 2 && i < 5 ? { ...r, call: i === 2 ? ('ring' as const) : ('live' as const) } : r));
     expect(run(list, () => false, 'ios').phoneS).toBe(3);

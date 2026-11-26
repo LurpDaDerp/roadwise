@@ -90,6 +90,15 @@ export interface ExtractedRow {
   gravityStability: number;
   orientationDelta: number;
   handlingScore: number;
+  /**
+   * The second's mean gravity direction, `gMean` (a unit vector in the device frame, pointing
+   * toward the earth: face-up on a table ≈ [0, 0, −1]), one component each. Set on every row with
+   * the IMU present and absent on an IMU-absent row; optional only because rows recorded before
+   * the key existed lack it. Phone pickups read the phone's tilt from it.
+   */
+  gx?: number;
+  gy?: number;
+  gz?: number;
   locked: boolean;
   screenOn: boolean;
   appForeground: boolean;

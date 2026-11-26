@@ -288,6 +288,21 @@ describe('frame-free features', () => {
     expect(next.row.orientationDelta).toBeCloseTo(0.2, 12);
   });
 
+  test('gx, gy, gz are the second\'s mean gravity direction (a unit vector toward the earth); an IMU-absent row has none', () => {
+    const flat = extractSecond(samples(1, () => ({})), null, PHONE, T0 + 1000, initialExtractState()).row;
+    expect([flat.gx, flat.gy, flat.gz]).toEqual([0, 0, -1]);
+    // Half the second upright (top up: [0, −1, 0]), half flat: the mean direction lies halfway, at 45°.
+    const half = extractSecond(samples(1, (k) => ({ g: k < 12 ? [0, -1, 0] : k === 12 ? [0, -Math.SQRT1_2, -Math.SQRT1_2] : [0, 0, -1] })), null, PHONE, T0 + 1000, initialExtractState()).row;
+    expect(half.gx).toBe(0);
+    expect(half.gy).toBeCloseTo(-Math.SQRT1_2, 12);
+    expect(half.gz).toBeCloseTo(-Math.SQRT1_2, 12);
+    // Not unit-length samples still give a unit direction.
+    const long = extractSecond(samples(1, () => ({ g: [0, -2, 0] })), null, PHONE, T0 + 1000, initialExtractState()).row;
+    expect([long.gx, long.gy, long.gz]).toEqual([0, -1, 0]);
+    const absent = extractSecond(samples(1, () => ({})).slice(0, 9), null, PHONE, T0 + 1000, initialExtractState()).row;
+    expect('gx' in absent || 'gy' in absent || 'gz' in absent).toBe(false);
+  });
+
   test('jerkMax is the steepest change of smoothed aLon, in g/s', () => {
     const { state } = accelerate(8, 0.2);
     const { row } = extractSecond(

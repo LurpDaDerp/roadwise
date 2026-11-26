@@ -154,22 +154,29 @@ struct ExtractedRow {
   var aLonMax, aLonMin, aLatMax, aLatMin, yawRateMax, jerkMax: Double
   var gravityStability, orientationDelta, handlingScore: Double
   var locked, screenOn, appForeground: Bool
+  /// The second's mean gravity direction (`gMean`, a unit vector toward the earth, device frame), one
+  /// component each; nil on an IMU-absent row, which then carries no `gx`/`gy`/`gz` (README §4).
+  var gx: Double? = nil
+  var gy: Double? = nil
+  var gz: Double? = nil
 
   /// Every number finite (the bridge contract; JSONSerialization would also trap on NaN).
   var firstNonFiniteField: String? {
-    let numbers: [(String, Double)] = [
+    var numbers: [(String, Double)] = [
       ("lat", lat), ("lng", lng), ("hAcc", hAcc), ("speed", speed), ("speedAcc", speedAcc),
       ("course", course), ("alt", alt), ("aLonMax", aLonMax), ("aLonMin", aLonMin),
       ("aLatMax", aLatMax), ("aLatMin", aLatMin), ("yawRateMax", yawRateMax), ("jerkMax", jerkMax),
       ("gravityStability", gravityStability), ("orientationDelta", orientationDelta),
       ("handlingScore", handlingScore),
     ]
+    if let x = gx, let y = gy, let z = gz { numbers += [("gx", x), ("gy", y), ("gz", z)] }
     return numbers.first { !$0.1.isFinite }?.0
   }
 
-  /// The `row` payload: exactly the 21 `FeatureRow` keys (JS validates strictly).
+  /// The `row` payload: exactly the 21 `FeatureRow` keys (JS validates strictly), plus the gravity
+  /// direction `gx`, `gy`, `gz` whenever the IMU was present.
   var payload: [String: Any] {
-    return [
+    var body: [String: Any] = [
       "ts": NSNumber(value: ts),
       "lat": lat, "lng": lng, "hAcc": hAcc, "speed": speed, "speedAcc": speedAcc,
       "course": course, "alt": alt, "gnssValid": gnssValid,
@@ -178,5 +185,11 @@ struct ExtractedRow {
       "orientationDelta": orientationDelta, "handlingScore": handlingScore,
       "locked": locked, "screenOn": screenOn, "appForeground": appForeground,
     ]
+    if let x = gx, let y = gy, let z = gz {
+      body["gx"] = x
+      body["gy"] = y
+      body["gz"] = z
+    }
+    return body
   }
 }

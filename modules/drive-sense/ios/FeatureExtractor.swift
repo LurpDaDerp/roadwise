@@ -180,6 +180,9 @@ final class FeatureExtractor {
     row.gravityStability = free.gravityStability
     row.orientationDelta = free.orientationDelta
     row.handlingScore = free.handlingScore
+    row.gx = gMean.x
+    row.gy = gMean.y
+    row.gz = gMean.z
 
     state = ExtractState(
       lastFix: g.lastFix, prevValidFix: g.prevValidFix, lastImuT: imu[n - 1].t,

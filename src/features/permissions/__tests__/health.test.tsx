@@ -94,7 +94,7 @@ it('iOS lists Location Always and Background App Refresh with the note about Alw
   // On both phones, the note on phone pickups.
   expect(
     within(screen.getByTestId('permissions-phone-note')).getByText(
-      'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.'
+      "On a drive, RoadWise can tell from how your phone moves when you pick it up. It never sees what's on your screen, your apps, or your messages."
     )
   ).toBeOnTheScreen();
 });

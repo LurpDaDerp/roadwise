@@ -43,6 +43,8 @@ export const rowWireSchema: z.ZodType<FeatureRow> = featureRowSchema.refine(
  * - lat/lng 1e-6° (~0.1 m); speed and speed accuracy 0.01 m/s; course 0.1°; hAcc 0.1 m;
  *   altitude 0.1 m;
  * - accelerometer-derived (g, and jerk in g/s) 1e-3; gyro-derived (rad/s) 1e-3;
+ * - the gravity direction's components (`gx`, `gy`, `gz`, optional: absent stays absent) 1e-3, which
+ *   moves the direction by 0.05° at most;
  * - every other float (0..1 scores, orientation change in rad) 1e-3.
  */
 export const ROW_DECIMALS = {
@@ -62,9 +64,13 @@ export const ROW_DECIMALS = {
   gravityStability: 3,
   orientationDelta: 3,
   handlingScore: 3,
-} as const satisfies Record<Exclude<NumericRowKey, 'ts'>, number>;
+  gx: 3,
+  gy: 3,
+  gz: 3,
+} as const satisfies Record<Exclude<NumericRowKey, 'ts' | 'steps'>, number>;
 
-type NumericRowKey = { [K in keyof FeatureRow]-?: FeatureRow[K] extends number ? K : never }[keyof FeatureRow];
+/** The numeric `FeatureRow` keys, optional ones included (`steps` is a whole number and never rounded). */
+type NumericRowKey = { [K in keyof FeatureRow]-?: NonNullable<FeatureRow[K]> extends number ? K : never }[keyof FeatureRow];
 
 const POW10 = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000] as const;
 
@@ -79,11 +85,11 @@ export function roundTo(x: number, decimals: number): number {
   return r === 0 ? 0 : r;
 }
 
-/** Every `FeatureRow` key: the 21 of the contract. */
+/** Every `FeatureRow` key: the 21 of the contract, and the optional gravity direction (`gx`, `gy`, `gz`). */
 const ROW_KEYS: ReadonlySet<string> = new Set<string>([
   'ts', 'lat', 'lng', 'hAcc', 'speed', 'speedAcc', 'course', 'alt', 'gnssValid',
   'aLonMax', 'aLonMin', 'aLatMax', 'aLatMin', 'yawRateMax', 'jerkMax',
-  'gravityStability', 'orientationDelta', 'handlingScore', 'locked', 'screenOn', 'appForeground',
+  'gravityStability', 'orientationDelta', 'handlingScore', 'gx', 'gy', 'gz', 'locked', 'screenOn', 'appForeground',
 ]);
 
 /**
@@ -177,7 +183,8 @@ export function parseRow(raw: unknown): DriveSenseRow | null {
   if (seq !== undefined) row.seq = seq;
   if (steps !== undefined) row.steps = steps;
   for (const key of Object.keys(ROW_DECIMALS) as (keyof typeof ROW_DECIMALS)[]) {
-    row[key] = roundTo(row[key], ROW_DECIMALS[key]);
+    const v = row[key];
+    if (v !== undefined) row[key] = roundTo(v, ROW_DECIMALS[key]);
   }
   return row;
 }

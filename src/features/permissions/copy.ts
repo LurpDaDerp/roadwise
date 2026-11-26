@@ -42,7 +42,7 @@ export const permissionsCopy = {
     android: "With Location set to Allow all the time, RoadWise notices drives and records them even when it's closed. Your location is never sold.",
   },
   /** The second note: how phone pickups are noticed, which needs no permission. */
-  phone: 'On a drive, RoadWise can tell from motion alone when you pick up your phone. It never sees your screen, apps, or messages.',
+  phone: "On a drive, RoadWise can tell from how your phone moves when you pick it up. It never sees what's on your screen, your apps, or your messages.",
   status: { on: 'On', notYet: 'Needs a look', off: 'Off', idle: 'Not in use', unknown: "Can't check" },
   openSettings: 'Open Settings',
   hiddenFromHome: 'Hidden from Home',

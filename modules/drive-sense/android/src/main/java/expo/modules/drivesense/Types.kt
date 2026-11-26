@@ -118,7 +118,10 @@ data class DriveDisplay(
   }
 }
 
-/** M1's `FeatureRow`, exactly its 21 keys (README §4). */
+/**
+ * M1's `FeatureRow`: its 21 keys, plus the second's mean gravity direction `gx`, `gy`, `gz` (README
+ * §4), null on an IMU-absent row, which then carries none of the three.
+ */
 data class FeatureRow(
   val ts: Long,
   val lat: Double,
@@ -140,10 +143,27 @@ data class FeatureRow(
   val handlingScore: Double,
   val locked: Boolean,
   val screenOn: Boolean,
-  val appForeground: Boolean
+  val appForeground: Boolean,
+  /** The second's mean gravity direction (`gMean`: a unit vector toward the earth, device frame), or null with the IMU absent. */
+  val gx: Double? = null,
+  val gy: Double? = null,
+  val gz: Double? = null
 ) {
-  /** The bridge payload for the `row` event: exactly the contract's keys, finite numbers, integer ts. */
-  fun toMap(): Map<String, Any> = linkedMapOf(
+  /**
+   * The bridge payload for the `row` event: exactly the contract's keys, finite numbers, integer ts,
+   * and `gx`, `gy`, `gz` whenever the IMU was present.
+   */
+  fun toMap(): Map<String, Any> {
+    val m = contractMap()
+    if (gx != null && gy != null && gz != null) {
+      m["gx"] = gx
+      m["gy"] = gy
+      m["gz"] = gz
+    }
+    return m
+  }
+
+  private fun contractMap(): LinkedHashMap<String, Any> = linkedMapOf(
     "ts" to ts,
     "lat" to lat,
     "lng" to lng,
@@ -168,9 +188,9 @@ data class FeatureRow(
   )
 
   /** Every number finite (README §1). A row that is not is never emitted. */
-  fun isFinite(): Boolean = listOf(
+  fun isFinite(): Boolean = listOfNotNull(
     lat, lng, hAcc, speed, speedAcc, course, alt, aLonMax, aLonMin, aLatMax, aLatMin,
-    yawRateMax, jerkMax, gravityStability, orientationDelta, handlingScore
+    yawRateMax, jerkMax, gravityStability, orientationDelta, handlingScore, gx, gy, gz
   ).all { it.isFinite() }
 }
 

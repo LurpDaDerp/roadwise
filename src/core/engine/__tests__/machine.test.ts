@@ -1,5 +1,5 @@
 import { createDetectors } from '@/core/detectors';
-import { limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
+import { inHand, limit, mph, row, seq, T0 } from '@/core/detectors/__fixtures__/rows';
 import type { AlertEvent, EngineDeps, EngineSnapshot, TripSession } from '@/core/engine/engine.types';
 import { CHECKPOINT_ROWS, createEngine, tintRatio } from '@/core/engine/machine';
 import { createSession, stillWithoutFix } from '@/core/engine/session';
@@ -104,7 +104,7 @@ test('alerts: one shown speeding alert per episode (its repeats are sounded only
   // 20 s of a handled phone at 30 mph: the pickup is shown (and shaken) on its third use row, then
   // sounded again, never shown, as its time in hand reaches 15 s.
   const before = h.alerts.length;
-  await feed(h, seq([20, (i) => ({ speed: mph(30), handlingScore: 0.9, gravityStability: 0.5, locked: false, screenOn: true, appForeground: false, ts: T0 + 51_000 + i * 1000 })]));
+  await feed(h, seq([20, (i) => ({ speed: mph(30), ...inHand(i), locked: false, screenOn: true, appForeground: false, ts: T0 + 51_000 + i * 1000 })]));
   await feed(h, seq([3, (i) => ({ speed: mph(30), ts: T0 + 71_000 + i * 1000 })]));
   const phone = h.alerts.slice(before).filter((a) => a.type !== 'speeding');
   expect(phone).toEqual([
@@ -270,8 +270,9 @@ test('stillWithoutFix: a still phone with no fix', () => {
 });
 
 describe('the warm-up in a live drive (Start Drive at any speed)', () => {
-  const handled = { handlingScore: 0.9, gravityStability: 0.5, orientationDelta: 0.2 };
   const at = (fromS: number, n: number, over: Partial<FeatureRow>) => seq([n, (i) => ({ ...over, ts: T0 + (fromS + i) * 1000 })]);
+  /** `n` seconds of the phone in the hand from `fromS`. */
+  const handled = (fromS: number, n: number, over: Partial<FeatureRow>) => seq([n, (i) => ({ ...over, ...inHand(i), ts: T0 + (fromS + i) * 1000 })]);
   async function drive(continues: boolean, rows: FeatureRow[]): Promise<Readonly<TripSession>> {
     const h = harness();
     await h.engine.dispatch({ type: 'start', ts: T0, origin: 'manual', continues });
@@ -281,21 +282,21 @@ describe('the warm-up in a live drive (Start Drive at any speed)', () => {
   }
   const types = (s: Readonly<TripSession>) => s.events.map((e) => e.type);
 
-  test('a start at 37 mph: the warm-up ends at the first trusted reading, so a phone handled 10 s in is a pickup', async () => {
-    const s = await drive(false, [...at(0, 10, { speed: mph(37) }), ...at(10, 3, { speed: mph(37), ...handled }), ...at(13, 5, { speed: mph(37) })]);
+  test('a start at 37 mph: the warm-up ends at the first trusted reading, so a phone handled 11 s in is a pickup', async () => {
+    const s = await drive(false, [...at(0, 11, { speed: mph(37) }), ...handled(11, 3, { speed: mph(37) }), ...at(14, 5, { speed: mph(37) })]);
     expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 });
-    expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 10_000, durationS: 3 })]);
+    expect(s.events).toEqual([expect.objectContaining({ type: 'phone_pickup', startedAt: T0 + 11_000, durationS: 3 })]);
   });
 
   test('a stopped start (first reading 0 mph) keeps the 30 s for hard events; speeding and a pickup in them count', async () => {
-    const s = await drive(false, [...at(0, 5, { speed: 0 }), ...at(5, 5, { speed: mph(40) }), ...at(10, 3, { speed: mph(40), ...handled }), ...at(13, 5, { speed: mph(40) })]);
+    const s = await drive(false, [...at(0, 5, { speed: 0 }), ...at(5, 6, { speed: mph(40) }), ...handled(11, 3, { speed: mph(40) }), ...at(14, 5, { speed: mph(40) })]);
     expect(s.warmup).toMatchObject({ decided: true, endsAt: T0 + 30_000 });
     expect(types(s).sort()).toEqual(['phone_pickup', 'speeding']);
-    expect(s.events.find((e) => e.type === 'speeding')).toMatchObject({ startedAt: T0 + 5000, durationS: 13 });
+    expect(s.events.find((e) => e.type === 'speeding')).toMatchObject({ startedAt: T0 + 5000, durationS: 14 });
   });
 
   test('a drive that continues the one before (continues) and starts stopped has no warm-up', async () => {
-    const s = await drive(true, [...at(0, 2, { speed: 0 }), ...at(2, 3, { speed: mph(35) }), ...at(5, 3, { speed: mph(35), ...handled }), ...at(8, 5, { speed: mph(35) })]);
+    const s = await drive(true, [...at(0, 2, { speed: 0 }), ...at(2, 3, { speed: mph(35) }), ...handled(5, 3, { speed: mph(35) }), ...at(8, 5, { speed: mph(35) })]);
     expect(s.warmup).toMatchObject({ continues: true, endsAt: T0 });
   });
 

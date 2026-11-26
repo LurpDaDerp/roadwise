@@ -23,11 +23,15 @@ import {
   NO_EVENTS_FIRST_S,
   NOT_DRIVING_PER_MONTH,
   NOT_DRIVING_WINDOW_S,
-  PHONE_HANDLING_MIN_SCORE,
   PHONE_PICKUP_MIN_MPH,
   PHONE_PICKUP_MIN_ROWS,
   PHONE_PUTDOWN_QUIET_S,
+  PHONE_SETTLE_S,
   PHONE_SEVERE_S,
+  PHONE_STILL_STEP_DEG,
+  PHONE_TILT_MIN_DEG,
+  PHONE_VIEW_ROLL_MAX_DEG,
+  PHONE_VIEW_TILT_DEG,
   TRIM_ENDS_M,
   WALK_END_S,
   WALK_STAND_MIN_S,
@@ -64,7 +68,9 @@ test('detection thresholds match the spec', () => {
 });
 
 test('phone use: a pickup at driving speed, put down after 10 quiet seconds, severe past 15 s in hand', () => {
-  expect(PHONE_HANDLING_MIN_SCORE).toBe(0.6);
+  expect([PHONE_STILL_STEP_DEG, PHONE_SETTLE_S, PHONE_TILT_MIN_DEG]).toEqual([3, 10, 30]);
+  expect(PHONE_VIEW_TILT_DEG).toEqual({ min: 15, max: 80 });
+  expect(PHONE_VIEW_ROLL_MAX_DEG).toBe(120);
   expect(PHONE_PICKUP_MIN_MPH).toBe(10);
   expect(PHONE_PICKUP_MIN_ROWS).toBe(3);
   expect(PHONE_PUTDOWN_QUIET_S).toBe(10);
